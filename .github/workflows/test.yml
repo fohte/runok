@@ -1,0 +1,84 @@
+name: Test
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Check if previous commit is auto-format by bot
+        id: check-prev
+        run: |
+          prev_commit_message=$(git log -1 --skip=1 --format=%s)
+          prev_commit_author=$(git log -1 --skip=1 --format=%an)
+          echo "Previous commit message: $prev_commit_message"
+          echo "Previous commit author: $prev_commit_author"
+
+          # Skip auto-format commit if previous commit is auto-format by a bot
+          if [ "$prev_commit_message" = "style: auto-format" ] && [[ "$prev_commit_author" == *"[bot]"* ]]; then
+            echo "skip_commit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_commit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: jdx/mise-action@v2
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - run: cargo fetch
+
+      - name: Run lefthook
+        id: lefthook
+        continue-on-error: true
+        run: lefthook run pre-commit --all-files
+
+      # lefthook-config's formatters run `git add` after formatting, which stages the changes.
+      # https://github.com/fohte/lefthook-config/blob/v0.1.7/base.yml
+      # commit-action uses `git ls-files --modified` which only detects unstaged changes.
+      # https://github.com/suzuki-shunsuke/commit-action/blob/87b297f0ce551411b43d1880f4fb3cbc60381055/action.yaml#L57
+      # We need to unstage the changes so commit-action can detect them.
+      - name: Unstage changes for commit-action
+        run: git restore --staged .
+
+      - name: Commit formatted files
+        if: ${{ !cancelled() && steps.check-prev.outputs.skip_commit != 'true' }}
+        uses: suzuki-shunsuke/commit-action@v0.0.14
+        with:
+          commit_message: 'style: auto-format'
+          workflow: deny
+          github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Fail if lefthook failed
+        if: steps.lefthook.outcome == 'failure'
+        run: exit 1
+
+  unit-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v2
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
