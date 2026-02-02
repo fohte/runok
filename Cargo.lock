@@ -198,7 +198,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust"
+name = "runok"
 version = "0.1.0"
 dependencies = [
  "rstest",
