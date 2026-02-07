@@ -244,7 +244,7 @@ mod tests {
     // Normal cases
     // =========================================================================
 
-    // --- Simple patterns (Req 1.1) ---
+    // --- Simple patterns ---
 
     #[rstest]
     #[case("git status", "git", &[PatternToken::Literal("status".into())])]
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(pattern.tokens, expected_tokens);
     }
 
-    // --- Alternation / Alias (Req 1.2, 1.3, 1.4) ---
+    // --- Alternation / Alias ---
 
     #[rstest]
     #[case(
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(pattern.tokens, expected_tokens);
     }
 
-    // --- Wildcard (Req 1.5) ---
+    // --- Wildcard ---
 
     #[rstest]
     #[case(
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(pattern.tokens, expected_tokens);
     }
 
-    // --- Negation (Req 1.4, 4.4) ---
+    // --- Negation ---
 
     #[rstest]
     #[case(
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(pattern.tokens, expected_tokens);
     }
 
-    // --- Optional brackets (Req 1.7, 1.8, 1.9) ---
+    // --- Optional brackets ---
 
     #[rstest]
     #[case(
