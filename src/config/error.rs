@@ -1,0 +1,151 @@
+use std::path::PathBuf;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("preset error: {0}")]
+    Preset(#[from] PresetError),
+    #[error("validation error: {0}")]
+    Validation(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PresetError {
+    #[error("local file not found: {0}")]
+    LocalNotFound(PathBuf),
+    #[error("fetch error: {url}: {message}")]
+    Fetch { url: String, message: String },
+    #[error("invalid reference: {0}")]
+    InvalidReference(String),
+    #[error("circular reference detected: {}", .cycle.join(" → "))]
+    CircularReference { cycle: Vec<String> },
+    #[error("cache error: {0}")]
+    Cache(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    // === ConfigError ===
+
+    #[test]
+    fn config_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let config_err: ConfigError = io_err.into();
+        assert_eq!(config_err.to_string(), "io error: file not found");
+    }
+
+    #[test]
+    fn config_error_from_preset_error() {
+        let preset_err = PresetError::InvalidReference("bad ref".to_string());
+        let config_err: ConfigError = preset_err.into();
+        assert_eq!(
+            config_err.to_string(),
+            "preset error: invalid reference: bad ref"
+        );
+    }
+
+    #[test]
+    fn config_error_validation() {
+        let error = ConfigError::Validation("rule must have exactly one action".to_string());
+        assert_eq!(
+            error.to_string(),
+            "validation error: rule must have exactly one action"
+        );
+    }
+
+    #[test]
+    fn config_error_io_has_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let config_err = ConfigError::Io(io_err);
+        let source = std::error::Error::source(&config_err);
+        assert!(source.is_some());
+    }
+
+    #[test]
+    fn config_error_preset_has_source() {
+        let preset_err = PresetError::InvalidReference("bad ref".to_string());
+        let config_err = ConfigError::Preset(preset_err);
+        let source = std::error::Error::source(&config_err);
+        assert!(source.is_some());
+    }
+
+    // === PresetError ===
+
+    #[test]
+    fn preset_error_local_not_found() {
+        let error = PresetError::LocalNotFound(std::path::PathBuf::from("/missing/file.yml"));
+        assert_eq!(error.to_string(), "local file not found: /missing/file.yml");
+    }
+
+    #[rstest]
+    #[case(
+        PresetError::Fetch {
+            url: "https://example.com/preset.yml".to_string(),
+            message: "404 Not Found".to_string(),
+        },
+        "fetch error: https://example.com/preset.yml: 404 Not Found"
+    )]
+    #[case(
+        PresetError::InvalidReference("github:invalid".to_string()),
+        "invalid reference: github:invalid"
+    )]
+    #[case(
+        PresetError::Cache("write failed".to_string()),
+        "cache error: write failed"
+    )]
+    fn preset_error_display(#[case] error: PresetError, #[case] expected: &str) {
+        assert_eq!(error.to_string(), expected);
+    }
+
+    #[test]
+    fn preset_error_circular_reference() {
+        let error = PresetError::CircularReference {
+            cycle: vec![
+                "a.yml".to_string(),
+                "b.yml".to_string(),
+                "a.yml".to_string(),
+            ],
+        };
+        assert_eq!(
+            error.to_string(),
+            "circular reference detected: a.yml → b.yml → a.yml"
+        );
+    }
+
+    #[test]
+    fn preset_error_implements_std_error() {
+        let error: &dyn std::error::Error = &PresetError::InvalidReference("test".to_string());
+        assert!(error.source().is_none());
+    }
+
+    // === anyhow integration ===
+
+    #[test]
+    fn config_error_into_anyhow() {
+        let error = ConfigError::Validation("invalid config".to_string());
+        let anyhow_err: anyhow::Error = error.into();
+        assert_eq!(anyhow_err.to_string(), "validation error: invalid config");
+    }
+
+    #[test]
+    fn preset_error_into_anyhow() {
+        let error = PresetError::InvalidReference("bad".to_string());
+        let anyhow_err: anyhow::Error = error.into();
+        assert_eq!(anyhow_err.to_string(), "invalid reference: bad");
+    }
+
+    #[test]
+    fn anyhow_error_chain_config_to_preset() {
+        let preset_err = PresetError::InvalidReference("bad".to_string());
+        let config_err = ConfigError::Preset(preset_err);
+        let anyhow_err: anyhow::Error = config_err.into();
+
+        let chain: Vec<String> = anyhow_err.chain().map(|e| e.to_string()).collect();
+        assert_eq!(chain[0], "preset error: invalid reference: bad");
+        assert_eq!(chain[1], "invalid reference: bad");
+    }
+}
