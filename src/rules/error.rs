@@ -27,7 +27,7 @@ pub enum RuleError {
     #[error("command parse error: {0}")]
     CommandParse(#[from] CommandParseError),
     #[error("expression evaluation error: {0}")]
-    ExprEval(String),
+    ExprEval(#[from] ExprError),
     #[error("recursion depth exceeded (max: {0})")]
     RecursionDepthExceeded(usize),
 }
@@ -115,14 +115,20 @@ mod tests {
         assert_eq!(rule_err.to_string(), "command parse error: unclosed quote");
     }
 
-    #[rstest]
-    #[case(RuleError::ExprEval("undefined variable 'x'".to_string()), "expression evaluation error: undefined variable 'x'")]
-    #[case(
-        RuleError::RecursionDepthExceeded(10),
-        "recursion depth exceeded (max: 10)"
-    )]
-    fn rule_error_display(#[case] error: RuleError, #[case] expected: &str) {
-        assert_eq!(error.to_string(), expected);
+    #[test]
+    fn rule_error_from_expr_error() {
+        let expr_err = ExprError::Parse("undefined variable 'x'".to_string());
+        let rule_err: RuleError = expr_err.into();
+        assert_eq!(
+            rule_err.to_string(),
+            "expression evaluation error: parse error: undefined variable 'x'"
+        );
+    }
+
+    #[test]
+    fn rule_error_recursion_depth_exceeded() {
+        let error = RuleError::RecursionDepthExceeded(10);
+        assert_eq!(error.to_string(), "recursion depth exceeded (max: 10)");
     }
 
     #[test]
@@ -135,6 +141,13 @@ mod tests {
     #[test]
     fn rule_error_command_parse_has_source() {
         let error = RuleError::CommandParse(CommandParseError::UnclosedQuote);
+        let source = std::error::Error::source(&error);
+        assert!(source.is_some());
+    }
+
+    #[test]
+    fn rule_error_expr_eval_has_source() {
+        let error = RuleError::ExprEval(ExprError::Eval("test".to_string()));
         let source = std::error::Error::source(&error);
         assert!(source.is_some());
     }
