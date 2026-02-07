@@ -289,6 +289,25 @@ fn parse_empty_alternation(#[case] input: &str) {
     assert!(matches!(err, PatternParseError::EmptyAlternation));
 }
 
+// --- Bare negation (! without value) ---
+
+#[test]
+fn parse_bare_negation() {
+    let err = parse("cmd !").unwrap_err();
+    assert!(matches!(err, PatternParseError::InvalidSyntax(_)));
+}
+
+// --- Pattern starting with non-command token ---
+
+#[rstest]
+#[case("* foo")]
+#[case("[--verbose] git status")]
+#[case("<cmd> foo")]
+fn parse_pattern_starting_with_non_command(#[case] input: &str) {
+    let err = parse(input).unwrap_err();
+    assert!(matches!(err, PatternParseError::InvalidSyntax(_)));
+}
+
 // --- Empty input ---
 
 #[test]
