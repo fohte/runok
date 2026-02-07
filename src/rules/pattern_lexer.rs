@@ -111,13 +111,13 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                         "empty negation".to_string(),
                     ));
                 }
-                tokens.push(classify_negation(&word));
+                tokens.push(classify_negation(&word)?);
             }
 
             // Any other character: consume a word (until whitespace, bracket, or angle bracket)
             _ => {
                 let word = consume_word(&mut chars, Some(ch));
-                tokens.push(classify_word(&word));
+                tokens.push(classify_word(&word)?);
             }
         }
     }
@@ -159,25 +159,34 @@ fn is_word_boundary(c: char) -> bool {
 }
 
 /// Classify a raw word into the appropriate LexToken.
-fn classify_word(word: &str) -> LexToken {
+fn classify_word(word: &str) -> Result<LexToken, PatternParseError> {
     if word == "*" {
-        LexToken::Wildcard
+        Ok(LexToken::Wildcard)
     } else if word.contains('|') {
-        let parts: Vec<String> = word.split('|').map(|s| s.to_string()).collect();
-        LexToken::Alternation(parts)
+        let parts = validate_alternation_parts(word)?;
+        Ok(LexToken::Alternation(parts))
     } else {
-        LexToken::Literal(word.to_string())
+        Ok(LexToken::Literal(word.to_string()))
     }
 }
 
 /// Classify a negation word (after '!') into the appropriate LexToken.
-fn classify_negation(word: &str) -> LexToken {
+fn classify_negation(word: &str) -> Result<LexToken, PatternParseError> {
     if word.contains('|') {
-        let parts: Vec<String> = word.split('|').map(|s| s.to_string()).collect();
-        LexToken::NegationAlternation(parts)
+        let parts = validate_alternation_parts(word)?;
+        Ok(LexToken::NegationAlternation(parts))
     } else {
-        LexToken::Negation(word.to_string())
+        Ok(LexToken::Negation(word.to_string()))
     }
+}
+
+/// Split on '|' and validate that no part is empty.
+fn validate_alternation_parts(word: &str) -> Result<Vec<String>, PatternParseError> {
+    let parts: Vec<String> = word.split('|').map(|s| s.to_string()).collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return Err(PatternParseError::EmptyAlternation);
+    }
+    Ok(parts)
 }
 
 #[cfg(test)]
@@ -397,6 +406,31 @@ mod tests {
     fn tokenize_unclosed_quote() {
         let result = tokenize(r#"git commit -m "WIP"#);
         assert!(matches!(result, Err(PatternParseError::InvalidSyntax(_))));
+    }
+
+    #[rstest]
+    #[case("a||b")]
+    #[case("-X|")]
+    #[case("|--request")]
+    #[case("||")]
+    fn tokenize_empty_alternation(#[case] input: &str) {
+        let result = tokenize(input);
+        assert!(
+            matches!(result, Err(PatternParseError::EmptyAlternation)),
+            "expected EmptyAlternation for {input:?}, got {result:?}"
+        );
+    }
+
+    #[rstest]
+    #[case("!a||b")]
+    #[case("!|b")]
+    #[case("!a|")]
+    fn tokenize_empty_negation_alternation(#[case] input: &str) {
+        let result = tokenize(input);
+        assert!(
+            matches!(result, Err(PatternParseError::EmptyAlternation)),
+            "expected EmptyAlternation for {input:?}, got {result:?}"
+        );
     }
 
     // === Edge cases from design spec ===
