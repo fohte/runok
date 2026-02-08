@@ -41,40 +41,19 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
             '"' | '\'' => {
                 let quote = ch;
                 chars.next(); // consume opening quote
-                let mut value = String::new();
-                let mut closed = false;
-                while let Some(&(_, c)) = chars.peek() {
-                    chars.next();
-                    if c == quote {
-                        closed = true;
-                        break;
-                    }
-                    value.push(c);
-                }
-                if !closed {
-                    return Err(PatternParseError::InvalidSyntax(format!(
+                let value = consume_until(&mut chars, quote).ok_or_else(|| {
+                    PatternParseError::InvalidSyntax(format!(
                         "unclosed quote starting at position {pos}"
-                    )));
-                }
+                    ))
+                })?;
                 tokens.push(LexToken::Literal(value));
             }
 
             // Angle bracket placeholder: <cmd>, <path:name>
             '<' => {
                 chars.next(); // consume '<'
-                let mut content = String::new();
-                let mut closed = false;
-                while let Some(&(_, c)) = chars.peek() {
-                    chars.next();
-                    if c == '>' {
-                        closed = true;
-                        break;
-                    }
-                    content.push(c);
-                }
-                if !closed {
-                    return Err(PatternParseError::UnclosedBracket(pos));
-                }
+                let content = consume_until(&mut chars, '>')
+                    .ok_or(PatternParseError::UnclosedBracket(pos))?;
                 tokens.push(LexToken::Placeholder(content));
             }
 
@@ -154,6 +133,21 @@ fn consume_word(
     word
 }
 
+/// Consume characters until `end_char` is found. Returns `None` if input ends first.
+fn consume_until(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    end_char: char,
+) -> Option<String> {
+    let mut s = String::new();
+    for (_, c) in chars.by_ref() {
+        if c == end_char {
+            return Some(s);
+        }
+        s.push(c);
+    }
+    None
+}
+
 fn is_word_boundary(c: char) -> bool {
     matches!(c, ' ' | '\t' | '[' | ']' | '<')
 }
@@ -182,11 +176,15 @@ fn classify_negation(word: &str) -> Result<LexToken, PatternParseError> {
 
 /// Split on '|' and validate that no part is empty.
 fn validate_alternation_parts(word: &str) -> Result<Vec<String>, PatternParseError> {
-    let parts: Vec<String> = word.split('|').map(|s| s.to_string()).collect();
-    if parts.iter().any(|p| p.is_empty()) {
-        return Err(PatternParseError::EmptyAlternation);
-    }
-    Ok(parts)
+    word.split('|')
+        .map(|s| {
+            if s.is_empty() {
+                Err(PatternParseError::EmptyAlternation)
+            } else {
+                Ok(s.to_string())
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
