@@ -1,6 +1,8 @@
 //! Pattern and PatternToken data types, and the parser that converts
 //! pattern strings into structured Pattern values.
 
+use super::pattern_lexer::LexToken;
+
 /// A parsed pattern consisting of a command name and a sequence of tokens.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
@@ -52,265 +54,172 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
         return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
     }
 
-    let raw_tokens = tokenize(trimmed)?;
-    if raw_tokens.is_empty() {
+    let lex_tokens = super::pattern_lexer::tokenize(trimmed)?;
+    if lex_tokens.is_empty() {
         return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
     }
 
-    let command = raw_tokens[0].clone();
-    let rest = &raw_tokens[1..];
-    let tokens = build_pattern_tokens(rest)?;
+    let command = match &lex_tokens[0] {
+        LexToken::Literal(s) => s.clone(),
+        other => {
+            return Err(PatternParseError::InvalidSyntax(format!(
+                "expected command name, got {other:?}"
+            )));
+        }
+    };
+
+    let rest = &lex_tokens[1..];
+    let tokens = build_pattern_tokens(rest, false)?;
 
     Ok(Pattern { command, tokens })
 }
 
-/// Split the pattern string into raw tokens, respecting:
-/// - `<...>` angle bracket groups (kept as single tokens including delimiters)
-/// - `[...]` square bracket groups (kept as single tokens including delimiters)
-/// - single/double quoted strings (quotes stripped, content kept as one token)
-/// - whitespace separation
-fn tokenize(input: &str) -> Result<Vec<String>, super::PatternParseError> {
-    use super::PatternParseError;
-
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = input.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        match chars[i] {
-            '<' => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                let start = i;
-                i += 1;
-                let mut content = String::new();
-                while i < chars.len() && chars[i] != '>' {
-                    content.push(chars[i]);
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    return Err(PatternParseError::UnclosedBracket(start));
-                }
-                i += 1; // skip '>'
-                tokens.push(format!("<{content}>"));
-            }
-            '[' => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                let start = i;
-                i += 1;
-                let mut content = String::new();
-                while i < chars.len() {
-                    if chars[i] == '[' {
-                        return Err(PatternParseError::NestedSquareBracket);
-                    }
-                    if chars[i] == ']' {
-                        break;
-                    }
-                    content.push(chars[i]);
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    return Err(PatternParseError::UnclosedSquareBracket(start));
-                }
-                i += 1; // skip ']'
-                tokens.push(format!("[{content}]"));
-            }
-            '\'' | '"' => {
-                let quote = chars[i];
-                let start = i;
-                i += 1;
-                let mut quoted = String::new();
-                while i < chars.len() && chars[i] != quote {
-                    quoted.push(chars[i]);
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    return Err(PatternParseError::InvalidSyntax(format!(
-                        "unclosed quote starting at position {start}"
-                    )));
-                }
-                i += 1; // skip closing quote
-                current.push_str(&quoted);
-            }
-            ' ' | '\t' => {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                i += 1;
-            }
-            c => {
-                current.push(c);
-                i += 1;
-            }
-        }
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    Ok(tokens)
-}
-
-/// Convert raw token strings into PatternToken values, handling
-/// flag-with-value association and other pattern syntax.
+/// Convert LexTokens into PatternToken values, handling
+/// flag-with-value association, optional groups, and other pattern syntax.
 fn build_pattern_tokens(
-    raw_tokens: &[String],
-) -> Result<Vec<PatternToken>, super::PatternParseError> {
-    build_pattern_tokens_inner(raw_tokens, false)
-}
-
-fn build_pattern_tokens_inner(
-    raw_tokens: &[String],
+    lex_tokens: &[LexToken],
     inside_group: bool,
 ) -> Result<Vec<PatternToken>, super::PatternParseError> {
+    use super::PatternParseError;
+
     let mut result = Vec::new();
-    let mut i = 0;
+    let mut iter = lex_tokens.iter().enumerate().peekable();
 
-    while i < raw_tokens.len() {
-        let token = &raw_tokens[i];
+    while let Some((i, token)) = iter.next() {
+        match token {
+            LexToken::Wildcard => {
+                result.push(PatternToken::Wildcard);
+            }
 
-        if token.starts_with('[') && token.ends_with(']') {
-            // Optional group: parse the inner content recursively
-            let inner = &token[1..token.len() - 1];
-            let inner_raw = tokenize(inner)?;
-            let inner_tokens = build_pattern_tokens_inner(&inner_raw, true)?;
-            result.push(PatternToken::Optional(inner_tokens));
-            i += 1;
-        } else if token.starts_with('<') && token.ends_with('>') {
-            // Angle bracket: exclusively PathRef or Placeholder
-            let pt = parse_angle_bracket_token(token)?;
-            result.push(pt);
-            i += 1;
-        } else if token == "*" {
-            result.push(PatternToken::Wildcard);
-            i += 1;
-        } else if let Some(inner) = token.strip_prefix('!') {
-            let inner_token = parse_value_or_alternation(inner)?;
-            result.push(PatternToken::Negation(Box::new(inner_token)));
-            i += 1;
-        } else if token.contains('|') && !token.starts_with('<') {
-            // Bare pipe alternation
-            let alts: Vec<String> = token.split('|').map(|s| s.to_string()).collect();
-            if alts.iter().any(|a| a.is_empty()) {
-                return Err(super::PatternParseError::EmptyAlternation);
+            LexToken::Literal(s) => {
+                result.push(PatternToken::Literal(s.clone()));
             }
-            // If flag-like, check for value
-            if alts.iter().any(|a| is_flag(a))
-                && i + 1 < raw_tokens.len()
-                && should_consume_as_value(raw_tokens, i + 1, inside_group)
-            {
-                let next = &raw_tokens[i + 1];
-                let value_token = parse_single_value_token(next)?;
-                result.push(PatternToken::FlagWithValue {
-                    aliases: alts,
-                    value: Box::new(value_token),
-                });
-                i += 2;
-            } else {
-                result.push(PatternToken::Alternation(alts));
-                i += 1;
+
+            LexToken::Alternation(alts) => {
+                if alts.iter().any(|a| is_flag(a)) {
+                    // Check if the next token should be consumed as a flag value
+                    let consume = if let Some(&(j, next)) = iter.peek() {
+                        should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group)
+                    } else {
+                        false
+                    };
+
+                    if consume {
+                        let (_, next_token) = iter.next().unwrap();
+                        let value = lex_to_pattern_value(next_token)?;
+                        result.push(PatternToken::FlagWithValue {
+                            aliases: alts.clone(),
+                            value: Box::new(value),
+                        });
+                    } else {
+                        result.push(PatternToken::Alternation(alts.clone()));
+                    }
+                } else {
+                    result.push(PatternToken::Alternation(alts.clone()));
+                }
             }
-        } else {
-            result.push(PatternToken::Literal(token.clone()));
-            i += 1;
+
+            LexToken::Negation(s) => {
+                result.push(PatternToken::Negation(Box::new(PatternToken::Literal(
+                    s.clone(),
+                ))));
+            }
+
+            LexToken::NegationAlternation(alts) => {
+                result.push(PatternToken::Negation(Box::new(PatternToken::Alternation(
+                    alts.clone(),
+                ))));
+            }
+
+            LexToken::Placeholder(content) => {
+                let pt = parse_placeholder(content)?;
+                result.push(pt);
+            }
+
+            LexToken::OpenBracket => {
+                // Collect tokens until CloseBracket
+                let mut inner = Vec::new();
+                let bracket_pos = i;
+                loop {
+                    match iter.next() {
+                        Some((_, LexToken::CloseBracket)) => break,
+                        Some((_, t)) => inner.push(t.clone()),
+                        None => {
+                            return Err(PatternParseError::UnclosedSquareBracket(bracket_pos));
+                        }
+                    }
+                }
+                let inner_tokens = build_pattern_tokens(&inner, true)?;
+                result.push(PatternToken::Optional(inner_tokens));
+            }
+
+            LexToken::CloseBracket => {
+                return Err(PatternParseError::InvalidSyntax(
+                    "unexpected closing bracket".into(),
+                ));
+            }
         }
     }
 
     Ok(result)
 }
 
-/// Parse the content inside angle brackets.
-///
-/// Angle brackets are exclusively for:
-/// - `<path:name>` -> PathRef
-/// - `<cmd>` -> Placeholder (single word, no pipe)
-///
-/// Alternation uses bare pipe syntax (`-X|--request`) without angle brackets.
-fn parse_angle_bracket_token(token: &str) -> Result<PatternToken, super::PatternParseError> {
-    let inner = &token[1..token.len() - 1];
+/// Convert a single LexToken into a PatternToken for use as a flag value.
+fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::PatternParseError> {
+    match token {
+        LexToken::Wildcard => Ok(PatternToken::Wildcard),
+        LexToken::Literal(s) => Ok(PatternToken::Literal(s.clone())),
+        LexToken::Negation(s) => Ok(PatternToken::Negation(Box::new(PatternToken::Literal(
+            s.clone(),
+        )))),
+        LexToken::NegationAlternation(alts) => Ok(PatternToken::Negation(Box::new(
+            PatternToken::Alternation(alts.clone()),
+        ))),
+        LexToken::Placeholder(content) => parse_placeholder(content),
+        LexToken::Alternation(alts) => Ok(PatternToken::Alternation(alts.clone())),
+        LexToken::OpenBracket | LexToken::CloseBracket => Err(
+            super::PatternParseError::InvalidSyntax("bracket cannot be used as flag value".into()),
+        ),
+    }
+}
 
-    if inner.is_empty() {
+/// Parse angle-bracket placeholder content into PathRef or Placeholder.
+fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseError> {
+    if content.is_empty() {
         return Err(super::PatternParseError::InvalidSyntax(
             "empty angle brackets".into(),
         ));
     }
 
-    // Alternation (pipe) inside angle brackets is not allowed
-    if inner.contains('|') {
+    if content.contains('|') {
         return Err(super::PatternParseError::InvalidSyntax(format!(
-            "alternation inside angle brackets is not supported, use bare pipe: {inner}"
+            "alternation inside angle brackets is not supported, use bare pipe: {content}"
         )));
     }
 
-    if let Some(name) = inner.strip_prefix("path:") {
+    if let Some(name) = content.strip_prefix("path:") {
         return Ok(PatternToken::PathRef(name.to_string()));
     }
 
-    Ok(PatternToken::Placeholder(inner.to_string()))
+    Ok(PatternToken::Placeholder(content.to_string()))
 }
 
-/// Parse a single raw token as a value (not a flag itself).
-/// Used for the value part of a FlagWithValue.
-fn parse_single_value_token(token: &str) -> Result<PatternToken, super::PatternParseError> {
-    if token == "*" {
-        Ok(PatternToken::Wildcard)
-    } else if token.starts_with('<') && token.ends_with('>') {
-        parse_angle_bracket_token(token)
-    } else if let Some(inner) = token.strip_prefix('!') {
-        let inner_token = parse_value_or_alternation(inner)?;
-        Ok(PatternToken::Negation(Box::new(inner_token)))
-    } else {
-        Ok(PatternToken::Literal(token.to_string()))
-    }
-}
-
-/// Parse a string that might be a bare alternation (contains `|`) or a literal.
-fn parse_value_or_alternation(s: &str) -> Result<PatternToken, super::PatternParseError> {
-    if s.contains('|') {
-        let alts: Vec<String> = s.split('|').map(|s| s.to_string()).collect();
-        if alts.iter().any(|a| a.is_empty()) {
-            return Err(super::PatternParseError::EmptyAlternation);
-        }
-        Ok(PatternToken::Alternation(alts))
-    } else {
-        Ok(PatternToken::Literal(s.to_string()))
-    }
-}
-
-/// Determine whether the token at `idx` should be consumed as a flag's value.
+/// Determine whether a LexToken should be consumed as a flag's value.
 ///
 /// A token is consumed as a value when:
-/// - It is a non-wildcard token (literal, negation, etc.) that doesn't look like a flag itself, OR
-/// - It is `*` AND there are more tokens after it (so `*` is the value, not the trailing wildcard).
+/// - It is a non-wildcard token that doesn't look like a flag itself, OR
+/// - It is `Wildcard` AND there are more tokens after it (so `*` is the value, not the trailing wildcard).
 ///
-/// This prevents `<-f|--force> *` (where `*` is the last token) from being parsed as
-/// FlagWithValue, while allowing `<-X|--request> * *` to parse the first `*` as a value.
-fn should_consume_as_value(raw_tokens: &[String], idx: usize, inside_group: bool) -> bool {
-    let token = &raw_tokens[idx];
-
-    if token.starts_with('[') {
-        return false;
+/// This prevents `-f|--force *` (where `*` is the last token) from being parsed as
+/// FlagWithValue, while allowing `-X|--request * *` to parse the first `*` as a value.
+fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: bool) -> bool {
+    match next {
+        LexToken::OpenBracket | LexToken::CloseBracket => false,
+        LexToken::Literal(s) if is_flag(s) => false,
+        LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
+        LexToken::Wildcard => inside_group || has_more_after,
+        _ => true,
     }
-
-    // Flags (e.g., --force, -v) are not consumed as values for a preceding flag.
-    // Negation tokens (e.g., !prod) are valid values though.
-    if is_flag(token) {
-        return false;
-    }
-
-    // Wildcard: inside a group (e.g., [-C *]), always consume as value.
-    // At top level, only consume if there are more tokens after it,
-    // so a trailing wildcard stays independent.
-    if token == "*" {
-        return inside_group || idx + 1 < raw_tokens.len();
-    }
-
-    true
 }
 
 /// Check if a string looks like a flag (starts with `-`).
