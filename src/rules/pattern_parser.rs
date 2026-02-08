@@ -232,154 +232,25 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
-    // === Successful parsing (rstest parameterized) ===
+    fn assert_parse(input: &str, expected_command: &str, expected_tokens: Vec<PatternToken>) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, expected_command);
+        assert_eq!(result.tokens, expected_tokens);
+    }
 
     #[rstest]
-    // --- Simple patterns ---
     #[case::command_only("git", "git", vec![])]
-    #[case::simple_command("git status", "git", vec![
+    #[case::simple("git status", "git", vec![
         PatternToken::Literal("status".into()),
     ])]
-    #[case::multiple_literals("git remote add origin", "git", vec![
+    #[case::multiple("git remote add origin", "git", vec![
         PatternToken::Literal("remote".into()),
         PatternToken::Literal("add".into()),
         PatternToken::Literal("origin".into()),
     ])]
-    // --- Wildcard ---
-    #[case::wildcard("git *", "git", vec![PatternToken::Wildcard])]
-    #[case::wildcard_with_literals("git push * --force", "git", vec![
-        PatternToken::Literal("push".into()),
-        PatternToken::Wildcard,
-        PatternToken::Literal("--force".into()),
-    ])]
-    // --- Alternation (bare pipe) ---
-    #[case::value_alternation("git push origin main|master", "git", vec![
-        PatternToken::Literal("push".into()),
-        PatternToken::Literal("origin".into()),
-        PatternToken::Alternation(vec!["main".into(), "master".into()]),
-    ])]
-    #[case::non_flag_alternation("kubectl describe|get|list *", "kubectl", vec![
-        PatternToken::Alternation(vec!["describe".into(), "get".into(), "list".into()]),
-        PatternToken::Wildcard,
-    ])]
-    // --- FlagWithValue (only via alternation) ---
-    #[case::flag_with_literal_value("curl -X|--request POST *", "curl", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-X".into(), "--request".into()],
-            value: Box::new(PatternToken::Literal("POST".into())),
-        },
-        PatternToken::Wildcard,
-    ])]
-    #[case::flag_with_wildcard_value("curl -X|--request * *", "curl", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-X".into(), "--request".into()],
-            value: Box::new(PatternToken::Wildcard),
-        },
-        PatternToken::Wildcard,
-    ])]
-    #[case::flag_alternation_with_value("aws -p|--profile prod *", "aws", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-p".into(), "--profile".into()],
-            value: Box::new(PatternToken::Literal("prod".into())),
-        },
-        PatternToken::Wildcard,
-    ])]
-    // Trailing * is an independent wildcard, not consumed as the flag's value
-    #[case::flag_alternation_trailing_wildcard("git commit -m|--message *", "git", vec![
-        PatternToken::Literal("commit".into()),
-        PatternToken::Alternation(vec!["-m".into(), "--message".into()]),
-        PatternToken::Wildcard,
-    ])]
-    // Boolean flag alternation (no value)
-    #[case::boolean_flag_alternation("git push -f|--force *", "git", vec![
-        PatternToken::Literal("push".into()),
-        PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
-        PatternToken::Wildcard,
-    ])]
-    // --- Single flags without alternation are literals ---
-    #[case::long_flag_is_literal("aws --profile prod *", "aws", vec![
-        PatternToken::Literal("--profile".into()),
-        PatternToken::Literal("prod".into()),
-        PatternToken::Wildcard,
-    ])]
-    #[case::short_flag_is_literal("git -C /tmp status", "git", vec![
-        PatternToken::Literal("-C".into()),
-        PatternToken::Literal("/tmp".into()),
-        PatternToken::Literal("status".into()),
-    ])]
-    #[case::long_flag_not_consuming_positional("git push --force origin", "git", vec![
-        PatternToken::Literal("push".into()),
-        PatternToken::Literal("--force".into()),
-        PatternToken::Literal("origin".into()),
-    ])]
-    #[case::long_flag_not_consuming_wildcard("git --verbose *", "git", vec![
-        PatternToken::Literal("--verbose".into()),
-        PatternToken::Wildcard,
-    ])]
-    #[case::flag_at_end("git push --force", "git", vec![
-        PatternToken::Literal("push".into()),
-        PatternToken::Literal("--force".into()),
-    ])]
-    #[case::multi_char_short_flag("rm -rf /", "rm", vec![
-        PatternToken::Literal("-rf".into()),
-        PatternToken::Literal("/".into()),
-    ])]
-    // --- Negation ---
-    #[case::negation_literal("aws --profile !prod *", "aws", vec![
-        PatternToken::Literal("--profile".into()),
-        PatternToken::Negation(Box::new(PatternToken::Literal("prod".into()))),
-        PatternToken::Wildcard,
-    ])]
-    #[case::negation_alternation("kubectl !describe|get|list *", "kubectl", vec![
-        PatternToken::Negation(Box::new(PatternToken::Alternation(vec![
-            "describe".into(), "get".into(), "list".into(),
-        ]))),
-        PatternToken::Wildcard,
-    ])]
-    // --- Optional groups ---
-    #[case::optional_flag("rm [-f] *", "rm", vec![
-        PatternToken::Optional(vec![PatternToken::Literal("-f".into())]),
-        PatternToken::Wildcard,
-    ])]
-    #[case::optional_flag_with_value("curl [-X|--request GET] *", "curl", vec![
-        PatternToken::Optional(vec![PatternToken::FlagWithValue {
-            aliases: vec!["-X".into(), "--request".into()],
-            value: Box::new(PatternToken::Literal("GET".into())),
-        }]),
-        PatternToken::Wildcard,
-    ])]
-    #[case::optional_multiple_tokens("git [-C *] status", "git", vec![
-        PatternToken::Optional(vec![
-            PatternToken::Literal("-C".into()),
-            PatternToken::Wildcard,
-        ]),
-        PatternToken::Literal("status".into()),
-    ])]
-    // --- Placeholder and PathRef ---
-    #[case::placeholder("sudo <cmd>", "sudo", vec![
-        PatternToken::Placeholder("cmd".into()),
-    ])]
-    #[case::path_ref("cat <path:sensitive>", "cat", vec![
-        PatternToken::PathRef("sensitive".into()),
-    ])]
-    // Flag value as Placeholder/PathRef
-    #[case::flag_value_placeholder("cmd -o|--option <cmd>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-o".into(), "--option".into()],
-            value: Box::new(PatternToken::Placeholder("cmd".into())),
-        },
-    ])]
-    #[case::flag_value_path_ref("cmd -c|--config <path:config>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-c".into(), "--config".into()],
-            value: Box::new(PatternToken::PathRef("config".into())),
-        },
-    ])]
-    // --- Joined token (=) ---
     #[case::joined_equals("java -Denv=prod", "java", vec![
         PatternToken::Literal("-Denv=prod".into()),
     ])]
-    // --- Quoted strings ---
     #[case::single_quoted("git commit -m 'WIP*'", "git", vec![
         PatternToken::Literal("commit".into()),
         PatternToken::Literal("-m".into()),
@@ -390,17 +261,196 @@ mod tests {
         PatternToken::Literal("-m".into()),
         PatternToken::Literal("WIP*".into()),
     ])]
-    fn parse_ok(
+    fn parse_literals(
         #[case] input: &str,
         #[case] expected_command: &str,
         #[case] expected_tokens: Vec<PatternToken>,
     ) {
-        let result = parse(input).unwrap();
-        assert_eq!(result.command, expected_command);
-        assert_eq!(result.tokens, expected_tokens);
+        assert_parse(input, expected_command, expected_tokens);
     }
 
-    // === Error cases (rstest parameterized) ===
+    #[rstest]
+    #[case::standalone("git *", "git", vec![PatternToken::Wildcard])]
+    #[case::between_literals("git push * --force", "git", vec![
+        PatternToken::Literal("push".into()),
+        PatternToken::Wildcard,
+        PatternToken::Literal("--force".into()),
+    ])]
+    fn parse_wildcard(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::value_alternation("git push origin main|master", "git", vec![
+        PatternToken::Literal("push".into()),
+        PatternToken::Literal("origin".into()),
+        PatternToken::Alternation(vec!["main".into(), "master".into()]),
+    ])]
+    #[case::non_flag("kubectl describe|get|list *", "kubectl", vec![
+        PatternToken::Alternation(vec!["describe".into(), "get".into(), "list".into()]),
+        PatternToken::Wildcard,
+    ])]
+    fn parse_alternation(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::literal_value("curl -X|--request POST *", "curl", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-X".into(), "--request".into()],
+            value: Box::new(PatternToken::Literal("POST".into())),
+        },
+        PatternToken::Wildcard,
+    ])]
+    #[case::wildcard_value("curl -X|--request * *", "curl", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-X".into(), "--request".into()],
+            value: Box::new(PatternToken::Wildcard),
+        },
+        PatternToken::Wildcard,
+    ])]
+    #[case::named_value("aws -p|--profile prod *", "aws", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-p".into(), "--profile".into()],
+            value: Box::new(PatternToken::Literal("prod".into())),
+        },
+        PatternToken::Wildcard,
+    ])]
+    #[case::trailing_wildcard_not_consumed("git commit -m|--message *", "git", vec![
+        PatternToken::Literal("commit".into()),
+        PatternToken::Alternation(vec!["-m".into(), "--message".into()]),
+        PatternToken::Wildcard,
+    ])]
+    #[case::boolean_flag("git push -f|--force *", "git", vec![
+        PatternToken::Literal("push".into()),
+        PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
+        PatternToken::Wildcard,
+    ])]
+    #[case::placeholder_value("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-o".into(), "--option".into()],
+            value: Box::new(PatternToken::Placeholder("cmd".into())),
+        },
+    ])]
+    #[case::path_ref_value("cmd -c|--config <path:config>", "cmd", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-c".into(), "--config".into()],
+            value: Box::new(PatternToken::PathRef("config".into())),
+        },
+    ])]
+    fn parse_flag_with_value(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::long_flag("aws --profile prod *", "aws", vec![
+        PatternToken::Literal("--profile".into()),
+        PatternToken::Literal("prod".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::short_flag("git -C /tmp status", "git", vec![
+        PatternToken::Literal("-C".into()),
+        PatternToken::Literal("/tmp".into()),
+        PatternToken::Literal("status".into()),
+    ])]
+    #[case::not_consuming_positional("git push --force origin", "git", vec![
+        PatternToken::Literal("push".into()),
+        PatternToken::Literal("--force".into()),
+        PatternToken::Literal("origin".into()),
+    ])]
+    #[case::not_consuming_wildcard("git --verbose *", "git", vec![
+        PatternToken::Literal("--verbose".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::at_end("git push --force", "git", vec![
+        PatternToken::Literal("push".into()),
+        PatternToken::Literal("--force".into()),
+    ])]
+    #[case::multi_char_short("rm -rf /", "rm", vec![
+        PatternToken::Literal("-rf".into()),
+        PatternToken::Literal("/".into()),
+    ])]
+    fn parse_single_flag_as_literal(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::literal("aws --profile !prod *", "aws", vec![
+        PatternToken::Literal("--profile".into()),
+        PatternToken::Negation(Box::new(PatternToken::Literal("prod".into()))),
+        PatternToken::Wildcard,
+    ])]
+    #[case::alternation("kubectl !describe|get|list *", "kubectl", vec![
+        PatternToken::Negation(Box::new(PatternToken::Alternation(vec![
+            "describe".into(), "get".into(), "list".into(),
+        ]))),
+        PatternToken::Wildcard,
+    ])]
+    fn parse_negation(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::single_flag("rm [-f] *", "rm", vec![
+        PatternToken::Optional(vec![PatternToken::Literal("-f".into())]),
+        PatternToken::Wildcard,
+    ])]
+    #[case::flag_with_value("curl [-X|--request GET] *", "curl", vec![
+        PatternToken::Optional(vec![PatternToken::FlagWithValue {
+            aliases: vec!["-X".into(), "--request".into()],
+            value: Box::new(PatternToken::Literal("GET".into())),
+        }]),
+        PatternToken::Wildcard,
+    ])]
+    #[case::multiple_tokens("git [-C *] status", "git", vec![
+        PatternToken::Optional(vec![
+            PatternToken::Literal("-C".into()),
+            PatternToken::Wildcard,
+        ]),
+        PatternToken::Literal("status".into()),
+    ])]
+    fn parse_optional(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::placeholder("sudo <cmd>", "sudo", vec![
+        PatternToken::Placeholder("cmd".into()),
+    ])]
+    #[case::path_ref("cat <path:sensitive>", "cat", vec![
+        PatternToken::PathRef("sensitive".into()),
+    ])]
+    fn parse_placeholder(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
 
     #[rstest]
     #[case::empty_string("", "InvalidSyntax")]
