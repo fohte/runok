@@ -190,7 +190,7 @@ fn build_pattern_tokens_inner(
             result.push(PatternToken::Wildcard);
             i += 1;
         } else if let Some(inner) = token.strip_prefix('!') {
-            let inner_token = parse_value_or_alternation(inner);
+            let inner_token = parse_value_or_alternation(inner)?;
             result.push(PatternToken::Negation(Box::new(inner_token)));
             i += 1;
         } else if token.contains('|') && !token.starts_with('<') {
@@ -259,8 +259,10 @@ fn parse_angle_bracket_token(token: &str) -> Result<PatternToken, super::Pattern
 fn parse_single_value_token(token: &str) -> Result<PatternToken, super::PatternParseError> {
     if token == "*" {
         Ok(PatternToken::Wildcard)
+    } else if token.starts_with('<') && token.ends_with('>') {
+        parse_angle_bracket_token(token)
     } else if let Some(inner) = token.strip_prefix('!') {
-        let inner_token = parse_value_or_alternation(inner);
+        let inner_token = parse_value_or_alternation(inner)?;
         Ok(PatternToken::Negation(Box::new(inner_token)))
     } else {
         Ok(PatternToken::Literal(token.to_string()))
@@ -268,12 +270,15 @@ fn parse_single_value_token(token: &str) -> Result<PatternToken, super::PatternP
 }
 
 /// Parse a string that might be a bare alternation (contains `|`) or a literal.
-fn parse_value_or_alternation(s: &str) -> PatternToken {
+fn parse_value_or_alternation(s: &str) -> Result<PatternToken, super::PatternParseError> {
     if s.contains('|') {
         let alts: Vec<String> = s.split('|').map(|s| s.to_string()).collect();
-        PatternToken::Alternation(alts)
+        if alts.iter().any(|a| a.is_empty()) {
+            return Err(super::PatternParseError::EmptyAlternation);
+        }
+        Ok(PatternToken::Alternation(alts))
     } else {
-        PatternToken::Literal(s.to_string())
+        Ok(PatternToken::Literal(s.to_string()))
     }
 }
 
@@ -448,6 +453,19 @@ mod tests {
     #[case::path_ref("cat <path:sensitive>", "cat", vec![
         PatternToken::PathRef("sensitive".into()),
     ])]
+    // Flag value as Placeholder/PathRef
+    #[case::flag_value_placeholder("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-o".into(), "--option".into()],
+            value: Box::new(PatternToken::Placeholder("cmd".into())),
+        },
+    ])]
+    #[case::flag_value_path_ref("cmd -c|--config <path:config>", "cmd", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-c".into(), "--config".into()],
+            value: Box::new(PatternToken::PathRef("config".into())),
+        },
+    ])]
     // --- Joined token (=) ---
     #[case::joined_equals("java -Denv=prod", "java", vec![
         PatternToken::Literal("-Denv=prod".into()),
@@ -485,6 +503,7 @@ mod tests {
     #[case::angle_bracket_with_pipe("curl <-X|--request> POST *", "InvalidSyntax")]
     #[case::angle_bracket_value_alternation("git push origin <main|master>", "InvalidSyntax")]
     #[case::empty_alternation("kubectl describe| *", "EmptyAlternation")]
+    #[case::empty_negation_alternation("kubectl !a||b *", "EmptyAlternation")]
     #[case::unclosed_single_quote("git commit -m 'WIP", "InvalidSyntax")]
     #[case::unclosed_double_quote(r#"git commit -m "WIP"#, "InvalidSyntax")]
     fn parse_err(#[case] input: &str, #[case] expected_variant: &str) {
