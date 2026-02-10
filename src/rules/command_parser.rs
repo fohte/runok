@@ -6,7 +6,7 @@ use crate::rules::CommandParseError;
 /// - Whitespace-delimited splitting
 /// - Single-quoted strings (no escape processing inside)
 /// - Double-quoted strings (backslash escapes for `\`, `"`, `$`, `` ` ``, newline;
-///   unknown escapes drop the backslash to match shell behavior)
+///   unknown escapes preserve the backslash to match shell behavior)
 /// - Backslash escapes outside of quotes
 /// - Empty quoted strings (`""`, `''`) are preserved as empty tokens
 pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
@@ -52,8 +52,11 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
                         Some('\\') => match chars.next() {
                             Some(c @ ('"' | '\\' | '$' | '`')) => current.push(c),
                             Some('\n') => {} // line continuation
-                            // Unknown escape: drop backslash (match shell behavior)
-                            Some(c) => current.push(c),
+                            // Unknown escape: preserve backslash (match shell behavior)
+                            Some(c) => {
+                                current.push('\\');
+                                current.push(c);
+                            }
                             None => return Err(CommandParseError::UnclosedQuote),
                         },
                         Some(c) => current.push(c),
@@ -211,10 +214,10 @@ mod tests {
     // ========================================
 
     #[test]
-    fn tokenize_double_quote_unknown_escape_drops_backslash() {
-        // Shell behavior: "\j" -> "j" (backslash dropped for unknown escapes)
+    fn tokenize_double_quote_unknown_escape_preserves_backslash() {
+        // Shell behavior: "\j" -> "\j" (backslash preserved for unknown escapes)
         let result = tokenize(r#"echo "\j""#).unwrap();
-        assert_eq!(result, vec!["echo", "j"]);
+        assert_eq!(result, vec!["echo", "\\j"]);
     }
 
     #[test]
