@@ -18,6 +18,8 @@ pub enum CommandParseError {
     UnclosedQuote,
     #[error("empty command")]
     EmptyCommand,
+    #[error("syntax error in command")]
+    SyntaxError,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,7 +80,7 @@ mod tests {
     fn pattern_parse_error_is_debug() {
         let error = PatternParseError::UnclosedBracket(3);
         let debug = format!("{:?}", error);
-        assert!(debug.contains("UnclosedBracket"));
+        assert_eq!(debug, "UnclosedBracket(3)");
     }
 
     // === CommandParseError ===
