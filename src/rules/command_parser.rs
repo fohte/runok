@@ -66,11 +66,13 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
             }
             // Backslash escape outside quotes
             '\\' => {
-                has_token = true;
                 chars.next(); // consume backslash
                 match chars.next() {
                     Some('\n') => {} // line continuation
-                    Some(c) => current.push(c),
+                    Some(c) => {
+                        has_token = true;
+                        current.push(c);
+                    }
                     None => {} // trailing backslash is ignored
                 }
             }
@@ -237,6 +239,13 @@ mod tests {
     fn tokenize_escapes(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = tokenize(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn tokenize_trailing_backslash_ignored() {
+        // Trailing backslash at end of input should not produce a spurious empty token
+        let result = tokenize("echo \\").unwrap();
+        assert_eq!(result, vec!["echo"]);
     }
 
     // ========================================
