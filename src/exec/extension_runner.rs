@@ -29,16 +29,6 @@ pub struct ExtensionResponse {
 /// JSON-RPC 2.0 envelope for responses (internal parsing helper).
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
-    #[expect(
-        dead_code,
-        reason = "included for JSON-RPC 2.0 compliance; validated at protocol level"
-    )]
-    jsonrpc: Option<String>,
-    #[expect(
-        dead_code,
-        reason = "included for JSON-RPC 2.0 compliance; validated at protocol level"
-    )]
-    id: Option<serde_json::Value>,
     result: Option<ExtensionResponse>,
     error: Option<JsonRpcError>,
 }
