@@ -59,14 +59,19 @@ pub struct ProcessExtensionRunner;
 
 impl ProcessExtensionRunner {
     /// Build a JSON-RPC 2.0 request string from an ExtensionRequest.
-    pub fn build_jsonrpc_request(&self, request: &ExtensionRequest) -> String {
+    pub fn build_jsonrpc_request(
+        &self,
+        request: &ExtensionRequest,
+    ) -> Result<String, ExtensionError> {
         let envelope = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "validateCommand",
             "params": request,
         });
-        serde_json::to_string(&envelope).unwrap_or_default()
+        serde_json::to_string(&envelope).map_err(|e| {
+            ExtensionError::InvalidResponse(format!("request serialization failed: {e}"))
+        })
     }
 
     /// Parse a JSON-RPC 2.0 response string into an ExtensionResponse.
@@ -116,9 +121,9 @@ impl ExtensionRunner for ProcessExtensionRunner {
             .spawn()?;
 
         // Write JSON-RPC request to stdin, then close the pipe
-        let json_request = self.build_jsonrpc_request(request);
+        let json_request = self.build_jsonrpc_request(request)?;
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(json_request.as_bytes());
+            stdin.write_all(json_request.as_bytes())?;
             // stdin is dropped here, closing the pipe
         }
 
@@ -195,7 +200,9 @@ mod tests {
     fn serialize_jsonrpc_request() {
         let runner = ProcessExtensionRunner;
         let request = sample_request();
-        let json_str = runner.build_jsonrpc_request(&request);
+        let json_str = runner
+            .build_jsonrpc_request(&request)
+            .expect("should serialize request");
 
         let parsed: serde_json::Value =
             serde_json::from_str(&json_str).expect("should be valid JSON");
@@ -224,7 +231,9 @@ mod tests {
             cwd: ".".to_string(),
         };
         let runner = ProcessExtensionRunner;
-        let json_str = runner.build_jsonrpc_request(&request);
+        let json_str = runner
+            .build_jsonrpc_request(&request)
+            .expect("should serialize request");
 
         let parsed: serde_json::Value =
             serde_json::from_str(&json_str).expect("should be valid JSON");
