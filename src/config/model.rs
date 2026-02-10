@@ -77,8 +77,7 @@ mod tests {
 
     #[test]
     fn parse_empty_config() {
-        let yaml = "{}";
-        let config = parse_config(yaml).unwrap();
+        let config = parse_config("{}").unwrap();
         assert_eq!(config.extends, None);
         assert_eq!(config.defaults, None);
         assert_eq!(config.rules, None);
@@ -95,10 +94,14 @@ extends:
 "#;
         let config = parse_config(yaml).unwrap();
         let extends = config.extends.unwrap();
-        assert_eq!(extends.len(), 3);
-        assert_eq!(extends[0], "./local-rules.yaml");
-        assert_eq!(extends[1], "github:runok/presets@v1.0.0");
-        assert_eq!(extends[2], "https://example.com/preset.yaml");
+        assert_eq!(
+            extends,
+            vec![
+                "./local-rules.yaml",
+                "github:runok/presets@v1.0.0",
+                "https://example.com/preset.yaml",
+            ]
+        );
     }
 
     // === Defaults ===
@@ -108,123 +111,126 @@ extends:
     #[case("deny", ActionKind::Deny)]
     #[case("ask", ActionKind::Ask)]
     fn parse_defaults_action(#[case] action_str: &str, #[case] expected: ActionKind) {
-        let yaml = format!(
-            r#"
-defaults:
-  action: {action_str}
-"#
-        );
+        let yaml = format!("defaults:\n  action: {action_str}");
         let config = parse_config(&yaml).unwrap();
-        let defaults = config.defaults.unwrap();
-        assert_eq!(defaults.action, Some(expected));
+        assert_eq!(config.defaults.unwrap().action, Some(expected));
     }
 
     #[test]
-    fn parse_defaults_sandbox() {
-        let yaml = r#"
-defaults:
-  action: ask
-  sandbox: workspace-write
-"#;
+    fn parse_defaults_with_sandbox() {
+        let yaml = "defaults:\n  action: ask\n  sandbox: workspace-write";
         let config = parse_config(yaml).unwrap();
         let defaults = config.defaults.unwrap();
         assert_eq!(defaults.action, Some(ActionKind::Ask));
         assert_eq!(defaults.sandbox, Some("workspace-write".to_string()));
     }
 
-    // === Rules ===
+    // === Rules: single action key ===
 
-    #[test]
-    fn parse_deny_rule() {
-        let yaml = r#"
-rules:
-  - deny: 'rm -rf /'
-"#;
-        let config = parse_config(yaml).unwrap();
+    #[rstest]
+    #[case::deny("deny", "rm -rf /")]
+    #[case::allow("allow", "git status")]
+    #[case::ask("ask", "curl -X|--request !GET *")]
+    fn parse_single_rule(#[case] action: &str, #[case] pattern: &str) {
+        let yaml = format!("rules:\n  - {action}: '{pattern}'");
+        let config = parse_config(&yaml).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].deny, Some("rm -rf /".to_string()));
-        assert_eq!(rules[0].allow, None);
-        assert_eq!(rules[0].ask, None);
+
+        let rule = &rules[0];
+        let (deny, allow, ask) = (&rule.deny, &rule.allow, &rule.ask);
+        match action {
+            "deny" => {
+                assert_eq!(deny.as_deref(), Some(pattern));
+                assert_eq!(allow.as_deref(), None);
+                assert_eq!(ask.as_deref(), None);
+            }
+            "allow" => {
+                assert_eq!(deny.as_deref(), None);
+                assert_eq!(allow.as_deref(), Some(pattern));
+                assert_eq!(ask.as_deref(), None);
+            }
+            "ask" => {
+                assert_eq!(deny.as_deref(), None);
+                assert_eq!(allow.as_deref(), None);
+                assert_eq!(ask.as_deref(), Some(pattern));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // === Rules: optional attributes ===
+
+    #[rstest]
+    #[case::when(
+        "deny: 'aws *'\n    when: \"env.AWS_PROFILE == 'prod'\"",
+        None,
+        Some("env.AWS_PROFILE == 'prod'"),
+        None,
+        None
+    )]
+    #[case::message(
+        "deny: 'git push -f|--force *'\n    message: 'Force push is not allowed'",
+        Some("Force push is not allowed"),
+        None,
+        None,
+        None
+    )]
+    #[case::fix_suggestion(
+        "deny: 'git push -f|--force *'\n    fix_suggestion: 'git push --force-with-lease'",
+        None,
+        None,
+        Some("git push --force-with-lease"),
+        None
+    )]
+    #[case::sandbox(
+        "allow: 'python3 *'\n    sandbox: restricted",
+        None,
+        None,
+        None,
+        Some("restricted")
+    )]
+    #[case::message_and_fix(
+        "deny: 'git push -f|--force *'\n    message: 'Force push is not allowed'\n    fix_suggestion: 'git push --force-with-lease'",
+        Some("Force push is not allowed"),
+        None,
+        Some("git push --force-with-lease"),
+        None
+    )]
+    #[case::when_and_message(
+        "deny: 'aws *'\n    when: \"env.AWS_PROFILE == 'prod'\"\n    message: 'Production AWS operations are not allowed'",
+        Some("Production AWS operations are not allowed"),
+        Some("env.AWS_PROFILE == 'prod'"),
+        None,
+        None
+    )]
+    fn parse_rule_attributes(
+        #[case] rule_yaml: &str,
+        #[case] expected_message: Option<&str>,
+        #[case] expected_when: Option<&str>,
+        #[case] expected_fix: Option<&str>,
+        #[case] expected_sandbox: Option<&str>,
+    ) {
+        let yaml = format!("rules:\n  - {rule_yaml}");
+        let config = parse_config(&yaml).unwrap();
+        let rule = &config.rules.unwrap()[0];
+        assert_eq!(rule.message.as_deref(), expected_message);
+        assert_eq!(rule.when.as_deref(), expected_when);
+        assert_eq!(rule.fix_suggestion.as_deref(), expected_fix);
+        assert_eq!(rule.sandbox.as_deref(), expected_sandbox);
     }
 
     #[test]
-    fn parse_allow_rule() {
-        let yaml = r#"
-rules:
-  - allow: 'git status'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].allow, Some("git status".to_string()));
-    }
-
-    #[test]
-    fn parse_ask_rule() {
-        let yaml = r#"
-rules:
-  - ask: 'curl -X|--request !GET *'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].ask, Some("curl -X|--request !GET *".to_string()));
-    }
-
-    #[test]
-    fn parse_deny_rule_with_message_and_fix() {
-        let yaml = r#"
-rules:
-  - deny: 'git push -f|--force *'
-    message: 'Force push is not allowed'
-    fix_suggestion: 'git push --force-with-lease'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].deny, Some("git push -f|--force *".to_string()));
-        assert_eq!(
-            rules[0].message,
-            Some("Force push is not allowed".to_string())
-        );
-        assert_eq!(
-            rules[0].fix_suggestion,
-            Some("git push --force-with-lease".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_deny_rule_with_when() {
-        let yaml = r#"
-rules:
-  - deny: 'aws *'
-    when: "env.AWS_PROFILE == 'prod'"
-    message: 'Production AWS operations are not allowed'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].deny, Some("aws *".to_string()));
-        assert_eq!(rules[0].when, Some("env.AWS_PROFILE == 'prod'".to_string()));
-        assert_eq!(
-            rules[0].message,
-            Some("Production AWS operations are not allowed".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_allow_rule_with_sandbox() {
-        let yaml = r#"
-rules:
-  - allow: 'python3 *'
-    sandbox: restricted
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].allow, Some("python3 *".to_string()));
-        assert_eq!(rules[0].sandbox, Some("restricted".to_string()));
+    fn parse_rule_all_optional_fields_none_by_default() {
+        let yaml = "rules:\n  - deny: 'test'";
+        let rule = &parse_config(yaml).unwrap().rules.unwrap()[0];
+        assert_eq!(rule.deny, Some("test".to_string()));
+        assert_eq!(rule.allow, None);
+        assert_eq!(rule.ask, None);
+        assert_eq!(rule.when, None);
+        assert_eq!(rule.message, None);
+        assert_eq!(rule.fix_suggestion, None);
+        assert_eq!(rule.sandbox, None);
     }
 
     #[test]
@@ -240,13 +246,13 @@ rules:
         let config = parse_config(yaml).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 4);
-        assert_eq!(rules[0].deny, Some("rm -rf /".to_string()));
-        assert_eq!(rules[1].allow, Some("git status".to_string()));
-        assert_eq!(rules[2].ask, Some("git push *".to_string()));
-        assert_eq!(rules[3].deny, Some("git push -f|--force *".to_string()));
+        assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status"));
+        assert_eq!(rules[2].ask.as_deref(), Some("git push *"));
+        assert_eq!(rules[3].deny.as_deref(), Some("git push -f|--force *"));
         assert_eq!(
-            rules[3].message,
-            Some("Force push is not allowed".to_string())
+            rules[3].message.as_deref(),
+            Some("Force push is not allowed")
         );
     }
 
@@ -263,15 +269,16 @@ definitions:
       - "~/.ssh/**"
       - "/etc/**"
 "#;
-        let config = parse_config(yaml).unwrap();
-        let definitions = config.definitions.unwrap();
-        let paths = definitions.paths.unwrap();
-        let sensitive = &paths["sensitive"];
-        assert_eq!(sensitive.len(), 4);
-        assert_eq!(sensitive[0], ".env*");
-        assert_eq!(sensitive[1], ".envrc");
-        assert_eq!(sensitive[2], "~/.ssh/**");
-        assert_eq!(sensitive[3], "/etc/**");
+        let paths = parse_config(yaml)
+            .unwrap()
+            .definitions
+            .unwrap()
+            .paths
+            .unwrap();
+        assert_eq!(
+            paths["sensitive"],
+            vec![".env*", ".envrc", "~/.ssh/**", "/etc/**"]
+        );
     }
 
     #[test]
@@ -287,9 +294,12 @@ definitions:
       network:
         allow: [github.com, "*.github.com", pypi.org]
 "#;
-        let config = parse_config(yaml).unwrap();
-        let definitions = config.definitions.unwrap();
-        let sandbox = definitions.sandbox.unwrap();
+        let sandbox = parse_config(yaml)
+            .unwrap()
+            .definitions
+            .unwrap()
+            .sandbox
+            .unwrap();
         let restricted = &sandbox["restricted"];
 
         let fs = restricted.fs.as_ref().unwrap();
@@ -310,36 +320,20 @@ definitions:
         );
     }
 
-    #[test]
-    fn parse_definitions_wrappers() {
-        let yaml = r#"
-definitions:
-  wrappers:
-    - 'sudo <cmd>'
-    - 'bash -c <cmd>'
-    - 'xargs <cmd>'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let definitions = config.definitions.unwrap();
-        let wrappers = definitions.wrappers.unwrap();
-        assert_eq!(wrappers.len(), 3);
-        assert_eq!(wrappers[0], "sudo <cmd>");
-        assert_eq!(wrappers[1], "bash -c <cmd>");
-        assert_eq!(wrappers[2], "xargs <cmd>");
-    }
-
-    #[test]
-    fn parse_definitions_commands() {
-        let yaml = r#"
-definitions:
-  commands:
-    - 'git commit'
-    - 'git push'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let definitions = config.definitions.unwrap();
-        let commands = definitions.commands.unwrap();
-        assert_eq!(commands.len(), 2);
+    #[rstest]
+    #[case::wrappers(
+        "definitions:\n  wrappers:\n    - 'sudo <cmd>'\n    - 'bash -c <cmd>'\n    - 'xargs <cmd>'",
+        vec!["sudo <cmd>", "bash -c <cmd>", "xargs <cmd>"],
+    )]
+    #[case::commands(
+        "definitions:\n  commands:\n    - 'git commit'\n    - 'git push'",
+        vec!["git commit", "git push"],
+    )]
+    fn parse_definitions_string_lists(#[case] yaml: &str, #[case] expected: Vec<&str>) {
+        let defs = parse_config(yaml).unwrap().definitions.unwrap();
+        let actual = defs.wrappers.or(defs.commands).unwrap();
+        let actual_refs: Vec<&str> = actual.iter().map(|s| s.as_str()).collect();
+        assert_eq!(actual_refs, expected);
     }
 
     // === Full config ===
@@ -398,105 +392,49 @@ definitions:
 "#;
         let config = parse_config(yaml).unwrap();
 
-        // extends
-        let extends = config.extends.unwrap();
-        assert_eq!(extends.len(), 2);
+        assert_eq!(config.extends.as_ref().unwrap().len(), 2);
 
-        // defaults
-        let defaults = config.defaults.unwrap();
+        let defaults = config.defaults.as_ref().unwrap();
         assert_eq!(defaults.action, Some(ActionKind::Ask));
-        assert_eq!(defaults.sandbox, Some("workspace-write".to_string()));
+        assert_eq!(defaults.sandbox.as_deref(), Some("workspace-write"));
 
-        // rules
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 9);
+        assert_eq!(config.rules.as_ref().unwrap().len(), 9);
 
-        // definitions
-        let definitions = config.definitions.unwrap();
-        assert!(definitions.paths.is_some());
-        assert!(definitions.sandbox.is_some());
-        assert!(definitions.wrappers.is_some());
-        let wrappers = definitions.wrappers.unwrap();
-        assert_eq!(wrappers.len(), 6);
+        let defs = config.definitions.as_ref().unwrap();
+        assert!(defs.paths.is_some());
+        assert!(defs.sandbox.is_some());
+        assert_eq!(defs.wrappers.as_ref().unwrap().len(), 6);
     }
 
     // === Error cases ===
 
-    #[test]
-    fn parse_invalid_yaml_returns_error() {
-        let yaml = "rules: [invalid yaml\n  broken:";
-        let result = parse_config(yaml);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_wrong_type_returns_error() {
-        // rules should be a list, not a string
-        let yaml = "rules: 'not a list'";
-        let result = parse_config(yaml);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_invalid_action_kind_returns_error() {
-        let yaml = r#"
-defaults:
-  action: invalid_action
-"#;
-        let result = parse_config(yaml);
-        assert!(result.is_err());
+    #[rstest]
+    #[case::invalid_yaml("rules: [invalid yaml\n  broken:")]
+    #[case::wrong_type("rules: 'not a list'")]
+    #[case::invalid_action("defaults:\n  action: invalid_action")]
+    fn parse_error(#[case] yaml: &str) {
+        assert!(parse_config(yaml).is_err());
     }
 
     #[test]
     fn parse_empty_string_returns_empty_config() {
-        // Empty YAML string parses as null, which should fail since Config has fields
-        let yaml = "";
-        let result = parse_config(yaml);
-        // serde-saphyr may treat empty string differently
-        // An empty document should either succeed with all-None fields or error
-        // Let's verify the behavior
-        assert!(
-            result.is_err() || {
-                let config = result.unwrap();
-                config.extends.is_none()
-                    && config.defaults.is_none()
-                    && config.rules.is_none()
-                    && config.definitions.is_none()
-            }
-        );
+        let config = parse_config("").unwrap();
+        assert_eq!(config.extends, None);
+        assert_eq!(config.defaults, None);
+        assert_eq!(config.rules, None);
+        assert_eq!(config.definitions, None);
     }
 
     // === ActionKind ===
 
     #[test]
     fn action_kind_default_is_ask() {
-        let kind = ActionKind::default();
-        assert_eq!(kind, ActionKind::Ask);
+        assert_eq!(ActionKind::default(), ActionKind::Ask);
     }
 
     #[test]
     fn action_kind_ordering() {
-        // Allow < Ask < Deny (alphabetical by serde rename)
         assert!(ActionKind::Allow < ActionKind::Ask);
         assert!(ActionKind::Ask < ActionKind::Deny);
-    }
-
-    // === RuleEntry attributes ===
-
-    #[test]
-    fn rule_entry_all_optional_fields_none_by_default() {
-        let yaml = r#"
-rules:
-  - deny: 'test'
-"#;
-        let config = parse_config(yaml).unwrap();
-        let rule = &config.rules.unwrap()[0];
-        assert_eq!(rule.deny, Some("test".to_string()));
-        assert_eq!(rule.allow, None);
-        assert_eq!(rule.ask, None);
-        assert_eq!(rule.when, None);
-        assert_eq!(rule.message, None);
-        assert_eq!(rule.fix_suggestion, None);
-        assert_eq!(rule.sandbox, None);
     }
 }
