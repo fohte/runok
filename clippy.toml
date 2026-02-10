@@ -1,0 +1,20 @@
+# Allow unwrap/expect/panic in test code.
+# These lints are denied in Cargo.toml for production code,
+# but tests commonly use these for clarity and brevity.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+[[disallowed-methods]]
+path = "std::env::set_var"
+reason = "Unsafe in multi-threaded contexts. Use explicit configuration passing instead."
+
+[[disallowed-methods]]
+path = "std::env::remove_var"
+reason = "Unsafe in multi-threaded contexts. Avoid modifying environment variables at runtime."
+
+# Disallow serial_test crate - tests requiring serialization indicate
+# side effects that should be eliminated through proper test isolation
+[[disallowed-macros]]
+path = "serial_test::serial"
+reason = "serial_test is forbidden. Tests requiring serial execution have side effects and should be redesigned for proper isolation"

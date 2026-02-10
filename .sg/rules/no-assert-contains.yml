@@ -1,0 +1,16 @@
+id: no-assert-contains
+language: rust
+severity: error
+message: |
+  Avoid using `assert!(x.contains(...))` in tests.
+  Use `assert_eq!` with exact values instead of substring matching.
+note: |
+  Consider using:
+  - `assert_eq!(actual, expected)` for exact matching
+  - Split the test to check specific values
+rule:
+  any:
+    # Without custom message: assert!(x.contains(...))
+    - pattern: assert!($X.contains($$$ARGS))
+    # With custom message: assert!(x.contains(...), "message", ...)
+    - pattern: assert!($X.contains($$$ARGS), $$$MSG)

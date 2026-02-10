@@ -2,6 +2,9 @@ name: Test
 
 on:
   push:
+    branches-ignore:
+      # Skip release-please branches (Release PRs) since they only update CHANGELOG and version
+      - release-please--branches--*
 
 permissions:
   contents: write
@@ -17,7 +20,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -37,7 +40,12 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: jdx/mise-action@v2
+      # Run rustup before mise-action to prevent race condition.
+      # Multiple cargo: tools in mise.toml trigger parallel rustup component downloads,
+      # causing "could not rename downloaded file" errors.
+      - run: rustup show
+
+      - uses: jdx/mise-action@v3
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -59,7 +67,7 @@ jobs:
 
       - name: Commit formatted files
         if: ${{ !cancelled() && steps.check-prev.outputs.skip_commit != 'true' }}
-        uses: suzuki-shunsuke/commit-action@v0.0.14
+        uses: suzuki-shunsuke/commit-action@v0.1.0
         with:
           commit_message: 'style: auto-format'
           workflow: deny
@@ -73,12 +81,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v2
+      - run: rustup show
+
+      - uses: jdx/mise-action@v3
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
+      - name: Run tests with coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false

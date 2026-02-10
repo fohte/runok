@@ -1,0 +1,14 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecov-yaml
+#
+# Validate: curl -X POST --data-binary @codecov.yml https://codecov.io/validate
+
+coverage:
+  status:
+    # Set project and patch status to informational mode to prevent PR blocks on coverage decrease
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true

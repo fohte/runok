@@ -98,19 +98,19 @@ fn build_pattern_tokens(
             LexToken::Alternation(alts) => {
                 if alts.iter().any(|a| is_flag(a)) {
                     // Check if the next token should be consumed as a flag value
-                    let consume = if let Some(&(j, next)) = iter.peek() {
-                        should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group)
-                    } else {
-                        false
-                    };
-
-                    if consume {
-                        let (_, next_token) = iter.next().unwrap();
-                        let value = lex_to_pattern_value(next_token)?;
-                        result.push(PatternToken::FlagWithValue {
-                            aliases: alts.clone(),
-                            value: Box::new(value),
-                        });
+                    if let Some(&(j, next)) = iter.peek() {
+                        if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
+                            let (_, next_token) = iter.next().ok_or(
+                                PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
+                            )?;
+                            let value = lex_to_pattern_value(next_token)?;
+                            result.push(PatternToken::FlagWithValue {
+                                aliases: alts.clone(),
+                                value: Box::new(value),
+                            });
+                        } else {
+                            result.push(PatternToken::Alternation(alts.clone()));
+                        }
                     } else {
                         result.push(PatternToken::Alternation(alts.clone()));
                     }
