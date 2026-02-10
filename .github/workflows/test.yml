@@ -37,7 +37,7 @@ jobs:
             echo "skip_commit=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
