@@ -18,6 +18,8 @@ pub enum CommandParseError {
     UnclosedQuote,
     #[error("empty command")]
     EmptyCommand,
+    #[error("syntax error in command")]
+    SyntaxError,
 }
 
 #[derive(Debug, thiserror::Error)]

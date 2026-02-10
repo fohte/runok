@@ -5,8 +5,10 @@ use crate::rules::CommandParseError;
 /// Handles:
 /// - Whitespace-delimited splitting
 /// - Single-quoted strings (no escape processing inside)
-/// - Double-quoted strings (backslash escapes for `\`, `"`, `$`, `` ` ``, newline)
+/// - Double-quoted strings (backslash escapes for `\`, `"`, `$`, `` ` ``, newline;
+///   unknown escapes drop the backslash to match shell behavior)
 /// - Backslash escapes outside of quotes
+/// - Empty quoted strings (`""`, `''`) are preserved as empty tokens
 pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -15,19 +17,22 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
 
     let mut tokens = Vec::new();
     let mut current = String::new();
+    let mut has_token = false;
     let mut chars = trimmed.chars().peekable();
 
     while let Some(&ch) = chars.peek() {
         match ch {
             // Whitespace outside quotes: emit current token
             c if c.is_ascii_whitespace() => {
-                if !current.is_empty() {
+                if has_token {
                     tokens.push(std::mem::take(&mut current));
+                    has_token = false;
                 }
                 chars.next();
             }
             // Single quote: consume until closing quote, no escape processing
             '\'' => {
+                has_token = true;
                 chars.next(); // consume opening quote
                 loop {
                     match chars.next() {
@@ -39,6 +44,7 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
             }
             // Double quote: consume with escape processing
             '"' => {
+                has_token = true;
                 chars.next(); // consume opening quote
                 loop {
                     match chars.next() {
@@ -46,10 +52,8 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
                         Some('\\') => match chars.next() {
                             Some(c @ ('"' | '\\' | '$' | '`')) => current.push(c),
                             Some('\n') => {} // line continuation
-                            Some(c) => {
-                                current.push('\\');
-                                current.push(c);
-                            }
+                            // Unknown escape: drop backslash (match shell behavior)
+                            Some(c) => current.push(c),
                             None => return Err(CommandParseError::UnclosedQuote),
                         },
                         Some(c) => current.push(c),
@@ -59,6 +63,7 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
             }
             // Backslash escape outside quotes
             '\\' => {
+                has_token = true;
                 chars.next(); // consume backslash
                 match chars.next() {
                     Some('\n') => {} // line continuation
@@ -68,13 +73,14 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
             }
             // Regular character
             _ => {
+                has_token = true;
                 current.push(ch);
                 chars.next();
             }
         }
     }
 
-    if !current.is_empty() {
+    if has_token {
         tokens.push(current);
     }
 
@@ -85,6 +91,7 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
 ///
 /// Splits on pipelines (`|`), logical operators (`&&`, `||`), and semicolons (`;`).
 /// Uses tree-sitter-bash to correctly handle quoting and nesting.
+/// Returns `SyntaxError` if the input contains parse errors.
 pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -94,19 +101,23 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
-        .expect("failed to load Bash grammar");
+        .map_err(|_| CommandParseError::SyntaxError)?;
 
     let tree = parser
         .parse(trimmed, None)
-        .expect("tree-sitter parse returned None");
+        .ok_or(CommandParseError::SyntaxError)?;
 
     let root = tree.root_node();
+
+    if root.has_error() {
+        return Err(CommandParseError::SyntaxError);
+    }
+
     let mut commands = Vec::new();
     collect_commands(root, trimmed.as_bytes(), &mut commands);
 
     if commands.is_empty() {
-        // If tree-sitter didn't extract any commands, treat the whole input as one
-        commands.push(trimmed.to_string());
+        return Err(CommandParseError::SyntaxError);
     }
 
     Ok(commands)
@@ -118,30 +129,12 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// their constituent commands. Everything else is preserved as-is.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // `program` is the root node — recurse into named children only
+        // `program` is the root — recurse into named children only
         // (skips anonymous nodes like `;`)
-        "program" => {
+        "program" | "pipeline" | "list" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
-            }
-        }
-        // `pipeline` splits on `|`
-        "pipeline" => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.is_named() {
-                    collect_commands(child, source, commands);
-                }
-            }
-        }
-        // `list` splits on `&&`, `||`, `;`
-        "list" => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.is_named() {
-                    collect_commands(child, source, commands);
-                }
             }
         }
         // Leaf command nodes — extract the source text
@@ -214,6 +207,24 @@ mod tests {
     }
 
     // ========================================
+    // tokenize: unknown escape sequences in double quotes
+    // ========================================
+
+    #[test]
+    fn tokenize_double_quote_unknown_escape_drops_backslash() {
+        // Shell behavior: "\j" -> "j" (backslash dropped for unknown escapes)
+        let result = tokenize(r#"echo "\j""#).unwrap();
+        assert_eq!(result, vec!["echo", "j"]);
+    }
+
+    #[test]
+    fn tokenize_double_quote_known_escapes_preserved() {
+        // Known escapes: \\, \", \$, \` are processed
+        let result = tokenize(r#"echo "a\$b""#).unwrap();
+        assert_eq!(result, vec!["echo", "a$b"]);
+    }
+
+    // ========================================
     // tokenize: escape sequences (outside quotes)
     // ========================================
 
@@ -252,6 +263,22 @@ mod tests {
         // e.g., echo "hello"' world' -> "hello world"
         let result = tokenize(r#"echo "hello"' world'"#).unwrap();
         assert_eq!(result, vec!["echo", "hello world"]);
+    }
+
+    // ========================================
+    // tokenize: empty quoted strings
+    // ========================================
+
+    #[test]
+    fn tokenize_empty_double_quotes() {
+        let result = tokenize(r#"echo "" arg"#).unwrap();
+        assert_eq!(result, vec!["echo", "", "arg"]);
+    }
+
+    #[test]
+    fn tokenize_empty_single_quotes() {
+        let result = tokenize("echo '' arg").unwrap();
+        assert_eq!(result, vec!["echo", "", "arg"]);
     }
 
     // ========================================
@@ -324,6 +351,16 @@ mod tests {
     fn extract_commands_empty_input() {
         let result = extract_commands("");
         assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
+    }
+
+    // ========================================
+    // extract_commands: syntax errors
+    // ========================================
+
+    #[test]
+    fn extract_commands_syntax_error() {
+        let result = extract_commands("&&");
+        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
     }
 
     // ========================================
