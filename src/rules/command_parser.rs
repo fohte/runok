@@ -89,6 +89,10 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
         tokens.push(current);
     }
 
+    if tokens.is_empty() {
+        return Err(CommandParseError::EmptyCommand);
+    }
+
     Ok(tokens)
 }
 
@@ -306,6 +310,19 @@ mod tests {
     #[test]
     fn tokenize_whitespace_only() {
         let result = tokenize("   ");
+        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
+    }
+
+    #[test]
+    fn tokenize_only_trailing_backslash() {
+        // A lone backslash produces no tokens, so it should be treated as empty
+        let result = tokenize("\\");
+        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
+    }
+
+    #[test]
+    fn tokenize_backslash_newline_only() {
+        let result = tokenize("\\\n");
         assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
     }
 
