@@ -172,10 +172,8 @@ mod tests {
         }
     }
 
-    /// Create a temporary script file that drains stdin and prints the given response.
-    /// Returns the path to the script. Uses a unique counter to avoid conflicts
-    /// between parallel test runs.
-    fn write_test_script(response: &str) -> std::path::PathBuf {
+    /// Create a temporary executable script with the given raw content.
+    fn write_test_script_raw(content: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -183,11 +181,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("should create temp dir");
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("ext-{}-{}.sh", std::process::id(), id));
-        std::fs::write(
-            &path,
-            format!("#!/bin/sh\ncat > /dev/null\nprintf '%s' '{}'\n", response),
-        )
-        .expect("should write test script");
+        std::fs::write(&path, content).expect("should write test script");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -195,6 +189,14 @@ mod tests {
                 .expect("should set executable permission");
         }
         path
+    }
+
+    /// Create a script that drains stdin and prints the given JSON response.
+    fn write_test_script(response: &str) -> std::path::PathBuf {
+        write_test_script_raw(&format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{}'\n",
+            response
+        ))
     }
 
     // === Serialization tests ===
@@ -253,258 +255,138 @@ mod tests {
 
     // === Response deserialization tests ===
 
-    #[test]
-    fn deserialize_valid_deny_response() {
-        let json = r#"{
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "status": "deny",
-                "message": "POST requests are not allowed",
-                "fix_suggestion": "curl -X GET https://api.example.com"
-            }
-        }"#;
-
-        let response = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect("should parse valid deny response");
-        assert_eq!(response.status, "deny");
-        assert_eq!(
-            response.message.as_deref(),
-            Some("POST requests are not allowed")
-        );
-        assert_eq!(
-            response.fix_suggestion.as_deref(),
-            Some("curl -X GET https://api.example.com")
-        );
-    }
-
-    #[test]
-    fn deserialize_valid_allow_response() {
-        let json = r#"{
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "status": "allow"
-            }
-        }"#;
-
-        let response = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect("should parse valid allow response");
-        assert_eq!(response.status, "allow");
-        assert_eq!(response.message, None);
-        assert_eq!(response.fix_suggestion, None);
-    }
-
-    #[test]
-    fn deserialize_valid_ask_response() {
-        let json = r#"{
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "status": "ask",
-                "message": "This looks risky, please confirm"
-            }
-        }"#;
-
-        let response = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect("should parse valid ask response");
-        assert_eq!(response.status, "ask");
-        assert_eq!(
-            response.message.as_deref(),
-            Some("This looks risky, please confirm")
-        );
-    }
-
     #[rstest]
-    #[case("allow")]
-    #[case("deny")]
-    #[case("ask")]
-    fn valid_status_values(#[case] status: &str) {
-        let json = format!(r#"{{"jsonrpc": "2.0", "id": 1, "result": {{"status": "{status}"}}}}"#);
-        let response = ProcessExtensionRunner::parse_jsonrpc_response(&json)
-            .expect("should parse response with valid status");
-        assert_eq!(response.status, status);
+    #[case::deny(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":"deny","message":"POST not allowed","fix_suggestion":"use GET"}}"#,
+        ExtensionResponse { status: "deny".into(), message: Some("POST not allowed".into()), fix_suggestion: Some("use GET".into()) },
+    )]
+    #[case::allow(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":"allow"}}"#,
+        ExtensionResponse { status: "allow".into(), message: None, fix_suggestion: None },
+    )]
+    #[case::ask(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ask","message":"please confirm"}}"#,
+        ExtensionResponse { status: "ask".into(), message: Some("please confirm".into()), fix_suggestion: None },
+    )]
+    fn parse_valid_response(#[case] json: &str, #[case] expected: ExtensionResponse) {
+        let response = ProcessExtensionRunner::parse_jsonrpc_response(json)
+            .expect("should parse valid response");
+        assert_eq!(response, expected);
     }
 
     // === Error cases: parsing ===
 
-    #[test]
-    fn invalid_json_response() {
-        let result = ProcessExtensionRunner::parse_jsonrpc_response("not json at all");
-        let err = result.expect_err("should fail on invalid JSON");
+    #[rstest]
+    #[case::invalid_json(
+        "not json at all",
+        "JSON parse error: expected ident at line 1 column 2"
+    )]
+    #[case::missing_result(
+        r#"{"jsonrpc": "2.0", "id": 1}"#,
+        "missing 'result' field in JSON-RPC response"
+    )]
+    #[case::missing_status(
+        r#"{"jsonrpc": "2.0", "id": 1, "result": {"message": "hi"}}"#,
+        "JSON parse error: missing field `status` at line 1 column 55"
+    )]
+    #[case::jsonrpc_error(
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}"#,
+        "JSON-RPC error: Invalid request"
+    )]
+    fn parse_invalid_response(#[case] json: &str, #[case] expected_msg: &str) {
+        let err =
+            ProcessExtensionRunner::parse_jsonrpc_response(json).expect_err("should fail to parse");
         match err {
-            ExtensionError::InvalidResponse(msg) => {
-                assert_eq!(msg, "JSON parse error: expected ident at line 1 column 2");
-            }
-            other => panic!("expected InvalidResponse, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn missing_result_field() {
-        let json = r#"{"jsonrpc": "2.0", "id": 1}"#;
-        let err = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect_err("should fail when result is missing");
-        match err {
-            ExtensionError::InvalidResponse(msg) => {
-                assert_eq!(msg, "missing 'result' field in JSON-RPC response");
-            }
-            other => panic!("expected InvalidResponse, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn missing_status_in_result() {
-        let json = r#"{"jsonrpc": "2.0", "id": 1, "result": {"message": "hi"}}"#;
-        let err = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect_err("should fail when status is missing");
-        match err {
-            ExtensionError::InvalidResponse(msg) => {
-                assert_eq!(
-                    msg,
-                    "JSON parse error: missing field `status` at line 1 column 55"
-                );
-            }
-            other => panic!("expected InvalidResponse, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn jsonrpc_error_response() {
-        let json = r#"{
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {
-                "code": -32600,
-                "message": "Invalid request"
-            }
-        }"#;
-        let err = ProcessExtensionRunner::parse_jsonrpc_response(json)
-            .expect_err("should fail on JSON-RPC error response");
-        match err {
-            ExtensionError::InvalidResponse(msg) => {
-                assert_eq!(msg, "JSON-RPC error: Invalid request");
-            }
+            ExtensionError::InvalidResponse(msg) => assert_eq!(msg, expected_msg),
             other => panic!("expected InvalidResponse, got: {other:?}"),
         }
     }
 
     // === End-to-end with real process ===
 
-    #[test]
-    fn validate_with_real_process_deny_response() {
-        let runner = ProcessExtensionRunner;
-        let request = sample_request();
-
-        let response_json =
-            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"deny","message":"blocked"}}"#;
+    #[rstest]
+    #[case::deny(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":"deny","message":"blocked"}}"#,
+        ExtensionResponse { status: "deny".into(), message: Some("blocked".into()), fix_suggestion: None },
+    )]
+    #[case::allow(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":"allow"}}"#,
+        ExtensionResponse { status: "allow".into(), message: None, fix_suggestion: None },
+    )]
+    fn validate_with_real_process(
+        #[case] response_json: &str,
+        #[case] expected: ExtensionResponse,
+    ) {
         let script = write_test_script(response_json);
-        let cmd = script.display().to_string();
-
-        let response = runner
-            .validate(&cmd, &request, Duration::from_secs(5))
-            .expect("should get deny response from process");
-        assert_eq!(response.status, "deny");
-        assert_eq!(response.message.as_deref(), Some("blocked"));
-    }
-
-    #[test]
-    fn validate_with_real_process_allow_response() {
-        let runner = ProcessExtensionRunner;
-        let request = sample_request();
-
-        let response_json = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"allow"}}"#;
-        let script = write_test_script(response_json);
-        let cmd = script.display().to_string();
-
-        let response = runner
-            .validate(&cmd, &request, Duration::from_secs(5))
-            .expect("should get allow response from process");
-        assert_eq!(response.status, "allow");
-        assert_eq!(response.message, None);
+        let response = ProcessExtensionRunner
+            .validate(
+                &script.display().to_string(),
+                &sample_request(),
+                Duration::from_secs(5),
+            )
+            .expect("should get response from process");
+        assert_eq!(response, expected);
     }
 
     #[test]
     fn validate_spawn_error_for_nonexistent_command() {
-        let runner = ProcessExtensionRunner;
-        let request = sample_request();
-
-        let err = runner
-            .validate("/nonexistent/binary/path", &request, Duration::from_secs(5))
+        let err = ProcessExtensionRunner
+            .validate(
+                "/nonexistent/binary/path",
+                &sample_request(),
+                Duration::from_secs(5),
+            )
             .expect_err("should fail for nonexistent binary");
-        match err {
-            ExtensionError::Spawn(_) => {}
-            other => panic!("expected Spawn error, got: {other:?}"),
-        }
+        assert!(matches!(err, ExtensionError::Spawn(_)));
     }
 
     #[test]
     fn validate_invalid_json_from_process() {
-        let runner = ProcessExtensionRunner;
-        let request = sample_request();
-
         let script = write_test_script("not-valid-json");
-        let cmd = script.display().to_string();
-
-        let err = runner
-            .validate(&cmd, &request, Duration::from_secs(5))
+        let err = ProcessExtensionRunner
+            .validate(
+                &script.display().to_string(),
+                &sample_request(),
+                Duration::from_secs(5),
+            )
             .expect_err("should fail on invalid JSON from process");
-        match err {
-            ExtensionError::InvalidResponse(_) => {}
-            other => panic!("expected InvalidResponse, got: {other:?}"),
-        }
+        assert!(matches!(err, ExtensionError::InvalidResponse(_)));
     }
 
     #[test]
     fn validate_timeout() {
-        let runner = ProcessExtensionRunner;
-        let request = sample_request();
-
-        // Use a script that sleeps longer than the timeout
-        let dir = std::env::temp_dir().join("runok-test-extension");
-        std::fs::create_dir_all(&dir).expect("should create temp dir");
-        let path = dir.join(format!("ext-timeout-{}.sh", std::process::id()));
-        std::fs::write(&path, "#!/bin/sh\nsleep 10\n").expect("should write timeout script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("should set executable permission");
-        }
-        let cmd = path.display().to_string();
-
-        let err = runner
-            .validate(&cmd, &request, Duration::from_secs(1))
+        let script = write_test_script_raw("#!/bin/sh\nsleep 10\n");
+        let err = ProcessExtensionRunner
+            .validate(
+                &script.display().to_string(),
+                &sample_request(),
+                Duration::from_secs(1),
+            )
             .expect_err("should timeout for long-running process");
-        match err {
-            ExtensionError::Timeout(d) => {
-                assert_eq!(d, Duration::from_secs(1));
-            }
-            other => panic!("expected Timeout error, got: {other:?}"),
-        }
+        assert_eq!(
+            err.to_string(),
+            format!("timeout after {:?}", Duration::from_secs(1))
+        );
     }
 
     // === parse_command tests ===
 
-    #[test]
-    fn parse_command_simple() {
-        let (prog, args) = ProcessExtensionRunner::parse_command("deno run check.ts");
-        assert_eq!(prog, "deno");
-        assert_eq!(args, vec!["run", "check.ts"]);
-    }
-
-    #[test]
-    fn parse_command_no_args() {
-        let (prog, args) = ProcessExtensionRunner::parse_command("/usr/bin/validator");
-        assert_eq!(prog, "/usr/bin/validator");
-        assert!(args.is_empty());
-    }
-
-    #[test]
-    fn parse_command_with_flags() {
-        let (prog, args) =
-            ProcessExtensionRunner::parse_command("deno run --allow-net ./checks/url_check.ts");
-        assert_eq!(prog, "deno");
-        assert_eq!(args, vec!["run", "--allow-net", "./checks/url_check.ts"]);
+    #[rstest]
+    #[case::simple("deno run check.ts", "deno", &["run", "check.ts"])]
+    #[case::no_args("/usr/bin/validator", "/usr/bin/validator", &[])]
+    #[case::with_flags(
+        "deno run --allow-net ./checks/url_check.ts",
+        "deno",
+        &["run", "--allow-net", "./checks/url_check.ts"],
+    )]
+    fn parse_command(
+        #[case] input: &str,
+        #[case] expected_prog: &str,
+        #[case] expected_args: &[&str],
+    ) {
+        let (prog, args) = ProcessExtensionRunner::parse_command(input);
+        assert_eq!(prog, expected_prog);
+        let args_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert_eq!(args_strs, expected_args);
     }
 }
