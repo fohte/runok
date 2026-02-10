@@ -21,6 +21,10 @@ pub struct ParsedCommand {
     /// Flags and their optional values. Boolean flags have `None`.
     /// For `=`-joined tokens like `-Dkey=value`, the key is the flag name
     /// and the value is the part after `=`.
+    ///
+    /// Duplicate flags are last-wins (HashMap semantics). This is acceptable
+    /// because the matching engine uses `raw_tokens` for pattern matching,
+    /// not this map. This map is for structured access in `when` expressions.
     pub flags: HashMap<String, Option<String>>,
     /// Positional arguments (non-flag tokens after the command name).
     pub args: Vec<String>,
@@ -34,6 +38,10 @@ pub struct ParsedCommand {
 /// as its value. Unknown flags are treated as boolean (no value).
 /// Tokens containing `=` (e.g., `-Denv=prod`, `--word-diff=color`) are
 /// split into flag name and value at the first `=`.
+///
+/// Combined short flags (`-am`) are not split into individual flags.
+/// Rules match tokens literally ("What You See Is How It Parses"),
+/// so `-m` in a rule won't match `-am` in the input.
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
     let raw_tokens = tokenize(input)?;
     let command = raw_tokens[0].clone();
