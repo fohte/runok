@@ -1,4 +1,93 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::rules::CommandParseError;
+
+/// Schema describing which flags take values vs. are boolean-only.
+///
+/// Derived from rule patterns (Policy-Derived Schema): if a rule writes
+/// `deny: "curl -X POST"`, then `-X` is inferred to take a value.
+/// Flags not listed in `value_flags` are treated as boolean (no value).
+#[derive(Debug, Default)]
+pub struct FlagSchema {
+    /// Flags known to take a following value (e.g., `-X`, `--request`).
+    pub value_flags: HashSet<String>,
+}
+
+/// A parsed command with structured flag and argument information.
+#[derive(Debug, PartialEq)]
+pub struct ParsedCommand {
+    /// The command name (first token).
+    pub command: String,
+    /// Flags and their optional values. Boolean flags have `None`.
+    /// For `=`-joined tokens like `-Dkey=value`, the key is the flag name
+    /// and the value is the part after `=`.
+    ///
+    /// Duplicate flags are last-wins (HashMap semantics). This is acceptable
+    /// because the matching engine uses `raw_tokens` for pattern matching,
+    /// not this map. This map is for structured access in `when` expressions.
+    pub flags: HashMap<String, Option<String>>,
+    /// Positional arguments (non-flag tokens after the command name).
+    pub args: Vec<String>,
+    /// The original raw tokens from tokenization.
+    pub raw_tokens: Vec<String>,
+}
+
+/// Parse a command string into a structured `ParsedCommand`.
+///
+/// Uses `FlagSchema` to determine whether a flag consumes the next token
+/// as its value. Unknown flags are treated as boolean (no value).
+/// Tokens containing `=` (e.g., `-Denv=prod`, `--word-diff=color`) are
+/// split into flag name and value at the first `=`.
+///
+/// Combined short flags (`-am`) are not split into individual flags.
+/// Rules match tokens literally ("What You See Is How It Parses"),
+/// so `-m` in a rule won't match `-am` in the input.
+pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
+    let raw_tokens = tokenize(input)?;
+    let command = raw_tokens[0].clone();
+
+    let mut flags = HashMap::new();
+    let mut args = Vec::new();
+    let mut i = 1;
+
+    while i < raw_tokens.len() {
+        let token = &raw_tokens[i];
+
+        if let Some(eq_pos) = token.find('=') {
+            // Handle `=`-joined flags like `-Denv=prod` or `--word-diff=color`
+            let flag_part = &token[..eq_pos];
+            if flag_part.starts_with('-') {
+                let value_part = &token[eq_pos + 1..];
+                flags.insert(flag_part.to_string(), Some(value_part.to_string()));
+                i += 1;
+                continue;
+            }
+        }
+
+        if token.starts_with('-') {
+            if schema.value_flags.contains(token.as_str()) {
+                // Flag takes a value: consume the next token
+                let value = raw_tokens.get(i + 1).cloned();
+                flags.insert(token.clone(), value);
+                i += 2;
+            } else {
+                // Boolean flag (no value)
+                flags.insert(token.clone(), None);
+                i += 1;
+            }
+        } else {
+            args.push(token.clone());
+            i += 1;
+        }
+    }
+
+    Ok(ParsedCommand {
+        command,
+        flags,
+        args,
+        raw_tokens,
+    })
+}
 
 /// Tokenize a command string into a list of raw tokens.
 ///
@@ -378,5 +467,163 @@ mod tests {
     fn extract_commands_with_quotes() {
         let result = extract_commands(r#"echo "hello | world" && grep test"#).unwrap();
         assert_eq!(result, vec![r#"echo "hello | world""#, "grep test"]);
+    }
+
+    // ========================================
+    // parse_command: no schema (default) — unknown flags are boolean
+    // ========================================
+
+    #[rstest]
+    // simple commands without flags
+    #[case::no_flags("git status", "git", &[], &["status"])]
+    #[case::multiple_args("cp src.txt dst.txt", "cp", &[], &["src.txt", "dst.txt"])]
+    // boolean flags (unknown → boolean)
+    #[case::short_combined("rm -rf /tmp/test", "rm", &[("-rf", None)], &["/tmp/test"])]
+    #[case::long_flag("git push --force origin main", "git", &[("--force", None)], &["push", "origin", "main"])]
+    // equals-joined flags
+    #[case::eq_short("java -Denv=prod Main", "java", &[("-Denv", Some("prod"))], &["Main"])]
+    #[case::eq_long("git diff --word-diff=color file.txt", "git", &[("--word-diff", Some("color"))], &["diff", "file.txt"])]
+    // equals in non-flag token → positional arg
+    #[case::eq_non_flag("echo key=value", "echo", &[], &["key=value"])]
+    fn parse_command_default_schema(
+        #[case] input: &str,
+        #[case] expected_cmd: &str,
+        #[case] expected_flags: &[(&str, Option<&str>)],
+        #[case] expected_args: &[&str],
+    ) {
+        let schema = FlagSchema::default();
+        let result = parse_command(input, &schema).unwrap();
+        assert_eq!(result.command, expected_cmd);
+        assert_eq!(result.args, expected_args);
+        assert_eq!(result.flags.len(), expected_flags.len());
+        for &(flag, value) in expected_flags {
+            assert_eq!(
+                result.flags.get(flag),
+                Some(&value.map(String::from)),
+                "flag {flag}"
+            );
+        }
+    }
+
+    // ========================================
+    // parse_command: with schema — value flags consume next token
+    // ========================================
+
+    #[rstest]
+    // short value flag
+    #[case::short(
+        "curl -X POST https://example.com",
+        &["-X"],
+        "curl", &[("-X", Some("POST"))], &["https://example.com"],
+    )]
+    // long value flag
+    #[case::long(
+        "curl --request GET https://example.com",
+        &["--request"],
+        "curl", &[("--request", Some("GET"))], &["https://example.com"],
+    )]
+    // value flag at end with no following token
+    #[case::at_end(
+        "git commit -m",
+        &["-m"],
+        "git", &[("-m", None)], &["commit"],
+    )]
+    // separate boolean flag + value flag: `-a -m "msg"` keeps them distinct
+    #[case::separate_bool_and_value(
+        r#"git commit -a -m "initial commit""#,
+        &["-m"],
+        "git", &[("-a", None), ("-m", Some("initial commit"))], &["commit"],
+    )]
+    // combined short flags `-am` is treated as a single unknown flag token;
+    // runok does not split combined short flags (by design: "What You See
+    // Is How It Parses" — the rule `-m` won't match `-am`)
+    #[case::combined_short_flags(
+        r#"git commit -am "initial commit""#,
+        &["-m"],
+        "git", &[("-am", None)], &["commit", "initial commit"],
+    )]
+    // argument order independence: flag before arg
+    #[case::order_flag_first(
+        "curl -X POST https://example.com",
+        &["-X"],
+        "curl", &[("-X", Some("POST"))], &["https://example.com"],
+    )]
+    // argument order independence: flag after arg
+    #[case::order_flag_last(
+        "curl https://example.com -X POST",
+        &["-X"],
+        "curl", &[("-X", Some("POST"))], &["https://example.com"],
+    )]
+    fn parse_command_with_schema(
+        #[case] input: &str,
+        #[case] value_flags: &[&str],
+        #[case] expected_cmd: &str,
+        #[case] expected_flags: &[(&str, Option<&str>)],
+        #[case] expected_args: &[&str],
+    ) {
+        let schema = FlagSchema {
+            value_flags: value_flags.iter().map(|s| s.to_string()).collect(),
+        };
+        let result = parse_command(input, &schema).unwrap();
+        assert_eq!(result.command, expected_cmd);
+        assert_eq!(result.args, expected_args);
+        assert_eq!(result.flags.len(), expected_flags.len());
+        for &(flag, value) in expected_flags {
+            assert_eq!(
+                result.flags.get(flag),
+                Some(&value.map(String::from)),
+                "flag {flag}"
+            );
+        }
+    }
+
+    // ========================================
+    // parse_command: multiple value flags
+    // ========================================
+
+    #[test]
+    fn parse_command_mixed_flags_and_args() {
+        let schema = FlagSchema {
+            value_flags: ["-H", "-X"].iter().map(|s| s.to_string()).collect(),
+        };
+        let result = parse_command(
+            r#"curl -X POST -H "Content-Type: application/json" https://example.com"#,
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(result.command, "curl");
+        assert_eq!(result.flags.get("-X"), Some(&Some("POST".to_string())));
+        assert_eq!(
+            result.flags.get("-H"),
+            Some(&Some("Content-Type: application/json".to_string()))
+        );
+        assert_eq!(result.args, vec!["https://example.com"]);
+    }
+
+    // ========================================
+    // parse_command: error cases
+    // ========================================
+
+    #[test]
+    fn parse_command_empty_input() {
+        let schema = FlagSchema::default();
+        let result = parse_command("", &schema);
+        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
+    }
+
+    // ========================================
+    // parse_command: raw_tokens preserved
+    // ========================================
+
+    #[test]
+    fn parse_command_raw_tokens_preserved() {
+        let schema = FlagSchema {
+            value_flags: HashSet::from(["-X".to_string()]),
+        };
+        let result = parse_command("curl -X POST https://example.com", &schema).unwrap();
+        assert_eq!(
+            result.raw_tokens,
+            vec!["curl", "-X", "POST", "https://example.com"]
+        );
     }
 }
