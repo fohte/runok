@@ -59,7 +59,7 @@ jobs:
 
       - name: Commit formatted files
         if: ${{ !cancelled() && steps.check-prev.outputs.skip_commit != 'true' }}
-        uses: suzuki-shunsuke/commit-action@v0.0.14
+        uses: suzuki-shunsuke/commit-action@v0.1.0
         with:
           commit_message: 'style: auto-format'
           workflow: deny
