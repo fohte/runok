@@ -37,6 +37,19 @@ pub struct RuleEntry {
     pub sandbox: Option<String>,
 }
 
+impl RuleEntry {
+    /// Extract the action kind and pattern string from this rule entry.
+    /// Returns None if not exactly one of deny/allow/ask is set.
+    pub fn action_and_pattern(&self) -> Option<(ActionKind, &str)> {
+        match (&self.deny, &self.allow, &self.ask) {
+            (Some(pattern), None, None) => Some((ActionKind::Deny, pattern)),
+            (None, Some(pattern), None) => Some((ActionKind::Allow, pattern)),
+            (None, None, Some(pattern)) => Some((ActionKind::Ask, pattern)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct Definitions {
     pub paths: Option<HashMap<String, Vec<String>>>,
@@ -60,6 +73,65 @@ pub struct FsPolicy {
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct NetworkPolicy {
     pub allow: Option<Vec<String>>,
+}
+
+impl Config {
+    /// Validate the config structure.
+    ///
+    /// Collects all validation errors and returns them at once so that users
+    /// can fix every issue in a single pass.
+    ///
+    /// Checks:
+    /// - Each rule entry has exactly one of deny/allow/ask set
+    /// - deny rules must not have a sandbox attribute
+    /// - sandbox values must reference names defined in definitions.sandbox
+    pub fn validate(&self) -> Result<(), crate::config::ConfigError> {
+        let rules = match &self.rules {
+            Some(rules) => rules,
+            None => return Ok(()),
+        };
+
+        let defined_sandboxes: std::collections::HashSet<&str> = self
+            .definitions
+            .as_ref()
+            .and_then(|d| d.sandbox.as_ref())
+            .map(|s| s.keys().map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+
+        let mut errors = Vec::new();
+
+        for (i, rule) in rules.iter().enumerate() {
+            let action = match rule.action_and_pattern() {
+                Some((action, _)) => action,
+                None => {
+                    errors.push(format!(
+                        "rules[{i}]: must have exactly one of 'deny', 'allow', or 'ask'"
+                    ));
+                    continue;
+                }
+            };
+
+            if let Some(sandbox_name) = &rule.sandbox {
+                if action == ActionKind::Deny {
+                    errors.push(format!(
+                        "rules[{i}]: deny rule cannot have a sandbox attribute (sandbox: '{sandbox_name}')"
+                    ));
+                }
+
+                if !defined_sandboxes.contains(sandbox_name.as_str()) {
+                    errors.push(format!(
+                        "rules[{i}]: sandbox '{sandbox_name}' is not defined in definitions.sandbox"
+                    ));
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::config::ConfigError::Validation(errors))
+        }
+    }
 }
 
 /// Parse a YAML string into a `Config`.
@@ -453,5 +525,288 @@ mod tests {
     fn action_kind_ordering() {
         assert!(ActionKind::Allow < ActionKind::Ask);
         assert!(ActionKind::Ask < ActionKind::Deny);
+    }
+
+    // === RuleEntry::action_and_pattern ===
+
+    #[rstest]
+    #[case::deny("deny", "rm -rf /", ActionKind::Deny)]
+    #[case::allow("allow", "git status", ActionKind::Allow)]
+    #[case::ask("ask", "git push *", ActionKind::Ask)]
+    fn action_and_pattern_returns_correct_action(
+        #[case] key: &str,
+        #[case] pattern: &str,
+        #[case] expected_action: ActionKind,
+    ) {
+        let yaml = format!("rules:\n  - {key}: '{pattern}'");
+        let config = parse_config(&yaml).unwrap();
+        let rule = &config.rules.unwrap()[0];
+        let (action, pat) = rule.action_and_pattern().unwrap();
+        assert_eq!(action, expected_action);
+        assert_eq!(pat, pattern);
+    }
+
+    #[test]
+    fn action_and_pattern_returns_none_when_none_set() {
+        let rule = RuleEntry {
+            deny: None,
+            allow: None,
+            ask: None,
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+        };
+        assert!(rule.action_and_pattern().is_none());
+    }
+
+    #[test]
+    fn action_and_pattern_returns_none_when_multiple_set() {
+        let rule = RuleEntry {
+            deny: Some("rm -rf /".to_string()),
+            allow: Some("git status".to_string()),
+            ask: None,
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+        };
+        assert!(rule.action_and_pattern().is_none());
+    }
+
+    #[test]
+    fn action_and_pattern_returns_none_when_all_three_set() {
+        let rule = RuleEntry {
+            deny: Some("rm -rf /".to_string()),
+            allow: Some("git status".to_string()),
+            ask: Some("git push *".to_string()),
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+        };
+        assert!(rule.action_and_pattern().is_none());
+    }
+
+    // === Config::validate ===
+
+    #[test]
+    fn validate_valid_config() {
+        let config = parse_config(indoc! {"
+            rules:
+              - deny: 'rm -rf /'
+              - allow: 'git status'
+              - ask: 'git push *'
+        "})
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_config_without_rules() {
+        let config = parse_config("{}").unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_errors_on_rule_with_no_action() {
+        let config = Config {
+            extends: None,
+            defaults: None,
+            rules: Some(vec![RuleEntry {
+                deny: None,
+                allow: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            definitions: None,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn validate_errors_on_rule_with_multiple_actions() {
+        let config = Config {
+            extends: None,
+            defaults: None,
+            rules: Some(vec![RuleEntry {
+                deny: Some("rm -rf /".to_string()),
+                allow: Some("git status".to_string()),
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            definitions: None,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn validate_errors_on_deny_with_sandbox() {
+        let config = parse_config(indoc! {"
+            rules:
+              - deny: 'rm -rf /'
+                sandbox: restricted
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("deny"));
+        assert!(err.to_string().contains("sandbox"));
+    }
+
+    #[test]
+    fn validate_errors_on_undefined_sandbox_name() {
+        let config = parse_config(indoc! {"
+            rules:
+              - allow: 'python3 *'
+                sandbox: nonexistent
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("nonexistent"));
+        assert!(err.to_string().contains("not defined"));
+    }
+
+    #[test]
+    fn validate_errors_on_undefined_sandbox_name_with_empty_definitions() {
+        let config = parse_config(indoc! {"
+            rules:
+              - allow: 'python3 *'
+                sandbox: restricted
+            definitions:
+              paths:
+                sensitive:
+                  - '.env*'
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("restricted"));
+        assert!(err.to_string().contains("not defined"));
+    }
+
+    #[test]
+    fn validate_allow_with_valid_sandbox() {
+        let config = parse_config(indoc! {"
+            rules:
+              - allow: 'python3 *'
+                sandbox: restricted
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+        "})
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_ask_with_valid_sandbox() {
+        let config = parse_config(indoc! {"
+            rules:
+              - ask: 'npm run *'
+                sandbox: restricted
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+        "})
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_collects_all_errors() {
+        let config = Config {
+            extends: None,
+            defaults: None,
+            rules: Some(vec![
+                // Error 1: no action set
+                RuleEntry {
+                    deny: None,
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: None,
+                },
+                // Valid rule (should not appear in errors)
+                RuleEntry {
+                    deny: Some("rm -rf /".to_string()),
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: None,
+                },
+                // Error 2: deny with sandbox
+                RuleEntry {
+                    deny: Some("curl *".to_string()),
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: Some("restricted".to_string()),
+                },
+                // Error 3: undefined sandbox
+                RuleEntry {
+                    deny: None,
+                    allow: Some("python3 *".to_string()),
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: Some("nonexistent".to_string()),
+                },
+            ]),
+            definitions: None,
+        };
+        let err = config.validate().unwrap_err();
+        let expected = indoc! {"
+            validation errors:
+              - rules[0]: must have exactly one of 'deny', 'allow', or 'ask'
+              - rules[2]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')
+              - rules[2]: sandbox 'restricted' is not defined in definitions.sandbox
+              - rules[3]: sandbox 'nonexistent' is not defined in definitions.sandbox"}
+        .trim_start();
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn validate_includes_rule_index_in_error() {
+        let config = parse_config(indoc! {"
+            rules:
+              - allow: 'git status'
+              - deny: 'rm -rf /'
+                sandbox: restricted
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        let expected = indoc! {"
+            validation errors:
+              - rules[1]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')"}
+        .trim_start();
+        assert_eq!(err.to_string(), expected);
     }
 }
