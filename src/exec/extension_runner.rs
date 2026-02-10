@@ -94,8 +94,9 @@ impl ProcessExtensionRunner {
     }
 
     /// Split executor_cmd into program and arguments for spawning.
-    /// Uses simple whitespace splitting, as executor commands are typically
-    /// straightforward (e.g., "deno run --allow-net ./checks/url_check.ts").
+    /// Uses simple whitespace splitting because executor_cmd comes from the
+    /// user's config file, not from external input. Quoted argument support
+    /// (e.g. via shlex) can be added later if needed.
     fn parse_command(executor_cmd: &str) -> (String, Vec<String>) {
         let mut parts = executor_cmd.split_whitespace();
         let program = parts.next().unwrap_or("").to_string();
@@ -127,7 +128,10 @@ impl ExtensionRunner for ProcessExtensionRunner {
             // stdin is dropped here, closing the pipe
         }
 
-        // Wait with timeout using a polling loop
+        // Wait with timeout using a polling loop.
+        // NOTE: We read stdout after the process exits (via wait_with_output).
+        // This could deadlock if stdout exceeds the OS pipe buffer (~64KB), but
+        // extension responses are small JSON payloads so this is fine in practice.
         let start = std::time::Instant::now();
         loop {
             match child.try_wait() {
@@ -138,6 +142,9 @@ impl ExtensionRunner for ProcessExtensionRunner {
                 }
                 Ok(None) => {
                     if start.elapsed() >= timeout {
+                        // Best-effort cleanup; errors are intentionally ignored
+                        // so we always return `Timeout` rather than a misleading
+                        // `Spawn(io::Error)`.
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(ExtensionError::Timeout(timeout));
