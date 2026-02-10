@@ -8,8 +8,8 @@ pub enum ConfigError {
     Yaml(#[from] serde_saphyr::Error),
     #[error("preset error: {0}")]
     Preset(#[from] PresetError),
-    #[error("validation error: {0}")]
-    Validation(String),
+    #[error("validation errors:\n{}", .0.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n"))]
+    Validation(Vec<String>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,11 +51,23 @@ mod tests {
     }
 
     #[test]
-    fn config_error_validation() {
-        let error = ConfigError::Validation("rule must have exactly one action".to_string());
+    fn config_error_validation_single() {
+        let error = ConfigError::Validation(vec!["rule must have exactly one action".to_string()]);
         assert_eq!(
             error.to_string(),
-            "validation error: rule must have exactly one action"
+            "validation errors:\n  - rule must have exactly one action"
+        );
+    }
+
+    #[test]
+    fn config_error_validation_multiple() {
+        let error = ConfigError::Validation(vec![
+            "rule must have exactly one action".to_string(),
+            "deny rule cannot have sandbox".to_string(),
+        ]);
+        assert_eq!(
+            error.to_string(),
+            "validation errors:\n  - rule must have exactly one action\n  - deny rule cannot have sandbox"
         );
     }
 
@@ -145,9 +157,12 @@ mod tests {
 
     #[test]
     fn config_error_into_anyhow() {
-        let error = ConfigError::Validation("invalid config".to_string());
+        let error = ConfigError::Validation(vec!["invalid config".to_string()]);
         let anyhow_err: anyhow::Error = error.into();
-        assert_eq!(anyhow_err.to_string(), "validation error: invalid config");
+        assert_eq!(
+            anyhow_err.to_string(),
+            "validation errors:\n  - invalid config"
+        );
     }
 
     #[test]

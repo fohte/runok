@@ -39,15 +39,13 @@ pub struct RuleEntry {
 
 impl RuleEntry {
     /// Extract the action kind and pattern string from this rule entry.
-    /// Returns an error if not exactly one of deny/allow/ask is set.
-    pub fn action_and_pattern(&self) -> Result<(ActionKind, &str), crate::config::ConfigError> {
+    /// Returns None if not exactly one of deny/allow/ask is set.
+    pub fn action_and_pattern(&self) -> Option<(ActionKind, &str)> {
         match (&self.deny, &self.allow, &self.ask) {
-            (Some(pattern), None, None) => Ok((ActionKind::Deny, pattern)),
-            (None, Some(pattern), None) => Ok((ActionKind::Allow, pattern)),
-            (None, None, Some(pattern)) => Ok((ActionKind::Ask, pattern)),
-            _ => Err(crate::config::ConfigError::Validation(
-                "rule must have exactly one of 'deny', 'allow', or 'ask'".to_string(),
-            )),
+            (Some(pattern), None, None) => Some((ActionKind::Deny, pattern)),
+            (None, Some(pattern), None) => Some((ActionKind::Allow, pattern)),
+            (None, None, Some(pattern)) => Some((ActionKind::Ask, pattern)),
+            _ => None,
         }
     }
 }
@@ -80,6 +78,9 @@ pub struct NetworkPolicy {
 impl Config {
     /// Validate the config structure.
     ///
+    /// Collects all validation errors and returns them at once so that users
+    /// can fix every issue in a single pass.
+    ///
     /// Checks:
     /// - Each rule entry has exactly one of deny/allow/ask set
     /// - deny rules must not have a sandbox attribute
@@ -97,25 +98,39 @@ impl Config {
             .map(|s| s.keys().map(|k| k.as_str()).collect())
             .unwrap_or_default();
 
-        for rule in rules {
-            let (action, _) = rule.action_and_pattern()?;
+        let mut errors = Vec::new();
+
+        for (i, rule) in rules.iter().enumerate() {
+            let action = match rule.action_and_pattern() {
+                Some((action, _)) => action,
+                None => {
+                    errors.push(format!(
+                        "rules[{i}]: must have exactly one of 'deny', 'allow', or 'ask'"
+                    ));
+                    continue;
+                }
+            };
 
             if let Some(sandbox_name) = &rule.sandbox {
                 if action == ActionKind::Deny {
-                    return Err(crate::config::ConfigError::Validation(format!(
-                        "deny rule cannot have a sandbox attribute (sandbox: '{sandbox_name}')"
-                    )));
+                    errors.push(format!(
+                        "rules[{i}]: deny rule cannot have a sandbox attribute (sandbox: '{sandbox_name}')"
+                    ));
                 }
 
                 if !defined_sandboxes.contains(sandbox_name.as_str()) {
-                    return Err(crate::config::ConfigError::Validation(format!(
-                        "sandbox '{sandbox_name}' is not defined in definitions.sandbox"
-                    )));
+                    errors.push(format!(
+                        "rules[{i}]: sandbox '{sandbox_name}' is not defined in definitions.sandbox"
+                    ));
                 }
             }
         }
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::config::ConfigError::Validation(errors))
+        }
     }
 }
 
@@ -532,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn action_and_pattern_errors_when_none_set() {
+    fn action_and_pattern_returns_none_when_none_set() {
         let rule = RuleEntry {
             deny: None,
             allow: None,
@@ -542,13 +557,11 @@ mod tests {
             fix_suggestion: None,
             sandbox: None,
         };
-        let err = rule.action_and_pattern().unwrap_err();
-        assert!(matches!(err, crate::config::ConfigError::Validation(_)));
-        assert!(err.to_string().contains("exactly one"));
+        assert!(rule.action_and_pattern().is_none());
     }
 
     #[test]
-    fn action_and_pattern_errors_when_multiple_set() {
+    fn action_and_pattern_returns_none_when_multiple_set() {
         let rule = RuleEntry {
             deny: Some("rm -rf /".to_string()),
             allow: Some("git status".to_string()),
@@ -558,13 +571,11 @@ mod tests {
             fix_suggestion: None,
             sandbox: None,
         };
-        let err = rule.action_and_pattern().unwrap_err();
-        assert!(matches!(err, crate::config::ConfigError::Validation(_)));
-        assert!(err.to_string().contains("exactly one"));
+        assert!(rule.action_and_pattern().is_none());
     }
 
     #[test]
-    fn action_and_pattern_errors_when_all_three_set() {
+    fn action_and_pattern_returns_none_when_all_three_set() {
         let rule = RuleEntry {
             deny: Some("rm -rf /".to_string()),
             allow: Some("git status".to_string()),
@@ -574,8 +585,7 @@ mod tests {
             fix_suggestion: None,
             sandbox: None,
         };
-        let err = rule.action_and_pattern().unwrap_err();
-        assert!(matches!(err, crate::config::ConfigError::Validation(_)));
+        assert!(rule.action_and_pattern().is_none());
     }
 
     // === Config::validate ===
@@ -719,7 +729,67 @@ mod tests {
     }
 
     #[test]
-    fn validate_reports_first_invalid_rule() {
+    fn validate_collects_all_errors() {
+        let config = Config {
+            extends: None,
+            defaults: None,
+            rules: Some(vec![
+                // Error 1: no action set
+                RuleEntry {
+                    deny: None,
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: None,
+                },
+                // Valid rule (should not appear in errors)
+                RuleEntry {
+                    deny: Some("rm -rf /".to_string()),
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: None,
+                },
+                // Error 2: deny with sandbox
+                RuleEntry {
+                    deny: Some("curl *".to_string()),
+                    allow: None,
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: Some("restricted".to_string()),
+                },
+                // Error 3: undefined sandbox
+                RuleEntry {
+                    deny: None,
+                    allow: Some("python3 *".to_string()),
+                    ask: None,
+                    when: None,
+                    message: None,
+                    fix_suggestion: None,
+                    sandbox: Some("nonexistent".to_string()),
+                },
+            ]),
+            definitions: None,
+        };
+        let err = config.validate().unwrap_err();
+        let expected = indoc! {"
+            validation errors:
+              - rules[0]: must have exactly one of 'deny', 'allow', or 'ask'
+              - rules[2]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')
+              - rules[2]: sandbox 'restricted' is not defined in definitions.sandbox
+              - rules[3]: sandbox 'nonexistent' is not defined in definitions.sandbox"}
+        .trim_start();
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn validate_includes_rule_index_in_error() {
         let config = parse_config(indoc! {"
             rules:
               - allow: 'git status'
@@ -733,7 +803,10 @@ mod tests {
         "})
         .unwrap();
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("deny"));
-        assert!(err.to_string().contains("sandbox"));
+        let expected = indoc! {"
+            validation errors:
+              - rules[1]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')"}
+        .trim_start();
+        assert_eq!(err.to_string(), expected);
     }
 }
