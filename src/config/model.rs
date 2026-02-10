@@ -71,6 +71,7 @@ pub fn parse_config(yaml: &str) -> Result<Config, crate::config::ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     // === Basic parsing ===
@@ -86,16 +87,15 @@ mod tests {
 
     #[test]
     fn parse_extends() {
-        let yaml = r#"
-extends:
-  - ./local-rules.yaml
-  - "github:runok/presets@v1.0.0"
-  - "https://example.com/preset.yaml"
-"#;
-        let config = parse_config(yaml).unwrap();
-        let extends = config.extends.unwrap();
+        let config = parse_config(indoc! {"
+            extends:
+              - ./local-rules.yaml
+              - 'github:runok/presets@v1.0.0'
+              - 'https://example.com/preset.yaml'
+        "})
+        .unwrap();
         assert_eq!(
-            extends,
+            config.extends.unwrap(),
             vec![
                 "./local-rules.yaml",
                 "github:runok/presets@v1.0.0",
@@ -118,11 +118,15 @@ extends:
 
     #[test]
     fn parse_defaults_with_sandbox() {
-        let yaml = "defaults:\n  action: ask\n  sandbox: workspace-write";
-        let config = parse_config(yaml).unwrap();
+        let config = parse_config(indoc! {"
+            defaults:
+              action: ask
+              sandbox: workspace-write
+        "})
+        .unwrap();
         let defaults = config.defaults.unwrap();
         assert_eq!(defaults.action, Some(ActionKind::Ask));
-        assert_eq!(defaults.sandbox, Some("workspace-write".to_string()));
+        assert_eq!(defaults.sandbox.as_deref(), Some("workspace-write"));
     }
 
     // === Rules: single action key ===
@@ -163,46 +167,48 @@ extends:
 
     #[rstest]
     #[case::when(
-        "deny: 'aws *'\n    when: \"env.AWS_PROFILE == 'prod'\"",
-        None,
-        Some("env.AWS_PROFILE == 'prod'"),
-        None,
-        None
+        indoc! {"
+            deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+        "},
+        None, Some("env.AWS_PROFILE == 'prod'"), None, None,
     )]
     #[case::message(
-        "deny: 'git push -f|--force *'\n    message: 'Force push is not allowed'",
-        Some("Force push is not allowed"),
-        None,
-        None,
-        None
+        indoc! {"
+            deny: 'git push -f|--force *'
+            message: 'Force push is not allowed'
+        "},
+        Some("Force push is not allowed"), None, None, None,
     )]
     #[case::fix_suggestion(
-        "deny: 'git push -f|--force *'\n    fix_suggestion: 'git push --force-with-lease'",
-        None,
-        None,
-        Some("git push --force-with-lease"),
-        None
+        indoc! {"
+            deny: 'git push -f|--force *'
+            fix_suggestion: 'git push --force-with-lease'
+        "},
+        None, None, Some("git push --force-with-lease"), None,
     )]
     #[case::sandbox(
-        "allow: 'python3 *'\n    sandbox: restricted",
-        None,
-        None,
-        None,
-        Some("restricted")
+        indoc! {"
+            allow: 'python3 *'
+            sandbox: restricted
+        "},
+        None, None, None, Some("restricted"),
     )]
     #[case::message_and_fix(
-        "deny: 'git push -f|--force *'\n    message: 'Force push is not allowed'\n    fix_suggestion: 'git push --force-with-lease'",
-        Some("Force push is not allowed"),
-        None,
-        Some("git push --force-with-lease"),
-        None
+        indoc! {"
+            deny: 'git push -f|--force *'
+            message: 'Force push is not allowed'
+            fix_suggestion: 'git push --force-with-lease'
+        "},
+        Some("Force push is not allowed"), None, Some("git push --force-with-lease"), None,
     )]
     #[case::when_and_message(
-        "deny: 'aws *'\n    when: \"env.AWS_PROFILE == 'prod'\"\n    message: 'Production AWS operations are not allowed'",
-        Some("Production AWS operations are not allowed"),
-        Some("env.AWS_PROFILE == 'prod'"),
-        None,
-        None
+        indoc! {"
+            deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+            message: 'Production AWS operations are not allowed'
+        "},
+        Some("Production AWS operations are not allowed"), Some("env.AWS_PROFILE == 'prod'"), None, None,
     )]
     fn parse_rule_attributes(
         #[case] rule_yaml: &str,
@@ -211,7 +217,7 @@ extends:
         #[case] expected_fix: Option<&str>,
         #[case] expected_sandbox: Option<&str>,
     ) {
-        let yaml = format!("rules:\n  - {rule_yaml}");
+        let yaml = format!("rules:\n  - {}", rule_yaml.replace('\n', "\n    "));
         let config = parse_config(&yaml).unwrap();
         let rule = &config.rules.unwrap()[0];
         assert_eq!(rule.message.as_deref(), expected_message);
@@ -222,9 +228,11 @@ extends:
 
     #[test]
     fn parse_rule_all_optional_fields_none_by_default() {
-        let yaml = "rules:\n  - deny: 'test'";
-        let rule = &parse_config(yaml).unwrap().rules.unwrap()[0];
-        assert_eq!(rule.deny, Some("test".to_string()));
+        let rule = &parse_config("rules:\n  - deny: 'test'")
+            .unwrap()
+            .rules
+            .unwrap()[0];
+        assert_eq!(rule.deny.as_deref(), Some("test"));
         assert_eq!(rule.allow, None);
         assert_eq!(rule.ask, None);
         assert_eq!(rule.when, None);
@@ -235,15 +243,15 @@ extends:
 
     #[test]
     fn parse_multiple_rules() {
-        let yaml = r#"
-rules:
-  - deny: 'rm -rf /'
-  - allow: 'git status'
-  - ask: 'git push *'
-  - deny: 'git push -f|--force *'
-    message: 'Force push is not allowed'
-"#;
-        let config = parse_config(yaml).unwrap();
+        let config = parse_config(indoc! {"
+            rules:
+              - deny: 'rm -rf /'
+              - allow: 'git status'
+              - ask: 'git push *'
+              - deny: 'git push -f|--force *'
+                message: 'Force push is not allowed'
+        "})
+        .unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 4);
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
@@ -260,21 +268,20 @@ rules:
 
     #[test]
     fn parse_definitions_paths() {
-        let yaml = r#"
-definitions:
-  paths:
-    sensitive:
-      - ".env*"
-      - ".envrc"
-      - "~/.ssh/**"
-      - "/etc/**"
-"#;
-        let paths = parse_config(yaml)
-            .unwrap()
-            .definitions
-            .unwrap()
-            .paths
-            .unwrap();
+        let paths = parse_config(indoc! {r#"
+            definitions:
+              paths:
+                sensitive:
+                  - ".env*"
+                  - ".envrc"
+                  - "~/.ssh/**"
+                  - "/etc/**"
+        "#})
+        .unwrap()
+        .definitions
+        .unwrap()
+        .paths
+        .unwrap();
         assert_eq!(
             paths["sensitive"],
             vec![".env*", ".envrc", "~/.ssh/**", "/etc/**"]
@@ -283,23 +290,22 @@ definitions:
 
     #[test]
     fn parse_definitions_sandbox() {
-        let yaml = r#"
-definitions:
-  sandbox:
-    restricted:
-      fs:
-        writable: [./tmp, /tmp]
-        deny:
-          - "<path:sensitive>"
-      network:
-        allow: [github.com, "*.github.com", pypi.org]
-"#;
-        let sandbox = parse_config(yaml)
-            .unwrap()
-            .definitions
-            .unwrap()
-            .sandbox
-            .unwrap();
+        let sandbox = parse_config(indoc! {r#"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp, /tmp]
+                    deny:
+                      - "<path:sensitive>"
+                  network:
+                    allow: [github.com, "*.github.com", pypi.org]
+        "#})
+        .unwrap()
+        .definitions
+        .unwrap()
+        .sandbox
+        .unwrap();
         let restricted = &sandbox["restricted"];
 
         let fs = restricted.fs.as_ref().unwrap();
@@ -322,11 +328,22 @@ definitions:
 
     #[rstest]
     #[case::wrappers(
-        "definitions:\n  wrappers:\n    - 'sudo <cmd>'\n    - 'bash -c <cmd>'\n    - 'xargs <cmd>'",
+        indoc! {"
+            definitions:
+              wrappers:
+                - 'sudo <cmd>'
+                - 'bash -c <cmd>'
+                - 'xargs <cmd>'
+        "},
         vec!["sudo <cmd>", "bash -c <cmd>", "xargs <cmd>"],
     )]
     #[case::commands(
-        "definitions:\n  commands:\n    - 'git commit'\n    - 'git push'",
+        indoc! {"
+            definitions:
+              commands:
+                - 'git commit'
+                - 'git push'
+        "},
         vec!["git commit", "git push"],
     )]
     fn parse_definitions_string_lists(#[case] yaml: &str, #[case] expected: Vec<&str>) {
@@ -340,57 +357,57 @@ definitions:
 
     #[test]
     fn parse_full_config() {
-        let yaml = r#"
-extends:
-  - ./local-rules.yaml
-  - "github:runok/presets@v1.0.0"
+        let config = parse_config(indoc! {r#"
+            extends:
+              - ./local-rules.yaml
+              - "github:runok/presets@v1.0.0"
 
-defaults:
-  action: ask
-  sandbox: workspace-write
+            defaults:
+              action: ask
+              sandbox: workspace-write
 
-rules:
-  - deny: 'rm -rf /'
-  - deny: 'git push -f|--force *'
-    message: 'Force push is not allowed'
-    fix_suggestion: 'git push --force-with-lease'
-  - deny: 'aws *'
-    when: "env.AWS_PROFILE == 'prod'"
-    message: 'Production AWS operations are not allowed'
-  - allow: 'git status'
-  - allow: 'git [-C *] status'
-  - allow: 'curl [-X|--request GET] *'
-  - allow: 'python3 *'
-    sandbox: restricted
-  - ask: 'curl -X|--request !GET *'
-  - ask: 'git push *'
+            rules:
+              - deny: 'rm -rf /'
+              - deny: 'git push -f|--force *'
+                message: 'Force push is not allowed'
+                fix_suggestion: 'git push --force-with-lease'
+              - deny: 'aws *'
+                when: "env.AWS_PROFILE == 'prod'"
+                message: 'Production AWS operations are not allowed'
+              - allow: 'git status'
+              - allow: 'git [-C *] status'
+              - allow: 'curl [-X|--request GET] *'
+              - allow: 'python3 *'
+                sandbox: restricted
+              - ask: 'curl -X|--request !GET *'
+              - ask: 'git push *'
 
-definitions:
-  paths:
-    sensitive:
-      - ".env*"
-      - ".envrc"
-      - "~/.ssh/**"
-      - "/etc/**"
+            definitions:
+              paths:
+                sensitive:
+                  - ".env*"
+                  - ".envrc"
+                  - "~/.ssh/**"
+                  - "/etc/**"
 
-  sandbox:
-    restricted:
-      fs:
-        writable: [./tmp, /tmp]
-        deny:
-          - "<path:sensitive>"
-      network:
-        allow: [github.com, "*.github.com", pypi.org]
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp, /tmp]
+                    deny:
+                      - "<path:sensitive>"
+                  network:
+                    allow: [github.com, "*.github.com", pypi.org]
 
-  wrappers:
-    - 'sudo <cmd>'
-    - 'bash -c <cmd>'
-    - 'sh -c <cmd>'
-    - 'xargs <cmd>'
-    - "find * -exec <cmd> \\;"
-    - 'env * <cmd>'
-"#;
-        let config = parse_config(yaml).unwrap();
+              wrappers:
+                - 'sudo <cmd>'
+                - 'bash -c <cmd>'
+                - 'sh -c <cmd>'
+                - 'xargs <cmd>'
+                - "find * -exec <cmd> \\;"
+                - 'env * <cmd>'
+        "#})
+        .unwrap();
 
         assert_eq!(config.extends.as_ref().unwrap().len(), 2);
 
