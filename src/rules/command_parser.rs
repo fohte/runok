@@ -520,6 +520,20 @@ mod tests {
         &["-m"],
         "git", &[("-m", None)], &["commit"],
     )]
+    // separate boolean flag + value flag: `-a -m "msg"` keeps them distinct
+    #[case::separate_bool_and_value(
+        r#"git commit -a -m "initial commit""#,
+        &["-m"],
+        "git", &[("-a", None), ("-m", Some("initial commit"))], &["commit"],
+    )]
+    // combined short flags `-am` is treated as a single unknown flag token;
+    // runok does not split combined short flags (by design: "What You See
+    // Is How It Parses" — the rule `-m` won't match `-am`)
+    #[case::combined_short_flags(
+        r#"git commit -am "initial commit""#,
+        &["-m"],
+        "git", &[("-am", None)], &["commit", "initial commit"],
+    )]
     // argument order independence: flag before arg
     #[case::order_flag_first(
         "curl -X POST https://example.com",
