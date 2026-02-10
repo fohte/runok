@@ -3,12 +3,22 @@ on:
     branches:
       - master
       - main
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., v0.1.1)'
+        required: true
+        type: string
 
 name: release-please
 
 jobs:
   release-please:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -22,3 +32,50 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  build-release:
+    needs: release-please
+    # always() is required because release-please job is skipped on workflow_dispatch,
+    # and dependent jobs skip without evaluating their if condition by default.
+    if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: rustup show
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        env:
+          PROJECT_NAME: runok
+          BINARY_NAME: runok
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../"$PROJECT_NAME"-${{ matrix.target }}.tar.gz "$BINARY_NAME"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
+          PROJECT_NAME: runok
+        run: |
+          gh release upload "$TAG_NAME" \
+            "$PROJECT_NAME"-${{ matrix.target }}.tar.gz
