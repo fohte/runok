@@ -301,41 +301,19 @@ mod tests {
     // tokenize: error cases
     // ========================================
 
-    #[test]
-    fn tokenize_empty_input() {
-        let result = tokenize("");
-        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
-    }
-
-    #[test]
-    fn tokenize_whitespace_only() {
-        let result = tokenize("   ");
-        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
-    }
-
-    #[test]
-    fn tokenize_only_trailing_backslash() {
-        // A lone backslash produces no tokens, so it should be treated as empty
-        let result = tokenize("\\");
-        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
-    }
-
-    #[test]
-    fn tokenize_backslash_newline_only() {
-        let result = tokenize("\\\n");
-        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
-    }
-
-    #[test]
-    fn tokenize_unclosed_single_quote() {
-        let result = tokenize("echo 'hello");
-        assert!(matches!(result, Err(CommandParseError::UnclosedQuote)));
-    }
-
-    #[test]
-    fn tokenize_unclosed_double_quote() {
-        let result = tokenize(r#"echo "hello"#);
-        assert!(matches!(result, Err(CommandParseError::UnclosedQuote)));
+    #[rstest]
+    #[case("", CommandParseError::EmptyCommand)]
+    #[case("   ", CommandParseError::EmptyCommand)]
+    #[case("\\", CommandParseError::EmptyCommand)]
+    #[case("\\\n", CommandParseError::EmptyCommand)]
+    #[case("echo 'hello", CommandParseError::UnclosedQuote)]
+    #[case::unclosed_double_quote(r#"echo "hello"#, CommandParseError::UnclosedQuote)]
+    fn tokenize_errors(#[case] input: &str, #[case] expected: CommandParseError) {
+        let result = tokenize(input);
+        assert_eq!(
+            std::mem::discriminant(&result.unwrap_err()),
+            std::mem::discriminant(&expected),
+        );
     }
 
     // ========================================
