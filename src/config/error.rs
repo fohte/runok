@@ -4,6 +4,8 @@ use std::path::PathBuf;
 pub enum ConfigError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("yaml parse error: {0}")]
+    Yaml(#[from] serde_saphyr::Error),
     #[error("preset error: {0}")]
     Preset(#[from] PresetError),
     #[error("validation error: {0}")]
@@ -55,6 +57,23 @@ mod tests {
             error.to_string(),
             "validation error: rule must have exactly one action"
         );
+    }
+
+    #[test]
+    fn config_error_from_yaml_error() {
+        let result: Result<String, serde_saphyr::Error> = serde_saphyr::from_str("[invalid");
+        let yaml_err = result.unwrap_err();
+        let config_err: ConfigError = yaml_err.into();
+        assert!(config_err.to_string().starts_with("yaml parse error:"));
+    }
+
+    #[test]
+    fn config_error_yaml_has_source() {
+        let result: Result<String, serde_saphyr::Error> = serde_saphyr::from_str("[invalid");
+        let yaml_err = result.unwrap_err();
+        let config_err = ConfigError::Yaml(yaml_err);
+        let source = std::error::Error::source(&config_err);
+        assert!(source.is_some());
     }
 
     #[test]
