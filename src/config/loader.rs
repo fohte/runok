@@ -61,22 +61,18 @@ impl DefaultConfigLoader {
 
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
-        let global = match &self.global_config_path {
-            Some(path) if path.exists() => Some(Self::read_and_parse(path)?),
-            _ => None,
-        };
+        let global = self
+            .global_config_path
+            .as_ref()
+            .filter(|p| p.exists())
+            .map(|p| Self::read_and_parse(p))
+            .transpose()?;
 
-        let local = match Self::local_config_path(cwd) {
-            Some(path) => Some(Self::read_and_parse(&path)?),
-            None => None,
-        };
+        let local = Self::local_config_path(cwd)
+            .map(|p| Self::read_and_parse(&p))
+            .transpose()?;
 
-        let config = match (global, local) {
-            (None, None) => Config::default(),
-            (Some(g), None) => g,
-            (None, Some(l)) => l,
-            (Some(g), Some(l)) => g.merge(l),
-        };
+        let config = global.unwrap_or_default().merge(local.unwrap_or_default());
 
         config.validate()?;
         Ok(config)

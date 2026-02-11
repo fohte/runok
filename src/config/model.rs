@@ -181,25 +181,21 @@ impl Config {
         over: Option<HashMap<K, V>>,
     ) -> Option<HashMap<K, V>> {
         match (base, over) {
-            (None, None) => None,
-            (Some(b), None) => Some(b),
-            (None, Some(o)) => Some(o),
             (Some(mut b), Some(o)) => {
                 b.extend(o);
                 Some(b)
             }
+            (b, o) => b.or(o),
         }
     }
 
     fn merge_vecs<T>(base: Option<Vec<T>>, over: Option<Vec<T>>) -> Option<Vec<T>> {
         match (base, over) {
-            (None, None) => None,
-            (Some(b), None) => Some(b),
-            (None, Some(o)) => Some(o),
             (Some(mut b), Some(o)) => {
                 b.extend(o);
                 Some(b)
             }
+            (b, o) => b.or(o),
         }
     }
 }
