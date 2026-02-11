@@ -227,9 +227,9 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// their constituent commands. Everything else is preserved as-is.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // `program` is the root — recurse into named children only
-        // (skips anonymous nodes like `;`)
-        "program" | "pipeline" | "list" => {
+        // Compound constructs: recurse into named children only
+        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`)
+        "program" | "pipeline" | "list" | "subshell" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
@@ -467,6 +467,63 @@ mod tests {
     fn extract_commands_with_quotes() {
         let result = extract_commands(r#"echo "hello | world" && grep test"#).unwrap();
         assert_eq!(result, vec![r#"echo "hello | world""#, "grep test"]);
+    }
+
+    // ========================================
+    // extract_commands: logical operator chains
+    // ========================================
+
+    #[test]
+    fn extract_logical_operator_chain() {
+        let result = extract_commands("cmd1 && cmd2 || cmd3").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2", "cmd3"]);
+    }
+
+    // ========================================
+    // extract_commands: subshell
+    // ========================================
+
+    #[test]
+    fn extract_subshell_in_pipeline() {
+        let result = extract_commands("(cmd1 && cmd2) | cmd3").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2", "cmd3"]);
+    }
+
+    #[test]
+    fn extract_nested_subshell() {
+        let result = extract_commands("(cmd1 ; cmd2) && cmd3").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2", "cmd3"]);
+    }
+
+    // ========================================
+    // extract_commands: process substitution
+    // ========================================
+
+    #[test]
+    fn extract_process_substitution_preserved() {
+        let result = extract_commands("diff <(cmd1) <(cmd2)").unwrap();
+        assert_eq!(result, vec!["diff <(cmd1) <(cmd2)"]);
+    }
+
+    // ========================================
+    // extract_commands: heredoc
+    // ========================================
+
+    #[test]
+    fn extract_heredoc_as_single_command() {
+        let input = "cat <<EOF\nhello\nEOF";
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat <<EOF\nhello\nEOF"]);
+    }
+
+    // ========================================
+    // extract_commands: whitespace handling
+    // ========================================
+
+    #[test]
+    fn extract_commands_extra_whitespace() {
+        let result = extract_commands("  cmd1   &&   cmd2  ").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2"]);
     }
 
     // ========================================
