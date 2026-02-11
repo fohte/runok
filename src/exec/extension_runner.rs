@@ -64,6 +64,14 @@ pub struct ExtensionResult {
     pub fix_suggestion: Option<String>,
 }
 
+/// Strip ASCII control characters (except common whitespace) to prevent
+/// terminal injection from malicious extension output.
+fn sanitize_for_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_ascii_control() || matches!(*c, '\n' | '\r' | '\t'))
+        .collect()
+}
+
 /// Resolve an extension validation result into an action.
 ///
 /// On success, maps the response status to an `ActionKind`.
@@ -84,7 +92,7 @@ pub fn resolve_extension_result(
                     if verbose {
                         eprintln!(
                             "[verbose] Extension returned unknown status '{}', falling back to ask",
-                            response.status
+                            sanitize_for_terminal(&response.status)
                         );
                     }
                     ActionKind::Ask
@@ -96,21 +104,21 @@ pub fn resolve_extension_result(
                 fix_suggestion: response.fix_suggestion,
             }
         }
-        Err(err) => {
+        Err(ref err) => {
             if verbose {
-                eprintln!("[verbose] Extension error: {err}");
+                eprintln!(
+                    "[verbose] Extension error: {}",
+                    sanitize_for_terminal(&err.to_string())
+                );
             }
-            let message = match &err {
-                ExtensionError::Timeout(_) => {
-                    "Extension timed out, asking user for confirmation".to_string()
+            let message = format!(
+                "Extension {}, asking user for confirmation",
+                match &err {
+                    ExtensionError::Timeout(_) => "timed out",
+                    ExtensionError::Spawn(_) => "failed to start",
+                    ExtensionError::InvalidResponse(_) => "returned invalid response",
                 }
-                ExtensionError::Spawn(_) => {
-                    "Extension failed to start, asking user for confirmation".to_string()
-                }
-                ExtensionError::InvalidResponse(_) => {
-                    "Extension returned invalid response, asking user for confirmation".to_string()
-                }
-            };
+            );
             ExtensionResult {
                 action: ActionKind::Ask,
                 message: Some(message),
@@ -625,5 +633,18 @@ mod tests {
         let resolved = resolve_extension_result(result, false);
         assert_eq!(resolved.action, ActionKind::Allow);
         assert_eq!(resolved.message, None);
+    }
+
+    // === sanitize_for_terminal ===
+
+    #[rstest]
+    #[case::plain_text("hello world", "hello world")]
+    #[case::strips_ansi_escape("\x1b[31mred\x1b[0m", "[31mred[0m")]
+    #[case::preserves_newline("line1\nline2", "line1\nline2")]
+    #[case::preserves_tab("col1\tcol2", "col1\tcol2")]
+    #[case::strips_null("before\x00after", "beforeafter")]
+    #[case::strips_bell("alert\x07here", "alerthere")]
+    fn sanitize_for_terminal_cases(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(sanitize_for_terminal(input), expected);
     }
 }
