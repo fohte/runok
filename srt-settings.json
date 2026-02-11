@@ -1,0 +1,12 @@
+{
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": [],
+    "allowLocalBinding": true
+  },
+  "filesystem": {
+    "denyRead": [],
+    "allowWrite": ["/tmp", "."],
+    "denyWrite": []
+  }
+}
