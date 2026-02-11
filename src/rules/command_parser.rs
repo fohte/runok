@@ -490,9 +490,17 @@ mod tests {
     }
 
     #[test]
-    fn extract_nested_subshell() {
+    fn extract_subshell_in_logical_chain() {
         let result = extract_commands("(cmd1 ; cmd2) && cmd3").unwrap();
         assert_eq!(result, vec!["cmd1", "cmd2", "cmd3"]);
+    }
+
+    #[test]
+    fn extract_deeply_nested_subshell() {
+        // Note: `((...))` is arithmetic expansion in bash, so we use
+        // `(... | (...))` to test genuine subshell nesting.
+        let result = extract_commands("(cmd1 | (cmd2 ; cmd3)) && cmd4").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2", "cmd3", "cmd4"]);
     }
 
     // ========================================
@@ -524,6 +532,12 @@ mod tests {
     fn extract_commands_extra_whitespace() {
         let result = extract_commands("  cmd1   &&   cmd2  ").unwrap();
         assert_eq!(result, vec!["cmd1", "cmd2"]);
+    }
+
+    #[test]
+    fn extract_commands_whitespace_with_subshell() {
+        let result = extract_commands("  cmd1   &&   cmd2  | ( cmd3 )  ").unwrap();
+        assert_eq!(result, vec!["cmd1", "cmd2", "cmd3"]);
     }
 
     // ========================================
