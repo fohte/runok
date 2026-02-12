@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 pub struct Config {
     pub extends: Option<Vec<String>>,
     pub defaults: Option<Defaults>,
@@ -10,7 +10,7 @@ pub struct Config {
     pub definitions: Option<Definitions>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 pub struct Defaults {
     pub action: Option<ActionKind>,
     pub sandbox: Option<String>,
@@ -26,7 +26,7 @@ pub enum ActionKind {
 }
 
 /// Each entry in the `rules` list. Exactly one of `deny`, `allow`, or `ask` must be set.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct RuleEntry {
     pub deny: Option<String>,
     pub allow: Option<String>,
@@ -50,7 +50,7 @@ impl RuleEntry {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 pub struct Definitions {
     pub paths: Option<HashMap<String, Vec<String>>>,
     pub sandbox: Option<HashMap<String, SandboxPreset>>,
@@ -58,19 +58,19 @@ pub struct Definitions {
     pub commands: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct SandboxPreset {
     pub fs: Option<FsPolicy>,
     pub network: Option<NetworkPolicy>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct FsPolicy {
     pub writable: Option<Vec<String>>,
     pub deny: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct NetworkPolicy {
     pub allow: Option<Vec<String>>,
 }
@@ -130,6 +130,94 @@ impl Config {
             Ok(())
         } else {
             Err(crate::config::ConfigError::Validation(errors))
+        }
+    }
+
+    /// Merge two configs. `self` is the base (e.g. global), `other` is the override (e.g. local).
+    ///
+    /// - extends / rules / definitions.wrappers / definitions.commands: append
+    /// - defaults.action / defaults.sandbox: override (local wins)
+    /// - definitions.paths: per-key append (values concatenated, duplicates removed)
+    /// - definitions.sandbox: per-key override
+    ///   (sandbox presets have interdependent fields like fs.writable and
+    ///   fs.deny that must stay consistent; partial merging could create
+    ///   contradictory constraints.)
+    pub fn merge(self, other: Config) -> Config {
+        Config {
+            extends: Self::merge_vecs(self.extends, other.extends),
+            defaults: Self::merge_defaults(self.defaults, other.defaults),
+            rules: Self::merge_vecs(self.rules, other.rules),
+            definitions: Self::merge_definitions(self.definitions, other.definitions),
+        }
+    }
+
+    fn merge_defaults(base: Option<Defaults>, over: Option<Defaults>) -> Option<Defaults> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(Defaults {
+                action: o.action.or(b.action),
+                sandbox: o.sandbox.or(b.sandbox),
+            }),
+        }
+    }
+
+    fn merge_definitions(
+        base: Option<Definitions>,
+        over: Option<Definitions>,
+    ) -> Option<Definitions> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(Definitions {
+                paths: Self::merge_paths(b.paths, o.paths),
+                sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
+                wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
+                commands: Self::merge_vecs(b.commands, o.commands),
+            }),
+        }
+    }
+
+    /// Merge paths with per-key append strategy: values are concatenated and deduplicated.
+    fn merge_paths(
+        base: Option<HashMap<String, Vec<String>>>,
+        over: Option<HashMap<String, Vec<String>>>,
+    ) -> Option<HashMap<String, Vec<String>>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                for (key, over_values) in o {
+                    let entry = b.entry(key).or_default();
+                    let existing: HashSet<String> = entry.iter().cloned().collect();
+                    entry.extend(over_values.into_iter().filter(|v| !existing.contains(v)));
+                }
+                Some(b)
+            }
+            (b, o) => b.or(o),
+        }
+    }
+
+    fn merge_hashmaps<K: Eq + std::hash::Hash, V>(
+        base: Option<HashMap<K, V>>,
+        over: Option<HashMap<K, V>>,
+    ) -> Option<HashMap<K, V>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                b.extend(o);
+                Some(b)
+            }
+            (b, o) => b.or(o),
+        }
+    }
+
+    fn merge_vecs<T>(base: Option<Vec<T>>, over: Option<Vec<T>>) -> Option<Vec<T>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                b.extend(o);
+                Some(b)
+            }
+            (b, o) => b.or(o),
         }
     }
 }
@@ -787,6 +875,323 @@ mod tests {
         .trim_start();
         assert_eq!(err.to_string(), expected);
     }
+
+    // === Config::merge ===
+
+    #[test]
+    fn merge_both_default() {
+        let result = Config::default().merge(Config::default());
+        assert_eq!(result, Config::default());
+    }
+
+    #[test]
+    fn merge_base_only() {
+        let base = Config {
+            rules: Some(vec![RuleEntry {
+                deny: Some("rm -rf /".to_string()),
+                allow: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            ..Config::default()
+        };
+        let result = base.clone().merge(Config::default());
+        assert_eq!(result, base);
+    }
+
+    #[test]
+    fn merge_override_only() {
+        let over = Config {
+            rules: Some(vec![RuleEntry {
+                allow: Some("git status".to_string()),
+                deny: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            ..Config::default()
+        };
+        let result = Config::default().merge(over.clone());
+        assert_eq!(result, over);
+    }
+
+    #[test]
+    fn merge_defaults_action_overridden() {
+        let base = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Deny),
+                sandbox: None,
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Allow),
+                sandbox: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        assert_eq!(result.defaults.unwrap().action, Some(ActionKind::Allow));
+    }
+
+    #[test]
+    fn merge_defaults_sandbox_overridden() {
+        let base = Config {
+            defaults: Some(Defaults {
+                action: None,
+                sandbox: Some("global-sandbox".to_string()),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            defaults: Some(Defaults {
+                action: None,
+                sandbox: Some("local-sandbox".to_string()),
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        assert_eq!(
+            result.defaults.unwrap().sandbox.as_deref(),
+            Some("local-sandbox")
+        );
+    }
+
+    #[test]
+    fn merge_defaults_partial_override() {
+        let base = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Deny),
+                sandbox: Some("global-sandbox".to_string()),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Allow),
+                sandbox: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let defaults = result.defaults.unwrap();
+        assert_eq!(defaults.action, Some(ActionKind::Allow));
+        assert_eq!(defaults.sandbox.as_deref(), Some("global-sandbox"));
+    }
+
+    #[test]
+    fn merge_rules_appended() {
+        let base = Config {
+            rules: Some(vec![RuleEntry {
+                deny: Some("rm -rf /".to_string()),
+                allow: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            ..Config::default()
+        };
+        let over = Config {
+            rules: Some(vec![RuleEntry {
+                allow: Some("git status".to_string()),
+                deny: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+            }]),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let rules = result.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status"));
+    }
+
+    #[test]
+    fn merge_definitions_paths_appended_per_key() {
+        let base = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([
+                    (
+                        "sensitive".to_string(),
+                        vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()],
+                    ),
+                    ("logs".to_string(), vec!["/var/log/**".to_string()]),
+                ])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![".env".to_string(), "/etc/passwd".to_string()],
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let paths = result.definitions.unwrap().paths.unwrap();
+        // "sensitive" values are appended with deduplication:
+        // base order preserved, then new override values appended
+        let mut sensitive = paths["sensitive"].clone();
+        sensitive.sort();
+        assert_eq!(sensitive, vec![".env", "/etc/passwd", "/etc/shadow"]);
+        // "logs" is preserved from base
+        assert_eq!(paths["logs"], vec!["/var/log/**"]);
+    }
+
+    #[test]
+    fn merge_definitions_paths_deduplicates() {
+        let base = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![
+                        "/etc/passwd".to_string(),
+                        ".env".to_string(),
+                        "~/.ssh/**".to_string(),
+                    ],
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![
+                        ".env".to_string(),
+                        "/etc/passwd".to_string(),
+                        "/secrets/**".to_string(),
+                    ],
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let mut sensitive = result.definitions.unwrap().paths.unwrap()["sensitive"].clone();
+        // base has 3, override has 3, but 2 are duplicates -> 4 unique
+        sensitive.sort();
+        assert_eq!(
+            sensitive,
+            vec![".env", "/etc/passwd", "/secrets/**", "~/.ssh/**"]
+        );
+    }
+
+    #[test]
+    fn merge_definitions_sandbox_per_key() {
+        let base = Config {
+            definitions: Some(Definitions {
+                sandbox: Some(HashMap::from([(
+                    "restricted".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["./tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                sandbox: Some(HashMap::from([(
+                    "restricted".to_string(),
+                    SandboxPreset {
+                        fs: None,
+                        network: Some(NetworkPolicy {
+                            allow: Some(vec!["github.com".to_string()]),
+                        }),
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let sandbox = result.definitions.unwrap().sandbox.unwrap();
+        // local completely replaces the key
+        let restricted = &sandbox["restricted"];
+        assert_eq!(restricted.fs, None);
+        assert!(restricted.network.is_some());
+    }
+
+    #[test]
+    fn merge_definitions_wrappers_appended() {
+        let base = Config {
+            definitions: Some(Definitions {
+                wrappers: Some(vec!["sudo <cmd>".to_string()]),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                wrappers: Some(vec!["bash -c <cmd>".to_string()]),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let wrappers = result.definitions.unwrap().wrappers.unwrap();
+        assert_eq!(wrappers, vec!["sudo <cmd>", "bash -c <cmd>"]);
+    }
+
+    #[test]
+    fn merge_definitions_commands_appended() {
+        let base = Config {
+            definitions: Some(Definitions {
+                commands: Some(vec!["git commit".to_string()]),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                commands: Some(vec!["git push".to_string()]),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let commands = result.definitions.unwrap().commands.unwrap();
+        assert_eq!(commands, vec!["git commit", "git push"]);
+    }
+
+    #[test]
+    fn merge_extends_appended() {
+        let base = Config {
+            extends: Some(vec!["./base.yml".to_string()]),
+            ..Config::default()
+        };
+        let over = Config {
+            extends: Some(vec!["./local.yml".to_string()]),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        assert_eq!(result.extends.unwrap(), vec!["./base.yml", "./local.yml"]);
+    }
+
+    // === Config::validate ===
 
     #[test]
     fn validate_includes_rule_index_in_error() {

@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::ExtensionError;
+use crate::config::ActionKind;
 
 /// JSON-RPC 2.0 request sent to an extension process via stdin.
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +53,79 @@ pub trait ExtensionRunner {
         request: &ExtensionRequest,
         timeout: Duration,
     ) -> Result<ExtensionResponse, ExtensionError>;
+}
+
+/// The resolved result of an extension validation, including the action and
+/// optional message/fix_suggestion from the extension response.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensionResult {
+    pub action: ActionKind,
+    pub message: Option<String>,
+    pub fix_suggestion: Option<String>,
+}
+
+/// Strip ASCII control characters (except common whitespace) to prevent
+/// terminal injection from malicious extension output.
+fn sanitize_for_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_ascii_control() || matches!(*c, '\n' | '\r' | '\t'))
+        .collect()
+}
+
+/// Resolve an extension validation result into an action.
+///
+/// On success, maps the response status to an `ActionKind`.
+/// On any error (timeout, spawn failure, invalid response), falls back to
+/// `ActionKind::Ask` so that the user is prompted for confirmation.
+/// When `verbose` is true, error details are printed to stderr.
+pub fn resolve_extension_result(
+    result: Result<ExtensionResponse, ExtensionError>,
+    verbose: bool,
+) -> ExtensionResult {
+    match result {
+        Ok(response) => {
+            let action = match response.status.as_str() {
+                "allow" => ActionKind::Allow,
+                "deny" => ActionKind::Deny,
+                "ask" => ActionKind::Ask,
+                _ => {
+                    if verbose {
+                        eprintln!(
+                            "[verbose] Extension returned unknown status '{}', falling back to ask",
+                            sanitize_for_terminal(&response.status)
+                        );
+                    }
+                    ActionKind::Ask
+                }
+            };
+            ExtensionResult {
+                action,
+                message: response.message,
+                fix_suggestion: response.fix_suggestion,
+            }
+        }
+        Err(ref err) => {
+            if verbose {
+                eprintln!(
+                    "[verbose] Extension error: {}",
+                    sanitize_for_terminal(&err.to_string())
+                );
+            }
+            let message = format!(
+                "Extension {}, asking user for confirmation",
+                match &err {
+                    ExtensionError::Timeout(_) => "timed out",
+                    ExtensionError::Spawn(_) => "failed to start",
+                    ExtensionError::InvalidResponse(_) => "returned invalid response",
+                }
+            );
+            ExtensionResult {
+                action: ActionKind::Ask,
+                message: Some(message),
+                fix_suggestion: None,
+            }
+        }
+    }
 }
 
 /// Default implementation that spawns an external process.
@@ -162,6 +236,8 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::collections::HashMap;
+    use std::io::Write;
+    use tempfile::TempPath;
 
     fn sample_request() -> ExtensionRequest {
         ExtensionRequest {
@@ -175,26 +251,35 @@ mod tests {
     }
 
     /// Create a temporary executable script with the given raw content.
-    fn write_test_script_raw(content: &str) -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
+    ///
+    /// Returns a `TempPath` that auto-deletes the file on drop.
+    /// The file handle is closed via `into_temp_path()` before returning,
+    /// which prevents ETXTBSY on Linux when spawning the script immediately.
+    #[cfg(unix)]
+    fn write_test_script_raw(content: &str) -> TempPath {
+        use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("runok-test-extension");
-        std::fs::create_dir_all(&dir).expect("should create temp dir");
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("ext-{}-{}.sh", std::process::id(), id));
-        std::fs::write(&path, content).expect("should write test script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("should set executable permission");
-        }
+        let mut file = tempfile::Builder::new()
+            .prefix("runok-ext-")
+            .suffix(".sh")
+            .permissions(std::fs::Permissions::from_mode(0o755))
+            .tempfile()
+            .expect("should create temp script");
+        file.write_all(content.as_bytes())
+            .expect("should write test script");
+        let path = file.into_temp_path();
+
+        // Re-open the file read-only and immediately drop it to ensure the
+        // kernel's write reference count has reached zero.  Without this,
+        // exec can race against the closing write fd on Linux and fail with
+        // ETXTBSY ("Text file busy").
+        drop(std::fs::File::open(&path).expect("reopen read-only to flush kernel write state"));
+
         path
     }
 
     /// Create a script that drains stdin and prints the given JSON response.
-    fn write_test_script(response: &str) -> std::path::PathBuf {
+    fn write_test_script(response: &str) -> TempPath {
         write_test_script_raw(&format!(
             "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{}'\n",
             response
@@ -394,5 +479,185 @@ mod tests {
         assert_eq!(prog, expected_prog);
         let args_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         assert_eq!(args_strs, expected_args);
+    }
+
+    // === resolve_extension_result: error fallback ===
+
+    #[rstest]
+    #[case::timeout(
+        Err(ExtensionError::Timeout(Duration::from_secs(5))),
+        ActionKind::Ask,
+        Some("Extension timed out, asking user for confirmation")
+    )]
+    #[case::spawn(
+        Err(ExtensionError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found"
+        ))),
+        ActionKind::Ask,
+        Some("Extension failed to start, asking user for confirmation")
+    )]
+    #[case::invalid_response(
+        Err(ExtensionError::InvalidResponse("bad json".to_string())),
+        ActionKind::Ask,
+        Some("Extension returned invalid response, asking user for confirmation"),
+    )]
+    fn error_falls_back_to_ask(
+        #[case] result: Result<ExtensionResponse, ExtensionError>,
+        #[case] expected_action: ActionKind,
+        #[case] expected_message: Option<&str>,
+    ) {
+        let resolved = resolve_extension_result(result, false);
+        assert_eq!(resolved.action, expected_action);
+        assert_eq!(resolved.message.as_deref(), expected_message);
+        assert_eq!(resolved.fix_suggestion, None);
+    }
+
+    // === resolve_extension_result: successful response ===
+
+    #[rstest]
+    #[case::allow(
+        ExtensionResponse { status: "allow".into(), message: None, fix_suggestion: None },
+        ActionKind::Allow,
+    )]
+    #[case::deny(
+        ExtensionResponse { status: "deny".into(), message: Some("blocked".into()), fix_suggestion: Some("use GET".into()) },
+        ActionKind::Deny,
+    )]
+    #[case::ask(
+        ExtensionResponse { status: "ask".into(), message: Some("please confirm".into()), fix_suggestion: None },
+        ActionKind::Ask,
+    )]
+    fn success_maps_to_correct_action(
+        #[case] response: ExtensionResponse,
+        #[case] expected_action: ActionKind,
+    ) {
+        let expected_message = response.message.clone();
+        let expected_fix = response.fix_suggestion.clone();
+        let resolved = resolve_extension_result(Ok(response), false);
+        assert_eq!(resolved.action, expected_action);
+        assert_eq!(resolved.message, expected_message);
+        assert_eq!(resolved.fix_suggestion, expected_fix);
+    }
+
+    #[test]
+    fn unknown_status_falls_back_to_ask() {
+        let response = ExtensionResponse {
+            status: "unknown_status".into(),
+            message: Some("something".into()),
+            fix_suggestion: None,
+        };
+        let resolved = resolve_extension_result(Ok(response), false);
+        assert_eq!(resolved.action, ActionKind::Ask);
+    }
+
+    // === resolve_extension_result: verbose logging ===
+
+    #[rstest]
+    #[case::timeout_verbose(
+        Err(ExtensionError::Timeout(Duration::from_secs(5))),
+        "Extension error: timeout after 5s"
+    )]
+    #[case::spawn_verbose(
+        Err(ExtensionError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "plugin not found"
+        ))),
+        "Extension error: spawn error: plugin not found"
+    )]
+    #[case::invalid_response_verbose(
+        Err(ExtensionError::InvalidResponse("bad json".to_string())),
+        "Extension error: invalid response: bad json",
+    )]
+    fn verbose_mode_logs_error(
+        #[case] result: Result<ExtensionResponse, ExtensionError>,
+        #[case] expected_log_fragment: &str,
+    ) {
+        // Verify that verbose mode still returns Ask (the logging itself goes to
+        // stderr which we cannot easily capture in unit tests, but we verify the
+        // fallback behavior is consistent).
+        let resolved = resolve_extension_result(result, true);
+        assert_eq!(resolved.action, ActionKind::Ask);
+        // The expected_log_fragment is documented here to clarify what would be
+        // printed; the actual stderr capture is tested in integration tests.
+        let _ = expected_log_fragment;
+    }
+
+    // === Integration test: end-to-end fallback with real processes ===
+
+    #[test]
+    fn integration_timeout_falls_back_to_ask() {
+        let script = write_test_script_raw("#!/bin/sh\nsleep 10\n");
+        let result = ProcessExtensionRunner.validate(
+            &script.display().to_string(),
+            &sample_request(),
+            Duration::from_secs(1),
+        );
+        let resolved = resolve_extension_result(result, false);
+        assert_eq!(resolved.action, ActionKind::Ask);
+        assert_eq!(
+            resolved.message.as_deref(),
+            Some("Extension timed out, asking user for confirmation")
+        );
+    }
+
+    #[test]
+    fn integration_spawn_failure_falls_back_to_ask() {
+        let result = ProcessExtensionRunner.validate(
+            "/nonexistent/binary/path",
+            &sample_request(),
+            Duration::from_secs(5),
+        );
+        let resolved = resolve_extension_result(result, false);
+        assert_eq!(resolved.action, ActionKind::Ask);
+        assert_eq!(
+            resolved.message.as_deref(),
+            Some("Extension failed to start, asking user for confirmation")
+        );
+    }
+
+    #[test]
+    fn integration_invalid_response_falls_back_to_ask() {
+        let script = write_test_script("not-valid-json");
+        let result = ProcessExtensionRunner.validate(
+            &script.display().to_string(),
+            &sample_request(),
+            Duration::from_secs(5),
+        );
+        let resolved = resolve_extension_result(result, false);
+        assert_eq!(resolved.action, ActionKind::Ask);
+        assert_eq!(
+            resolved.message.as_deref(),
+            Some("Extension returned invalid response, asking user for confirmation")
+        );
+    }
+
+    #[test]
+    fn integration_success_does_not_fallback() {
+        let response_json = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"allow"}}"#;
+        let script = write_test_script(response_json);
+        let result = ProcessExtensionRunner.validate(
+            &script.display().to_string(),
+            &sample_request(),
+            Duration::from_secs(5),
+        );
+        // Verify extension ran successfully before testing fallback logic
+        assert!(result.is_ok(), "extension should succeed: {result:?}");
+        let resolved = resolve_extension_result(result, false);
+        assert_eq!(resolved.action, ActionKind::Allow);
+        assert_eq!(resolved.message, None);
+    }
+
+    // === sanitize_for_terminal ===
+
+    #[rstest]
+    #[case::plain_text("hello world", "hello world")]
+    #[case::strips_ansi_escape("\x1b[31mred\x1b[0m", "[31mred[0m")]
+    #[case::preserves_newline("line1\nline2", "line1\nline2")]
+    #[case::preserves_tab("col1\tcol2", "col1\tcol2")]
+    #[case::strips_null("before\x00after", "beforeafter")]
+    #[case::strips_bell("alert\x07here", "alerthere")]
+    fn sanitize_for_terminal_cases(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(sanitize_for_terminal(input), expected);
     }
 }

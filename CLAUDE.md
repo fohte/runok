@@ -1,12 +1,6 @@
-# Gemini Code Assist Style Guide
+# CLAUDE.md
 
-## DO NOT suggest
-
-- Changing versions or editions specified in config files
-
-Assume version choices are intentional. Your training data may be outdated.
-
-## Test code review rules
+## Test code rules
 
 ### Parameterize similar test cases with rstest
 
