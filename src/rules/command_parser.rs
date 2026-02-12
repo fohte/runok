@@ -224,64 +224,56 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// Recursively walk the tree-sitter AST and collect individual command strings.
 ///
 /// Compound constructs (pipeline, list, subshell, control structures) are split
-/// into their constituent commands. Leaf command nodes are preserved as-is.
-/// Condition expressions (for's value list, while's condition, if's condition)
-/// are not recursed into — only body/consequence/alternative branches.
+/// into their constituent commands. Conditions and value lists are also recursed
+/// into so that commands within them (including command substitutions) are extracted.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // Compound constructs: recurse into named children only
-        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`)
-        "program" | "pipeline" | "list" | "subshell" => {
+        // Compound constructs and control structure internals:
+        // recurse into named children only
+        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`,
+        //  `do`, `done`, `then`, `fi`, `esac`, etc.)
+        "program"
+        | "pipeline"
+        | "list"
+        | "subshell"
+        | "do_group"
+        | "compound_statement"
+        | "else_clause"
+        | "command_substitution" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
             }
         }
-        // for_statement / while_statement: recurse only into body (do_group)
-        "for_statement" | "while_statement" => {
-            if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands);
-            }
-        }
-        // if_statement: skip condition, recurse into then-clause commands,
-        // elif_clause, and else_clause
-        "if_statement" => {
+        // for_statement: recurse into body (do_group) and any command_substitution
+        // nodes in the value list. Literal values (number, word, etc.) are skipped.
+        "for_statement" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
-                    // Skip the condition command(s)
-                    _ if node
-                        .child_by_field_name("condition")
-                        .is_some_and(|c| c.id() == child.id()) => {}
-                    "elif_clause" | "else_clause" => {
+                    "do_group" | "command_substitution" => {
                         collect_commands(child, source, commands);
                     }
-                    // Named children that are not condition/elif/else are the then-clause body
-                    _ => {
-                        collect_commands(child, source, commands);
-                    }
+                    _ => {}
                 }
             }
         }
-        // elif_clause: named children split by the "then" keyword.
-        // Before "then" = condition (skip), after "then" = body (recurse).
-        "elif_clause" => {
-            let mut past_then = false;
+        // while_statement: recurse into both condition and body
+        "while_statement" => {
             let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if !child.is_named() {
-                    if child.kind() == "then" {
-                        past_then = true;
-                    }
-                    continue;
-                }
-                if past_then {
-                    collect_commands(child, source, commands);
-                }
+            for child in node.named_children(&mut cursor) {
+                collect_commands(child, source, commands);
             }
         }
-        // else_clause / do_group / compound_statement: recurse into all named children
-        "else_clause" | "do_group" | "compound_statement" => {
+        // if_statement: recurse into condition, then-clause, elif_clause, else_clause
+        "if_statement" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_commands(child, source, commands);
+            }
+        }
+        // elif_clause: recurse into all named children (condition + body)
+        "elif_clause" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
@@ -557,13 +549,13 @@ mod tests {
     #[rstest]
     #[case::for_simple("for i in 1 2 3; do echo $i; done", vec!["echo $i"])]
     #[case::for_multiple_cmds("for f in *.txt; do cat $f && rm $f; done", vec!["cat $f", "rm $f"])]
-    #[case::for_cmd_substitution("for f in $(find . -name '*.txt'); do echo $f; done", vec!["echo $f"])]
-    #[case::for_backtick_substitution("for f in `ls`; do cat $f; done", vec!["cat $f"])]
-    #[case::while_simple("while true; do echo hello; done", vec!["echo hello"])]
-    #[case::while_pipeline("while read line; do echo $line | grep foo; done", vec!["echo $line", "grep foo"])]
-    #[case::if_then("if true; then echo yes; fi", vec!["echo yes"])]
-    #[case::if_then_else("if true; then echo yes; else echo no; fi", vec!["echo yes", "echo no"])]
-    #[case::if_elif_else("if true; then echo a; elif false; then echo b; else echo c; fi", vec!["echo a", "echo b", "echo c"])]
+    #[case::for_cmd_substitution("for f in $(find . -name '*.txt'); do echo $f; done", vec!["find . -name '*.txt'", "echo $f"])]
+    #[case::for_backtick_substitution("for f in `ls`; do cat $f; done", vec!["ls", "cat $f"])]
+    #[case::while_simple("while true; do echo hello; done", vec!["true", "echo hello"])]
+    #[case::while_pipeline("while read line; do echo $line | grep foo; done", vec!["read line", "echo $line", "grep foo"])]
+    #[case::if_then("if true; then echo yes; fi", vec!["true", "echo yes"])]
+    #[case::if_then_else("if true; then echo yes; else echo no; fi", vec!["true", "echo yes", "echo no"])]
+    #[case::if_elif_else("if true; then echo a; elif false; then echo b; else echo c; fi", vec!["true", "echo a", "false", "echo b", "echo c"])]
     #[case::case_statement("case $x in a) echo a;; b) echo b;; esac", vec!["echo a", "echo b"])]
     #[case::compound_statement("{ echo a; echo b; }", vec!["echo a", "echo b"])]
     #[case::function_def("f() { echo hello; }", vec!["echo hello"])]
@@ -577,8 +569,8 @@ mod tests {
     // ========================================
 
     #[rstest]
-    #[case::for_in_if("for i in 1 2; do if true; then echo $i; fi; done", vec!["echo $i"])]
-    #[case::if_in_for("if true; then for i in a b; do echo $i; done; fi", vec!["echo $i"])]
+    #[case::for_in_if("for i in 1 2; do if true; then echo $i; fi; done", vec!["true", "echo $i"])]
+    #[case::if_in_for("if true; then for i in a b; do echo $i; done; fi", vec!["true", "echo $i"])]
     fn extract_nested_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
