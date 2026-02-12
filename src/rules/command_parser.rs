@@ -227,9 +227,9 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// their constituent commands. Everything else is preserved as-is.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // `program` is the root — recurse into named children only
-        // (skips anonymous nodes like `;`)
-        "program" | "pipeline" | "list" => {
+        // Compound constructs: recurse into named children only
+        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`)
+        "program" | "pipeline" | "list" | "subshell" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
@@ -418,55 +418,75 @@ mod tests {
     }
 
     // ========================================
-    // extract_commands: basic
+    // extract_commands: compound commands
     // ========================================
 
-    #[test]
-    fn extract_single_command() {
-        let result = extract_commands("echo hello").unwrap();
-        assert_eq!(result, vec!["echo hello"]);
-    }
-
     #[rstest]
-    #[case("echo hello | grep world", vec!["echo hello", "grep world"])]
-    #[case("cmd1 && cmd2", vec!["cmd1", "cmd2"])]
-    #[case("cmd1 || cmd2", vec!["cmd1", "cmd2"])]
-    #[case("cmd1 ; cmd2", vec!["cmd1", "cmd2"])]
+    #[case::single("echo hello", vec!["echo hello"])]
+    #[case::pipeline("echo hello | grep world", vec!["echo hello", "grep world"])]
+    #[case::and("cmd1 && cmd2", vec!["cmd1", "cmd2"])]
+    #[case::or("cmd1 || cmd2", vec!["cmd1", "cmd2"])]
+    #[case::semicolon("cmd1 ; cmd2", vec!["cmd1", "cmd2"])]
+    #[case::mixed_operators("curl url | jq '.data' && rm tmp.json", vec!["curl url", "jq '.data'", "rm tmp.json"])]
+    #[case::logical_chain("cmd1 && cmd2 || cmd3", vec!["cmd1", "cmd2", "cmd3"])]
+    #[case::quotes_preserved(r#"echo "hello | world" && grep test"#, vec![r#"echo "hello | world""#, "grep test"])]
     fn extract_compound_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn extract_mixed_operators() {
-        let result = extract_commands("curl url | jq '.data' && rm tmp.json").unwrap();
-        assert_eq!(result, vec!["curl url", "jq '.data'", "rm tmp.json"]);
-    }
-
-    #[test]
-    fn extract_commands_empty_input() {
-        let result = extract_commands("");
-        assert!(matches!(result, Err(CommandParseError::EmptyCommand)));
-    }
-
     // ========================================
-    // extract_commands: syntax errors
+    // extract_commands: subshell
     // ========================================
 
-    #[test]
-    fn extract_commands_syntax_error() {
-        let result = extract_commands("&&");
-        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
+    #[rstest]
+    #[case::in_pipeline("(cmd1 && cmd2) | cmd3", vec!["cmd1", "cmd2", "cmd3"])]
+    #[case::in_logical_chain("(cmd1 ; cmd2) && cmd3", vec!["cmd1", "cmd2", "cmd3"])]
+    // `((...))` is arithmetic expansion in bash, so we use
+    // `(... | (...))` to test genuine subshell nesting.
+    #[case::deeply_nested("(cmd1 | (cmd2 ; cmd3)) && cmd4", vec!["cmd1", "cmd2", "cmd3", "cmd4"])]
+    fn extract_subshell(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================
-    // extract_commands: quoting preserved in compound
+    // extract_commands: special constructs
     // ========================================
 
-    #[test]
-    fn extract_commands_with_quotes() {
-        let result = extract_commands(r#"echo "hello | world" && grep test"#).unwrap();
-        assert_eq!(result, vec![r#"echo "hello | world""#, "grep test"]);
+    #[rstest]
+    #[case::process_substitution("diff <(cmd1) <(cmd2)", vec!["diff <(cmd1) <(cmd2)"])]
+    #[case::heredoc("cat <<EOF\nhello\nEOF", vec!["cat <<EOF\nhello\nEOF"])]
+    fn extract_special_constructs(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: whitespace handling
+    // ========================================
+
+    #[rstest]
+    #[case::extra_whitespace("  cmd1   &&   cmd2  ", vec!["cmd1", "cmd2"])]
+    #[case::with_subshell("  cmd1   &&   cmd2  | ( cmd3 )  ", vec!["cmd1", "cmd2", "cmd3"])]
+    fn extract_commands_whitespace(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: error cases
+    // ========================================
+
+    #[rstest]
+    #[case::empty("", CommandParseError::EmptyCommand)]
+    #[case::syntax_error("&&", CommandParseError::SyntaxError)]
+    fn extract_commands_errors(#[case] input: &str, #[case] expected: CommandParseError) {
+        let result = extract_commands(input);
+        assert_eq!(
+            std::mem::discriminant(&result.unwrap_err()),
+            std::mem::discriminant(&expected),
+        );
     }
 
     // ========================================
