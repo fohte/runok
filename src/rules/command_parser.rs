@@ -557,6 +557,8 @@ mod tests {
     #[rstest]
     #[case::for_simple("for i in 1 2 3; do echo $i; done", vec!["echo $i"])]
     #[case::for_multiple_cmds("for f in *.txt; do cat $f && rm $f; done", vec!["cat $f", "rm $f"])]
+    #[case::for_cmd_substitution("for f in $(find . -name '*.txt'); do echo $f; done", vec!["echo $f"])]
+    #[case::for_backtick_substitution("for f in `ls`; do cat $f; done", vec!["cat $f"])]
     #[case::while_simple("while true; do echo hello; done", vec!["echo hello"])]
     #[case::while_pipeline("while read line; do echo $line | grep foo; done", vec!["echo $line", "grep foo"])]
     #[case::if_then("if true; then echo yes; fi", vec!["echo yes"])]
