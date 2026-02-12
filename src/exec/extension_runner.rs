@@ -250,6 +250,7 @@ mod tests {
 
     /// Create a temporary executable script with the given raw content.
     fn write_test_script_raw(content: &str) -> std::path::PathBuf {
+        use std::io::Write;
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -257,7 +258,13 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("should create temp dir");
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("ext-{}-{}.sh", std::process::id(), id));
-        std::fs::write(&path, content).expect("should write test script");
+        // Flush and sync to prevent ETXTBSY on Linux when the file is
+        // executed immediately after writing.
+        let mut file = std::fs::File::create(&path).expect("should create test script");
+        file.write_all(content.as_bytes())
+            .expect("should write test script");
+        file.sync_all().expect("should sync test script");
+        drop(file);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
