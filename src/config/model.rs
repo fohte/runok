@@ -137,7 +137,8 @@ impl Config {
     ///
     /// - extends / rules / definitions.wrappers / definitions.commands: append
     /// - defaults.action / defaults.sandbox: override (local wins)
-    /// - definitions.paths / definitions.sandbox: per-key override
+    /// - definitions.paths: per-key append (values concatenated, duplicates removed)
+    /// - definitions.sandbox: per-key override
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
@@ -168,11 +169,32 @@ impl Config {
             (Some(b), None) => Some(b),
             (None, Some(o)) => Some(o),
             (Some(b), Some(o)) => Some(Definitions {
-                paths: Self::merge_hashmaps(b.paths, o.paths),
+                paths: Self::merge_paths(b.paths, o.paths),
                 sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
                 wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
                 commands: Self::merge_vecs(b.commands, o.commands),
             }),
+        }
+    }
+
+    /// Merge paths with per-key append strategy: values are concatenated and deduplicated.
+    fn merge_paths(
+        base: Option<HashMap<String, Vec<String>>>,
+        over: Option<HashMap<String, Vec<String>>>,
+    ) -> Option<HashMap<String, Vec<String>>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                for (key, over_values) in o {
+                    let entry = b.entry(key).or_default();
+                    for v in over_values {
+                        if !entry.contains(&v) {
+                            entry.push(v);
+                        }
+                    }
+                }
+                Some(b)
+            }
+            (b, o) => b.or(o),
         }
     }
 
@@ -997,13 +1019,13 @@ mod tests {
     }
 
     #[test]
-    fn merge_definitions_paths_per_key() {
+    fn merge_definitions_paths_appended_per_key() {
         let base = Config {
             definitions: Some(Definitions {
                 paths: Some(HashMap::from([
                     (
                         "sensitive".to_string(),
-                        vec![".env*".to_string(), "/etc/**".to_string()],
+                        vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()],
                     ),
                     ("logs".to_string(), vec!["/var/log/**".to_string()]),
                 ])),
@@ -1015,7 +1037,7 @@ mod tests {
             definitions: Some(Definitions {
                 paths: Some(HashMap::from([(
                     "sensitive".to_string(),
-                    vec!["~/.ssh/**".to_string()],
+                    vec![".env".to_string(), "/etc/passwd".to_string()],
                 )])),
                 ..Definitions::default()
             }),
@@ -1023,10 +1045,53 @@ mod tests {
         };
         let result = base.merge(over);
         let paths = result.definitions.unwrap().paths.unwrap();
-        // "sensitive" is overridden by local
-        assert_eq!(paths["sensitive"], vec!["~/.ssh/**"]);
+        // "sensitive" values are appended with deduplication:
+        // base order preserved, then new override values appended
+        let mut sensitive = paths["sensitive"].clone();
+        sensitive.sort();
+        assert_eq!(sensitive, vec![".env", "/etc/passwd", "/etc/shadow"]);
         // "logs" is preserved from base
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
+    }
+
+    #[test]
+    fn merge_definitions_paths_deduplicates() {
+        let base = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![
+                        "/etc/passwd".to_string(),
+                        ".env".to_string(),
+                        "~/.ssh/**".to_string(),
+                    ],
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![
+                        ".env".to_string(),
+                        "/etc/passwd".to_string(),
+                        "/secrets/**".to_string(),
+                    ],
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let mut sensitive = result.definitions.unwrap().paths.unwrap()["sensitive"].clone();
+        // base has 3, override has 3, but 2 are duplicates -> 4 unique
+        sensitive.sort();
+        assert_eq!(
+            sensitive,
+            vec![".env", "/etc/passwd", "/secrets/**", "~/.ssh/**"]
+        );
     }
 
     #[test]
