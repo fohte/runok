@@ -139,6 +139,9 @@ impl Config {
     /// - defaults.action / defaults.sandbox: override (local wins)
     /// - definitions.paths: per-key append (values concatenated, duplicates removed)
     /// - definitions.sandbox: per-key override
+    ///   (sandbox presets have interdependent fields like fs.writable and
+    ///   fs.deny that must stay consistent; partial merging could create
+    ///   contradictory constraints.)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
