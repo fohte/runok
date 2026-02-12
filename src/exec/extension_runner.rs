@@ -236,6 +236,8 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::collections::HashMap;
+    use std::io::Write;
+    use tempfile::TempPath;
 
     fn sample_request() -> ExtensionRequest {
         ExtensionRequest {
@@ -249,33 +251,27 @@ mod tests {
     }
 
     /// Create a temporary executable script with the given raw content.
-    fn write_test_script_raw(content: &str) -> std::path::PathBuf {
-        use std::io::Write;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
+    ///
+    /// Returns a `TempPath` that auto-deletes the file on drop.
+    /// The file handle is closed via `into_temp_path()` before returning,
+    /// which prevents ETXTBSY on Linux when spawning the script immediately.
+    #[cfg(unix)]
+    fn write_test_script_raw(content: &str) -> TempPath {
+        use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join("runok-test-extension");
-        std::fs::create_dir_all(&dir).expect("should create temp dir");
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("ext-{}-{}.sh", std::process::id(), id));
-        // Flush and sync to prevent ETXTBSY on Linux when the file is
-        // executed immediately after writing.
-        let mut file = std::fs::File::create(&path).expect("should create test script");
+        let mut file = tempfile::Builder::new()
+            .prefix("runok-ext-")
+            .suffix(".sh")
+            .permissions(std::fs::Permissions::from_mode(0o755))
+            .tempfile()
+            .expect("should create temp script");
         file.write_all(content.as_bytes())
             .expect("should write test script");
-        file.sync_all().expect("should sync test script");
-        drop(file);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("should set executable permission");
-        }
-        path
+        file.into_temp_path()
     }
 
     /// Create a script that drains stdin and prints the given JSON response.
-    fn write_test_script(response: &str) -> std::path::PathBuf {
+    fn write_test_script(response: &str) -> TempPath {
         write_test_script_raw(&format!(
             "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{}'\n",
             response
