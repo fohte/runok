@@ -223,20 +223,80 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 
 /// Recursively walk the tree-sitter AST and collect individual command strings.
 ///
-/// Top-level compound constructs (pipeline, list with &&/||/;) are split into
-/// their constituent commands. Everything else is preserved as-is.
+/// Compound constructs (pipeline, list, subshell, control structures) are split
+/// into their constituent commands. Conditions and value lists are also recursed
+/// into so that commands within them (including command substitutions) are extracted.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // Compound constructs: recurse into named children only
-        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`)
-        "program" | "pipeline" | "list" | "subshell" => {
+        // Transparent containers: recurse into all named children.
+        // Skips anonymous tokens like `;`, `&&`, `||`, `|`, `(`, `)`,
+        // `do`, `done`, `then`, `fi`, `esac`, keywords, etc.
+        "program"
+        | "pipeline"
+        | "list"
+        | "subshell"
+        | "do_group"
+        | "compound_statement"
+        | "else_clause"
+        | "command_substitution"
+        | "while_statement"
+        | "if_statement"
+        | "elif_clause" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
             }
         }
-        // Leaf command nodes — extract the source text
+        // for_statement: recurse into body (do_group) and any command_substitution
+        // nodes in the value list. Literal values (number, word, etc.) are skipped.
+        "for_statement" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "do_group" | "command_substitution" => {
+                        collect_commands(child, source, commands);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // case_statement: recurse into each case_item (skip the match value)
+        "case_statement" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "case_item" {
+                    collect_commands(child, source, commands);
+                }
+            }
+        }
+        // case_item: skip pattern values (field name "value"), recurse into the rest
+        "case_item" => {
+            for i in 0..node.child_count() {
+                if node.field_name_for_child(i as u32) == Some("value") {
+                    continue;
+                }
+                if let Some(child) = node.child(i)
+                    && child.is_named()
+                {
+                    collect_commands(child, source, commands);
+                }
+            }
+        }
+        // function_definition: recurse into body
+        "function_definition" => {
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_commands(body, source, commands);
+            }
+        }
+        // Leaf command nodes — extract the source text, and also recurse
+        // into any command_substitution children to extract nested commands.
         _ => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "command_substitution" {
+                    collect_commands(child, source, commands);
+                }
+            }
             let text = &source[node.start_byte()..node.end_byte()];
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
@@ -470,6 +530,54 @@ mod tests {
     #[case::extra_whitespace("  cmd1   &&   cmd2  ", vec!["cmd1", "cmd2"])]
     #[case::with_subshell("  cmd1   &&   cmd2  | ( cmd3 )  ", vec!["cmd1", "cmd2", "cmd3"])]
     fn extract_commands_whitespace(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: control structures
+    // ========================================
+
+    #[rstest]
+    #[case::for_simple("for i in 1 2 3; do echo $i; done", vec!["echo $i"])]
+    #[case::for_multiple_cmds("for f in *.txt; do cat $f && rm $f; done", vec!["cat $f", "rm $f"])]
+    #[case::for_cmd_substitution("for f in $(find . -name '*.txt'); do echo $f; done", vec!["find . -name '*.txt'", "echo $f"])]
+    #[case::for_backtick_substitution("for f in `ls`; do cat $f; done", vec!["ls", "cat $f"])]
+    #[case::while_simple("while true; do echo hello; done", vec!["true", "echo hello"])]
+    #[case::while_pipeline("while read line; do echo $line | grep foo; done", vec!["read line", "echo $line", "grep foo"])]
+    #[case::if_then("if true; then echo yes; fi", vec!["true", "echo yes"])]
+    #[case::if_then_else("if true; then echo yes; else echo no; fi", vec!["true", "echo yes", "echo no"])]
+    #[case::if_elif_else("if true; then echo a; elif false; then echo b; else echo c; fi", vec!["true", "echo a", "false", "echo b", "echo c"])]
+    #[case::case_statement("case $x in a) echo a;; b) echo b;; esac", vec!["echo a", "echo b"])]
+    #[case::compound_statement("{ echo a; echo b; }", vec!["echo a", "echo b"])]
+    #[case::function_def("f() { echo hello; }", vec!["echo hello"])]
+    fn extract_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: nested control structures
+    // ========================================
+
+    #[rstest]
+    #[case::for_in_if("for i in 1 2; do if true; then echo $i; fi; done", vec!["true", "echo $i"])]
+    #[case::if_in_for("if true; then for i in a b; do echo $i; done; fi", vec!["true", "echo $i"])]
+    fn extract_nested_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: control structures with pipeline/list
+    // ========================================
+
+    #[rstest]
+    #[case::list_with_for("echo start && for i in 1 2; do echo $i; done", vec!["echo start", "echo $i"])]
+    #[case::for_piped("for i in 1 2; do echo $i; done | grep 1", vec!["echo $i", "grep 1"])]
+    #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
+    #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
+    fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
     }
