@@ -267,7 +267,15 @@ mod tests {
             .expect("should create temp script");
         file.write_all(content.as_bytes())
             .expect("should write test script");
-        file.into_temp_path()
+        let path = file.into_temp_path();
+
+        // Re-open the file read-only and immediately drop it to ensure the
+        // kernel's write reference count has reached zero.  Without this,
+        // exec can race against the closing write fd on Linux and fail with
+        // ETXTBSY ("Text file busy").
+        drop(std::fs::File::open(&path).expect("reopen read-only to flush kernel write state"));
+
+        path
     }
 
     /// Create a script that drains stdin and prints the given JSON response.
