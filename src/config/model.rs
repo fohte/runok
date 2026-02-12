@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
@@ -186,11 +186,8 @@ impl Config {
             (Some(mut b), Some(o)) => {
                 for (key, over_values) in o {
                     let entry = b.entry(key).or_default();
-                    for v in over_values {
-                        if !entry.contains(&v) {
-                            entry.push(v);
-                        }
-                    }
+                    let existing: HashSet<String> = entry.iter().cloned().collect();
+                    entry.extend(over_values.into_iter().filter(|v| !existing.contains(v)));
                 }
                 Some(b)
             }
