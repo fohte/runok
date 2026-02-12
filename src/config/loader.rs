@@ -27,7 +27,7 @@ impl DefaultConfigLoader {
                 PathBuf::from(h)
                     .join(".config")
                     .join("runok")
-                    .join("config.yml")
+                    .join("runok.yml")
             });
         Self { global_config_path }
     }
@@ -40,15 +40,15 @@ impl DefaultConfigLoader {
     }
 
     /// Determine which local config file to use.
-    /// `.runok/config.yml` takes priority over `runok.yml`.
+    /// `runok.yml` is preferred; `runok.yaml` is a fallback.
     fn local_config_path(cwd: &Path) -> Option<PathBuf> {
-        let dir_config = cwd.join(".runok").join("config.yml");
-        if dir_config.exists() {
-            return Some(dir_config);
+        let yml = cwd.join("runok.yml");
+        if yml.exists() {
+            return Some(yml);
         }
-        let file_config = cwd.join("runok.yml");
-        if file_config.exists() {
-            return Some(file_config);
+        let yaml = cwd.join("runok.yaml");
+        if yaml.exists() {
+            return Some(yaml);
         }
         None
     }
@@ -89,27 +89,25 @@ mod tests {
 
     /// Helper to set up a global config file inside a temp directory.
     fn write_global_config(dir: &Path, yaml: &str) -> PathBuf {
-        let path = dir.join("config.yml");
+        let path = dir.join("runok.yml");
         fs::write(&path, yaml).unwrap();
         path
     }
 
-    /// Helper to set up a local directory-style config (.runok/config.yml).
-    fn write_local_dir_config(cwd: &Path, yaml: &str) {
-        let dir = cwd.join(".runok");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("config.yml"), yaml).unwrap();
+    /// Helper to set up a local config (runok.yml).
+    fn write_local_config(cwd: &Path, yaml: &str) {
+        fs::write(cwd.join("runok.yml"), yaml).unwrap();
     }
 
-    /// Helper to set up a local single-file config (runok.yml).
-    fn write_local_file_config(cwd: &Path, yaml: &str) {
-        fs::write(cwd.join("runok.yml"), yaml).unwrap();
+    /// Helper to set up a local config with .yaml extension (fallback).
+    fn write_local_config_yaml(cwd: &Path, yaml: &str) {
+        fs::write(cwd.join("runok.yaml"), yaml).unwrap();
     }
 
     #[test]
     fn load_no_config_files_returns_default() {
         let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("config.yml");
+        let global_path = tmp.path().join("nonexistent").join("runok.yml");
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
@@ -140,13 +138,13 @@ mod tests {
     }
 
     #[test]
-    fn load_local_dir_config_only() {
+    fn load_local_yml_only() {
         let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("config.yml");
+        let global_path = tmp.path().join("nonexistent").join("runok.yml");
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
-        write_local_dir_config(
+        write_local_config(
             &cwd,
             indoc! {"
                 defaults:
@@ -163,13 +161,13 @@ mod tests {
     }
 
     #[test]
-    fn load_local_file_config_only() {
+    fn load_local_yaml_fallback() {
         let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("config.yml");
+        let global_path = tmp.path().join("nonexistent").join("runok.yml");
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
-        write_local_file_config(
+        write_local_config_yaml(
             &cwd,
             indoc! {"
                 defaults:
@@ -186,20 +184,20 @@ mod tests {
     }
 
     #[test]
-    fn load_dir_config_takes_priority_over_file_config() {
+    fn load_yml_takes_priority_over_yaml() {
         let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("config.yml");
+        let global_path = tmp.path().join("nonexistent").join("runok.yml");
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
-        write_local_dir_config(
+        write_local_config(
             &cwd,
             indoc! {"
                 defaults:
                   action: deny
             "},
         );
-        write_local_file_config(
+        write_local_config_yaml(
             &cwd,
             indoc! {"
                 defaults:
@@ -209,7 +207,7 @@ mod tests {
 
         let loader = DefaultConfigLoader::with_global_path(global_path);
         let config = loader.load(&cwd).unwrap();
-        // .runok/config.yml wins over runok.yml
+        // runok.yml wins over runok.yaml
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Deny)
@@ -232,7 +230,7 @@ mod tests {
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
-        write_local_dir_config(
+        write_local_config(
             &cwd,
             indoc! {"
                 defaults:
@@ -279,7 +277,7 @@ mod tests {
         let cwd = tmp.path().join("project");
         fs::create_dir_all(&cwd).unwrap();
 
-        write_local_dir_config(
+        write_local_config(
             &cwd,
             indoc! {r#"
                 definitions:
@@ -332,8 +330,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::global_io_error(true, false)]
-    #[case::local_io_error(false, true)]
+    #[case::global_parse_error(true, false)]
+    #[case::local_parse_error(false, true)]
     fn load_yaml_parse_error(#[case] global_invalid: bool, #[case] local_invalid: bool) {
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path().join("project");
@@ -342,11 +340,11 @@ mod tests {
         let global_path = if global_invalid {
             write_global_config(tmp.path(), "rules: [invalid yaml\n  broken:")
         } else {
-            tmp.path().join("nonexistent").join("config.yml")
+            tmp.path().join("nonexistent").join("runok.yml")
         };
 
         if local_invalid {
-            write_local_file_config(&cwd, "rules: [invalid yaml\n  broken:");
+            write_local_config(&cwd, "rules: [invalid yaml\n  broken:");
         }
 
         let loader = DefaultConfigLoader::with_global_path(global_path);
@@ -363,7 +361,7 @@ mod tests {
             let expected = PathBuf::from(home)
                 .join(".config")
                 .join("runok")
-                .join("config.yml");
+                .join("runok.yml");
             assert_eq!(loader.global_config_path, Some(expected));
         }
     }
