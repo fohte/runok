@@ -1,0 +1,33 @@
+id: prefer-indoc
+snapshots:
+  ? |
+    let s = "line1\\nline2\\nline3";
+  : labels:
+      - source: '"line1\\nline2\\nline3"'
+        style: primary
+        start: 8
+        end: 31
+  ? |
+    let s = r#"
+    line1
+    line2
+    "#;
+  : labels:
+      - source: |-
+          r#"
+          line1
+          line2
+          "#
+        style: primary
+        start: 8
+        end: 26
+  ? |
+    let s = r#"line1
+    line2"#;
+  : labels:
+      - source: |-
+          r#"line1
+          line2"#
+        style: primary
+        start: 8
+        end: 24
