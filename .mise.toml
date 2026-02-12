@@ -2,6 +2,9 @@
 lefthook = "2.0.16"
 "cargo:ast-grep" = "0.40.4"
 
+# sandbox runtime for tests
+"npm:@anthropic-ai/sandbox-runtime" = "0.0.34"
+
 # lefthook hooks
 actionlint = "1.7.10"
 bun = "1.3.8"
@@ -10,6 +13,12 @@ bun = "1.3.8"
 "npm:prettier" = "3.8.1"
 shellcheck = "0.11.0"
 shfmt = "3.12.0"
+
+[tasks.test]
+description = "Run tests in sandbox"
+run = ["cargo test --no-run", "srt --settings ./srt-settings.json cargo test"]
+[tasks.test.env]
+RUSTC_WRAPPER = ""
 
 [settings]
 npm.bun = true
