@@ -630,6 +630,8 @@ mod tests {
             &sample_request(),
             Duration::from_secs(5),
         );
+        // Verify extension ran successfully before testing fallback logic
+        assert!(result.is_ok(), "extension should succeed: {result:?}");
         let resolved = resolve_extension_result(result, false);
         assert_eq!(resolved.action, ActionKind::Allow);
         assert_eq!(resolved.message, None);
