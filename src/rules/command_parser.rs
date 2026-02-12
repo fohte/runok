@@ -228,10 +228,9 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// into so that commands within them (including command substitutions) are extracted.
 fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
     match node.kind() {
-        // Compound constructs and control structure internals:
-        // recurse into named children only
-        // (skips anonymous nodes like `;`, `&&`, `||`, `|`, `(`, `)`,
-        //  `do`, `done`, `then`, `fi`, `esac`, etc.)
+        // Transparent containers: recurse into all named children.
+        // Skips anonymous tokens like `;`, `&&`, `||`, `|`, `(`, `)`,
+        // `do`, `done`, `then`, `fi`, `esac`, keywords, etc.
         "program"
         | "pipeline"
         | "list"
@@ -239,7 +238,10 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         | "do_group"
         | "compound_statement"
         | "else_clause"
-        | "command_substitution" => {
+        | "command_substitution"
+        | "while_statement"
+        | "if_statement"
+        | "elif_clause" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands);
@@ -258,27 +260,6 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
-        // while_statement: recurse into both condition and body
-        "while_statement" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands);
-            }
-        }
-        // if_statement: recurse into condition, then-clause, elif_clause, else_clause
-        "if_statement" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands);
-            }
-        }
-        // elif_clause: recurse into all named children (condition + body)
-        "elif_clause" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands);
-            }
-        }
         // case_statement: recurse into each case_item (skip the match value)
         "case_statement" => {
             let mut cursor = node.walk();
@@ -288,11 +269,15 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
-        // case_item: recurse into named children except the pattern value(s)
+        // case_item: skip pattern values (field name "value"), recurse into the rest
         "case_item" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if child.kind() != "word" && child.kind() != "extglob_pattern" {
+            for i in 0..node.child_count() {
+                if node.field_name_for_child(i as u32) == Some("value") {
+                    continue;
+                }
+                if let Some(child) = node.child(i)
+                    && child.is_named()
+                {
                     collect_commands(child, source, commands);
                 }
             }
@@ -303,8 +288,15 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 collect_commands(body, source, commands);
             }
         }
-        // Leaf command nodes — extract the source text
+        // Leaf command nodes — extract the source text, and also recurse
+        // into any command_substitution children to extract nested commands.
         _ => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "command_substitution" {
+                    collect_commands(child, source, commands);
+                }
+            }
             let text = &source[node.start_byte()..node.end_byte()];
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
@@ -583,6 +575,8 @@ mod tests {
     #[rstest]
     #[case::list_with_for("echo start && for i in 1 2; do echo $i; done", vec!["echo start", "echo $i"])]
     #[case::for_piped("for i in 1 2; do echo $i; done | grep 1", vec!["echo $i", "grep 1"])]
+    #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
+    #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
