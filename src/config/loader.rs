@@ -267,7 +267,8 @@ mod tests {
         let defs = config.definitions.unwrap();
 
         let paths = defs.paths.unwrap();
-        assert_eq!(paths["sensitive"], vec!["~/.ssh/**"]);
+        // paths are appended per key (not overridden)
+        assert_eq!(paths["sensitive"], vec![".env*", "~/.ssh/**"]);
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
         assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);
