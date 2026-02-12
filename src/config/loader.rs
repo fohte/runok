@@ -87,127 +87,115 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// Helper to set up a global config file inside a temp directory.
-    fn write_global_config(dir: &Path, yaml: &str) -> PathBuf {
-        let path = dir.join("runok.yml");
-        fs::write(&path, yaml).unwrap();
-        path
+    /// Test environment with temp directories and a loader.
+    /// Global config defaults to a nonexistent path (no global config).
+    struct TestEnv {
+        _tmp: TempDir,
+        global_dir: PathBuf,
+        cwd: PathBuf,
+        global_path: PathBuf,
     }
 
-    /// Helper to set up a local config (runok.yml).
-    fn write_local_config(cwd: &Path, yaml: &str) {
-        fs::write(cwd.join("runok.yml"), yaml).unwrap();
-    }
+    impl TestEnv {
+        fn new() -> Self {
+            let tmp = TempDir::new().unwrap();
+            let global_dir = tmp.path().join("global");
+            let cwd = tmp.path().join("project");
+            fs::create_dir_all(&global_dir).unwrap();
+            fs::create_dir_all(&cwd).unwrap();
+            let global_path = global_dir.join("runok.yml");
+            Self {
+                _tmp: tmp,
+                global_dir,
+                cwd,
+                global_path,
+            }
+        }
 
-    /// Helper to set up a local config with .yaml extension (fallback).
-    fn write_local_config_yaml(cwd: &Path, yaml: &str) {
-        fs::write(cwd.join("runok.yaml"), yaml).unwrap();
+        fn write_global(&self, yaml: &str) {
+            fs::write(&self.global_path, yaml).unwrap();
+        }
+
+        fn write_local(&self, filename: &str, yaml: &str) {
+            fs::write(self.cwd.join(filename), yaml).unwrap();
+        }
+
+        fn loader(&self) -> DefaultConfigLoader {
+            DefaultConfigLoader::with_global_path(self.global_path.clone())
+        }
+
+        fn load(&self) -> Result<Config, ConfigError> {
+            self.loader().load(&self.cwd)
+        }
+
+        /// Create a loader whose global path points to a nonexistent file.
+        fn loader_without_global(&self) -> DefaultConfigLoader {
+            DefaultConfigLoader::with_global_path(
+                self.global_dir.join("nonexistent").join("runok.yml"),
+            )
+        }
+
+        fn load_without_global(&self) -> Result<Config, ConfigError> {
+            self.loader_without_global().load(&self.cwd)
+        }
     }
 
     #[test]
     fn load_no_config_files_returns_default() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("runok.yml");
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
-        assert_eq!(config, Config::default());
+        let env = TestEnv::new();
+        assert_eq!(env.load_without_global().unwrap(), Config::default());
     }
 
     #[test]
     fn load_global_only() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = write_global_config(
-            tmp.path(),
-            indoc! {"
-                defaults:
-                  action: deny
-            "},
-        );
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            defaults:
+              action: deny
+        "});
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
+        let config = env.load().unwrap();
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Deny)
         );
     }
 
-    #[test]
-    fn load_local_yml_only() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("runok.yml");
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
+    #[rstest]
+    #[case::yml("runok.yml", crate::config::ActionKind::Allow)]
+    #[case::yaml_fallback("runok.yaml", crate::config::ActionKind::Ask)]
+    fn load_local_only(#[case] filename: &str, #[case] expected_action: crate::config::ActionKind) {
+        let env = TestEnv::new();
+        let action_str = match expected_action {
+            crate::config::ActionKind::Allow => "allow",
+            crate::config::ActionKind::Ask => "ask",
+            crate::config::ActionKind::Deny => "deny",
+        };
+        env.write_local(filename, &format!("defaults:\n  action: {action_str}"));
 
-        write_local_config(
-            &cwd,
-            indoc! {"
-                defaults:
-                  action: allow
-            "},
-        );
-
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
-        assert_eq!(
-            config.defaults.unwrap().action,
-            Some(crate::config::ActionKind::Allow)
-        );
-    }
-
-    #[test]
-    fn load_local_yaml_fallback() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("runok.yml");
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        write_local_config_yaml(
-            &cwd,
-            indoc! {"
-                defaults:
-                  action: ask
-            "},
-        );
-
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
-        assert_eq!(
-            config.defaults.unwrap().action,
-            Some(crate::config::ActionKind::Ask)
-        );
+        let config = env.load_without_global().unwrap();
+        assert_eq!(config.defaults.unwrap().action, Some(expected_action));
     }
 
     #[test]
     fn load_yml_takes_priority_over_yaml() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = tmp.path().join("nonexistent").join("runok.yml");
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        write_local_config(
-            &cwd,
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
             indoc! {"
                 defaults:
                   action: deny
             "},
         );
-        write_local_config_yaml(
-            &cwd,
+        env.write_local(
+            "runok.yaml",
             indoc! {"
                 defaults:
                   action: allow
             "},
         );
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
-        // runok.yml wins over runok.yaml
+        let config = env.load_without_global().unwrap();
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Deny)
@@ -216,22 +204,16 @@ mod tests {
 
     #[test]
     fn load_merges_global_and_local() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = write_global_config(
-            tmp.path(),
-            indoc! {"
-                defaults:
-                  action: deny
-                  sandbox: global-sandbox
-                rules:
-                  - deny: 'rm -rf /'
-            "},
-        );
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        write_local_config(
-            &cwd,
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            defaults:
+              action: deny
+              sandbox: global-sandbox
+            rules:
+              - deny: 'rm -rf /'
+        "});
+        env.write_local(
+            "runok.yml",
             indoc! {"
                 defaults:
                   action: allow
@@ -240,16 +222,12 @@ mod tests {
             "},
         );
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
+        let config = env.load().unwrap();
 
-        // defaults.action is overridden by local
         let defaults = config.defaults.unwrap();
         assert_eq!(defaults.action, Some(crate::config::ActionKind::Allow));
-        // defaults.sandbox is inherited from global
         assert_eq!(defaults.sandbox.as_deref(), Some("global-sandbox"));
 
-        // rules are appended (global + local)
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
@@ -258,27 +236,21 @@ mod tests {
 
     #[test]
     fn load_merges_definitions() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = write_global_config(
-            tmp.path(),
-            indoc! {r#"
-                definitions:
-                  paths:
-                    sensitive:
-                      - ".env*"
-                    logs:
-                      - "/var/log/**"
-                  wrappers:
-                    - "sudo <cmd>"
-                  commands:
-                    - "git commit"
-            "#},
-        );
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        write_local_config(
-            &cwd,
+        let env = TestEnv::new();
+        env.write_global(indoc! {r#"
+            definitions:
+              paths:
+                sensitive:
+                  - ".env*"
+                logs:
+                  - "/var/log/**"
+              wrappers:
+                - "sudo <cmd>"
+              commands:
+                - "git commit"
+        "#});
+        env.write_local(
+            "runok.yml",
             indoc! {r#"
                 definitions:
                   paths:
@@ -291,40 +263,27 @@ mod tests {
             "#},
         );
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let config = loader.load(&cwd).unwrap();
+        let config = env.load().unwrap();
         let defs = config.definitions.unwrap();
 
-        // paths: "sensitive" overridden, "logs" preserved
         let paths = defs.paths.unwrap();
         assert_eq!(paths["sensitive"], vec!["~/.ssh/**"]);
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
-        // wrappers: appended
-        let wrappers = defs.wrappers.unwrap();
-        assert_eq!(wrappers, vec!["sudo <cmd>", "bash -c <cmd>"]);
-
-        // commands: appended
-        let commands = defs.commands.unwrap();
-        assert_eq!(commands, vec!["git commit", "git push"]);
+        assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);
+        assert_eq!(defs.commands.unwrap(), vec!["git commit", "git push"]);
     }
 
     #[test]
     fn load_validation_error_propagated() {
-        let tmp = TempDir::new().unwrap();
-        let global_path = write_global_config(
-            tmp.path(),
-            indoc! {"
-                rules:
-                  - deny: 'rm -rf /'
-                    sandbox: restricted
-            "},
-        );
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            rules:
+              - deny: 'rm -rf /'
+                sandbox: restricted
+        "});
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let err = loader.load(&cwd).unwrap_err();
+        let err = env.load().unwrap_err();
         assert!(err.to_string().contains("deny"));
         assert!(err.to_string().contains("sandbox"));
     }
@@ -333,23 +292,20 @@ mod tests {
     #[case::global_parse_error(true, false)]
     #[case::local_parse_error(false, true)]
     fn load_yaml_parse_error(#[case] global_invalid: bool, #[case] local_invalid: bool) {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().join("project");
-        fs::create_dir_all(&cwd).unwrap();
-
-        let global_path = if global_invalid {
-            write_global_config(tmp.path(), "rules: [invalid yaml\n  broken:")
-        } else {
-            tmp.path().join("nonexistent").join("runok.yml")
-        };
-
+        let env = TestEnv::new();
+        if global_invalid {
+            env.write_global("rules: [invalid yaml\n  broken:");
+        }
         if local_invalid {
-            write_local_config(&cwd, "rules: [invalid yaml\n  broken:");
+            env.write_local("runok.yml", "rules: [invalid yaml\n  broken:");
         }
 
-        let loader = DefaultConfigLoader::with_global_path(global_path);
-        let err = loader.load(&cwd).unwrap_err();
-        assert!(matches!(err, ConfigError::Yaml(_)));
+        let result = if global_invalid {
+            env.load()
+        } else {
+            env.load_without_global()
+        };
+        assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
     }
 
     #[test]
