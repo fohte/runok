@@ -1,0 +1,62 @@
+id: prefer-indoc
+valid:
+  # Single-line strings are fine
+  - |
+    let s = "hello world";
+  - |
+    let s = r#"single line"#;
+  # Already using indoc! macro (inside token_tree)
+  - |
+    let s = indoc! {"
+        line1
+        line2
+    "};
+  - |
+    let s = indoc! {r#"
+        line1
+        line2
+    "#};
+  # Single \\n only (not truly multiline content)
+  - |
+    let s = "\\n";
+  # String with only one \\n (e.g., trailing newline)
+  - |
+    let s = "hello\\n";
+  - |
+    let s = "old\\n";
+  # String with only escaped characters but no \\n
+  - |
+    let s = "hello\\tworld";
+  # Delimiter-like short strings
+  - |
+    let s = "\\n---";
+  - |
+    let s = "---\\n";
+  # Lines with leading spaces (indoc would strip indentation, changing meaning)
+  - |
+    let s = "  line1\\n  line2\\n  line3";
+  - |
+    let s = "  first\\n  \\n  third";
+  # Raw strings with leading spaces (indoc would strip indentation)
+  - |
+    let s = r#"
+      line1
+      line2
+    "#;
+  # Lines with leading tabs (indoc would strip indentation)
+  - |
+    let s = "line1\\n\tline2\\n\tline3";
+invalid:
+  # Raw string with leading newline (multiline)
+  - |
+    let s = r#"
+    line1
+    line2
+    "#;
+  # Normal string with 2+ \\n escapes (truly multiline)
+  - |
+    let s = "line1\\nline2\\nline3";
+  # Raw string with content on multiple lines
+  - |
+    let s = r#"line1
+    line2"#;

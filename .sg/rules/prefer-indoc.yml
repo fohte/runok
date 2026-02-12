@@ -1,0 +1,33 @@
+id: prefer-indoc
+language: rust
+severity: warning
+message: |
+  Use `indoc!` for multiline string literals to improve readability.
+  The `indoc!` macro allows writing indented multiline strings without leading newlines.
+note: |
+  Replace with:
+    indoc! {"
+        your content here
+    "}
+rule:
+  any:
+    # raw string literal containing a newline (multiline)
+    # Exclude strings with leading spaces (indoc would strip indentation)
+    - kind: raw_string_literal
+      regex: \n
+      not:
+        any:
+          - inside:
+              kind: token_tree
+          - regex: "\n "
+          - regex: "\n\t"
+    # normal string literal containing 2+ \\n escapes (truly multiline)
+    # Exclude strings where lines have leading spaces/tabs (indoc would strip them)
+    - kind: string_literal
+      regex: "\\\\n.*\\\\n"
+      not:
+        any:
+          - inside:
+              kind: token_tree
+          - regex: "\\\\n "
+          - regex: "\\\\n\\\\t"
