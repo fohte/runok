@@ -167,6 +167,41 @@ impl ProcessExtensionRunner {
         })
     }
 
+    /// Spawn with retry on ETXTBSY, which can occur on Linux when a
+    /// concurrent `fork()` in another thread inherits a write fd to the
+    /// executable before the child calls `exec()`.  The race window is
+    /// very short so a few retries with brief sleeps suffice.
+    /// See: <https://github.com/golang/go/issues/22315>
+    fn spawn_with_etxtbsy_retry(
+        program: &str,
+        args: &[String],
+    ) -> Result<std::process::Child, std::io::Error> {
+        let max_retries = 5;
+        for attempt in 0..max_retries {
+            match Command::new(program)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => return Ok(child),
+                #[cfg(unix)]
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::sleep(Duration::from_millis(10 * (attempt as u64 + 1)));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // Final attempt without catching ETXTBSY
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+
     /// Split executor_cmd into program and arguments for spawning.
     /// Uses simple whitespace splitting because executor_cmd comes from the
     /// user's config file, not from external input. Quoted argument support
@@ -188,12 +223,7 @@ impl ExtensionRunner for ProcessExtensionRunner {
     ) -> Result<ExtensionResponse, ExtensionError> {
         let (program, args) = Self::parse_command(executor_cmd);
 
-        let mut child = Command::new(&program)
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let mut child = Self::spawn_with_etxtbsy_retry(&program, &args)?;
 
         // Write JSON-RPC request to stdin, then close the pipe
         let json_request = self.build_jsonrpc_request(request)?;
@@ -253,8 +283,9 @@ mod tests {
     /// Create a temporary executable script with the given raw content.
     ///
     /// Returns a `TempPath` that auto-deletes the file on drop.
-    /// The file handle is closed via `into_temp_path()` before returning,
-    /// which prevents ETXTBSY on Linux when spawning the script immediately.
+    /// The write fd is closed via `into_temp_path()`.  ETXTBSY from
+    /// multi-threaded fork+exec races is handled by retry logic in
+    /// `spawn_with_etxtbsy_retry()`.
     #[cfg(unix)]
     fn write_test_script_raw(content: &str) -> TempPath {
         use std::os::unix::fs::PermissionsExt;
@@ -267,15 +298,7 @@ mod tests {
             .expect("should create temp script");
         file.write_all(content.as_bytes())
             .expect("should write test script");
-        let path = file.into_temp_path();
-
-        // Re-open the file read-only and immediately drop it to ensure the
-        // kernel's write reference count has reached zero.  Without this,
-        // exec can race against the closing write fd on Linux and fail with
-        // ETXTBSY ("Text file busy").
-        drop(std::fs::File::open(&path).expect("reopen read-only to flush kernel write state"));
-
-        path
+        file.into_temp_path()
     }
 
     /// Create a script that drains stdin and prints the given JSON response.
