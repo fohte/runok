@@ -176,15 +176,16 @@ impl ProcessExtensionRunner {
         program: &str,
         args: &[String],
     ) -> Result<std::process::Child, std::io::Error> {
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+
         let max_retries = 5;
         for attempt in 0..max_retries {
-            match Command::new(program)
-                .args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-            {
+            match command.spawn() {
                 Ok(child) => return Ok(child),
                 #[cfg(unix)]
                 Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
@@ -194,12 +195,7 @@ impl ProcessExtensionRunner {
             }
         }
         // Final attempt without catching ETXTBSY
-        Command::new(program)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+        command.spawn()
     }
 
     /// Split executor_cmd into program and arguments for spawning.
