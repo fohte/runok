@@ -1110,6 +1110,7 @@ dependencies = [
  "cel-interpreter",
  "clap",
  "indoc",
+ "libc",
  "rstest",
  "serde",
  "serde-saphyr",
