@@ -260,6 +260,7 @@ impl ExtensionRunner for ProcessExtensionRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
     use std::collections::HashMap;
     use std::io::Write;
@@ -299,10 +300,11 @@ mod tests {
 
     /// Create a script that drains stdin and prints the given JSON response.
     fn write_test_script(response: &str) -> TempPath {
-        write_test_script_raw(&format!(
-            "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{}'\n",
-            response
-        ))
+        write_test_script_raw(&formatdoc! {"
+            #!/bin/sh
+            cat > /dev/null
+            printf '%s' '{response}'
+        "})
     }
 
     // === Serialization tests ===
@@ -465,7 +467,10 @@ mod tests {
 
     #[test]
     fn validate_timeout() {
-        let script = write_test_script_raw("#!/bin/sh\nsleep 10\n");
+        let script = write_test_script_raw(indoc! {"
+            #!/bin/sh
+            sleep 10
+        "});
         let err = ProcessExtensionRunner
             .validate(
                 &script.display().to_string(),
@@ -606,7 +611,10 @@ mod tests {
 
     #[test]
     fn integration_timeout_falls_back_to_ask() {
-        let script = write_test_script_raw("#!/bin/sh\nsleep 10\n");
+        let script = write_test_script_raw(indoc! {"
+            #!/bin/sh
+            sleep 10
+        "});
         let result = ProcessExtensionRunner.validate(
             &script.display().to_string(),
             &sample_request(),
