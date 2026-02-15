@@ -1,0 +1,64 @@
+name: Renovate auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  copier:
+    runs-on: ubuntu-latest
+    if: >-
+      github.actor == 'renovate[bot]' &&
+      startsWith(github.head_ref, 'renovate/https-github.com-fohte-generic-boilerplate-')
+
+    steps:
+      - name: Check changed files
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          changed_files=$(gh pr diff "$PR_NUMBER" --name-only --repo ${{ github.repository }})
+          echo "Changed files:"
+          echo "$changed_files"
+
+          # Check if all changed files are .copier-answers.yml
+          if [ -z "$changed_files" ]; then
+            echo "copier_only=false" >> "$GITHUB_OUTPUT"
+            echo "No changed files detected"
+          else
+            non_copier_files=$(echo "$changed_files" | grep -v '^\.copier-answers\.yml$' || true)
+            if [ -z "$non_copier_files" ]; then
+              echo "copier_only=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "copier_only=false" >> "$GITHUB_OUTPUT"
+              echo "Non-copier files found:"
+              echo "$non_copier_files"
+            fi
+          fi
+
+      - name: Enable auto-merge
+        if: steps.check.outputs.copier_only == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Try --auto first (enables auto-merge when CI is pending/required)
+          # If PR is already in clean status, --auto fails with 'Pull request is in clean status'
+          # In that case, fall back to direct merge
+          if OUTPUT=$(gh pr merge "$PR_NUMBER" --squash --auto -R ${{ github.repository }} 2>&1); then
+            echo "$OUTPUT"
+            echo "Auto-merge enabled successfully"
+          elif echo "$OUTPUT" | grep -q "clean status"; then
+            echo "$OUTPUT"
+            echo "PR is in clean status, merging directly"
+            gh pr merge "$PR_NUMBER" --squash -R ${{ github.repository }}
+          else
+            echo "$OUTPUT"
+            echo "Auto-merge failed with unexpected error"
+            exit 1
+          fi
