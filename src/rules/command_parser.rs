@@ -309,6 +309,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     // ========================================
@@ -516,10 +517,21 @@ mod tests {
 
     #[rstest]
     #[case::process_substitution("diff <(cmd1) <(cmd2)", vec!["diff <(cmd1) <(cmd2)"])]
-    #[case::heredoc("cat <<EOF\nhello\nEOF", vec!["cat <<EOF\nhello\nEOF"])]
     fn extract_special_constructs(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extract_heredoc() {
+        let input = indoc! {"
+            cat <<EOF
+            hello
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec![input]);
     }
 
     // ========================================

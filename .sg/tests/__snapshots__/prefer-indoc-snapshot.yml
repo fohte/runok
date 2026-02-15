@@ -8,6 +8,13 @@ snapshots:
         start: 8
         end: 31
   ? |
+    let s = format!("line1\\nline2\\nline3");
+  : labels:
+      - source: '"line1\\nline2\\nline3"'
+        style: primary
+        start: 16
+        end: 39
+  ? |
     let s = r#"
     line1
     line2
@@ -31,3 +38,10 @@ snapshots:
         style: primary
         start: 8
         end: 24
+  ? |
+    let v = vec!["line1\\nline2\\nline3"];
+  : labels:
+      - source: '"line1\\nline2\\nline3"'
+        style: primary
+        start: 13
+        end: 36

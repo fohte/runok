@@ -16,6 +16,24 @@ valid:
         line1
         line2
     "#};
+  # Already using formatdoc! macro
+  - |
+    let s = formatdoc! {"
+        line1
+        line2
+    "};
+  # Already using writedoc! macro
+  - |
+    writedoc! {f, "
+        line1
+        line2
+    "};
+  # Path-qualified indoc macro
+  - |
+    let s = indoc::indoc! {"
+        line1
+        line2
+    "};
   # Single \\n only (not truly multiline content)
   - |
     let s = "\\n";
@@ -60,3 +78,9 @@ invalid:
   - |
     let s = r#"line1
     line2"#;
+  # Multiline string inside non-indoc macro (format!)
+  - |
+    let s = format!("line1\\nline2\\nline3");
+  # Multiline string inside non-indoc macro (vec!)
+  - |
+    let v = vec!["line1\\nline2\\nline3"];
