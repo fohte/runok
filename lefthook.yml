@@ -9,4 +9,4 @@ pre-commit:
   commands:
     ast-grep:
       glob: '*.rs'
-      run: ast-grep scan --rule .sg/rules/no-assert-contains.yml {staged_files}
+      run: ast-grep scan {staged_files}
