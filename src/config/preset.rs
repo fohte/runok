@@ -87,7 +87,11 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 
     let mut result = existing.canonicalize().unwrap_or(existing);
     for component in tail.into_iter().rev() {
-        result.push(component);
+        if component == ".." {
+            result.pop();
+        } else if component != "." {
+            result.push(component);
+        }
     }
     result
 }
