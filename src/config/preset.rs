@@ -59,19 +59,31 @@ fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), 
     Ok(())
 }
 
-/// Canonicalize as much of the path as exists on disk.
-///
-/// For paths where only a prefix exists (e.g. the file itself is missing),
-/// canonicalize the longest existing ancestor and append the remaining
-/// components literally. This avoids errors when the full path does not
-/// exist yet while still collapsing `..` in existing portions.
+/// Normalize a path by resolving `.` and `..` logically (without touching the filesystem),
+/// then canonicalize the longest existing prefix for symlink resolution.
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
-    if let Ok(p) = path.canonicalize() {
+    use std::path::Component;
+
+    // First, logically normalize the path to eliminate `.` and `..`.
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+
+    // Try full canonicalization on the normalized path.
+    if let Ok(p) = normalized.canonicalize() {
         return p;
     }
 
-    // Walk up until we find an ancestor that exists, then re-append the tail.
-    let mut existing = path.to_path_buf();
+    // Walk up to find the longest existing ancestor, canonicalize it,
+    // then re-append the non-existent tail.
+    let mut existing = normalized.clone();
     let mut tail = Vec::new();
     while !existing.exists() {
         if let Some(name) = existing.file_name() {
@@ -87,11 +99,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 
     let mut result = existing.canonicalize().unwrap_or(existing);
     for component in tail.into_iter().rev() {
-        if component == ".." {
-            result.pop();
-        } else if component != "." {
-            result.push(component);
-        }
+        result.push(component);
     }
     result
 }
