@@ -13,6 +13,9 @@ fn home_dir() -> Option<String> {
 /// - Relative path (`./rules/aws.yml`): resolved from `base_dir`
 /// - Home directory (`~/presets/git.yml`): `~` expanded via `get_home`
 /// - Absolute path (`/etc/runok/global.yml`): used as-is
+///
+/// Relative and `~/` paths are validated against path traversal:
+/// the resolved canonical path must stay within the expected root directory.
 fn resolve_local_path(
     reference: &str,
     base_dir: &Path,
@@ -24,15 +27,69 @@ fn resolve_local_path(
                 "cannot expand '~': HOME environment variable is not set".to_string(),
             )
         })?;
-        Ok(PathBuf::from(home).join(rest))
+        let resolved = PathBuf::from(&home).join(rest);
+        validate_within(&resolved, Path::new(&home), reference)?;
+        Ok(resolved)
     } else {
         let path = Path::new(reference);
         if path.is_absolute() {
             Ok(path.to_path_buf())
         } else {
-            Ok(base_dir.join(reference))
+            let resolved = base_dir.join(reference);
+            validate_within(&resolved, base_dir, reference)?;
+            Ok(resolved)
         }
     }
+}
+
+/// Verify that `resolved` stays within `root` after canonicalization.
+///
+/// Both `resolved` and `root` are canonicalized before comparison so that
+/// `../` sequences are collapsed. If `resolved` does not exist yet, only
+/// the existing ancestor portion is canonicalized.
+fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), PresetError> {
+    let canonical = canonicalize_best_effort(resolved);
+    let canonical_root = canonicalize_best_effort(root);
+
+    if !canonical.starts_with(&canonical_root) {
+        return Err(PresetError::InvalidReference(format!(
+            "path traversal detected: '{reference}' escapes the base directory"
+        )));
+    }
+    Ok(())
+}
+
+/// Canonicalize as much of the path as exists on disk.
+///
+/// For paths where only a prefix exists (e.g. the file itself is missing),
+/// canonicalize the longest existing ancestor and append the remaining
+/// components literally. This avoids errors when the full path does not
+/// exist yet while still collapsing `..` in existing portions.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    if let Ok(p) = path.canonicalize() {
+        return p;
+    }
+
+    // Walk up until we find an ancestor that exists, then re-append the tail.
+    let mut existing = path.to_path_buf();
+    let mut tail = Vec::new();
+    while !existing.exists() {
+        if let Some(name) = existing.file_name() {
+            tail.push(name.to_os_string());
+        } else {
+            break;
+        }
+        existing = match existing.parent() {
+            Some(p) => p.to_path_buf(),
+            None => break,
+        };
+    }
+
+    let mut result = existing.canonicalize().unwrap_or(existing);
+    for component in tail.into_iter().rev() {
+        result.push(component);
+    }
+    result
 }
 
 /// Load a local preset file and parse it as a `Config`.
@@ -42,6 +99,7 @@ fn resolve_local_path(
 pub fn load_local_preset(
     reference: &str,
     base_dir: &Path,
+    // Will be used for circular reference detection (planned for a future task).
     _visited: &mut HashSet<String>,
 ) -> Result<Config, ConfigError> {
     let path = resolve_local_path(reference, base_dir, home_dir)?;
@@ -59,9 +117,14 @@ pub fn load_local_preset(
 mod tests {
     use super::*;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
+
+    #[fixture]
+    fn tmp() -> TempDir {
+        TempDir::new().unwrap()
+    }
 
     #[rstest]
     #[case::relative_dot_slash(
@@ -81,11 +144,11 @@ mod tests {
         "},
     )]
     fn resolve_relative_path(
+        tmp: TempDir,
         #[case] reference: &str,
         #[case] relative_file_path: &str,
         #[case] yaml_content: &str,
     ) {
-        let tmp = TempDir::new().unwrap();
         let base_dir = tmp.path().join("project");
 
         let file_path = base_dir.join(relative_file_path);
@@ -100,9 +163,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_absolute_path() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn resolve_absolute_path(tmp: TempDir) {
         let preset_path = tmp.path().join("absolute-preset.yml");
         fs::write(
             &preset_path,
@@ -123,9 +185,8 @@ mod tests {
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
     }
 
-    #[test]
-    fn resolve_home_directory_path() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn resolve_home_directory_path(tmp: TempDir) {
         let fake_home = tmp.path().join("fakehome");
         fs::create_dir_all(fake_home.join("presets")).unwrap();
         fs::write(
@@ -154,9 +215,8 @@ mod tests {
         assert!(err.to_string().contains("HOME"));
     }
 
-    #[test]
-    fn error_on_nonexistent_file() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn error_on_nonexistent_file(tmp: TempDir) {
         let base_dir = tmp.path();
 
         let mut visited = HashSet::new();
@@ -173,9 +233,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn error_on_nonexistent_absolute_path() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn error_on_nonexistent_absolute_path(tmp: TempDir) {
         let missing_path = tmp.path().join("does-not-exist.yml");
         let reference = missing_path.to_str().unwrap();
 
@@ -190,9 +249,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn error_on_invalid_yaml_in_preset() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn error_on_invalid_yaml_in_preset(tmp: TempDir) {
         let preset_path = tmp.path().join("bad.yml");
         fs::write(&preset_path, "rules: [invalid yaml\n  broken:").unwrap();
 
@@ -201,9 +259,8 @@ mod tests {
         assert!(matches!(err, ConfigError::Yaml(_)));
     }
 
-    #[test]
-    fn loaded_preset_config_is_valid() {
-        let tmp = TempDir::new().unwrap();
+    #[rstest]
+    fn loaded_preset_config_is_valid(tmp: TempDir) {
         let base_dir = tmp.path();
         fs::write(
             base_dir.join("preset.yml"),
@@ -228,5 +285,55 @@ mod tests {
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].allow.as_deref(), Some("git status"));
         assert_eq!(rules[1].deny.as_deref(), Some("rm -rf /"));
+    }
+
+    // === Path traversal prevention ===
+
+    #[rstest]
+    #[case::dot_dot_relative(
+        "../../etc/passwd",
+        "path traversal detected: '../../etc/passwd' escapes the base directory"
+    )]
+    #[case::dot_dot_nested(
+        "./rules/../../etc/passwd",
+        "path traversal detected: './rules/../../etc/passwd' escapes the base directory"
+    )]
+    fn error_on_path_traversal_relative(
+        tmp: TempDir,
+        #[case] reference: &str,
+        #[case] expected_msg: &str,
+    ) {
+        let base_dir = tmp.path().join("project");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let mut visited = HashSet::new();
+        let err = load_local_preset(reference, &base_dir, &mut visited).unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::InvalidReference(msg)) => {
+                assert_eq!(msg, expected_msg);
+            }
+            other => panic!("expected PresetError::InvalidReference, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn error_on_path_traversal_home(tmp: TempDir) {
+        let fake_home = tmp.path().join("fakehome");
+        fs::create_dir_all(&fake_home).unwrap();
+
+        let fake_home_str = fake_home.to_str().unwrap().to_string();
+        let err = resolve_local_path("~/../../etc/passwd", tmp.path(), || Some(fake_home_str))
+            .unwrap_err();
+
+        match err {
+            PresetError::InvalidReference(msg) => {
+                assert_eq!(
+                    msg,
+                    "path traversal detected: '~/../../etc/passwd' escapes the base directory"
+                );
+            }
+            other => panic!("expected PresetError::InvalidReference, got: {other:?}"),
+        }
     }
 }
