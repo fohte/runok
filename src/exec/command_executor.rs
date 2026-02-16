@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::process::Command;
 
 use super::ExecError;
@@ -75,6 +76,37 @@ impl SandboxExecutor for StubSandboxExecutor {
     }
 }
 
+/// An error that can occur during dry-run validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DryRunError {
+    /// The command was not found.
+    NotFound(String),
+    /// Permission was denied to execute the command.
+    PermissionDenied(String),
+    /// An I/O error occurred.
+    Io(String),
+}
+
+impl From<ExecError> for DryRunError {
+    fn from(err: ExecError) -> Self {
+        match err {
+            ExecError::NotFound(s) => DryRunError::NotFound(s),
+            ExecError::PermissionDenied(s) => DryRunError::PermissionDenied(s),
+            ExecError::Io(e) => DryRunError::Io(e.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for DryRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DryRunError::NotFound(s) => write!(f, "command not found: {s}"),
+            DryRunError::PermissionDenied(s) => write!(f, "permission denied: {s}"),
+            DryRunError::Io(s) => write!(f, "io error: {s}"),
+        }
+    }
+}
+
 /// The result of a dry-run validation, containing information about what
 /// would happen if the command were executed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +118,7 @@ pub struct DryRunResult {
     /// Whether the command was found and is executable.
     pub is_valid: bool,
     /// If validation failed, the reason.
-    pub error: Option<String>,
+    pub error: Option<DryRunError>,
 }
 
 /// Trait for executing commands and returning exit codes.
@@ -206,9 +238,9 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
         let program = command.program().to_string();
         let exec_mode = self.determine_exec_mode(sandbox, command.is_compound());
 
-        let validation_args: Vec<String> = match command {
-            CommandInput::Argv(args) => args.clone(),
-            CommandInput::Shell(_) => vec!["sh".into()],
+        let validation_args: Cow<[String]> = match command {
+            CommandInput::Argv(args) => Cow::Borrowed(args),
+            CommandInput::Shell(_) => Cow::Owned(vec!["sh".into()]),
         };
 
         match self.validate(&validation_args) {
@@ -222,7 +254,7 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
                 program,
                 exec_mode,
                 is_valid: false,
-                error: Some(e.to_string()),
+                error: Some(e.into()),
             },
         }
     }
@@ -573,7 +605,11 @@ mod tests {
         if expected_valid {
             assert!(result.error.is_none());
         } else {
-            assert!(result.error.is_some());
+            let error = result.error.expect("error should be present");
+            assert!(
+                matches!(error, DryRunError::NotFound(ref s) if s == expected_program),
+                "expected NotFound({expected_program:?}), got {error:?}"
+            );
         }
     }
 
