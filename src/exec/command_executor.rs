@@ -75,6 +75,20 @@ impl SandboxExecutor for StubSandboxExecutor {
     }
 }
 
+/// The result of a dry-run validation, containing information about what
+/// would happen if the command were executed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DryRunResult {
+    /// The program name that was validated.
+    pub program: String,
+    /// The execution mode that would be used.
+    pub exec_mode: ExecMode,
+    /// Whether the command was found and is executable.
+    pub is_valid: bool,
+    /// If validation failed, the reason.
+    pub error: Option<String>,
+}
+
 /// Trait for executing commands and returning exit codes.
 pub trait CommandExecutor {
     /// Execute a command and return the exit code.
@@ -92,6 +106,9 @@ pub trait CommandExecutor {
 
     /// Check that the command exists and is executable (for dry-run validation).
     fn validate(&self, command: &[String]) -> Result<(), ExecError>;
+
+    /// Validate a command without executing it, returning structured results.
+    fn dry_run(&self, command: &CommandInput, sandbox: Option<&SandboxPolicy>) -> DryRunResult;
 
     /// Determine the execution mode based on sandbox presence and command form.
     fn determine_exec_mode(&self, sandbox: Option<&SandboxPolicy>, is_compound: bool) -> ExecMode;
@@ -182,6 +199,31 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
             Ok(())
         } else {
             Err(ExecError::NotFound(program.clone()))
+        }
+    }
+
+    fn dry_run(&self, command: &CommandInput, sandbox: Option<&SandboxPolicy>) -> DryRunResult {
+        let program = command.program().to_string();
+        let exec_mode = self.determine_exec_mode(sandbox, command.is_compound());
+
+        let validation_args: Vec<String> = match command {
+            CommandInput::Argv(args) => args.clone(),
+            CommandInput::Shell(_) => vec!["sh".into()],
+        };
+
+        match self.validate(&validation_args) {
+            Ok(()) => DryRunResult {
+                program,
+                exec_mode,
+                is_valid: true,
+                error: None,
+            },
+            Err(e) => DryRunResult {
+                program,
+                exec_mode,
+                is_valid: false,
+                error: Some(e.to_string()),
+            },
         }
     }
 
@@ -473,6 +515,66 @@ mod tests {
             .status()
             .expect("sh should complete");
         assert_eq!(exit_code_from_status(status), 137); // 128 + SIGKILL(9)
+    }
+
+    // === Dry-run ===
+
+    #[rstest]
+    #[case::argv_existing(
+        CommandInput::Argv(vec!["sh".into()]),
+        None,
+        true,
+        "sh",
+        ExecMode::TransparentProxy
+    )]
+    #[case::argv_nonexistent(
+        CommandInput::Argv(vec!["__nonexistent_cmd_99__".into()]),
+        None,
+        false,
+        "__nonexistent_cmd_99__",
+        ExecMode::TransparentProxy
+    )]
+    #[case::shell_compound(
+        CommandInput::Shell("echo hello".into()),
+        None,
+        true,
+        "sh",
+        ExecMode::ShellExec
+    )]
+    #[case::argv_empty(
+        CommandInput::Argv(vec![]),
+        None,
+        false,
+        "",
+        ExecMode::TransparentProxy
+    )]
+    #[case::argv_with_sandbox(
+        CommandInput::Argv(vec!["sh".into()]),
+        Some(&SandboxPolicy { _private: () }),
+        true,
+        "sh",
+        ExecMode::SpawnAndWait
+    )]
+    fn dry_run(
+        executor: ProcessCommandExecutor<StubSandboxExecutor>,
+        #[case] command: CommandInput,
+        #[case] sandbox: Option<&SandboxPolicy>,
+        #[case] expected_valid: bool,
+        #[case] expected_program: &str,
+        #[case] expected_mode: ExecMode,
+    ) {
+        let result = executor.dry_run(&command, sandbox);
+
+        assert_eq!(result.is_valid, expected_valid);
+        assert_eq!(result.program, expected_program);
+        if cfg!(unix) {
+            assert_eq!(result.exec_mode, expected_mode);
+        }
+        if expected_valid {
+            assert!(result.error.is_none());
+        } else {
+            assert!(result.error.is_some());
+        }
     }
 
     // === Custom SandboxExecutor for testing ===
