@@ -164,7 +164,15 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
         // attempting to resolve the command via the shell is a simple approach.
         let status = Command::new("sh")
             .arg("-c")
-            .arg(format!("command -v {}", shell_escape(program)))
+            .arg(format!(
+                "command -v {}",
+                shlex::try_quote(program).map_err(|_| {
+                    ExecError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "command name contains NUL byte",
+                    ))
+                })?
+            ))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -277,12 +285,6 @@ fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
 
     // Fallback for platforms where neither code nor signal is available
     1
-}
-
-/// Simple shell escaping for use in `command -v` lookups.
-/// Wraps the string in single quotes, escaping any embedded single quotes.
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -471,16 +473,6 @@ mod tests {
             .status()
             .expect("sh should complete");
         assert_eq!(exit_code_from_status(status), 137); // 128 + SIGKILL(9)
-    }
-
-    // === shell_escape ===
-
-    #[rstest]
-    #[case::simple("echo", "'echo'")]
-    #[case::with_spaces("hello world", "'hello world'")]
-    #[case::with_single_quote("it's", "'it'\\''s'")]
-    fn shell_escape_cases(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(shell_escape(input), expected);
     }
 
     // === Custom SandboxExecutor for testing ===

@@ -1115,6 +1115,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "shlex",
  "tempfile",
  "thiserror 2.0.18",
  "tree-sitter",
