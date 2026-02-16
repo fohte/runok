@@ -175,11 +175,116 @@ fn match_optional_present(
     cmd_tokens: &[&str],
     definitions: &Definitions,
 ) -> bool {
-    // Build a combined pattern: optional tokens + remaining pattern tokens
-    let mut combined = Vec::with_capacity(optional_tokens.len() + remaining_pattern.len());
-    combined.extend_from_slice(optional_tokens);
-    combined.extend_from_slice(remaining_pattern);
-    match_tokens_inner(&combined, cmd_tokens, definitions)
+    // Chain optional tokens with remaining pattern to avoid cloning.
+    let combined: Vec<&PatternToken> = optional_tokens
+        .iter()
+        .chain(remaining_pattern.iter())
+        .collect();
+    match_tokens_ref(&combined, cmd_tokens, definitions)
+}
+
+/// Same as [`match_tokens_inner`] but operates on `&[&PatternToken]` to avoid
+/// cloning when chaining optional groups with the remaining pattern.
+fn match_tokens_ref(
+    pattern_tokens: &[&PatternToken],
+    cmd_tokens: &[&str],
+    definitions: &Definitions,
+) -> bool {
+    let Some((first, rest)) = pattern_tokens.split_first() else {
+        return cmd_tokens.is_empty();
+    };
+
+    match first {
+        PatternToken::Wildcard => {
+            for skip in 0..=cmd_tokens.len() {
+                if match_tokens_ref(rest, &cmd_tokens[skip..], definitions) {
+                    return true;
+                }
+            }
+            false
+        }
+
+        PatternToken::Literal(s) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            if cmd_tokens[0] == s.as_str() {
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            } else {
+                false
+            }
+        }
+
+        PatternToken::Alternation(alts) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            } else {
+                false
+            }
+        }
+
+        PatternToken::FlagWithValue { aliases, value } => {
+            for i in 0..cmd_tokens.len() {
+                if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
+                    && i + 1 < cmd_tokens.len()
+                    && match_single_token(value, cmd_tokens[i + 1], definitions)
+                {
+                    let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
+                    if match_tokens_ref(rest, &remaining, definitions) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        PatternToken::Negation(inner) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            if !match_single_token(inner, cmd_tokens[0], definitions) {
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            } else {
+                false
+            }
+        }
+
+        PatternToken::Optional(inner_tokens) => {
+            // "present" path: chain inner tokens with rest
+            let combined: Vec<&PatternToken> =
+                inner_tokens.iter().chain(rest.iter().copied()).collect();
+            if match_tokens_ref(&combined, cmd_tokens, definitions) {
+                return true;
+            }
+            // "absent" path
+            if optional_flags_absent(inner_tokens, cmd_tokens) {
+                return match_tokens_ref(rest, cmd_tokens, definitions);
+            }
+            false
+        }
+
+        PatternToken::PathRef(name) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            let paths = resolve_paths(name, definitions);
+            if paths.iter().any(|p| p.as_str() == cmd_tokens[0]) {
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            } else {
+                false
+            }
+        }
+
+        PatternToken::Placeholder(_) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+        }
+    }
 }
 
 /// Check if a single pattern token matches a single command token.
@@ -199,14 +304,14 @@ fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Defin
     }
 }
 
-/// Resolve a path reference name from definitions.
-fn resolve_paths(name: &str, definitions: &Definitions) -> Vec<String> {
+/// Resolve a path reference name from definitions, returning a borrowed slice.
+fn resolve_paths<'a>(name: &str, definitions: &'a Definitions) -> &'a [String] {
     definitions
         .paths
         .as_ref()
-        .and_then(|paths: &std::collections::HashMap<String, Vec<String>>| paths.get(name))
-        .cloned()
-        .unwrap_or_default()
+        .and_then(|paths| paths.get(name))
+        .map(|v| v.as_slice())
+        .unwrap_or(&[])
 }
 
 /// Remove elements at the given indices from a slice, returning a new Vec.
@@ -224,7 +329,7 @@ mod tests {
     use super::*;
     use crate::rules::command_parser::{FlagSchema, parse_command};
     use crate::rules::pattern_parser::parse as parse_pattern;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::collections::{HashMap, HashSet};
 
     /// Helper: parse pattern and command, then check matching.
@@ -256,6 +361,7 @@ mod tests {
         }
     }
 
+    #[fixture]
     fn empty_defs() -> Definitions {
         Definitions::default()
     }
