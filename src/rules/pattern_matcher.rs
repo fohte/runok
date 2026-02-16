@@ -341,9 +341,12 @@ fn normalize_path(path: &str) -> String {
     for comp in Path::new(path).components() {
         match comp {
             Component::ParentDir => {
-                // Pop the last normal component; keep RootDir in place
                 if matches!(components.last(), Some(Component::Normal(_))) {
+                    // Pop the last normal component
                     components.pop();
+                } else if !matches!(components.last(), Some(Component::RootDir)) {
+                    // Preserve leading `..` in relative paths
+                    components.push(comp);
                 }
             }
             Component::CurDir => {
@@ -749,6 +752,8 @@ mod tests {
     #[case::dotdot_at_root("/../etc/passwd", "/etc/passwd")]
     #[case::relative("foo/./bar", "foo/bar")]
     #[case::relative_dotdot("foo/bar/../baz", "foo/baz")]
+    #[case::leading_dotdot("../etc/passwd", "../etc/passwd")]
+    #[case::leading_double_dotdot("../../etc/passwd", "../../etc/passwd")]
     fn normalize_path_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(normalize_path(input), expected);
     }
