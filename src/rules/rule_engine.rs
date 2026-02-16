@@ -57,7 +57,8 @@ pub fn evaluate_command(
         }
     };
 
-    let definitions = config.definitions.as_ref().cloned().unwrap_or_default();
+    let default_definitions = Definitions::default();
+    let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
 
     // Collect all matched rules with their parsed patterns
     let mut matched: Vec<MatchedRule> = Vec::new();
@@ -72,13 +73,13 @@ pub fn evaluate_command(
         let schema = build_flag_schema(&pattern);
         let parsed_command = parse_command(command, &schema)?;
 
-        if !matches(&pattern, &parsed_command, &definitions) {
+        if !matches(&pattern, &parsed_command, definitions) {
             continue;
         }
 
         // Evaluate when clause if present
         if let Some(when_expr) = &rule.when {
-            let expr_context = build_expr_context(&parsed_command, context, &definitions);
+            let expr_context = build_expr_context(&parsed_command, context, definitions);
             match evaluate(when_expr, &expr_context) {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -117,14 +118,9 @@ pub fn evaluate_command(
         ActionKind::Allow => Action::Allow,
     };
 
-    // Collect sandbox preset from the most restrictive matched rule.
-    // If the winning rule has no sandbox, check other matched rules for sandbox
-    // (first match wins among rules with the same action level).
-    let sandbox_preset = matched
-        .iter()
-        .filter(|m| m.rule.sandbox.is_some())
-        .max_by_key(|m| m.action_kind)
-        .and_then(|m| m.rule.sandbox.clone());
+    // Sandbox preset comes only from the winning rule to prevent lower-priority
+    // rules from influencing the security posture.
+    let sandbox_preset = most_restrictive.rule.sandbox.clone();
 
     Ok(EvalResult {
         action,
