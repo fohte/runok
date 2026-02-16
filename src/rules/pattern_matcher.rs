@@ -4,9 +4,16 @@
 //! supporting wildcards, alternations, negations, optional groups,
 //! and path-variable expansion via [`Definitions`].
 
+use std::cell::Cell;
+use std::path::{Component, Path};
+
 use crate::config::Definitions;
 use crate::rules::command_parser::ParsedCommand;
 use crate::rules::pattern_parser::{Pattern, PatternToken};
+
+/// Maximum number of recursive steps allowed during pattern matching.
+/// Prevents exponential blowup from patterns with multiple consecutive wildcards.
+const MAX_MATCH_STEPS: usize = 10_000;
 
 /// Check whether `pattern` matches `command`.
 ///
@@ -20,15 +27,26 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
 
     // Match pattern tokens against raw_tokens (excluding the command name at index 0)
     let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
-    match_tokens_inner(&pattern.tokens, &cmd_tokens, definitions)
+    let steps = Cell::new(0usize);
+    match_tokens_inner(&pattern.tokens, &cmd_tokens, definitions, &steps)
 }
 
 /// Core recursive matcher operating on `&[&str]` slices.
+///
+/// `steps` tracks the total number of recursive calls to prevent exponential
+/// blowup from patterns with multiple consecutive wildcards.
 fn match_tokens_inner(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&str],
     definitions: &Definitions,
+    steps: &Cell<usize>,
 ) -> bool {
+    let count = steps.get() + 1;
+    steps.set(count);
+    if count > MAX_MATCH_STEPS {
+        return false;
+    }
+
     // Base case: both exhausted
     let Some((first, rest)) = pattern_tokens.split_first() else {
         return cmd_tokens.is_empty();
@@ -38,7 +56,7 @@ fn match_tokens_inner(
         PatternToken::Wildcard => {
             // Wildcard matches zero or more tokens (greedy with backtracking)
             for skip in 0..=cmd_tokens.len() {
-                if match_tokens_inner(rest, &cmd_tokens[skip..], definitions) {
+                if match_tokens_inner(rest, &cmd_tokens[skip..], definitions, steps) {
                     return true;
                 }
             }
@@ -50,7 +68,7 @@ fn match_tokens_inner(
                 return false;
             }
             if cmd_tokens[0] == s.as_str() {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions)
+                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -61,7 +79,7 @@ fn match_tokens_inner(
                 return false;
             }
             if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions)
+                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -77,7 +95,7 @@ fn match_tokens_inner(
                 {
                     // Remove the flag and its value, continue matching
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    if match_tokens_inner(rest, &remaining, definitions) {
+                    if match_tokens_inner(rest, &remaining, definitions, steps) {
                         return true;
                     }
                 }
@@ -90,7 +108,7 @@ fn match_tokens_inner(
                 return false;
             }
             if !match_single_token(inner, cmd_tokens[0], definitions) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions)
+                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -98,13 +116,13 @@ fn match_tokens_inner(
 
         PatternToken::Optional(inner_tokens) => {
             // Try matching with the optional tokens present (consuming command tokens)
-            if match_optional_present(inner_tokens, rest, cmd_tokens, definitions) {
+            if match_optional_present(inner_tokens, rest, cmd_tokens, definitions, steps) {
                 return true;
             }
             // Try matching without the optional tokens (skip the Optional entirely),
             // but verify that the optional's flags are actually absent from the command
             if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_inner(rest, cmd_tokens, definitions);
+                return match_tokens_inner(rest, cmd_tokens, definitions, steps);
             }
             false
         }
@@ -114,8 +132,9 @@ fn match_tokens_inner(
                 return false;
             }
             let paths = resolve_paths(name, definitions);
-            if paths.iter().any(|p| p.as_str() == cmd_tokens[0]) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions)
+            let normalized_cmd = normalize_path(cmd_tokens[0]);
+            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
+                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -128,7 +147,7 @@ fn match_tokens_inner(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            match_tokens_inner(rest, &cmd_tokens[1..], definitions)
+            match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
         }
     }
 }
@@ -174,13 +193,14 @@ fn match_optional_present(
     remaining_pattern: &[PatternToken],
     cmd_tokens: &[&str],
     definitions: &Definitions,
+    steps: &Cell<usize>,
 ) -> bool {
     // Chain optional tokens with remaining pattern to avoid cloning.
     let combined: Vec<&PatternToken> = optional_tokens
         .iter()
         .chain(remaining_pattern.iter())
         .collect();
-    match_tokens_ref(&combined, cmd_tokens, definitions)
+    match_tokens_ref(&combined, cmd_tokens, definitions, steps)
 }
 
 /// Same as [`match_tokens_inner`] but operates on `&[&PatternToken]` to avoid
@@ -189,7 +209,14 @@ fn match_tokens_ref(
     pattern_tokens: &[&PatternToken],
     cmd_tokens: &[&str],
     definitions: &Definitions,
+    steps: &Cell<usize>,
 ) -> bool {
+    let count = steps.get() + 1;
+    steps.set(count);
+    if count > MAX_MATCH_STEPS {
+        return false;
+    }
+
     let Some((first, rest)) = pattern_tokens.split_first() else {
         return cmd_tokens.is_empty();
     };
@@ -197,7 +224,7 @@ fn match_tokens_ref(
     match first {
         PatternToken::Wildcard => {
             for skip in 0..=cmd_tokens.len() {
-                if match_tokens_ref(rest, &cmd_tokens[skip..], definitions) {
+                if match_tokens_ref(rest, &cmd_tokens[skip..], definitions, steps) {
                     return true;
                 }
             }
@@ -209,7 +236,7 @@ fn match_tokens_ref(
                 return false;
             }
             if cmd_tokens[0] == s.as_str() {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -220,7 +247,7 @@ fn match_tokens_ref(
                 return false;
             }
             if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -233,7 +260,7 @@ fn match_tokens_ref(
                     && match_single_token(value, cmd_tokens[i + 1], definitions)
                 {
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    if match_tokens_ref(rest, &remaining, definitions) {
+                    if match_tokens_ref(rest, &remaining, definitions, steps) {
                         return true;
                     }
                 }
@@ -246,7 +273,7 @@ fn match_tokens_ref(
                 return false;
             }
             if !match_single_token(inner, cmd_tokens[0], definitions) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -256,12 +283,12 @@ fn match_tokens_ref(
             // "present" path: chain inner tokens with rest
             let combined: Vec<&PatternToken> =
                 inner_tokens.iter().chain(rest.iter().copied()).collect();
-            if match_tokens_ref(&combined, cmd_tokens, definitions) {
+            if match_tokens_ref(&combined, cmd_tokens, definitions, steps) {
                 return true;
             }
             // "absent" path
             if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_ref(rest, cmd_tokens, definitions);
+                return match_tokens_ref(rest, cmd_tokens, definitions, steps);
             }
             false
         }
@@ -271,8 +298,9 @@ fn match_tokens_ref(
                 return false;
             }
             let paths = resolve_paths(name, definitions);
-            if paths.iter().any(|p| p.as_str() == cmd_tokens[0]) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            let normalized_cmd = normalize_path(cmd_tokens[0]);
+            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
+                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
             } else {
                 false
             }
@@ -282,7 +310,7 @@ fn match_tokens_ref(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            match_tokens_ref(rest, &cmd_tokens[1..], definitions)
+            match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
         }
     }
 }
@@ -296,12 +324,41 @@ fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Defin
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
         PatternToken::PathRef(name) => {
             let paths = resolve_paths(name, definitions);
-            paths.iter().any(|p| p.as_str() == cmd_token)
+            let normalized_cmd = normalize_path(cmd_token);
+            paths.iter().any(|p| normalize_path(p) == normalized_cmd)
         }
         PatternToken::Placeholder(_) => true,
         // FlagWithValue and Optional don't make sense as single-token matches
         PatternToken::FlagWithValue { .. } | PatternToken::Optional(_) => false,
     }
+}
+
+/// Normalize a file path by resolving `.` and `..` components without
+/// touching the filesystem. This prevents traversal-based bypasses such
+/// as `/etc/./passwd` or `/etc/../etc/passwd` when matching `<path:name>`.
+fn normalize_path(path: &str) -> String {
+    let mut components = Vec::new();
+    for comp in Path::new(path).components() {
+        match comp {
+            Component::ParentDir => {
+                // Pop the last normal component; keep RootDir in place
+                if matches!(components.last(), Some(Component::Normal(_))) {
+                    components.pop();
+                }
+            }
+            Component::CurDir => {
+                // Skip `.`
+            }
+            _ => {
+                components.push(comp);
+            }
+        }
+    }
+    if components.is_empty() {
+        return ".".to_string();
+    }
+    let rebuilt: std::path::PathBuf = components.iter().collect();
+    rebuilt.to_string_lossy().into_owned()
 }
 
 /// Resolve a path reference name from definitions, returning a borrowed slice.
@@ -623,5 +680,76 @@ mod tests {
             "java -Denv=staging",
             &empty_defs()
         ));
+    }
+
+    // ========================================
+    // Path normalization
+    // ========================================
+
+    #[rstest]
+    #[case::dot_segment("cat /etc/./passwd", true)]
+    #[case::dotdot_segment("cat /etc/../etc/passwd", true)]
+    #[case::multiple_dots("cat /etc/./././passwd", true)]
+    #[case::complex_traversal("cat /tmp/../etc/passwd", true)]
+    #[case::unrelated_path("cat /tmp/file.txt", false)]
+    fn path_ref_normalized(#[case] command_str: &str, #[case] expected: bool) {
+        let defs = Definitions {
+            paths: Some(HashMap::from([(
+                "sensitive".to_string(),
+                vec!["/etc/passwd".to_string()],
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(
+            check_match("cat <path:sensitive>", command_str, &defs),
+            expected
+        );
+    }
+
+    #[test]
+    fn path_ref_definition_normalized() {
+        // Definition itself contains non-canonical path
+        let defs = Definitions {
+            paths: Some(HashMap::from([(
+                "sensitive".to_string(),
+                vec!["/etc/./passwd".to_string()],
+            )])),
+            ..Default::default()
+        };
+        assert!(check_match(
+            "cat <path:sensitive>",
+            "cat /etc/passwd",
+            &defs
+        ));
+    }
+
+    // ========================================
+    // Wildcard DoS prevention
+    // ========================================
+
+    #[test]
+    fn wildcard_dos_terminates() {
+        // Many consecutive wildcards against non-matching input would cause
+        // exponential blowup without the step limit. This test verifies
+        // that the matcher terminates quickly by returning false.
+        let pattern_str = "cmd * * * * * * * * * * a";
+        let command_str = "cmd b b b b b b b b b b b b b b b b b b b b";
+        assert!(!check_match(pattern_str, command_str, &empty_defs()));
+    }
+
+    // ========================================
+    // normalize_path unit tests
+    // ========================================
+
+    #[rstest]
+    #[case::identity("/etc/passwd", "/etc/passwd")]
+    #[case::dot("/etc/./passwd", "/etc/passwd")]
+    #[case::dotdot("/etc/../etc/passwd", "/etc/passwd")]
+    #[case::multiple_dots("/a/./b/./c", "/a/b/c")]
+    #[case::dotdot_at_root("/../etc/passwd", "/etc/passwd")]
+    #[case::relative("foo/./bar", "foo/bar")]
+    #[case::relative_dotdot("foo/bar/../baz", "foo/baz")]
+    fn normalize_path_cases(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(normalize_path(input), expected);
     }
 }
