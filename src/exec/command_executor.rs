@@ -108,6 +108,9 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
                 }
             }
             ExecMode::ShellExec => {
+                // command tokens are joined back into the original shell string for sh -c.
+                // This is safe because the caller passes pre-parsed tokens from the user's
+                // original command line, not separately constructed arguments.
                 let shell_cmd = command.join(" ");
                 if let Some(policy) = sandbox {
                     self.sandbox_executor
@@ -255,7 +258,13 @@ fn shell_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+    use std::cell::RefCell;
+
+    #[fixture]
+    fn executor() -> ProcessCommandExecutor<StubSandboxExecutor> {
+        ProcessCommandExecutor::new_without_sandbox()
+    }
 
     // === ExecMode determination ===
 
@@ -265,12 +274,11 @@ mod tests {
     #[case::compound_no_sandbox(None, true, ExecMode::ShellExec)]
     #[case::compound_with_sandbox(Some(&SandboxPolicy { _private: () }), true, ExecMode::ShellExec)]
     fn determine_exec_mode(
+        executor: ProcessCommandExecutor<StubSandboxExecutor>,
         #[case] sandbox: Option<&SandboxPolicy>,
         #[case] is_compound: bool,
         #[case] expected: ExecMode,
     ) {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
         let mode = executor.determine_exec_mode(sandbox, is_compound);
 
         if cfg!(unix) {
@@ -288,80 +296,43 @@ mod tests {
     // === Exit code tests ===
     //
     // Note: TransparentProxy (exec() syscall) cannot be tested in-process because
-    // it replaces the current process. The exec() path is tested via spawn+wait
-    // by using is_compound=true or sandbox=Some to force SpawnAndWait/ShellExec mode.
+    // it replaces the current process. All tests use is_compound=true to force
+    // ShellExec mode.
 
-    #[test]
-    fn exec_spawn_returns_zero_on_success() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
-        // Use compound mode to force ShellExec (avoids exec() replacing test process)
-        let code = executor
-            .exec(&["true".into()], None, true)
-            .expect("true should succeed");
-        assert_eq!(code, 0);
-    }
-
-    #[test]
-    fn exec_shell_exec_returns_nonzero() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
+    #[rstest]
+    #[case::success(&["true"], 0)]
+    #[case::failure(&["false"], 1)]
+    #[case::custom_exit_code(&["exit", "42"], 42)]
+    #[case::pipeline(&["echo", "hello", "|", "cat"], 0)]
+    fn exec_shell_exec_returns_correct_exit_code(
+        executor: ProcessCommandExecutor<StubSandboxExecutor>,
+        #[case] cmd: &[&str],
+        #[case] expected_code: i32,
+    ) {
+        let command: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
 
         let code = executor
-            .exec(&["false".into()], None, true)
-            .expect("false should complete");
-        assert_eq!(code, 1);
-    }
-
-    #[test]
-    fn exec_compound_command_returns_exit_code() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
-        let code = executor
-            .exec(&["exit".into(), "42".into()], None, true)
-            .expect("sh -c should complete");
-        assert_eq!(code, 42);
-    }
-
-    #[test]
-    fn exec_compound_command_pipeline() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
-        let code = executor
-            .exec(
-                &["echo".into(), "hello".into(), "|".into(), "cat".into()],
-                None,
-                true,
-            )
-            .expect("pipeline should complete");
-        assert_eq!(code, 0);
+            .exec(&command, None, true)
+            .expect("command should complete");
+        assert_eq!(code, expected_code);
     }
 
     #[cfg(unix)]
-    #[test]
-    fn exec_signal_termination_returns_128_plus_signal() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
+    #[rstest]
+    fn exec_signal_termination_returns_128_plus_signal(
+        executor: ProcessCommandExecutor<StubSandboxExecutor>,
+    ) {
         // sh -c "kill -9 $$" sends SIGKILL to the shell process itself
         let code = executor
-            .exec(
-                &["kill".into(), "-9".into(), "$$".into()],
-                None,
-                true, // compound to use sh -c
-            )
+            .exec(&["kill".into(), "-9".into(), "$$".into()], None, true)
             .expect("should complete");
         // SIGKILL = 9, so exit code should be 128 + 9 = 137
         assert_eq!(code, 137);
     }
 
-    #[test]
-    fn exec_not_found_returns_error() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
-        let result = executor.exec(
-            &["__nonexistent_command_12345__".into()],
-            None,
-            true, // compound to force spawn+wait
-        );
+    #[rstest]
+    fn exec_not_found_returns_error(executor: ProcessCommandExecutor<StubSandboxExecutor>) {
+        let result = executor.exec(&["__nonexistent_command_12345__".into()], None, true);
         // sh -c will return 127 for command not found
         match result {
             Ok(code) => assert_eq!(code, 127),
@@ -370,10 +341,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn exec_empty_command_returns_not_found() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-
+    #[rstest]
+    fn exec_empty_command_returns_not_found(executor: ProcessCommandExecutor<StubSandboxExecutor>) {
         let result = executor.exec(&[], None, false);
         assert!(matches!(result, Err(ExecError::NotFound(_))));
     }
@@ -413,50 +382,41 @@ mod tests {
 
     // === Validate ===
 
-    #[test]
-    fn validate_existing_command() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-        assert!(executor.validate(&["sh".into()]).is_ok());
-    }
+    #[rstest]
+    #[case::exists(&["sh"], true)]
+    #[case::nonexistent(&["__nonexistent_command_12345__"], false)]
+    #[case::empty(&[], false)]
+    fn validate_command(
+        executor: ProcessCommandExecutor<StubSandboxExecutor>,
+        #[case] cmd: &[&str],
+        #[case] should_succeed: bool,
+    ) {
+        let command: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
+        let result = executor.validate(&command);
 
-    #[test]
-    fn validate_nonexistent_command() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-        let result = executor.validate(&["__nonexistent_command_12345__".into()]);
-        assert!(matches!(result, Err(ExecError::NotFound(_))));
-    }
-
-    #[test]
-    fn validate_empty_command() {
-        let executor = ProcessCommandExecutor::new_without_sandbox();
-        let result = executor.validate(&[]);
-        assert!(matches!(result, Err(ExecError::NotFound(_))));
+        if should_succeed {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ExecError::NotFound(_))));
+        }
     }
 
     // === exit_code_from_status ===
 
-    #[test]
-    fn exit_code_from_successful_status() {
-        let status = Command::new("true").status().expect("true should succeed");
-        assert_eq!(exit_code_from_status(status), 0);
-    }
-
-    #[test]
-    fn exit_code_from_failed_status() {
-        let status = Command::new("false")
+    #[rstest]
+    #[case::success("true", &[], 0)]
+    #[case::failure("false", &[], 1)]
+    #[case::custom_exit("sh", &["-c", "exit 42"], 42)]
+    fn exit_code_from_status_cases(
+        #[case] cmd: &str,
+        #[case] args: &[&str],
+        #[case] expected_code: i32,
+    ) {
+        let status = Command::new(cmd)
+            .args(args)
             .status()
-            .expect("false should complete");
-        assert_eq!(exit_code_from_status(status), 1);
-    }
-
-    #[test]
-    fn exit_code_from_custom_exit() {
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("exit 42")
-            .status()
-            .expect("sh should complete");
-        assert_eq!(exit_code_from_status(status), 42);
+            .expect("command should complete");
+        assert_eq!(exit_code_from_status(status), expected_code);
     }
 
     #[cfg(unix)]
@@ -481,8 +441,6 @@ mod tests {
     }
 
     // === Custom SandboxExecutor for testing ===
-
-    use std::cell::RefCell;
 
     struct MockSandboxExecutor {
         exit_code: i32,
