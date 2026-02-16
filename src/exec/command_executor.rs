@@ -13,6 +13,36 @@ pub enum ExecMode {
     ShellExec,
 }
 
+/// The command to execute, either as an argv array or a raw shell string.
+///
+/// - `Argv`: A single command with its arguments (e.g., `["git", "status"]`).
+///   Used for exec() syscall or direct spawn.
+/// - `Shell`: A raw shell command string (e.g., `"cmd1 && cmd2 | cmd3"`).
+///   Passed directly to `sh -c` without any transformation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandInput {
+    /// A single command as an argument vector. The first element is the program name.
+    Argv(Vec<String>),
+    /// A raw shell command string, passed to `sh -c` as-is.
+    Shell(String),
+}
+
+impl CommandInput {
+    /// Returns true if this is a shell command string (compound command).
+    pub fn is_compound(&self) -> bool {
+        matches!(self, CommandInput::Shell(_))
+    }
+
+    /// Returns the program name for validation purposes.
+    /// For `Shell` commands, returns `"sh"` since that is the actual program invoked.
+    pub fn program(&self) -> &str {
+        match self {
+            CommandInput::Argv(args) => args.first().map(|s| s.as_str()).unwrap_or(""),
+            CommandInput::Shell(_) => "sh",
+        }
+    }
+}
+
 /// Stub sandbox policy for Phase 2. The actual implementation will provide
 /// filesystem and network restrictions.
 #[derive(Debug, Clone)]
@@ -49,16 +79,15 @@ impl SandboxExecutor for StubSandboxExecutor {
 pub trait CommandExecutor {
     /// Execute a command and return the exit code.
     ///
-    /// The execution mode is determined by `is_compound` and `sandbox`:
-    /// - Single command + no sandbox (Unix): exec() syscall (transparent proxy)
-    /// - Single command + sandbox: SandboxExecutor via spawn + wait
-    /// - Compound command: sh -c "..." via spawn + wait
+    /// The execution mode is determined by the `CommandInput` variant and `sandbox`:
+    /// - `Argv` + no sandbox (Unix): exec() syscall (transparent proxy)
+    /// - `Argv` + sandbox: SandboxExecutor via spawn + wait
+    /// - `Shell`: sh -c via spawn + wait
     /// - Non-Unix: always spawn + wait
     fn exec(
         &self,
-        command: &[String],
+        command: &CommandInput,
         sandbox: Option<&SandboxPolicy>,
-        is_compound: bool,
     ) -> Result<i32, ExecError>;
 
     /// Check that the command exists and is executable (for dry-run validation).
@@ -90,33 +119,34 @@ impl ProcessCommandExecutor<StubSandboxExecutor> {
 impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
     fn exec(
         &self,
-        command: &[String],
+        command: &CommandInput,
         sandbox: Option<&SandboxPolicy>,
-        is_compound: bool,
     ) -> Result<i32, ExecError> {
-        if command.is_empty() {
-            return Err(ExecError::NotFound(String::new()));
-        }
-
-        match self.determine_exec_mode(sandbox, is_compound) {
-            ExecMode::TransparentProxy => exec_transparent_proxy(command),
-            ExecMode::SpawnAndWait => {
-                if let Some(policy) = sandbox {
-                    self.sandbox_executor.exec_sandboxed(command, policy)
-                } else {
-                    spawn_and_wait(command)
+        match command {
+            CommandInput::Argv(args) => {
+                if args.is_empty() {
+                    return Err(ExecError::NotFound(String::new()));
+                }
+                match self.determine_exec_mode(sandbox, false) {
+                    ExecMode::TransparentProxy => exec_transparent_proxy(args),
+                    ExecMode::SpawnAndWait => {
+                        if let Some(policy) = sandbox {
+                            self.sandbox_executor.exec_sandboxed(args, policy)
+                        } else {
+                            spawn_and_wait(args)
+                        }
+                    }
+                    ExecMode::ShellExec => {
+                        unreachable!("ShellExec is not used for Argv commands")
+                    }
                 }
             }
-            ExecMode::ShellExec => {
-                // command tokens are joined back into the original shell string for sh -c.
-                // This is safe because the caller passes pre-parsed tokens from the user's
-                // original command line, not separately constructed arguments.
-                let shell_cmd = command.join(" ");
+            CommandInput::Shell(shell_cmd) => {
+                let sh_args: Vec<String> = vec!["sh".into(), "-c".into(), shell_cmd.clone()];
                 if let Some(policy) = sandbox {
-                    self.sandbox_executor
-                        .exec_sandboxed(&["sh".into(), "-c".into(), shell_cmd], policy)
+                    self.sandbox_executor.exec_sandboxed(&sh_args, policy)
                 } else {
-                    spawn_and_wait(&["sh".into(), "-c".into(), shell_cmd])
+                    spawn_and_wait(&sh_args)
                 }
             }
         }
@@ -293,26 +323,23 @@ mod tests {
         }
     }
 
-    // === Exit code tests ===
+    // === Exit code tests (Shell mode) ===
     //
     // Note: TransparentProxy (exec() syscall) cannot be tested in-process because
-    // it replaces the current process. All tests use is_compound=true to force
-    // ShellExec mode.
+    // it replaces the current process. Shell mode tests verify exit code handling.
 
     #[rstest]
-    #[case::success(&["true"], 0)]
-    #[case::failure(&["false"], 1)]
-    #[case::custom_exit_code(&["exit", "42"], 42)]
-    #[case::pipeline(&["echo", "hello", "|", "cat"], 0)]
-    fn exec_shell_exec_returns_correct_exit_code(
+    #[case::success("true", 0)]
+    #[case::failure("false", 1)]
+    #[case::custom_exit_code("exit 42", 42)]
+    #[case::pipeline("echo hello | cat", 0)]
+    fn exec_shell_returns_correct_exit_code(
         executor: ProcessCommandExecutor<StubSandboxExecutor>,
-        #[case] cmd: &[&str],
+        #[case] shell_cmd: &str,
         #[case] expected_code: i32,
     ) {
-        let command: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
-
         let code = executor
-            .exec(&command, None, true)
+            .exec(&CommandInput::Shell(shell_cmd.into()), None)
             .expect("command should complete");
         assert_eq!(code, expected_code);
     }
@@ -324,7 +351,7 @@ mod tests {
     ) {
         // sh -c "kill -9 $$" sends SIGKILL to the shell process itself
         let code = executor
-            .exec(&["kill".into(), "-9".into(), "$$".into()], None, true)
+            .exec(&CommandInput::Shell("kill -9 $$".into()), None)
             .expect("should complete");
         // SIGKILL = 9, so exit code should be 128 + 9 = 137
         assert_eq!(code, 137);
@@ -332,7 +359,10 @@ mod tests {
 
     #[rstest]
     fn exec_not_found_returns_error(executor: ProcessCommandExecutor<StubSandboxExecutor>) {
-        let result = executor.exec(&["__nonexistent_command_12345__".into()], None, true);
+        let result = executor.exec(
+            &CommandInput::Shell("__nonexistent_command_12345__".into()),
+            None,
+        );
         // sh -c will return 127 for command not found
         match result {
             Ok(code) => assert_eq!(code, 127),
@@ -342,42 +372,55 @@ mod tests {
     }
 
     #[rstest]
-    fn exec_empty_command_returns_not_found(executor: ProcessCommandExecutor<StubSandboxExecutor>) {
-        let result = executor.exec(&[], None, false);
+    fn exec_empty_argv_returns_not_found(executor: ProcessCommandExecutor<StubSandboxExecutor>) {
+        let result = executor.exec(&CommandInput::Argv(vec![]), None);
         assert!(matches!(result, Err(ExecError::NotFound(_))));
     }
 
     // === Sandbox execution ===
 
     #[test]
-    fn exec_with_sandbox_calls_sandbox_executor() {
+    fn exec_argv_with_sandbox_calls_sandbox_executor() {
         let executor = ProcessCommandExecutor::new(StubSandboxExecutor);
         let policy = SandboxPolicy { _private: () };
 
-        let result = executor.exec(&["echo".into(), "test".into()], Some(&policy), false);
+        let result = executor.exec(
+            &CommandInput::Argv(vec!["echo".into(), "test".into()]),
+            Some(&policy),
+        );
 
         // StubSandboxExecutor returns Unsupported error
         assert!(matches!(result, Err(ExecError::Io(_))));
     }
 
     #[test]
-    fn exec_compound_with_sandbox_calls_sandbox_executor() {
+    fn exec_shell_with_sandbox_calls_sandbox_executor() {
         let executor = ProcessCommandExecutor::new(StubSandboxExecutor);
         let policy = SandboxPolicy { _private: () };
 
         let result = executor.exec(
-            &[
-                "echo".into(),
-                "a".into(),
-                "&&".into(),
-                "echo".into(),
-                "b".into(),
-            ],
+            &CommandInput::Shell("echo a && echo b".into()),
             Some(&policy),
-            true,
         );
 
         assert!(matches!(result, Err(ExecError::Io(_))));
+    }
+
+    // === CommandInput ===
+
+    #[rstest]
+    #[case::argv(CommandInput::Argv(vec!["git".into(), "status".into()]), false)]
+    #[case::shell(CommandInput::Shell("git status".into()), true)]
+    fn command_input_is_compound(#[case] input: CommandInput, #[case] expected: bool) {
+        assert_eq!(input.is_compound(), expected);
+    }
+
+    #[rstest]
+    #[case::argv(CommandInput::Argv(vec!["git".into(), "status".into()]), "git")]
+    #[case::shell(CommandInput::Shell("git status".into()), "sh")]
+    #[case::empty_argv(CommandInput::Argv(vec![]), "")]
+    fn command_input_program(#[case] input: CommandInput, #[case] expected: &str) {
+        assert_eq!(input.program(), expected);
     }
 
     // === Validate ===
@@ -468,12 +511,15 @@ mod tests {
     }
 
     #[test]
-    fn exec_with_mock_sandbox_returns_exit_code() {
+    fn exec_argv_with_mock_sandbox_returns_exit_code() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(0));
         let policy = SandboxPolicy { _private: () };
 
         let code = executor
-            .exec(&["echo".into(), "test".into()], Some(&policy), false)
+            .exec(
+                &CommandInput::Argv(vec!["echo".into(), "test".into()]),
+                Some(&policy),
+            )
             .expect("mock sandbox should succeed");
         assert_eq!(code, 0);
 
@@ -483,37 +529,33 @@ mod tests {
     }
 
     #[test]
-    fn exec_with_mock_sandbox_nonzero() {
+    fn exec_argv_with_mock_sandbox_nonzero() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(42));
         let policy = SandboxPolicy { _private: () };
 
         let code = executor
-            .exec(&["echo".into(), "test".into()], Some(&policy), false)
+            .exec(
+                &CommandInput::Argv(vec!["echo".into(), "test".into()]),
+                Some(&policy),
+            )
             .expect("mock sandbox should succeed");
         assert_eq!(code, 42);
     }
 
     #[test]
-    fn exec_compound_with_mock_sandbox_wraps_in_sh() {
+    fn exec_shell_with_mock_sandbox_passes_sh_c() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(7));
         let policy = SandboxPolicy { _private: () };
 
         let code = executor
             .exec(
-                &[
-                    "echo".into(),
-                    "a".into(),
-                    "&&".into(),
-                    "echo".into(),
-                    "b".into(),
-                ],
+                &CommandInput::Shell("echo a && echo b".into()),
                 Some(&policy),
-                true,
             )
             .expect("mock sandbox should succeed");
         assert_eq!(code, 7);
 
-        // Compound + sandbox should wrap the command in sh -c
+        // Shell + sandbox should pass sh -c with the raw shell string
         let invocations = executor.sandbox_executor.invocations.borrow();
         assert_eq!(invocations.len(), 1);
         assert_eq!(invocations[0], vec!["sh", "-c", "echo a && echo b"]);
