@@ -24,6 +24,8 @@ pub enum PresetError {
     CircularReference { cycle: Vec<String> },
     #[error("cache error: {0}")]
     Cache(String),
+    #[error("network error (using cached version from {cached_at}): {message}")]
+    NetworkErrorWithCache { message: String, cached_at: String },
 }
 
 #[cfg(test)]
