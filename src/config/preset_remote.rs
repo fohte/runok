@@ -334,12 +334,11 @@ fn handle_stale_cache<G: GitClient>(
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
-            // After fetch, checkout to update the working tree.
-            // - If git_ref is specified, checkout that ref.
-            // - If git_ref is None (Latest), checkout FETCH_HEAD to pick up
-            //   the fetched content (git fetch alone only updates remote refs,
-            //   not the working tree).
-            let checkout_ref = params.git_ref.as_deref().unwrap_or("FETCH_HEAD");
+            // Always checkout FETCH_HEAD after fetch to update the working tree.
+            // `git fetch` updates remote tracking refs but not the working tree,
+            // and `git checkout <branch>` is a no-op if already on that branch.
+            // FETCH_HEAD always points to the just-fetched commit.
+            let checkout_ref = "FETCH_HEAD";
             if let Err(e) = git_client.checkout(dir, checkout_ref) {
                 eprintln!(
                     "warning: checkout failed for '{original_reference}': {e}, \
