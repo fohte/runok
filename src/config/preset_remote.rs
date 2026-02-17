@@ -307,16 +307,9 @@ pub fn load_remote_preset<G: GitClient>(
     match cache.check(original_reference, params.is_immutable) {
         CacheStatus::Hit(dir) => read_preset_from_dir(&dir),
         CacheStatus::Stale(dir) => {
-            handle_stale_cache(git_client, &dir, &params, original_reference, cache)
+            handle_stale_cache(git_client, &dir, &params, original_reference)
         }
-        CacheStatus::Miss => handle_cache_miss(
-            git_client,
-            &cache_dir,
-            &params,
-            reference,
-            original_reference,
-            cache,
-        ),
+        CacheStatus::Miss => handle_cache_miss(git_client, &cache_dir, &params, original_reference),
     }
 }
 
@@ -325,7 +318,6 @@ fn handle_stale_cache<G: GitClient>(
     dir: &Path,
     params: &GitParams,
     original_reference: &str,
-    _cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
@@ -369,9 +361,7 @@ fn handle_cache_miss<G: GitClient>(
     git_client: &G,
     cache_dir: &Path,
     params: &GitParams,
-    _reference: &PresetReference,
     original_reference: &str,
-    _cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
     // Create parent directory only; let git clone create the target directory itself.
     // Creating cache_dir first would cause `git clone` to fail with
