@@ -165,9 +165,22 @@ fn parse_git_url(reference: &str) -> Result<PresetReference, PresetError> {
             git_ref: None,
         })
     } else {
-        // HTTPS URL: check for trailing @ref
-        // Split at last @ that isn't part of the URL scheme
-        if let Some(idx) = reference.rfind('@') {
+        // HTTPS URL: check for trailing @ref after the path portion.
+        // We must not split on the `@` in userinfo (e.g., `https://user@host/...`).
+        // Strategy: find the path start (after `://host`) and only look for `@` there.
+        let ref_split_start = reference
+            .find("://")
+            .map(|scheme_end| {
+                // Skip past `://host` to the first `/` of the path
+                reference[scheme_end + 3..]
+                    .find('/')
+                    .map(|slash| scheme_end + 3 + slash)
+                    .unwrap_or(reference.len())
+            })
+            .unwrap_or(0);
+
+        if let Some(at_offset) = reference[ref_split_start..].rfind('@') {
+            let idx = ref_split_start + at_offset;
             let url = &reference[..idx];
             let git_ref = &reference[idx + 1..];
             if !git_ref.is_empty() && !url.is_empty() {
@@ -316,11 +329,13 @@ fn handle_stale_cache<G: GitClient>(
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
-            // After fetch, checkout the branch/tag. If checkout fails,
-            // skip metadata update and use the existing cached version.
-            if let Some(ref git_ref) = params.git_ref
-                && let Err(e) = git_client.checkout(dir, git_ref)
-            {
+            // After fetch, checkout to update the working tree.
+            // - If git_ref is specified, checkout that ref.
+            // - If git_ref is None (Latest), checkout FETCH_HEAD to pick up
+            //   the fetched content (git fetch alone only updates remote refs,
+            //   not the working tree).
+            let checkout_ref = params.git_ref.as_deref().unwrap_or("FETCH_HEAD");
+            if let Err(e) = git_client.checkout(dir, checkout_ref) {
                 eprintln!(
                     "warning: checkout failed for '{original_reference}': {e}, \
                      using cached version"
@@ -354,7 +369,7 @@ fn handle_cache_miss<G: GitClient>(
     git_client: &G,
     cache_dir: &Path,
     params: &GitParams,
-    reference: &PresetReference,
+    _reference: &PresetReference,
     original_reference: &str,
     _cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
@@ -367,13 +382,15 @@ fn handle_cache_miss<G: GitClient>(
         })?;
     }
 
-    // Determine clone branch: for CommitSha, clone without --branch then checkout
-    let clone_branch = match reference {
-        PresetReference::GitHub {
-            version: GitHubVersion::CommitSha(_),
-            ..
-        } => None,
-        _ => params.git_ref.as_deref(),
+    // Determine if git_ref is a commit SHA. `git clone --branch` only accepts
+    // branch/tag names, not commit SHAs, so SHA refs must clone without --branch
+    // then checkout the SHA separately.
+    let ref_is_sha = params.git_ref.as_deref().is_some_and(is_commit_sha);
+
+    let clone_branch = if ref_is_sha {
+        None
+    } else {
+        params.git_ref.as_deref()
     };
 
     git_client
@@ -384,11 +401,7 @@ fn handle_cache_miss<G: GitClient>(
         })?;
 
     // For commit SHA, checkout the specific commit after clone
-    if let PresetReference::GitHub {
-        version: GitHubVersion::CommitSha(sha),
-        ..
-    } = reference
-    {
+    if let Some(sha) = params.git_ref.as_deref().filter(|r| is_commit_sha(r)) {
         git_client
             .checkout(cache_dir, sha)
             .map_err(|e| PresetError::GitClone {
@@ -488,6 +501,20 @@ mod tests {
         PresetReference::GitUrl {
             url: "git@github.com:org/repo".into(),
             git_ref: Some("v2.0".into()),
+        }
+    )]
+    #[case::https_url_with_userinfo(
+        "https://user@github.com/org/repo.git",
+        PresetReference::GitUrl {
+            url: "https://user@github.com/org/repo.git".into(),
+            git_ref: None,
+        }
+    )]
+    #[case::https_url_with_userinfo_and_ref(
+        "https://user@github.com/org/repo.git@v1.0",
+        PresetReference::GitUrl {
+            url: "https://user@github.com/org/repo.git".into(),
+            git_ref: Some("v1.0".into()),
         }
     )]
     #[case::local_relative(
@@ -809,6 +836,90 @@ mod tests {
             matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == sha)
         });
         assert!(has_checkout_sha, "expected checkout with SHA");
+    }
+
+    #[rstest]
+    fn git_url_commit_sha_skips_branch_and_checkouts(tmp: TempDir) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let sha = "abc1234def567890abc1234def567890abc12345";
+        let reference_str = &format!("https://github.com/org/repo.git@{sha}");
+        let parsed = parse_preset_reference(reference_str).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_clone(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok(sha.to_string()));
+
+        let mut visited = HashSet::new();
+        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
+
+        let calls = mock.calls.borrow();
+        // Clone must NOT pass SHA as --branch
+        let has_clone_without_branch = calls.iter().any(|c| {
+            matches!(c, crate::config::git_client::mock::GitCall::CloneShallow { branch, .. } if branch.is_none())
+        });
+        assert!(
+            has_clone_without_branch,
+            "expected clone without --branch for GitUrl with commit SHA"
+        );
+
+        // Must checkout the SHA after clone
+        let has_checkout_sha = calls.iter().any(|c| {
+            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == sha)
+        });
+        assert!(has_checkout_sha, "expected checkout with SHA for GitUrl");
+    }
+
+    #[rstest]
+    fn stale_cache_latest_checkouts_fetch_head(tmp: TempDir) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let reference_str = "github:org/repo";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a stale cache (fetched_at = 0)
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'cargo test'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("def456".to_string()));
+
+        let mut visited = HashSet::new();
+        let config =
+            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap();
+
+        let rules = config.rules.unwrap();
+        assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
+
+        // Verify checkout was called with FETCH_HEAD (since Latest has no git_ref)
+        let calls = mock.calls.borrow();
+        let has_checkout_fetch_head = calls.iter().any(|c| {
+            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == "FETCH_HEAD")
+        });
+        assert!(
+            has_checkout_fetch_head,
+            "expected checkout with FETCH_HEAD for Latest reference"
+        );
     }
 
     #[rstest]
