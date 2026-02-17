@@ -122,8 +122,10 @@ impl GitClient for ProcessGitClient {
 
     fn checkout(&self, repo_dir: &Path, git_ref: &str) -> Result<(), PresetError> {
         let mut cmd = Self::git_command(repo_dir);
-        // `--` prevents git_ref from being interpreted as an option.
-        cmd.args(["checkout", "--quiet", "--", git_ref]);
+        // Place `git_ref` before `--` so it is interpreted as a tree-ish,
+        // not a pathspec. The trailing `--` prevents ambiguity if a file
+        // happens to share the same name as the ref.
+        cmd.args(["checkout", "--quiet", git_ref, "--"]);
 
         Self::run_git(&mut cmd, git_ref)
     }

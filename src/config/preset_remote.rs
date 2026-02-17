@@ -278,6 +278,19 @@ fn read_preset_from_dir(dir: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// Re-wrap a `PresetError` with a different reference, extracting the inner
+/// message to avoid double-nesting the Display format.
+fn rewrap_git_error(error: PresetError, reference: &str) -> PresetError {
+    let message = match error {
+        PresetError::GitClone { message, .. } => message,
+        other => other.to_string(),
+    };
+    PresetError::GitClone {
+        reference: reference.to_string(),
+        message,
+    }
+}
+
 fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -385,19 +398,13 @@ fn handle_cache_miss<G: GitClient>(
 
     git_client
         .clone_shallow(&params.url, cache_dir, clone_branch)
-        .map_err(|e| PresetError::GitClone {
-            reference: original_reference.to_string(),
-            message: e.to_string(),
-        })?;
+        .map_err(|e| rewrap_git_error(e, original_reference))?;
 
     // For commit SHA, checkout the specific commit after clone
     if let Some(sha) = params.git_ref.as_deref().filter(|r| is_commit_sha(r)) {
         git_client
             .checkout(cache_dir, sha)
-            .map_err(|e| PresetError::GitClone {
-                reference: original_reference.to_string(),
-                message: format!("checkout failed: {e}"),
-            })?;
+            .map_err(|e| rewrap_git_error(e, original_reference))?;
     }
 
     // Write cache metadata
