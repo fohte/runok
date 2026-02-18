@@ -399,10 +399,14 @@ fn handle_cache_miss<G: GitClient>(
         .clone_shallow(&params.url, cache_dir, clone_branch)
         .map_err(|e| rewrap_git_error(e, original_reference))?;
 
-    // For commit SHA, checkout the specific commit after clone
+    // For commit SHA, the shallow clone only has the default branch tip.
+    // Fetch the specific commit then checkout FETCH_HEAD.
     if let Some(sha) = params.git_ref.as_deref().filter(|r| is_commit_sha(r)) {
         git_client
-            .checkout(cache_dir, sha)
+            .fetch(cache_dir, Some(sha))
+            .map_err(|e| rewrap_git_error(e, original_reference))?;
+        git_client
+            .checkout(cache_dir, "FETCH_HEAD")
             .map_err(|e| rewrap_git_error(e, original_reference))?;
     }
 
@@ -800,7 +804,7 @@ mod tests {
     }
 
     #[rstest]
-    fn commit_sha_triggers_checkout_after_clone(tmp: TempDir) {
+    fn commit_sha_triggers_fetch_and_checkout_after_clone(tmp: TempDir) {
         let cache = PresetCache::with_config(
             tmp.path().to_path_buf(),
             std::time::Duration::from_secs(3600),
@@ -810,12 +814,12 @@ mod tests {
         let parsed = parse_preset_reference(reference_str).unwrap();
 
         let mock = MockGitClient::new();
+        // clone (no --branch) → fetch SHA → checkout FETCH_HEAD → rev_parse
         mock.on_clone(Ok(()));
+        mock.on_fetch(Ok(()));
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        // Mock clone doesn't create files, so read_preset_from_dir will fail.
-        // We verify the git call sequence (clone without --branch, then checkout SHA).
         let mut visited = HashSet::new();
         let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
 
@@ -828,14 +832,23 @@ mod tests {
             "expected clone without --branch for CommitSha"
         );
 
-        let has_checkout_sha = calls.iter().any(|c| {
-            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == sha)
+        // After clone, fetch the SHA then checkout FETCH_HEAD
+        let has_fetch = calls
+            .iter()
+            .any(|c| matches!(c, crate::config::git_client::mock::GitCall::Fetch));
+        assert!(has_fetch, "expected fetch after clone for CommitSha");
+
+        let has_checkout_fetch_head = calls.iter().any(|c| {
+            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == "FETCH_HEAD")
         });
-        assert!(has_checkout_sha, "expected checkout with SHA");
+        assert!(
+            has_checkout_fetch_head,
+            "expected checkout FETCH_HEAD after fetch"
+        );
     }
 
     #[rstest]
-    fn git_url_commit_sha_skips_branch_and_checkouts(tmp: TempDir) {
+    fn git_url_commit_sha_fetches_then_checkouts(tmp: TempDir) {
         let cache = PresetCache::with_config(
             tmp.path().to_path_buf(),
             std::time::Duration::from_secs(3600),
@@ -846,6 +859,7 @@ mod tests {
 
         let mock = MockGitClient::new();
         mock.on_clone(Ok(()));
+        mock.on_fetch(Ok(()));
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
@@ -853,7 +867,6 @@ mod tests {
         let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
 
         let calls = mock.calls.borrow();
-        // Clone must NOT pass SHA as --branch
         let has_clone_without_branch = calls.iter().any(|c| {
             matches!(c, crate::config::git_client::mock::GitCall::CloneShallow { branch, .. } if branch.is_none())
         });
@@ -862,11 +875,13 @@ mod tests {
             "expected clone without --branch for GitUrl with commit SHA"
         );
 
-        // Must checkout the SHA after clone
-        let has_checkout_sha = calls.iter().any(|c| {
-            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == sha)
+        let has_checkout_fetch_head = calls.iter().any(|c| {
+            matches!(c, crate::config::git_client::mock::GitCall::Checkout { git_ref, .. } if git_ref == "FETCH_HEAD")
         });
-        assert!(has_checkout_sha, "expected checkout with SHA for GitUrl");
+        assert!(
+            has_checkout_fetch_head,
+            "expected checkout FETCH_HEAD for GitUrl with SHA"
+        );
     }
 
     #[rstest]
