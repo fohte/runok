@@ -178,9 +178,10 @@ pub fn resolve_extends_with<G: GitClient>(
     git_client: &G,
     cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
-    let mut chain = vec![source_name.to_string()];
+    let canonical_source = normalize_reference_key(source_name, base_dir);
+    let mut chain = vec![canonical_source.clone()];
     let mut visited = HashSet::new();
-    visited.insert(source_name.to_string());
+    visited.insert(canonical_source);
 
     resolve_extends_recursive(
         config,
@@ -214,22 +215,31 @@ fn resolve_extends_recursive<G: GitClient>(
     let mut merged = Config::default();
 
     for reference in &extends {
-        if visited.contains(reference.as_str()) {
-            // Build the cycle chain: from the first occurrence of `reference` to the end
-            let cycle_start = chain.iter().position(|r| r == reference).unwrap_or(0);
+        // Normalize local references to canonical keys for cycle detection.
+        // Without this, "./runok.yml" and "runok.yml" would be treated as
+        // different references even though they resolve to the same file.
+        let canonical_key = normalize_reference_key(reference, base_dir);
+
+        if visited.contains(&canonical_key) {
+            // Build the cycle chain: from the first occurrence to the end
+            let cycle_start = chain.iter().position(|r| r == &canonical_key).unwrap_or(0);
             let mut cycle: Vec<String> = chain[cycle_start..].to_vec();
-            cycle.push(reference.clone());
+            cycle.push(canonical_key);
             return Err(PresetError::CircularReference { cycle }.into());
         }
 
         if chain.len() >= MAX_EXTENDS_DEPTH {
-            let mut cycle = chain.clone();
-            cycle.push(reference.clone());
-            return Err(PresetError::CircularReference { cycle }.into());
+            let mut depth_chain = chain.clone();
+            depth_chain.push(canonical_key);
+            return Err(PresetError::MaxExtendsDepthExceeded {
+                chain: depth_chain,
+                max_depth: MAX_EXTENDS_DEPTH,
+            }
+            .into());
         }
 
-        chain.push(reference.clone());
-        visited.insert(reference.clone());
+        chain.push(canonical_key.clone());
+        visited.insert(canonical_key.clone());
 
         // Load the preset config (without resolving its extends yet)
         let preset_config = load_preset_with(reference, base_dir, git_client, cache)?;
@@ -249,7 +259,7 @@ fn resolve_extends_recursive<G: GitClient>(
 
         merged = merged.merge(resolved);
 
-        visited.remove(reference.as_str());
+        visited.remove(&canonical_key);
         chain.pop();
     }
 
@@ -260,6 +270,22 @@ fn resolve_extends_recursive<G: GitClient>(
     };
 
     Ok(merged.merge(current))
+}
+
+/// Normalize a reference string into a canonical key for cycle detection.
+///
+/// For local references, resolves the path against `base_dir` and canonicalizes
+/// it so that `./runok.yml` and `runok.yml` are treated as the same file.
+/// For remote references, the original string is used as-is.
+fn normalize_reference_key(reference: &str, base_dir: &Path) -> String {
+    let parsed = parse_preset_reference(reference);
+    match parsed {
+        Ok(PresetReference::Local(_)) => {
+            let path = canonicalize_best_effort(&base_dir.join(reference));
+            path.to_string_lossy().to_string()
+        }
+        _ => reference.to_string(),
+    }
 }
 
 /// Determine the base directory for a preset's own extends resolution.
@@ -293,6 +319,20 @@ mod tests {
     #[fixture]
     fn tmp() -> TempDir {
         TempDir::new().unwrap()
+    }
+
+    /// Extract file names from canonical paths in a cycle chain for assertion.
+    fn cycle_filenames(cycle: &[String]) -> Vec<String> {
+        cycle
+            .iter()
+            .map(|p| {
+                Path::new(p)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect()
     }
 
     #[rstest]
@@ -542,7 +582,7 @@ mod tests {
 
         match err {
             ConfigError::Preset(PresetError::CircularReference { cycle }) => {
-                assert_eq!(cycle, vec!["./a.yml", "./b.yml", "./a.yml"]);
+                assert_eq!(cycle_filenames(&cycle), vec!["a.yml", "b.yml", "a.yml"]);
             }
             other => panic!("expected CircularReference, got: {other:?}"),
         }
@@ -579,7 +619,7 @@ mod tests {
 
         match err {
             ConfigError::Preset(PresetError::CircularReference { cycle }) => {
-                assert_eq!(cycle, vec!["./a.yml", "./a.yml"]);
+                assert_eq!(cycle_filenames(&cycle), vec!["a.yml", "a.yml"]);
             }
             other => panic!("expected CircularReference, got: {other:?}"),
         }
@@ -630,7 +670,10 @@ mod tests {
 
         match err {
             ConfigError::Preset(PresetError::CircularReference { cycle }) => {
-                assert_eq!(cycle, vec!["./a.yml", "./b.yml", "./c.yml", "./a.yml"]);
+                assert_eq!(
+                    cycle_filenames(&cycle),
+                    vec!["a.yml", "b.yml", "c.yml", "a.yml"]
+                );
             }
             other => panic!("expected CircularReference, got: {other:?}"),
         }
@@ -668,13 +711,23 @@ mod tests {
             base_dir.join(".cache"),
             std::time::Duration::from_secs(3600),
         );
-        // "runok.yml" is in the chain as the root, so ./runok.yml would collide
-        // if the reference matches. But "./runok.yml" != "runok.yml" as strings.
-        // This test verifies that different string representations are treated as
-        // different references (no false positive).
-        let result = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache);
-        // "./runok.yml" is a different string from "runok.yml", so no circular reference
-        assert!(result.is_ok());
+        // "./runok.yml" and "runok.yml" resolve to the same file.
+        // After path normalization, this is correctly detected as circular.
+        let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
+            .unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::CircularReference { cycle }) => {
+                // runok.yml → a.yml → runok.yml (back to root)
+                assert_eq!(
+                    cycle_filenames(&cycle),
+                    vec!["runok.yml", "a.yml", "runok.yml"]
+                );
+                // First and last should be the same canonical path
+                assert_eq!(cycle[0], cycle[2]);
+            }
+            other => panic!("expected CircularReference, got: {other:?}"),
+        }
     }
 
     // === Nested extends resolution (no cycles) ===
@@ -880,9 +933,21 @@ mod tests {
         let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
             .unwrap_err();
 
-        assert_eq!(
-            err.to_string(),
-            "preset error: circular reference detected: ./a.yml \u{2192} ./b.yml \u{2192} ./a.yml"
-        );
+        match err {
+            ConfigError::Preset(PresetError::CircularReference { cycle }) => {
+                assert_eq!(cycle_filenames(&cycle), vec!["a.yml", "b.yml", "a.yml"]);
+                // Verify Display format uses " → " separator
+                let error = PresetError::CircularReference { cycle };
+                let msg = error.to_string();
+                // The canonical paths are joined with " → "
+                let parts: Vec<&str> = msg
+                    .strip_prefix("circular reference detected: ")
+                    .unwrap()
+                    .split(" \u{2192} ")
+                    .collect();
+                assert_eq!(parts.len(), 3);
+            }
+            other => panic!("expected CircularReference, got: {other:?}"),
+        }
     }
 }
