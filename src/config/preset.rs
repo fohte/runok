@@ -229,10 +229,9 @@ fn resolve_extends_recursive<G: GitClient>(
         }
 
         if chain.len() >= MAX_EXTENDS_DEPTH {
-            return Err(PresetError::CircularReference {
-                cycle: chain.clone(),
-            }
-            .into());
+            let mut cycle = chain.clone();
+            cycle.push(reference.clone());
+            return Err(PresetError::CircularReference { cycle }.into());
         }
 
         chain.push(reference.clone());
