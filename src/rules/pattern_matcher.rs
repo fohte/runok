@@ -155,10 +155,10 @@ fn match_tokens_inner(
 /// Try to match a wrapper pattern against a command and extract the tokens
 /// captured by the `<cmd>` placeholder.
 ///
-/// Returns `Some(captured_tokens)` if the pattern matches and contains a
-/// `<cmd>` placeholder, where `captured_tokens` are the remaining command
-/// tokens that correspond to the placeholder position.
-/// Returns `None` if the pattern does not match or has no placeholder.
+/// Returns `Some(captured_command)` if the pattern matches and contains a
+/// `<cmd>` placeholder, where `captured_command` is the space-joined
+/// reconstruction of the captured tokens at the placeholder position.
+/// Returns `None` if the pattern does not match or has no `<cmd>` placeholder.
 pub fn extract_placeholder(
     pattern: &Pattern,
     command: &ParsedCommand,
@@ -190,6 +190,9 @@ pub fn extract_placeholder(
 
 /// Core recursive extractor that matches pattern tokens against command tokens,
 /// capturing the tokens that align with a `Placeholder("cmd")` token.
+///
+/// Only `<cmd>` placeholders contribute to the `captured` vector; other
+/// placeholder names (e.g., `<user>`) are consumed without capturing.
 fn extract_placeholder_inner<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
@@ -208,18 +211,27 @@ fn extract_placeholder_inner<'a>(
     };
 
     match first {
-        PatternToken::Placeholder(_) => {
-            // The placeholder captures all remaining tokens if it is the last
-            // pattern token, otherwise it captures exactly one token.
+        PatternToken::Placeholder(name) => {
+            let is_cmd = name == "cmd";
             if rest.is_empty() {
                 // Last token in pattern: capture all remaining command tokens
-                captured.extend_from_slice(cmd_tokens);
+                if is_cmd {
+                    captured.extend_from_slice(cmd_tokens);
+                }
                 true
             } else if cmd_tokens.is_empty() {
                 false
             } else {
-                captured.push(cmd_tokens[0]);
-                extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured)
+                let saved_len = captured.len();
+                if is_cmd {
+                    captured.push(cmd_tokens[0]);
+                }
+                if extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured) {
+                    true
+                } else {
+                    captured.truncate(saved_len);
+                    false
+                }
             }
         }
 
@@ -251,10 +263,12 @@ fn extract_placeholder_inner<'a>(
                     && i + 1 < cmd_tokens.len()
                     && match_single_token(value, cmd_tokens[i + 1], definitions)
                 {
+                    let saved_len = captured.len();
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
                     if extract_placeholder_inner(rest, &remaining, definitions, steps, captured) {
                         return true;
                     }
+                    captured.truncate(saved_len);
                 }
             }
             false
@@ -262,6 +276,7 @@ fn extract_placeholder_inner<'a>(
 
         PatternToken::Wildcard => {
             for skip in 0..=cmd_tokens.len() {
+                let saved_len = captured.len();
                 if extract_placeholder_inner(
                     rest,
                     &cmd_tokens[skip..],
@@ -271,6 +286,7 @@ fn extract_placeholder_inner<'a>(
                 ) {
                     return true;
                 }
+                captured.truncate(saved_len);
             }
             false
         }
@@ -288,7 +304,7 @@ fn extract_placeholder_inner<'a>(
 
         PatternToken::Optional(_) | PatternToken::PathRef(_) => {
             // Wrapper patterns are simple; Optional and PathRef are not
-            // expected. Fall back to basic matching without capture.
+            // expected in practice. Fall back to basic matching without capture.
             match_tokens_inner(pattern_tokens, cmd_tokens, definitions, steps)
         }
     }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::config::{ActionKind, Config, Definitions, RuleEntry};
 use crate::rules::RuleError;
-use crate::rules::command_parser::{FlagSchema, ParsedCommand, parse_command};
+use crate::rules::command_parser::{FlagSchema, ParsedCommand, extract_commands, parse_command};
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
 use crate::rules::pattern_matcher::{extract_placeholder, matches};
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
@@ -162,6 +162,11 @@ fn evaluate_command_inner(
 
 /// Try to match the command against wrapper patterns and recursively
 /// evaluate the inner command.
+///
+/// If the extracted inner command is a compound command (containing
+/// pipelines, `&&`, `||`, or `;`), it is split into individual commands
+/// and each is evaluated separately. The results are merged using
+/// Explicit Deny Wins.
 fn try_unwrap_wrapper(
     config: &Config,
     command: &str,
@@ -180,8 +185,19 @@ fn try_unwrap_wrapper(
         let parsed_command = parse_command(command, &schema)?;
 
         if let Some(inner_command) = extract_placeholder(&pattern, &parsed_command, definitions) {
-            let result = evaluate_command_inner(config, &inner_command, context, depth + 1)?;
-            return Ok(Some(result));
+            // Split compound commands (e.g., "ls; rm -rf /") into individual ones
+            let sub_commands =
+                extract_commands(&inner_command).unwrap_or_else(|_| vec![inner_command]);
+
+            let mut result: Option<EvalResult> = None;
+            for cmd in &sub_commands {
+                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                result = Some(match result {
+                    Some(prev) => merge_results(prev, sub_result),
+                    None => sub_result,
+                });
+            }
+            return Ok(result);
         }
     }
 
@@ -656,16 +672,15 @@ mod tests {
     }
 
     #[rstest]
-    fn sudo_wrapper_evaluates_inner_command(empty_context: EvalContext) {
-        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["sudo <cmd>"]);
-        let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Deny(_)));
-    }
-
-    #[rstest]
-    fn bash_c_wrapper_evaluates_inner_command(empty_context: EvalContext) {
-        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["bash -c <cmd>"]);
-        let result = evaluate_command(&config, "bash -c 'rm -rf /'", &empty_context).unwrap();
+    #[case::sudo("sudo <cmd>", "sudo rm -rf /")]
+    #[case::bash_c("bash -c <cmd>", "bash -c 'rm -rf /'")]
+    fn wrapper_evaluates_inner_deny(
+        #[case] wrapper: &str,
+        #[case] command: &str,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec![wrapper]);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
@@ -692,7 +707,6 @@ mod tests {
     #[rstest]
     fn wrapper_no_match_returns_default(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["sudo <cmd>"]);
-        // "ls" is not a wrapper pattern and has no matching rules
         let result = evaluate_command(&config, "ls -la", &empty_context).unwrap();
         assert_eq!(result.action, Action::Default);
     }
@@ -713,7 +727,6 @@ mod tests {
             env: HashMap::new(),
             cwd: PathBuf::from("/tmp"),
         };
-        // Create a self-referencing wrapper: "a <cmd>" where "a" wraps itself
         let config = make_config_with_wrappers(vec![], vec!["a <cmd>"]);
         let result = evaluate_command(&config, "a a a a a a a a a a a a", &context);
         assert!(
@@ -726,7 +739,6 @@ mod tests {
     #[rstest]
     fn wrapper_without_placeholder_does_not_recurse(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![allow_rule("sudo *")], vec!["time *"]);
-        // "time" pattern has no <cmd> placeholder, so no recursion
         let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
         assert_eq!(result.action, Action::Default);
     }
@@ -735,7 +747,24 @@ mod tests {
     fn no_wrappers_defined_skips_unwrap(empty_context: EvalContext) {
         let config = make_config(vec![deny_rule("rm -rf *")]);
         let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-        // Without wrappers defined, "sudo rm -rf /" won't match "rm -rf *"
         assert_eq!(result.action, Action::Default);
+    }
+
+    #[rstest]
+    fn compound_command_in_wrapper_denies_dangerous_part(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["bash -c <cmd>"]);
+        let result = evaluate_command(&config, "bash -c 'ls; rm -rf /'", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_command_in_wrapper_allows_safe_commands(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(
+            vec![allow_rule("ls *"), allow_rule("echo *")],
+            vec!["bash -c <cmd>"],
+        );
+        let result =
+            evaluate_command(&config, "bash -c 'ls -la && echo done'", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
     }
 }
