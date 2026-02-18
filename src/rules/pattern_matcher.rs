@@ -184,6 +184,11 @@ pub fn extract_placeholder(
         if captured.is_empty() {
             Ok(None)
         } else {
+            // join(" ") is intentional: the tokenizer has already stripped
+            // outer quotes, so re-quoting (e.g. shell_quote_join) would produce
+            // a single-token string like 'rm -rf /' that cannot be re-parsed as
+            // a multi-token command. The resulting string is fed into
+            // extract_commands (tree-sitter-bash) which handles shell syntax.
             Ok(Some(captured.join(" ")))
         }
     } else {
@@ -227,17 +232,26 @@ fn extract_placeholder_inner<'a>(
             } else if cmd_tokens.is_empty() {
                 Ok(false)
             } else {
-                let saved_len = captured.len();
-                if is_cmd {
-                    captured.push(cmd_tokens[0]);
-                }
-                if extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured)?
-                {
-                    Ok(true)
-                } else {
+                // Try consuming 1, 2, … tokens with backtracking, similar
+                // to the Wildcard strategy, so multi-token inner commands
+                // can be captured when <cmd> is not the last pattern token.
+                for take in 1..=cmd_tokens.len() {
+                    let saved_len = captured.len();
+                    if is_cmd {
+                        captured.extend_from_slice(&cmd_tokens[..take]);
+                    }
+                    if extract_placeholder_inner(
+                        rest,
+                        &cmd_tokens[take..],
+                        definitions,
+                        steps,
+                        captured,
+                    )? {
+                        return Ok(true);
+                    }
                     captured.truncate(saved_len);
-                    Ok(false)
                 }
+                Ok(false)
             }
         }
 
