@@ -1328,28 +1328,38 @@ mod tests {
         assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
     }
 
-    #[test]
-    fn merge_strictest_writable_intersection() {
+    #[rstest]
+    #[case::non_empty_intersection(
+        vec!["/tmp".to_string(), "/home".to_string(), "/var".to_string()],
+        vec!["/tmp".to_string(), "/var".to_string()],
+        vec!["/tmp", "/var"],
+    )]
+    #[case::empty_intersection(
+        vec!["/tmp".to_string()],
+        vec!["/home".to_string()],
+        vec![],
+    )]
+    fn merge_strictest_writable_intersection(
+        #[case] writable_a: Vec<String>,
+        #[case] writable_b: Vec<String>,
+        #[case] expected: Vec<&str>,
+    ) {
         let a = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec![
-                    "/tmp".to_string(),
-                    "/home".to_string(),
-                    "/var".to_string(),
-                ]),
+                writable: Some(writable_a),
                 deny: None,
             }),
             network: None,
         };
         let b = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string(), "/var".to_string()]),
+                writable: Some(writable_b),
                 deny: None,
             }),
             network: None,
         };
         let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
-        assert_eq!(result.writable, vec!["/tmp", "/var"]);
+        assert_eq!(result.writable, expected);
     }
 
     #[test]
@@ -1372,58 +1382,32 @@ mod tests {
         assert_eq!(result.deny, vec!["/etc/passwd", "/etc/shadow"]);
     }
 
-    #[test]
-    fn merge_strictest_network_intersection() {
+    #[rstest]
+    #[case::intersection(
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]) }),
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]) }),
+        Some(vec!["github.com".to_string()]),
+    )]
+    #[case::none_means_restricted(
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string()]) }),
+        Some(NetworkPolicy { allow: None }),
+        Some(vec![]),
+    )]
+    fn merge_strictest_network(
+        #[case] network_a: Option<NetworkPolicy>,
+        #[case] network_b: Option<NetworkPolicy>,
+        #[case] expected: Option<Vec<String>>,
+    ) {
         let a = SandboxPreset {
             fs: None,
-            network: Some(NetworkPolicy {
-                allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]),
-            }),
+            network: network_a,
         };
         let b = SandboxPreset {
             fs: None,
-            network: Some(NetworkPolicy {
-                allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]),
-            }),
+            network: network_b,
         };
         let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
-        assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
-    }
-
-    #[test]
-    fn merge_strictest_network_none_means_restricted() {
-        let a = SandboxPreset {
-            fs: None,
-            network: Some(NetworkPolicy {
-                allow: Some(vec!["github.com".to_string()]),
-            }),
-        };
-        let b = SandboxPreset {
-            fs: None,
-            network: Some(NetworkPolicy { allow: None }),
-        };
-        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
-        assert_eq!(result.network_allow, Some(vec![]));
-    }
-
-    #[test]
-    fn merge_strictest_writable_empty_intersection() {
-        let a = SandboxPreset {
-            fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string()]),
-                deny: None,
-            }),
-            network: None,
-        };
-        let b = SandboxPreset {
-            fs: Some(FsPolicy {
-                writable: Some(vec!["/home".to_string()]),
-                deny: None,
-            }),
-            network: None,
-        };
-        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
-        assert!(result.writable.is_empty());
+        assert_eq!(result.network_allow, expected);
     }
 
     #[test]

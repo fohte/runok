@@ -110,17 +110,17 @@ pub fn evaluate_compound(
 
     let action = merged_action.unwrap_or(Action::Default);
 
+    // Deduplicate preset names while preserving order
+    let mut seen = HashSet::new();
+    let unique_names: Vec<&String> = preset_names
+        .iter()
+        .filter(|n| seen.insert(n.as_str()))
+        .collect();
+
     // Resolve sandbox presets and merge policies
-    let sandbox_policy = if preset_names.is_empty() {
+    let sandbox_policy = if unique_names.is_empty() {
         None
     } else if let Some(sandbox_map) = sandbox_defs {
-        // Deduplicate preset names while preserving order
-        let mut seen = HashSet::new();
-        let unique_names: Vec<&String> = preset_names
-            .iter()
-            .filter(|n| seen.insert(n.as_str()))
-            .collect();
-
         let presets: Vec<&SandboxPreset> = unique_names
             .iter()
             .filter_map(|name| sandbox_map.get(name.as_str()))
@@ -139,7 +139,7 @@ pub fn evaluate_compound(
     // but presets did define writable roots), escalate action to Ask
     let (final_action, final_policy) = match (action, sandbox_policy) {
         (action, Some(policy))
-            if has_writable_contradiction(&policy, &preset_names, sandbox_defs) =>
+            if has_writable_contradiction(&policy, &unique_names, sandbox_defs) =>
         {
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))
@@ -158,7 +158,7 @@ pub fn evaluate_compound(
 /// is empty.
 fn has_writable_contradiction(
     policy: &MergedSandboxPolicy,
-    preset_names: &[String],
+    preset_names: &[&String],
     sandbox_defs: Option<&HashMap<String, SandboxPreset>>,
 ) -> bool {
     if !policy.writable.is_empty() {
@@ -173,7 +173,7 @@ fn has_writable_contradiction(
     // Check if any source preset actually defined writable roots
     preset_names.iter().any(|name| {
         sandbox_map
-            .get(name)
+            .get(name.as_str())
             .and_then(|p| p.fs.as_ref())
             .and_then(|fs| fs.writable.as_ref())
             .is_some_and(|w| !w.is_empty())
@@ -959,44 +959,30 @@ mod tests {
     // ========================================
 
     #[rstest]
-    fn compound_pipeline_all_allow(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("ls *"), allow_rule("grep *")]);
-        let result = evaluate_compound(&config, "ls -la | grep foo", &empty_context).unwrap();
+    #[case::pipeline("ls -la | grep foo")]
+    #[case::and_chain("echo hello && ls -la")]
+    #[case::or_chain("echo hello || ls -la")]
+    fn compound_all_allow(#[case] command: &str, empty_context: EvalContext) {
+        let config = make_config(vec![
+            allow_rule("ls *"),
+            allow_rule("grep *"),
+            allow_rule("echo *"),
+        ]);
+        let result = evaluate_compound(&config, command, &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
     }
 
     #[rstest]
-    fn compound_and_chain_all_allow(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("echo *"), allow_rule("ls *")]);
-        let result = evaluate_compound(&config, "echo hello && ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Allow);
-    }
-
-    #[rstest]
-    fn compound_or_chain_all_allow(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("echo *"), allow_rule("ls *")]);
-        let result = evaluate_compound(&config, "echo hello || ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Allow);
-    }
-
-    #[rstest]
-    fn compound_deny_wins_in_pipeline(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("ls *"), deny_rule("rm -rf *")]);
-        let result = evaluate_compound(&config, "ls -la | rm -rf /", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Deny(_)));
-    }
-
-    #[rstest]
-    fn compound_deny_wins_in_and_chain(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("echo *"), deny_rule("rm -rf *")]);
-        let result = evaluate_compound(&config, "echo hello && rm -rf /", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Deny(_)));
-    }
-
-    #[rstest]
-    fn compound_deny_wins_in_or_chain(empty_context: EvalContext) {
-        let config = make_config(vec![allow_rule("echo *"), deny_rule("rm -rf *")]);
-        let result = evaluate_compound(&config, "echo hello || rm -rf /", &empty_context).unwrap();
+    #[case::pipeline("ls -la | rm -rf /")]
+    #[case::and_chain("echo hello && rm -rf /")]
+    #[case::or_chain("echo hello || rm -rf /")]
+    fn compound_deny_wins(#[case] command: &str, empty_context: EvalContext) {
+        let config = make_config(vec![
+            allow_rule("ls *"),
+            allow_rule("echo *"),
+            deny_rule("rm -rf *"),
+        ]);
+        let result = evaluate_compound(&config, command, &empty_context).unwrap();
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
