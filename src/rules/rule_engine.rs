@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use crate::config::{ActionKind, Config, Definitions, RuleEntry};
 use crate::rules::RuleError;
-use crate::rules::command_parser::{FlagSchema, ParsedCommand, extract_commands, parse_command};
+use crate::rules::command_parser::{
+    FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
+};
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
 use crate::rules::pattern_matcher::{extract_placeholder, matches};
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
@@ -184,7 +186,19 @@ fn try_unwrap_wrapper(
         let schema = build_flag_schema(&pattern);
         let parsed_command = parse_command(command, &schema)?;
 
-        if let Some(inner_command) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+        if let Some(tokens) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+            // Single token: a shell script string (e.g., from `bash -c <cmd>`)
+            // that should be passed as-is for tree-sitter to parse.
+            // Multiple tokens: a structured command + args (e.g., from `sudo <cmd>`)
+            // that must be re-quoted to preserve tokens containing spaces.
+            let inner_command = if tokens.len() == 1 {
+                let Some(single) = tokens.into_iter().next() else {
+                    unreachable!("tokens.len() == 1 guarantees at least one element");
+                };
+                single
+            } else {
+                shell_quote_join(&tokens)
+            };
             // Split compound commands (e.g., "ls; rm -rf /") into individual ones
             let sub_commands =
                 extract_commands(&inner_command).unwrap_or_else(|_| vec![inner_command]);
@@ -784,5 +798,16 @@ mod tests {
             }
             other => panic!("expected UnsupportedWrapperToken({expected_token:?}), got {other:?}",),
         }
+    }
+
+    #[rstest]
+    fn wrapper_preserves_quoting_in_inner_command(empty_context: EvalContext) {
+        // "sudo echo 'hello world'" should evaluate "echo 'hello world'" as
+        // 2 tokens [echo, hello world], not 3 tokens [echo, hello, world].
+        // The deny rule matches echo with exactly 1 argument via "echo <arg>",
+        // which only works if quoting is preserved.
+        let config = make_config_with_wrappers(vec![deny_rule("echo *")], vec!["sudo <cmd>"]);
+        let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
     }
 }

@@ -156,9 +156,9 @@ fn match_tokens_inner(
 /// Try to match a wrapper pattern against a command and extract the tokens
 /// captured by the `<cmd>` placeholder.
 ///
-/// Returns `Ok(Some(captured_command))` if the pattern matches and contains a
-/// `<cmd>` placeholder, where `captured_command` is the space-joined
-/// reconstruction of the captured tokens at the placeholder position.
+/// Returns `Ok(Some(tokens))` if the pattern matches and contains a `<cmd>`
+/// placeholder, where `tokens` are the individual command tokens captured at
+/// the placeholder position (with quotes already stripped by the tokenizer).
 /// Returns `Ok(None)` if the pattern does not match or has no `<cmd>` placeholder.
 /// Returns `Err` if the wrapper pattern contains unsupported tokens
 /// (`Optional` or `PathRef`).
@@ -166,7 +166,7 @@ pub fn extract_placeholder(
     pattern: &Pattern,
     command: &ParsedCommand,
     definitions: &Definitions,
-) -> Result<Option<String>, RuleError> {
+) -> Result<Option<Vec<String>>, RuleError> {
     if pattern.command != command.command {
         return Ok(None);
     }
@@ -184,12 +184,7 @@ pub fn extract_placeholder(
         if captured.is_empty() {
             Ok(None)
         } else {
-            // join(" ") is intentional: the tokenizer has already stripped
-            // outer quotes, so re-quoting (e.g. shell_quote_join) would produce
-            // a single-token string like 'rm -rf /' that cannot be re-parsed as
-            // a multi-token command. The resulting string is fed into
-            // extract_commands (tree-sitter-bash) which handles shell syntax.
-            Ok(Some(captured.join(" ")))
+            Ok(Some(captured.iter().map(|s| (*s).to_string()).collect()))
         }
     } else {
         Ok(None)
