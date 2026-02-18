@@ -3,9 +3,11 @@ use std::path::PathBuf;
 
 use crate::config::{ActionKind, Config, Definitions, RuleEntry};
 use crate::rules::RuleError;
-use crate::rules::command_parser::{FlagSchema, ParsedCommand, parse_command};
+use crate::rules::command_parser::{
+    FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
+};
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
-use crate::rules::pattern_matcher::matches;
+use crate::rules::pattern_matcher::{extract_placeholder, matches};
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
 
 /// Context for rule evaluation, providing environment variables and
@@ -40,13 +42,32 @@ pub struct DenyResponse {
     pub matched_rule: String,
 }
 
+/// Maximum recursion depth for wrapper command evaluation.
+const MAX_WRAPPER_DEPTH: usize = 10;
+
 /// Evaluate a command against all rules in the config, returning the most
 /// restrictive matching action (Explicit Deny Wins).
+///
+/// If the command matches a wrapper pattern from `definitions.wrappers`,
+/// the inner command is extracted and evaluated recursively.
 pub fn evaluate_command(
     config: &Config,
     command: &str,
     context: &EvalContext,
 ) -> Result<EvalResult, RuleError> {
+    evaluate_command_inner(config, command, context, 0)
+}
+
+fn evaluate_command_inner(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+    depth: usize,
+) -> Result<EvalResult, RuleError> {
+    if depth > MAX_WRAPPER_DEPTH {
+        return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
+    }
+
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -94,38 +115,126 @@ pub fn evaluate_command(
         });
     }
 
-    if matched.is_empty() {
+    // Try wrapper pattern matching for recursive evaluation
+    let wrapper_result = try_unwrap_wrapper(config, command, context, definitions, depth)?;
+
+    if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {
             action: Action::Default,
             sandbox_preset: None,
         });
     }
 
-    // Explicit Deny Wins: pick the most restrictive action.
-    // ActionKind ordering: Allow < Ask < Deny
-    // Safety: early return above guarantees `matched` is non-empty.
-    let Some(most_restrictive) = matched.iter().max_by_key(|m| m.action_kind) else {
-        unreachable!("matched is non-empty due to early return");
+    // Determine the direct rule result
+    let direct_result = if matched.is_empty() {
+        None
+    } else {
+        // Explicit Deny Wins: pick the most restrictive action.
+        // ActionKind ordering: Allow < Ask < Deny
+        let Some(most_restrictive) = matched.iter().max_by_key(|m| m.action_kind) else {
+            unreachable!("matched is non-empty");
+        };
+
+        let action = match most_restrictive.action_kind {
+            ActionKind::Deny => Action::Deny(DenyResponse {
+                message: most_restrictive.rule.message.clone(),
+                fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
+                matched_rule: most_restrictive.pattern_str.clone(),
+            }),
+            ActionKind::Ask => Action::Ask(most_restrictive.rule.message.clone()),
+            ActionKind::Allow => Action::Allow,
+        };
+
+        let sandbox_preset = most_restrictive.rule.sandbox.clone();
+
+        Some(EvalResult {
+            action,
+            sandbox_preset,
+        })
     };
 
-    let action = match most_restrictive.action_kind {
-        ActionKind::Deny => Action::Deny(DenyResponse {
-            message: most_restrictive.rule.message.clone(),
-            fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
-            matched_rule: most_restrictive.pattern_str.clone(),
-        }),
-        ActionKind::Ask => Action::Ask(most_restrictive.rule.message.clone()),
-        ActionKind::Allow => Action::Allow,
+    // Merge direct result with wrapper result using Explicit Deny Wins
+    match (direct_result, wrapper_result) {
+        (Some(direct), Some(wrapper)) => Ok(merge_results(direct, wrapper)),
+        (Some(direct), None) => Ok(direct),
+        (None, Some(wrapper)) => Ok(wrapper),
+        (None, None) => unreachable!("at least one result exists"),
+    }
+}
+
+/// Try to match the command against wrapper patterns and recursively
+/// evaluate the inner command.
+///
+/// If the extracted inner command is a compound command (containing
+/// pipelines, `&&`, `||`, or `;`), it is split into individual commands
+/// and each is evaluated separately. The results are merged using
+/// Explicit Deny Wins.
+fn try_unwrap_wrapper(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+    definitions: &Definitions,
+    depth: usize,
+) -> Result<Option<EvalResult>, RuleError> {
+    let wrappers = match definitions.wrappers.as_ref() {
+        Some(w) if !w.is_empty() => w,
+        _ => return Ok(None),
     };
 
-    // Sandbox preset comes only from the winning rule to prevent lower-priority
-    // rules from influencing the security posture.
-    let sandbox_preset = most_restrictive.rule.sandbox.clone();
+    for wrapper_pattern_str in wrappers {
+        let pattern = parse_pattern(wrapper_pattern_str)?;
+        let schema = build_flag_schema(&pattern);
+        let parsed_command = parse_command(command, &schema)?;
 
-    Ok(EvalResult {
-        action,
-        sandbox_preset,
-    })
+        if let Some(tokens) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+            // Single token: a shell script string (e.g., from `bash -c <cmd>`)
+            // that should be passed as-is for tree-sitter to parse.
+            // Multiple tokens: a structured command + args (e.g., from `sudo <cmd>`)
+            // that must be re-quoted to preserve tokens containing spaces.
+            let inner_command = if tokens.len() == 1 {
+                let Some(single) = tokens.into_iter().next() else {
+                    unreachable!("tokens.len() == 1 guarantees at least one element");
+                };
+                single
+            } else {
+                shell_quote_join(&tokens)
+            };
+            // Split compound commands (e.g., "ls; rm -rf /") into individual ones
+            let sub_commands =
+                extract_commands(&inner_command).unwrap_or_else(|_| vec![inner_command]);
+
+            let mut result: Option<EvalResult> = None;
+            for cmd in &sub_commands {
+                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                result = Some(match result {
+                    Some(prev) => merge_results(prev, sub_result),
+                    None => sub_result,
+                });
+            }
+            return Ok(result);
+        }
+    }
+
+    Ok(None)
+}
+
+/// Merge two evaluation results using Explicit Deny Wins priority.
+fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
+    let a_priority = action_priority(&a.action);
+    let b_priority = action_priority(&b.action);
+
+    if b_priority > a_priority { b } else { a }
+}
+
+/// Map an action to its priority for Explicit Deny Wins comparison.
+/// Higher value = more restrictive.
+fn action_priority(action: &Action) -> u8 {
+    match action {
+        Action::Default => 0,
+        Action::Allow => 1,
+        Action::Ask(_) => 2,
+        Action::Deny(_) => 3,
+    }
 }
 
 struct MatchedRule<'a> {
@@ -559,5 +668,146 @@ mod tests {
         let config = make_config(vec![invalid_rule, allow_rule("git status")]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
+    }
+
+    // ========================================
+    // Wrapper command recursive evaluation
+    // ========================================
+
+    fn make_config_with_wrappers(rules: Vec<RuleEntry>, wrappers: Vec<&str>) -> Config {
+        Config {
+            rules: Some(rules),
+            definitions: Some(Definitions {
+                wrappers: Some(wrappers.into_iter().map(String::from).collect()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    #[case::sudo("sudo <cmd>", "sudo rm -rf /")]
+    #[case::bash_c("bash -c <cmd>", "bash -c 'rm -rf /'")]
+    fn wrapper_evaluates_inner_deny(
+        #[case] wrapper: &str,
+        #[case] command: &str,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec![wrapper]);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn wrapper_allows_safe_inner_command(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(
+            vec![allow_rule("ls *"), deny_rule("rm -rf *")],
+            vec!["sudo <cmd>"],
+        );
+        let result = evaluate_command(&config, "sudo ls -la", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn nested_wrappers_sudo_bash_c(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(
+            vec![deny_rule("rm -rf *")],
+            vec!["sudo <cmd>", "bash -c <cmd>"],
+        );
+        let result = evaluate_command(&config, "sudo bash -c 'rm -rf /'", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn wrapper_no_match_returns_default(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["sudo <cmd>"]);
+        let result = evaluate_command(&config, "ls -la", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Default);
+    }
+
+    #[rstest]
+    fn wrapper_deny_wins_over_allow_from_direct_rule(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(
+            vec![allow_rule("sudo *"), deny_rule("rm -rf *")],
+            vec!["sudo <cmd>"],
+        );
+        let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[test]
+    fn recursion_depth_exceeded() {
+        let context = EvalContext {
+            env: HashMap::new(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let config = make_config_with_wrappers(vec![], vec!["a <cmd>"]);
+        let result = evaluate_command(&config, "a a a a a a a a a a a a", &context);
+        assert!(
+            matches!(result, Err(RuleError::RecursionDepthExceeded(_))),
+            "expected RecursionDepthExceeded, got {:?}",
+            result,
+        );
+    }
+
+    #[rstest]
+    fn wrapper_without_placeholder_does_not_recurse(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(vec![allow_rule("sudo *")], vec!["time *"]);
+        let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Default);
+    }
+
+    #[rstest]
+    fn no_wrappers_defined_skips_unwrap(empty_context: EvalContext) {
+        let config = make_config(vec![deny_rule("rm -rf *")]);
+        let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Default);
+    }
+
+    #[rstest]
+    fn compound_command_in_wrapper_denies_dangerous_part(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["bash -c <cmd>"]);
+        let result = evaluate_command(&config, "bash -c 'ls; rm -rf /'", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_command_in_wrapper_allows_safe_commands(empty_context: EvalContext) {
+        let config = make_config_with_wrappers(
+            vec![allow_rule("ls *"), allow_rule("echo *")],
+            vec!["bash -c <cmd>"],
+        );
+        let result =
+            evaluate_command(&config, "bash -c 'ls -la && echo done'", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    #[case::optional("sudo [-u root] <cmd>", "Optional ([...])")]
+    #[case::path_ref("sudo <path:bin> <cmd>", "PathRef (<path:bin>)")]
+    fn wrapper_with_unsupported_token_returns_error(
+        #[case] wrapper: &str,
+        #[case] expected_token: &str,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm *")], vec![wrapper]);
+        let result = evaluate_command(&config, "sudo rm foo", &empty_context);
+        match result {
+            Err(RuleError::UnsupportedWrapperToken(token)) => {
+                assert_eq!(token, expected_token);
+            }
+            other => panic!("expected UnsupportedWrapperToken({expected_token:?}), got {other:?}",),
+        }
+    }
+
+    #[rstest]
+    fn wrapper_preserves_quoting_in_inner_command(empty_context: EvalContext) {
+        // "sudo echo 'hello world'" should evaluate "echo 'hello world'" as
+        // 2 tokens [echo, hello world], not 3 tokens [echo, hello, world].
+        // The deny rule matches echo with exactly 1 argument via "echo <arg>",
+        // which only works if quoting is preserved.
+        let config = make_config_with_wrappers(vec![deny_rule("echo *")], vec!["sudo <cmd>"]);
+        let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
     }
 }

@@ -8,6 +8,7 @@ use std::cell::Cell;
 use std::path::{Component, Path};
 
 use crate::config::Definitions;
+use crate::rules::RuleError;
 use crate::rules::command_parser::ParsedCommand;
 use crate::rules::pattern_parser::{Pattern, PatternToken};
 
@@ -149,6 +150,184 @@ fn match_tokens_inner(
             }
             match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
         }
+    }
+}
+
+/// Try to match a wrapper pattern against a command and extract the tokens
+/// captured by the `<cmd>` placeholder.
+///
+/// Returns `Ok(Some(tokens))` if the pattern matches and contains a `<cmd>`
+/// placeholder, where `tokens` are the individual command tokens captured at
+/// the placeholder position (with quotes already stripped by the tokenizer).
+/// Returns `Ok(None)` if the pattern does not match or has no `<cmd>` placeholder.
+/// Returns `Err` if the wrapper pattern contains unsupported tokens
+/// (`Optional` or `PathRef`).
+pub fn extract_placeholder(
+    pattern: &Pattern,
+    command: &ParsedCommand,
+    definitions: &Definitions,
+) -> Result<Option<Vec<String>>, RuleError> {
+    if pattern.command != command.command {
+        return Ok(None);
+    }
+
+    let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
+    let steps = Cell::new(0usize);
+    let mut captured = Vec::new();
+    if extract_placeholder_inner(
+        &pattern.tokens,
+        &cmd_tokens,
+        definitions,
+        &steps,
+        &mut captured,
+    )? {
+        if captured.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(captured.iter().map(|s| (*s).to_string()).collect()))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Core recursive extractor that matches pattern tokens against command tokens,
+/// capturing the tokens that align with a `Placeholder("cmd")` token.
+///
+/// Only `<cmd>` placeholders contribute to the `captured` vector; other
+/// placeholder names (e.g., `<user>`) are consumed without capturing.
+///
+/// Returns `Err` if `Optional` or `PathRef` tokens are encountered, as
+/// these are not supported in wrapper patterns.
+fn extract_placeholder_inner<'a>(
+    pattern_tokens: &[PatternToken],
+    cmd_tokens: &[&'a str],
+    definitions: &Definitions,
+    steps: &Cell<usize>,
+    captured: &mut Vec<&'a str>,
+) -> Result<bool, RuleError> {
+    let count = steps.get() + 1;
+    steps.set(count);
+    if count > MAX_MATCH_STEPS {
+        return Ok(false);
+    }
+
+    let Some((first, rest)) = pattern_tokens.split_first() else {
+        return Ok(cmd_tokens.is_empty());
+    };
+
+    match first {
+        PatternToken::Placeholder(name) => {
+            let is_cmd = name == "cmd";
+            if rest.is_empty() {
+                if is_cmd {
+                    // <cmd> at end of pattern: capture all remaining tokens
+                    captured.extend_from_slice(cmd_tokens);
+                    Ok(true)
+                } else {
+                    // Non-<cmd> placeholder consumes exactly one token
+                    Ok(cmd_tokens.len() == 1)
+                }
+            } else if cmd_tokens.is_empty() {
+                Ok(false)
+            } else {
+                // Try consuming 1, 2, … tokens with backtracking, similar
+                // to the Wildcard strategy, so multi-token inner commands
+                // can be captured when <cmd> is not the last pattern token.
+                for take in 1..=cmd_tokens.len() {
+                    let saved_len = captured.len();
+                    if is_cmd {
+                        captured.extend_from_slice(&cmd_tokens[..take]);
+                    }
+                    if extract_placeholder_inner(
+                        rest,
+                        &cmd_tokens[take..],
+                        definitions,
+                        steps,
+                        captured,
+                    )? {
+                        return Ok(true);
+                    }
+                    captured.truncate(saved_len);
+                }
+                Ok(false)
+            }
+        }
+
+        PatternToken::Literal(s) => {
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            if cmd_tokens[0] == s.as_str() {
+                extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured)
+            } else {
+                Ok(false)
+            }
+        }
+
+        PatternToken::Alternation(alts) => {
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
+                extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured)
+            } else {
+                Ok(false)
+            }
+        }
+
+        PatternToken::FlagWithValue { aliases, value } => {
+            for i in 0..cmd_tokens.len() {
+                if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
+                    && i + 1 < cmd_tokens.len()
+                    && match_single_token(value, cmd_tokens[i + 1], definitions)
+                {
+                    let saved_len = captured.len();
+                    let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
+                    if extract_placeholder_inner(rest, &remaining, definitions, steps, captured)? {
+                        return Ok(true);
+                    }
+                    captured.truncate(saved_len);
+                }
+            }
+            Ok(false)
+        }
+
+        PatternToken::Wildcard => {
+            for skip in 0..=cmd_tokens.len() {
+                let saved_len = captured.len();
+                if extract_placeholder_inner(
+                    rest,
+                    &cmd_tokens[skip..],
+                    definitions,
+                    steps,
+                    captured,
+                )? {
+                    return Ok(true);
+                }
+                captured.truncate(saved_len);
+            }
+            Ok(false)
+        }
+
+        PatternToken::Negation(inner) => {
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            if !match_single_token(inner, cmd_tokens[0], definitions) {
+                extract_placeholder_inner(rest, &cmd_tokens[1..], definitions, steps, captured)
+            } else {
+                Ok(false)
+            }
+        }
+
+        PatternToken::Optional(_) => Err(RuleError::UnsupportedWrapperToken(
+            "Optional ([...])".into(),
+        )),
+
+        PatternToken::PathRef(name) => Err(RuleError::UnsupportedWrapperToken(format!(
+            "PathRef (<path:{name}>)"
+        ))),
     }
 }
 
