@@ -184,7 +184,7 @@ fn try_unwrap_wrapper(
         let schema = build_flag_schema(&pattern);
         let parsed_command = parse_command(command, &schema)?;
 
-        if let Some(inner_command) = extract_placeholder(&pattern, &parsed_command, definitions) {
+        if let Some(inner_command) = extract_placeholder(&pattern, &parsed_command, definitions)? {
             // Split compound commands (e.g., "ls; rm -rf /") into individual ones
             let sub_commands =
                 extract_commands(&inner_command).unwrap_or_else(|_| vec![inner_command]);
@@ -766,5 +766,23 @@ mod tests {
         let result =
             evaluate_command(&config, "bash -c 'ls -la && echo done'", &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    #[case::optional("sudo [-u root] <cmd>", "Optional ([...])")]
+    #[case::path_ref("sudo <path:bin> <cmd>", "PathRef (<path:bin>)")]
+    fn wrapper_with_unsupported_token_returns_error(
+        #[case] wrapper: &str,
+        #[case] expected_token: &str,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config_with_wrappers(vec![deny_rule("rm *")], vec![wrapper]);
+        let result = evaluate_command(&config, "sudo rm foo", &empty_context);
+        match result {
+            Err(RuleError::UnsupportedWrapperToken(token)) => {
+                assert_eq!(token, expected_token);
+            }
+            other => panic!("expected UnsupportedWrapperToken({expected_token:?}), got {other:?}",),
+        }
     }
 }
