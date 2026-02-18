@@ -6,6 +6,8 @@ use super::git_client::{GitClient, ProcessGitClient};
 use super::preset_remote::{PresetReference, load_remote_preset, parse_preset_reference};
 use super::{Config, ConfigError, PresetError, parse_config};
 
+const MAX_EXTENDS_DEPTH: usize = 10;
+
 fn home_dir() -> Option<String> {
     std::env::var("HOME").ok().filter(|h| !h.is_empty())
 }
@@ -114,7 +116,6 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 pub fn load_local_preset(
     reference: &str,
     base_dir: &Path,
-    // Will be used for circular reference detection (planned for a future task).
     _visited: &mut HashSet<String>,
 ) -> Result<Config, ConfigError> {
     let path = resolve_local_path(reference, base_dir, home_dir)?;
@@ -156,6 +157,137 @@ pub fn load_preset_with<G: GitClient>(
     match parsed {
         PresetReference::Local(_) => load_local_preset(reference, base_dir, visited),
         _ => load_remote_preset(&parsed, reference, git_client, cache, visited),
+    }
+}
+
+/// Resolve all `extends` references in a config, recursively loading and merging presets.
+///
+/// Uses DFS with a `chain` vector to track the current resolution path and detect
+/// circular references. When a reference is encountered that already exists in the chain,
+/// returns `PresetError::CircularReference` with the full cycle path.
+///
+/// Convenience wrapper around `resolve_extends_with` that uses `ProcessGitClient`.
+pub fn resolve_extends(
+    config: Config,
+    base_dir: &Path,
+    source_name: &str,
+    cache: &PresetCache,
+) -> Result<Config, ConfigError> {
+    resolve_extends_with(config, base_dir, source_name, &ProcessGitClient, cache)
+}
+
+/// Resolve all `extends` references in a config with a custom git client.
+pub fn resolve_extends_with<G: GitClient>(
+    config: Config,
+    base_dir: &Path,
+    source_name: &str,
+    git_client: &G,
+    cache: &PresetCache,
+) -> Result<Config, ConfigError> {
+    let mut chain = vec![source_name.to_string()];
+    let mut visited = HashSet::new();
+    visited.insert(source_name.to_string());
+
+    resolve_extends_recursive(
+        config,
+        base_dir,
+        git_client,
+        cache,
+        &mut chain,
+        &mut visited,
+    )
+}
+
+/// Recursive inner function for extends resolution.
+///
+/// `chain` tracks the current DFS path (ordered) for cycle reporting.
+/// `visited` is the set of all references in the current chain for O(1) lookup.
+fn resolve_extends_recursive<G: GitClient>(
+    config: Config,
+    base_dir: &Path,
+    git_client: &G,
+    cache: &PresetCache,
+    chain: &mut Vec<String>,
+    visited: &mut HashSet<String>,
+) -> Result<Config, ConfigError> {
+    let extends = match &config.extends {
+        Some(refs) if !refs.is_empty() => refs.clone(),
+        _ => return Ok(config),
+    };
+
+    // Start with an empty config and merge each resolved preset in order,
+    // then merge the current config on top (current config takes priority).
+    let mut merged = Config::default();
+
+    for reference in &extends {
+        if visited.contains(reference.as_str()) {
+            // Build the cycle chain: from the first occurrence of `reference` to the end
+            let cycle_start = chain.iter().position(|r| r == reference).unwrap_or(0);
+            let mut cycle: Vec<String> = chain[cycle_start..].to_vec();
+            cycle.push(reference.clone());
+            return Err(PresetError::CircularReference { cycle }.into());
+        }
+
+        if chain.len() >= MAX_EXTENDS_DEPTH {
+            return Err(PresetError::CircularReference {
+                cycle: chain.clone(),
+            }
+            .into());
+        }
+
+        chain.push(reference.clone());
+        visited.insert(reference.clone());
+
+        // Load the preset config (without resolving its extends yet)
+        let mut load_visited = HashSet::new();
+        let preset_config =
+            load_preset_with(reference, base_dir, git_client, cache, &mut load_visited)?;
+
+        // Determine the base_dir for the loaded preset's own extends
+        let preset_base_dir = determine_preset_base_dir(reference, base_dir);
+
+        // Recursively resolve the preset's own extends
+        let resolved = resolve_extends_recursive(
+            preset_config,
+            &preset_base_dir,
+            git_client,
+            cache,
+            chain,
+            visited,
+        )?;
+
+        merged = merged.merge(resolved);
+
+        visited.remove(reference.as_str());
+        chain.pop();
+    }
+
+    // Strip extends from the current config before merging (already resolved)
+    let current = Config {
+        extends: None,
+        ..config
+    };
+
+    Ok(merged.merge(current))
+}
+
+/// Determine the base directory for a preset's own extends resolution.
+fn determine_preset_base_dir(reference: &str, parent_base_dir: &Path) -> PathBuf {
+    let parsed = parse_preset_reference(reference);
+    match parsed {
+        Ok(PresetReference::Local(_)) => {
+            // For local presets, resolve relative to the preset file's directory
+            let path = parent_base_dir.join(reference);
+            path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| parent_base_dir.to_path_buf())
+        }
+        _ => {
+            // For remote presets, the base_dir stays the same
+            // (remote presets' relative extends are resolved relative to the repo root,
+            // which is handled by the cache directory)
+            parent_base_dir.to_path_buf()
+        }
     }
 }
 
@@ -381,5 +513,392 @@ mod tests {
             }
             other => panic!("expected PresetError::InvalidReference, got: {other:?}"),
         }
+    }
+
+    // === Circular reference detection ===
+
+    #[rstest]
+    fn circular_reference_direct(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // a.yml extends b.yml, b.yml extends a.yml
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./b.yml
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+        fs::write(
+            base_dir.join("b.yml"),
+            indoc! {"
+                extends:
+                  - ./a.yml
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
+            .unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::CircularReference { cycle }) => {
+                assert_eq!(cycle, vec!["./a.yml", "./b.yml", "./a.yml"]);
+            }
+            other => panic!("expected CircularReference, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn circular_reference_self(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // a.yml extends itself
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./a.yml
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
+            .unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::CircularReference { cycle }) => {
+                assert_eq!(cycle, vec!["./a.yml", "./a.yml"]);
+            }
+            other => panic!("expected CircularReference, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn circular_reference_three_level(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // a.yml → b.yml → c.yml → a.yml
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./b.yml
+            "},
+        )
+        .unwrap();
+        fs::write(
+            base_dir.join("b.yml"),
+            indoc! {"
+                extends:
+                  - ./c.yml
+            "},
+        )
+        .unwrap();
+        fs::write(
+            base_dir.join("c.yml"),
+            indoc! {"
+                extends:
+                  - ./a.yml
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
+            .unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::CircularReference { cycle }) => {
+                assert_eq!(cycle, vec!["./a.yml", "./b.yml", "./c.yml", "./a.yml"]);
+            }
+            other => panic!("expected CircularReference, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn circular_reference_back_to_root(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // a.yml extends back to runok.yml (the root source)
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./runok.yml
+            "},
+        )
+        .unwrap();
+        fs::write(
+            base_dir.join("runok.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'ls'
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        // "runok.yml" is in the chain as the root, so ./runok.yml would collide
+        // if the reference matches. But "./runok.yml" != "runok.yml" as strings.
+        // This test verifies that different string representations are treated as
+        // different references (no false positive).
+        let result = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache);
+        // "./runok.yml" is a different string from "runok.yml", so no circular reference
+        assert!(result.is_ok());
+    }
+
+    // === Nested extends resolution (no cycles) ===
+
+    #[rstest]
+    fn nested_extends_resolved(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // base.yml has rules
+        fs::write(
+            base_dir.join("base.yml"),
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        )
+        .unwrap();
+
+        // mid.yml extends base.yml and adds rules
+        fs::write(
+            base_dir.join("mid.yml"),
+            indoc! {"
+                extends:
+                  - ./base.yml
+                rules:
+                  - allow: 'cargo test'
+            "},
+        )
+        .unwrap();
+
+        // root config extends mid.yml
+        let config = parse_config(indoc! {"
+            extends:
+              - ./mid.yml
+            rules:
+              - allow: 'git status'
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let resolved =
+            resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache).unwrap();
+
+        let rules = resolved.rules.unwrap();
+        assert_eq!(rules.len(), 3);
+        // base.yml rules first, then mid.yml, then root
+        assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
+        assert_eq!(rules[1].allow.as_deref(), Some("cargo test"));
+        assert_eq!(rules[2].allow.as_deref(), Some("git status"));
+    }
+
+    #[rstest]
+    fn diamond_extends_resolved(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        // common.yml is shared
+        fs::write(
+            base_dir.join("common.yml"),
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        )
+        .unwrap();
+
+        // a.yml extends common.yml
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./common.yml
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+
+        // b.yml extends common.yml
+        fs::write(
+            base_dir.join("b.yml"),
+            indoc! {"
+                extends:
+                  - ./common.yml
+                rules:
+                  - allow: 'cargo test'
+            "},
+        )
+        .unwrap();
+
+        // root extends both a.yml and b.yml (diamond shape)
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+              - ./b.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        // Diamond is not a circular reference, so this should succeed.
+        // common.yml is loaded twice but that's expected (no cycle).
+        let resolved =
+            resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache).unwrap();
+
+        let rules = resolved.rules.unwrap();
+        // common.yml (from a.yml) + a.yml + common.yml (from b.yml) + b.yml
+        assert_eq!(rules.len(), 4);
+    }
+
+    #[rstest]
+    fn no_extends_returns_config_as_is(tmp: TempDir) {
+        let base_dir = tmp.path();
+        let config = parse_config(indoc! {"
+            rules:
+              - allow: 'git status'
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let resolved = resolve_extends_with(
+            config.clone(),
+            base_dir,
+            "runok.yml",
+            &ProcessGitClient,
+            &cache,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.rules, config.rules);
+    }
+
+    #[rstest]
+    fn extends_stripped_from_resolved_config(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        fs::write(
+            base_dir.join("base.yml"),
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./base.yml
+            rules:
+              - allow: 'git status'
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let resolved =
+            resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache).unwrap();
+
+        // extends should be stripped from the resolved config
+        assert!(resolved.extends.is_none());
+    }
+
+    #[rstest]
+    fn error_message_contains_cycle_chain(tmp: TempDir) {
+        let base_dir = tmp.path();
+
+        fs::write(
+            base_dir.join("a.yml"),
+            indoc! {"
+                extends:
+                  - ./b.yml
+            "},
+        )
+        .unwrap();
+        fs::write(
+            base_dir.join("b.yml"),
+            indoc! {"
+                extends:
+                  - ./a.yml
+            "},
+        )
+        .unwrap();
+
+        let config = parse_config(indoc! {"
+            extends:
+              - ./a.yml
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            base_dir.join(".cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let err = resolve_extends_with(config, base_dir, "runok.yml", &ProcessGitClient, &cache)
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "preset error: circular reference detected: ./a.yml \u{2192} ./b.yml \u{2192} ./a.yml"
+        );
     }
 }
