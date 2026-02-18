@@ -221,9 +221,13 @@ fn extract_placeholder_inner<'a>(
             let is_cmd = name == "cmd";
             if rest.is_empty() {
                 if is_cmd {
+                    // <cmd> at end of pattern: capture all remaining tokens
                     captured.extend_from_slice(cmd_tokens);
+                    Ok(true)
+                } else {
+                    // Non-<cmd> placeholder consumes exactly one token
+                    Ok(cmd_tokens.len() == 1)
                 }
-                Ok(true)
             } else if cmd_tokens.is_empty() {
                 Ok(false)
             } else {
