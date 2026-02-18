@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::config::{ActionKind, Config, Definitions, RuleEntry};
+use crate::config::{
+    ActionKind, Config, Definitions, MergedSandboxPolicy, RuleEntry, SandboxPreset,
+};
 use crate::rules::RuleError;
 use crate::rules::command_parser::{
     FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
@@ -23,6 +25,14 @@ pub struct EvalResult {
     pub action: Action,
     /// Sandbox preset name from the matched rule, or `None` to fall back to `defaults.sandbox`.
     pub sandbox_preset: Option<String>,
+}
+
+/// Result of compound command evaluation: an action and an optional merged
+/// sandbox policy built from all sub-commands' sandbox presets.
+#[derive(Debug, PartialEq)]
+pub struct CompoundEvalResult {
+    pub action: Action,
+    pub sandbox_policy: Option<MergedSandboxPolicy>,
 }
 
 /// The action determined by rule evaluation.
@@ -56,6 +66,128 @@ pub fn evaluate_command(
     context: &EvalContext,
 ) -> Result<EvalResult, RuleError> {
     evaluate_command_inner(config, command, context, 0)
+}
+
+/// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
+/// by splitting it into individual commands, evaluating each, and aggregating
+/// the results.
+///
+/// - Action aggregation: Explicit Deny Wins (deny > ask > allow > default)
+/// - Sandbox policy aggregation: Strictest Wins (writable roots intersected,
+///   deny paths unioned, network access intersected)
+/// - If sandbox aggregation produces empty writable roots (contradiction),
+///   the action is escalated to `Ask`
+///
+/// For single (non-compound) commands, this delegates to `evaluate_command`.
+pub fn evaluate_compound(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+) -> Result<CompoundEvalResult, RuleError> {
+    let commands = extract_commands(command).unwrap_or_else(|_| vec![command.to_string()]);
+
+    let default_definitions = Definitions::default();
+    let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
+    let sandbox_defs = definitions.sandbox.as_ref();
+
+    let mut merged_action: Option<Action> = None;
+    let mut preset_names: Vec<String> = Vec::new();
+
+    for cmd in &commands {
+        let result = evaluate_command(config, cmd, context)?;
+
+        // Collect sandbox preset names
+        if let Some(name) = result.sandbox_preset {
+            preset_names.push(name);
+        }
+
+        // Aggregate action using Explicit Deny Wins
+        merged_action = Some(match merged_action {
+            Some(prev) => merge_actions(prev, result.action),
+            None => result.action,
+        });
+    }
+
+    let action = merged_action.unwrap_or(Action::Default);
+
+    // Resolve sandbox presets and merge policies
+    let sandbox_policy = if preset_names.is_empty() {
+        None
+    } else if let Some(sandbox_map) = sandbox_defs {
+        // Deduplicate preset names while preserving order
+        let mut seen = HashSet::new();
+        let unique_names: Vec<&String> = preset_names
+            .iter()
+            .filter(|n| seen.insert(n.as_str()))
+            .collect();
+
+        let presets: Vec<&SandboxPreset> = unique_names
+            .iter()
+            .filter_map(|name| sandbox_map.get(name.as_str()))
+            .collect();
+
+        if presets.is_empty() {
+            None
+        } else {
+            SandboxPreset::merge_strictest(&presets)
+        }
+    } else {
+        None
+    };
+
+    // If sandbox policy has contradicting writable roots (empty after intersection
+    // but presets did define writable roots), escalate action to Ask
+    let (final_action, final_policy) = match (action, sandbox_policy) {
+        (action, Some(policy))
+            if has_writable_contradiction(&policy, &preset_names, sandbox_defs) =>
+        {
+            let escalated = escalate_to_ask(action);
+            (escalated, Some(policy))
+        }
+        (action, policy) => (action, policy),
+    };
+
+    Ok(CompoundEvalResult {
+        action: final_action,
+        sandbox_policy: final_policy,
+    })
+}
+
+/// Check if the merged policy has a writable roots contradiction:
+/// at least one source preset defined writable roots, but the intersection
+/// is empty.
+fn has_writable_contradiction(
+    policy: &MergedSandboxPolicy,
+    preset_names: &[String],
+    sandbox_defs: Option<&HashMap<String, SandboxPreset>>,
+) -> bool {
+    if !policy.writable.is_empty() {
+        return false;
+    }
+
+    let sandbox_map = match sandbox_defs {
+        Some(m) => m,
+        None => return false,
+    };
+
+    // Check if any source preset actually defined writable roots
+    preset_names.iter().any(|name| {
+        sandbox_map
+            .get(name)
+            .and_then(|p| p.fs.as_ref())
+            .and_then(|fs| fs.writable.as_ref())
+            .is_some_and(|w| !w.is_empty())
+    })
+}
+
+/// Escalate an action to Ask if it is currently Allow or Default.
+fn escalate_to_ask(action: Action) -> Action {
+    match action {
+        Action::Allow | Action::Default => Action::Ask(Some(
+            "sandbox policy conflict: writable roots are contradictory".to_string(),
+        )),
+        other => other,
+    }
 }
 
 fn evaluate_command_inner(
@@ -220,10 +352,21 @@ fn try_unwrap_wrapper(
 
 /// Merge two evaluation results using Explicit Deny Wins priority.
 fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
-    let a_priority = action_priority(&a.action);
-    let b_priority = action_priority(&b.action);
+    if action_priority(&b.action) > action_priority(&a.action) {
+        b
+    } else {
+        a
+    }
+}
 
-    if b_priority > a_priority { b } else { a }
+/// Merge two actions using Explicit Deny Wins priority, returning the more
+/// restrictive one.
+fn merge_actions(a: Action, b: Action) -> Action {
+    if action_priority(&b) > action_priority(&a) {
+        b
+    } else {
+        a
+    }
 }
 
 /// Map an action to its priority for Explicit Deny Wins comparison.
@@ -809,5 +952,560 @@ mod tests {
         let config = make_config_with_wrappers(vec![deny_rule("echo *")], vec!["sudo <cmd>"]);
         let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
         assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    // ========================================
+    // Compound command evaluation
+    // ========================================
+
+    #[rstest]
+    fn compound_pipeline_all_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("ls *"), allow_rule("grep *")]);
+        let result = evaluate_compound(&config, "ls -la | grep foo", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_and_chain_all_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), allow_rule("ls *")]);
+        let result = evaluate_compound(&config, "echo hello && ls -la", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_or_chain_all_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), allow_rule("ls *")]);
+        let result = evaluate_compound(&config, "echo hello || ls -la", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_deny_wins_in_pipeline(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("ls *"), deny_rule("rm -rf *")]);
+        let result = evaluate_compound(&config, "ls -la | rm -rf /", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_deny_wins_in_and_chain(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), deny_rule("rm -rf *")]);
+        let result = evaluate_compound(&config, "echo hello && rm -rf /", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_deny_wins_in_or_chain(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), deny_rule("rm -rf *")]);
+        let result = evaluate_compound(&config, "echo hello || rm -rf /", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_ask_wins_over_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), ask_rule("git push *")]);
+        let result =
+            evaluate_compound(&config, "echo done && git push origin", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Ask(_)));
+    }
+
+    #[rstest]
+    fn compound_deny_wins_over_ask_and_allow(empty_context: EvalContext) {
+        let config = make_config(vec![
+            allow_rule("echo *"),
+            ask_rule("git push *"),
+            deny_rule("rm -rf *"),
+        ]);
+        let result = evaluate_compound(
+            &config,
+            "echo done && git push origin && rm -rf /",
+            &empty_context,
+        )
+        .unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_single_command_delegates(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("git status")]);
+        let result = evaluate_compound(&config, "git status", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+        assert_eq!(result.sandbox_policy, None);
+    }
+
+    #[rstest]
+    fn compound_no_matching_rules_returns_default(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("git status")]);
+        let result = evaluate_compound(&config, "hg status | wc -l", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Default);
+    }
+
+    // ========================================
+    // Compound: sandbox policy aggregation
+    // ========================================
+
+    use crate::config::{FsPolicy, NetworkPolicy, SandboxPreset};
+
+    fn make_sandbox_config(
+        rules: Vec<RuleEntry>,
+        sandbox: HashMap<String, SandboxPreset>,
+    ) -> Config {
+        Config {
+            rules: Some(rules),
+            definitions: Some(Definitions {
+                sandbox: Some(sandbox),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn allow_rule_with_sandbox(pattern: &str, sandbox: &str) -> RuleEntry {
+        let mut rule = allow_rule(pattern);
+        rule.sandbox = Some(sandbox.to_string());
+        rule
+    }
+
+    #[rstest]
+    fn compound_sandbox_writable_roots_intersection(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "preset_a"),
+                allow_rule_with_sandbox("cat *", "preset_b"),
+            ],
+            HashMap::from([
+                (
+                    "preset_a".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec![
+                                "/tmp".to_string(),
+                                "/home".to_string(),
+                                "/var".to_string(),
+                            ]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "preset_b".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string(), "/var".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+        let policy = result.sandbox_policy.unwrap();
+        assert_eq!(policy.writable, vec!["/tmp", "/var"]);
+    }
+
+    #[rstest]
+    fn compound_sandbox_deny_paths_union(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "preset_a"),
+                allow_rule_with_sandbox("cat *", "preset_b"),
+            ],
+            HashMap::from([
+                (
+                    "preset_a".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: Some(vec!["/etc/passwd".to_string()]),
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "preset_b".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: Some(vec!["/etc/shadow".to_string()]),
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        let policy = result.sandbox_policy.unwrap();
+        assert_eq!(policy.deny, vec!["/etc/passwd", "/etc/shadow"]);
+    }
+
+    #[rstest]
+    fn compound_sandbox_network_intersection(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("curl *", "preset_a"),
+                allow_rule_with_sandbox("wget *", "preset_b"),
+            ],
+            HashMap::from([
+                (
+                    "preset_a".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: Some(NetworkPolicy {
+                            allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]),
+                        }),
+                    },
+                ),
+                (
+                    "preset_b".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: Some(NetworkPolicy {
+                            allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]),
+                        }),
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(
+            &config,
+            "curl https://github.com && wget https://npmjs.org",
+            &empty_context,
+        )
+        .unwrap();
+        let policy = result.sandbox_policy.unwrap();
+        assert_eq!(policy.network_allow, Some(vec!["github.com".to_string()]));
+    }
+
+    #[rstest]
+    fn compound_sandbox_network_restricted_by_any(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("curl *", "net_ok"),
+                allow_rule_with_sandbox("ls *", "no_net"),
+            ],
+            HashMap::from([
+                (
+                    "net_ok".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: Some(NetworkPolicy {
+                            allow: Some(vec!["github.com".to_string()]),
+                        }),
+                    },
+                ),
+                (
+                    "no_net".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: Some(NetworkPolicy { allow: None }),
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(
+            &config,
+            "curl https://github.com && ls /tmp",
+            &empty_context,
+        )
+        .unwrap();
+        let policy = result.sandbox_policy.unwrap();
+        // network.allow: None in no_net means no network allowed -> empty list
+        assert_eq!(policy.network_allow, Some(vec![]));
+    }
+
+    // ========================================
+    // Compound: writable roots contradiction -> ask escalation
+    // ========================================
+
+    #[rstest]
+    fn compound_writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "only_tmp"),
+                allow_rule_with_sandbox("cat *", "only_home"),
+            ],
+            HashMap::from([
+                (
+                    "only_tmp".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "only_home".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/home".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        // Writable roots intersection is empty -> contradiction -> escalate to Ask
+        assert!(matches!(result.action, Action::Ask(_)));
+    }
+
+    #[rstest]
+    fn compound_writable_contradiction_does_not_downgrade_deny(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "only_tmp"),
+                deny_rule("cat *"),
+            ],
+            HashMap::from([(
+                "only_tmp".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        writable: Some(vec!["/tmp".to_string()]),
+                        deny: None,
+                    }),
+                    network: None,
+                },
+            )]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        // deny should not be downgraded to ask
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_same_sandbox_preset_deduplicates(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "preset_a"),
+                allow_rule_with_sandbox("cat *", "preset_a"),
+            ],
+            HashMap::from([(
+                "preset_a".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        writable: Some(vec!["/tmp".to_string()]),
+                        deny: Some(vec!["/etc".to_string()]),
+                    }),
+                    network: None,
+                },
+            )]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        let policy = result.sandbox_policy.unwrap();
+        // Same preset intersected with itself should preserve the values
+        assert_eq!(policy.writable, vec!["/tmp"]);
+        assert_eq!(policy.deny, vec!["/etc"]);
+    }
+
+    #[rstest]
+    fn compound_no_sandbox_presets_returns_none(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("ls *"), allow_rule("cat *")]);
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        assert_eq!(result.sandbox_policy, None);
+    }
+
+    #[rstest]
+    fn compound_semicolon_separator(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("echo *"), deny_rule("rm -rf *")]);
+        let result = evaluate_compound(&config, "echo hello; rm -rf /", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn compound_mixed_operators(empty_context: EvalContext) {
+        let config = make_config(vec![
+            allow_rule("echo *"),
+            allow_rule("ls *"),
+            ask_rule("grep *"),
+        ]);
+        let result =
+            evaluate_compound(&config, "echo hello | grep world && ls -la", &empty_context)
+                .unwrap();
+        assert!(matches!(result.action, Action::Ask(_)));
+    }
+
+    #[rstest]
+    fn compound_partial_sandbox_only_some_commands(empty_context: EvalContext) {
+        // Only python3 has a sandbox preset; ls does not.
+        // The merged policy should reflect only the single preset.
+        let config = make_sandbox_config(
+            vec![
+                allow_rule("ls *"),
+                allow_rule_with_sandbox("python3 *", "restricted"),
+            ],
+            HashMap::from([(
+                "restricted".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        writable: Some(vec!["/tmp".to_string()]),
+                        deny: Some(vec!["/etc".to_string()]),
+                    }),
+                    network: None,
+                },
+            )]),
+        );
+
+        let result =
+            evaluate_compound(&config, "ls -la | python3 script.py", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+        let policy = result.sandbox_policy.unwrap();
+        assert_eq!(policy.writable, vec!["/tmp"]);
+        assert_eq!(policy.deny, vec!["/etc"]);
+    }
+
+    #[rstest]
+    fn compound_single_command_with_sandbox(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![allow_rule_with_sandbox("python3 *", "restricted")],
+            HashMap::from([(
+                "restricted".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        writable: Some(vec!["/tmp".to_string()]),
+                        deny: None,
+                    }),
+                    network: Some(NetworkPolicy {
+                        allow: Some(vec!["pypi.org".to_string()]),
+                    }),
+                },
+            )]),
+        );
+
+        let result = evaluate_compound(&config, "python3 script.py", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+        let policy = result.sandbox_policy.unwrap();
+        assert_eq!(policy.writable, vec!["/tmp"]);
+        assert_eq!(policy.network_allow, Some(vec!["pypi.org".to_string()]));
+    }
+
+    #[rstest]
+    fn compound_three_presets_progressive_intersection(empty_context: EvalContext) {
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("cmd1 *", "p1"),
+                allow_rule_with_sandbox("cmd2 *", "p2"),
+                allow_rule_with_sandbox("cmd3 *", "p3"),
+            ],
+            HashMap::from([
+                (
+                    "p1".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec![
+                                "/a".to_string(),
+                                "/b".to_string(),
+                                "/c".to_string(),
+                            ]),
+                            deny: Some(vec!["/x".to_string()]),
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "p2".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/b".to_string(), "/c".to_string()]),
+                            deny: Some(vec!["/y".to_string()]),
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "p3".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/c".to_string(), "/d".to_string()]),
+                            deny: Some(vec!["/z".to_string()]),
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(
+            &config,
+            "cmd1 arg1 && cmd2 arg2 && cmd3 arg3",
+            &empty_context,
+        )
+        .unwrap();
+        let policy = result.sandbox_policy.unwrap();
+        // Writable: {a,b,c} ∩ {b,c} ∩ {c,d} = {c}
+        assert_eq!(policy.writable, vec!["/c"]);
+        // Deny: {x} ∪ {y} ∪ {z}
+        assert_eq!(policy.deny, vec!["/x", "/y", "/z"]);
+    }
+
+    #[rstest]
+    fn compound_ask_not_overwritten_by_escalation(empty_context: EvalContext) {
+        // If action is already Ask (from rule evaluation), writable contradiction
+        // should not overwrite the existing Ask message.
+        let config = make_sandbox_config(
+            vec![
+                {
+                    let mut rule = ask_rule("ls *");
+                    rule.sandbox = Some("only_tmp".to_string());
+                    rule.message = Some("confirm ls".to_string());
+                    rule
+                },
+                allow_rule_with_sandbox("cat *", "only_home"),
+            ],
+            HashMap::from([
+                (
+                    "only_tmp".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "only_home".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: Some(vec!["/home".to_string()]),
+                            deny: None,
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        // Action is Ask from the rule itself; escalation should not change it
+        match &result.action {
+            Action::Ask(msg) => {
+                assert_eq!(msg.as_deref(), Some("confirm ls"));
+            }
+            other => panic!("expected Ask, got {:?}", other),
+        }
     }
 }
