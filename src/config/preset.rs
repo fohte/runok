@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::cache::PresetCache;
+use super::git_client::{GitClient, ProcessGitClient};
+use super::preset_remote::{PresetReference, load_remote_preset, parse_preset_reference};
 use super::{Config, ConfigError, PresetError, parse_config};
 
 fn home_dir() -> Option<String> {
@@ -123,6 +126,37 @@ pub fn load_local_preset(
     let yaml = std::fs::read_to_string(&path)?;
     let config = parse_config(&yaml)?;
     Ok(config)
+}
+
+/// Load a preset by reference string using the real git client.
+///
+/// Convenience wrapper around `load_preset_with` that uses `ProcessGitClient`.
+pub fn load_preset(
+    reference: &str,
+    base_dir: &Path,
+    cache: &PresetCache,
+    visited: &mut HashSet<String>,
+) -> Result<Config, ConfigError> {
+    load_preset_with(reference, base_dir, &ProcessGitClient, cache, visited)
+}
+
+/// Load a preset by reference string, dispatching to local or remote loader.
+///
+/// Parses the reference to determine its type, then delegates to the appropriate loader:
+/// - Local paths → `load_local_preset`
+/// - GitHub shorthand / git URLs → `load_remote_preset` (with caching)
+pub fn load_preset_with<G: GitClient>(
+    reference: &str,
+    base_dir: &Path,
+    git_client: &G,
+    cache: &PresetCache,
+    visited: &mut HashSet<String>,
+) -> Result<Config, ConfigError> {
+    let parsed = parse_preset_reference(reference)?;
+    match parsed {
+        PresetReference::Local(_) => load_local_preset(reference, base_dir, visited),
+        _ => load_remote_preset(&parsed, reference, git_client, cache, visited),
+    }
 }
 
 #[cfg(test)]

@@ -24,6 +24,10 @@ pub enum PresetError {
     CircularReference { cycle: Vec<String> },
     #[error("cache error: {0}")]
     Cache(String),
+    #[error("git clone failed for '{reference}': {message}")]
+    GitClone { reference: String, message: String },
+    #[error("git clone failed, using cached version: {message}")]
+    GitCloneWithCache { message: String },
 }
 
 #[cfg(test)]
@@ -127,6 +131,19 @@ mod tests {
     #[case(
         PresetError::Cache("write failed".to_string()),
         "cache error: write failed"
+    )]
+    #[case(
+        PresetError::GitClone {
+            reference: "github:org/repo@v1".to_string(),
+            message: "authentication failed".to_string(),
+        },
+        "git clone failed for 'github:org/repo@v1': authentication failed"
+    )]
+    #[case(
+        PresetError::GitCloneWithCache {
+            message: "network unreachable".to_string(),
+        },
+        "git clone failed, using cached version: network unreachable"
     )]
     fn preset_error_display(#[case] error: PresetError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
