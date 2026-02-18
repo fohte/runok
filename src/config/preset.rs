@@ -113,11 +113,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 ///
 /// `reference` is a local path string (relative, absolute, or `~/`-prefixed).
 /// `base_dir` is the directory of the file that contains the `extends` entry.
-pub fn load_local_preset(
-    reference: &str,
-    base_dir: &Path,
-    _visited: &mut HashSet<String>,
-) -> Result<Config, ConfigError> {
+pub fn load_local_preset(reference: &str, base_dir: &Path) -> Result<Config, ConfigError> {
     let path = resolve_local_path(reference, base_dir, home_dir)?;
 
     if !path.exists() {
@@ -136,9 +132,8 @@ pub fn load_preset(
     reference: &str,
     base_dir: &Path,
     cache: &PresetCache,
-    visited: &mut HashSet<String>,
 ) -> Result<Config, ConfigError> {
-    load_preset_with(reference, base_dir, &ProcessGitClient, cache, visited)
+    load_preset_with(reference, base_dir, &ProcessGitClient, cache)
 }
 
 /// Load a preset by reference string, dispatching to local or remote loader.
@@ -151,12 +146,11 @@ pub fn load_preset_with<G: GitClient>(
     base_dir: &Path,
     git_client: &G,
     cache: &PresetCache,
-    visited: &mut HashSet<String>,
 ) -> Result<Config, ConfigError> {
     let parsed = parse_preset_reference(reference)?;
     match parsed {
-        PresetReference::Local(_) => load_local_preset(reference, base_dir, visited),
-        _ => load_remote_preset(&parsed, reference, git_client, cache, visited),
+        PresetReference::Local(_) => load_local_preset(reference, base_dir),
+        _ => load_remote_preset(&parsed, reference, git_client, cache),
     }
 }
 
@@ -238,9 +232,7 @@ fn resolve_extends_recursive<G: GitClient>(
         visited.insert(reference.clone());
 
         // Load the preset config (without resolving its extends yet)
-        let mut load_visited = HashSet::new();
-        let preset_config =
-            load_preset_with(reference, base_dir, git_client, cache, &mut load_visited)?;
+        let preset_config = load_preset_with(reference, base_dir, git_client, cache)?;
 
         // Determine the base_dir for the loaded preset's own extends
         let preset_base_dir = determine_preset_base_dir(reference, base_dir);
@@ -332,8 +324,7 @@ mod tests {
         fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         fs::write(&file_path, yaml_content).unwrap();
 
-        let mut visited = HashSet::new();
-        let config = load_local_preset(reference, &base_dir, &mut visited).unwrap();
+        let config = load_local_preset(reference, &base_dir).unwrap();
         assert!(
             config.rules.is_some() || config.defaults.is_some(),
             "loaded config should have content"
@@ -356,8 +347,7 @@ mod tests {
         fs::create_dir_all(&other_dir).unwrap();
 
         let reference = preset_path.to_str().unwrap();
-        let mut visited = HashSet::new();
-        let config = load_local_preset(reference, &other_dir, &mut visited).unwrap();
+        let config = load_local_preset(reference, &other_dir).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
     }
@@ -396,8 +386,7 @@ mod tests {
     fn error_on_nonexistent_file(tmp: TempDir) {
         let base_dir = tmp.path();
 
-        let mut visited = HashSet::new();
-        let err = load_local_preset("./nonexistent.yml", base_dir, &mut visited).unwrap_err();
+        let err = load_local_preset("./nonexistent.yml", base_dir).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::LocalNotFound(path)) => {
@@ -415,8 +404,7 @@ mod tests {
         let missing_path = tmp.path().join("does-not-exist.yml");
         let reference = missing_path.to_str().unwrap();
 
-        let mut visited = HashSet::new();
-        let err = load_local_preset(reference, tmp.path(), &mut visited).unwrap_err();
+        let err = load_local_preset(reference, tmp.path()).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::LocalNotFound(path)) => {
@@ -431,8 +419,7 @@ mod tests {
         let preset_path = tmp.path().join("bad.yml");
         fs::write(&preset_path, "rules: [invalid yaml\n  broken:").unwrap();
 
-        let mut visited = HashSet::new();
-        let err = load_local_preset("./bad.yml", tmp.path(), &mut visited).unwrap_err();
+        let err = load_local_preset("./bad.yml", tmp.path()).unwrap_err();
         assert!(matches!(err, ConfigError::Yaml(_)));
     }
 
@@ -451,8 +438,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut visited = HashSet::new();
-        let config = load_local_preset("./preset.yml", base_dir, &mut visited).unwrap();
+        let config = load_local_preset("./preset.yml", base_dir).unwrap();
 
         assert_eq!(
             config.defaults.as_ref().unwrap().action,
@@ -483,8 +469,7 @@ mod tests {
         let base_dir = tmp.path().join("project");
         fs::create_dir_all(&base_dir).unwrap();
 
-        let mut visited = HashSet::new();
-        let err = load_local_preset(reference, &base_dir, &mut visited).unwrap_err();
+        let err = load_local_preset(reference, &base_dir).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::InvalidReference(msg)) => {

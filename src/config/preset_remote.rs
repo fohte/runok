@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -310,7 +309,6 @@ pub fn load_remote_preset<G: GitClient>(
     original_reference: &str,
     git_client: &G,
     cache: &PresetCache,
-    _visited: &mut HashSet<String>,
 ) -> Result<Config, ConfigError> {
     emit_mutable_warning(reference, original_reference);
 
@@ -616,8 +614,7 @@ mod tests {
 
         // Mock clone doesn't create files, so read_preset_from_dir will fail.
         // We verify clone was called with correct --branch.
-        let mut visited = HashSet::new();
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
 
         let calls = mock.calls.borrow();
         let has_clone_with_branch = calls.iter().any(|c| {
@@ -686,9 +683,7 @@ mod tests {
         let mock = MockGitClient::new();
         // No clone/fetch results queued — should not be called
 
-        let mut visited = HashSet::new();
-        let config =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
@@ -728,9 +723,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let mut visited = HashSet::new();
-        let config =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
@@ -768,9 +761,7 @@ mod tests {
             message: "network error".to_string(),
         }));
 
-        let mut visited = HashSet::new();
-        let config =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("old cached rule"));
@@ -791,9 +782,7 @@ mod tests {
             message: "authentication failed".to_string(),
         }));
 
-        let mut visited = HashSet::new();
-        let err =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap_err();
+        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { reference, .. }) => {
@@ -820,8 +809,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let mut visited = HashSet::new();
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -863,8 +851,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let mut visited = HashSet::new();
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -915,9 +902,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let mut visited = HashSet::new();
-        let config =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
@@ -950,9 +935,7 @@ mod tests {
         // Create cache dir but no runok.yml
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let mut visited = HashSet::new();
-        let err =
-            load_remote_preset(&parsed, reference_str, &mock, &cache, &mut visited).unwrap_err();
+        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { message, .. }) => {
