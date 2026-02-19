@@ -228,7 +228,7 @@ fn resolve_extends_recursive<G: GitClient>(
             return Err(PresetError::CircularReference { cycle }.into());
         }
 
-        if chain.len() >= MAX_EXTENDS_DEPTH {
+        if chain.len() > MAX_EXTENDS_DEPTH {
             let mut depth_chain = chain.clone();
             depth_chain.push(canonical_key);
             return Err(PresetError::MaxExtendsDepthExceeded {
@@ -245,7 +245,7 @@ fn resolve_extends_recursive<G: GitClient>(
         let preset_config = load_preset_with(reference, base_dir, git_client, cache)?;
 
         // Determine the base_dir for the loaded preset's own extends
-        let preset_base_dir = determine_preset_base_dir(reference, base_dir);
+        let preset_base_dir = determine_preset_base_dir(reference, base_dir, cache);
 
         // Recursively resolve the preset's own extends
         let resolved = resolve_extends_recursive(
@@ -295,8 +295,13 @@ fn normalize_reference_key(reference: &str, base_dir: &Path) -> String {
 ///
 /// For local presets, resolves the reference (including `~/` expansion) and
 /// returns the parent directory of the resolved path. For remote presets,
-/// the parent's base directory is used as-is.
-fn determine_preset_base_dir(reference: &str, parent_base_dir: &Path) -> PathBuf {
+/// returns the cache directory where the repo was cloned, so that the
+/// preset's own relative extends are resolved within the cloned repo.
+fn determine_preset_base_dir(
+    reference: &str,
+    parent_base_dir: &Path,
+    cache: &PresetCache,
+) -> PathBuf {
     let parsed = parse_preset_reference(reference);
     match parsed {
         Ok(PresetReference::Local(_)) => {
@@ -310,10 +315,10 @@ fn determine_preset_base_dir(reference: &str, parent_base_dir: &Path) -> PathBuf
                 .unwrap_or_else(|| parent_base_dir.to_path_buf())
         }
         _ => {
-            // For remote presets, the base_dir stays the same
-            // (remote presets' relative extends are resolved relative to the repo root,
-            // which is handled by the cache directory)
-            parent_base_dir.to_path_buf()
+            // For remote presets, use the cache directory where the repo was cloned.
+            // This ensures the preset's own relative extends (e.g., ./sub/rules.yml)
+            // are resolved within the cloned repository, not the parent config's directory.
+            cache.cache_dir(reference)
         }
     }
 }
