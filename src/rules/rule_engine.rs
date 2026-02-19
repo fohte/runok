@@ -19,6 +19,16 @@ pub struct EvalContext {
     pub cwd: PathBuf,
 }
 
+impl EvalContext {
+    /// Build an `EvalContext` from the current process environment.
+    pub fn from_env() -> Self {
+        Self {
+            env: std::env::vars().collect(),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        }
+    }
+}
+
 /// Result of rule evaluation: an action and an optional sandbox preset name.
 #[derive(Debug, PartialEq)]
 pub struct EvalResult {
