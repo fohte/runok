@@ -27,6 +27,14 @@ impl ExecAdapter {
             executor,
         }
     }
+
+    fn command_input(&self) -> CommandInput {
+        if self.args.len() == 1 {
+            CommandInput::Shell(self.args[0].clone())
+        } else {
+            CommandInput::Argv(self.args.clone())
+        }
+    }
 }
 
 impl Endpoint for ExecAdapter {
@@ -34,18 +42,18 @@ impl Endpoint for ExecAdapter {
         if self.args.is_empty() {
             return Ok(None);
         }
+        // Return single arguments unquoted so the rule engine can detect
+        // shell metacharacters (&&, ;, |) in compound commands.
+        if self.args.len() == 1 {
+            return Ok(Some(self.args[0].clone()));
+        }
         Ok(Some(shell_quote_join(&self.args)))
     }
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
         match result.action {
             Action::Allow => {
-                let command_input = if self.args.len() == 1 {
-                    // Single token might be a compound command (e.g., "cmd1 && cmd2")
-                    CommandInput::Shell(self.args[0].clone())
-                } else {
-                    CommandInput::Argv(self.args.clone())
-                };
+                let command_input = self.command_input();
 
                 // Determine sandbox policy from the result or from the constructor preset
                 let sandbox = match result.sandbox {
@@ -91,12 +99,7 @@ impl Endpoint for ExecAdapter {
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
         match defaults.action {
             Some(ActionKind::Allow) | None => {
-                // Execute the command
-                let command_input = if self.args.len() == 1 {
-                    CommandInput::Shell(self.args[0].clone())
-                } else {
-                    CommandInput::Argv(self.args.clone())
-                };
+                let command_input = self.command_input();
                 let exit_code = self.executor.exec(&command_input, None)?;
                 Ok(exit_code)
             }
@@ -177,11 +180,55 @@ mod tests {
         }
     }
 
+    struct CapturingExecutor {
+        captured: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>>,
+    }
+
+    impl CommandExecutor for CapturingExecutor {
+        fn exec(
+            &self,
+            command: &CommandInput,
+            _sandbox: Option<&SandboxPolicy>,
+        ) -> Result<i32, ExecError> {
+            *self.captured.lock().unwrap() = Some(command.clone());
+            Ok(0)
+        }
+
+        fn validate(&self, _command: &[String]) -> Result<(), ExecError> {
+            Ok(())
+        }
+
+        fn dry_run(
+            &self,
+            _command: &CommandInput,
+            _sandbox: Option<&SandboxPolicy>,
+        ) -> DryRunResult {
+            DryRunResult {
+                program: String::new(),
+                exec_mode: ExecMode::SpawnAndWait,
+                is_valid: true,
+                error: None,
+            }
+        }
+
+        fn determine_exec_mode(
+            &self,
+            _sandbox: Option<&SandboxPolicy>,
+            _is_compound: bool,
+        ) -> ExecMode {
+            ExecMode::SpawnAndWait
+        }
+    }
+
     // --- extract_command ---
 
     #[rstest]
     #[case::empty_args(vec![], None)]
     #[case::single_arg(vec!["git".into()], Some("git".to_string()))]
+    #[case::single_compound_arg(
+        vec!["echo hello && echo world".into()],
+        Some("echo hello && echo world".to_string())
+    )]
     #[case::multiple_args(
         vec!["git".into(), "status".into()],
         Some("git status".to_string())
@@ -223,7 +270,9 @@ mod tests {
     // --- handle_action: Deny ---
 
     #[rstest]
-    fn handle_action_deny_returns_exit_3() {
+    #[case::with_message(Some("dangerous command".to_string()))]
+    #[case::without_message(None)]
+    fn handle_action_deny_returns_exit_3(#[case] message: Option<String>) {
         let adapter = ExecAdapter::new(
             vec!["rm".into(), "-rf".into(), "/".into()],
             None,
@@ -232,27 +281,7 @@ mod tests {
         let result = adapter
             .handle_action(ActionResult {
                 action: Action::Deny(DenyResponse {
-                    message: Some("dangerous command".to_string()),
-                    fix_suggestion: None,
-                    matched_rule: "rm -rf /".to_string(),
-                }),
-                sandbox: SandboxInfo::Preset(None),
-            })
-            .unwrap();
-        assert_eq!(result, 3);
-    }
-
-    #[rstest]
-    fn handle_action_deny_without_message_uses_default() {
-        let adapter = ExecAdapter::new(
-            vec!["rm".into(), "-rf".into(), "/".into()],
-            None,
-            Box::new(MockExecutor::new(0)),
-        );
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Deny(DenyResponse {
-                    message: None,
+                    message,
                     fix_suggestion: None,
                     matched_rule: "rm -rf /".to_string(),
                 }),
@@ -265,7 +294,9 @@ mod tests {
     // --- handle_action: Ask (treated as deny) ---
 
     #[rstest]
-    fn handle_action_ask_returns_exit_3() {
+    #[case::with_message(Some("please confirm".to_string()))]
+    #[case::without_message(None)]
+    fn handle_action_ask_returns_exit_3(#[case] message: Option<String>) {
         let adapter = ExecAdapter::new(
             vec!["terraform".into(), "apply".into()],
             None,
@@ -273,23 +304,7 @@ mod tests {
         );
         let result = adapter
             .handle_action(ActionResult {
-                action: Action::Ask(Some("please confirm".to_string())),
-                sandbox: SandboxInfo::Preset(None),
-            })
-            .unwrap();
-        assert_eq!(result, 3);
-    }
-
-    #[rstest]
-    fn handle_action_ask_without_message_returns_exit_3() {
-        let adapter = ExecAdapter::new(
-            vec!["terraform".into(), "apply".into()],
-            None,
-            Box::new(MockExecutor::new(0)),
-        );
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Ask(None),
+                action: Action::Ask(message),
                 sandbox: SandboxInfo::Preset(None),
             })
             .unwrap();
@@ -379,59 +394,29 @@ mod tests {
         assert_eq!(result, 1);
     }
 
-    // --- single arg treated as shell command ---
+    // --- command_input dispatching ---
 
     #[rstest]
-    fn single_arg_uses_shell_command_input() {
+    #[case::single_arg_shell(
+        vec!["echo hello && echo world".into()],
+        CommandInput::Shell("echo hello && echo world".to_string())
+    )]
+    #[case::multiple_args_argv(
+        vec!["git".into(), "status".into()],
+        CommandInput::Argv(vec!["git".into(), "status".into()])
+    )]
+    fn handle_action_dispatches_correct_command_input(
+        #[case] args: Vec<String>,
+        #[case] expected: CommandInput,
+    ) {
         let executed_command: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
-        let executed_clone = executed_command.clone();
-
-        struct CapturingExecutor {
-            captured: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>>,
-        }
-
-        impl CommandExecutor for CapturingExecutor {
-            fn exec(
-                &self,
-                command: &CommandInput,
-                _sandbox: Option<&SandboxPolicy>,
-            ) -> Result<i32, ExecError> {
-                *self.captured.lock().unwrap() = Some(command.clone());
-                Ok(0)
-            }
-
-            fn validate(&self, _command: &[String]) -> Result<(), ExecError> {
-                Ok(())
-            }
-
-            fn dry_run(
-                &self,
-                _command: &CommandInput,
-                _sandbox: Option<&SandboxPolicy>,
-            ) -> DryRunResult {
-                DryRunResult {
-                    program: String::new(),
-                    exec_mode: ExecMode::SpawnAndWait,
-                    is_valid: true,
-                    error: None,
-                }
-            }
-
-            fn determine_exec_mode(
-                &self,
-                _sandbox: Option<&SandboxPolicy>,
-                _is_compound: bool,
-            ) -> ExecMode {
-                ExecMode::SpawnAndWait
-            }
-        }
 
         let adapter = ExecAdapter::new(
-            vec!["echo hello && echo world".into()],
+            args,
             None,
             Box::new(CapturingExecutor {
-                captured: executed_clone,
+                captured: executed_command.clone(),
             }),
         );
 
@@ -443,77 +428,6 @@ mod tests {
             .unwrap();
 
         let captured = executed_command.lock().unwrap();
-        assert_eq!(
-            *captured,
-            Some(CommandInput::Shell("echo hello && echo world".to_string()))
-        );
-    }
-
-    #[rstest]
-    fn multiple_args_uses_argv_command_input() {
-        let executed_command: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
-        let executed_clone = executed_command.clone();
-
-        struct CapturingExecutor {
-            captured: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>>,
-        }
-
-        impl CommandExecutor for CapturingExecutor {
-            fn exec(
-                &self,
-                command: &CommandInput,
-                _sandbox: Option<&SandboxPolicy>,
-            ) -> Result<i32, ExecError> {
-                *self.captured.lock().unwrap() = Some(command.clone());
-                Ok(0)
-            }
-
-            fn validate(&self, _command: &[String]) -> Result<(), ExecError> {
-                Ok(())
-            }
-
-            fn dry_run(
-                &self,
-                _command: &CommandInput,
-                _sandbox: Option<&SandboxPolicy>,
-            ) -> DryRunResult {
-                DryRunResult {
-                    program: String::new(),
-                    exec_mode: ExecMode::SpawnAndWait,
-                    is_valid: true,
-                    error: None,
-                }
-            }
-
-            fn determine_exec_mode(
-                &self,
-                _sandbox: Option<&SandboxPolicy>,
-                _is_compound: bool,
-            ) -> ExecMode {
-                ExecMode::SpawnAndWait
-            }
-        }
-
-        let adapter = ExecAdapter::new(
-            vec!["git".into(), "status".into()],
-            None,
-            Box::new(CapturingExecutor {
-                captured: executed_clone,
-            }),
-        );
-
-        adapter
-            .handle_action(ActionResult {
-                action: Action::Allow,
-                sandbox: SandboxInfo::Preset(None),
-            })
-            .unwrap();
-
-        let captured = executed_command.lock().unwrap();
-        assert_eq!(
-            *captured,
-            Some(CommandInput::Argv(vec!["git".into(), "status".into()]))
-        );
+        assert_eq!(*captured, Some(expected));
     }
 }
