@@ -74,7 +74,7 @@ impl ClaudeCodeHookAdapter {
 
         let (decision, reason, updated_input) = match &result.action {
             Action::Allow => {
-                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command);
+                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("allow", None, updated)
             }
             Action::Deny(deny_response) => ("deny", deny_response.message.clone(), None),
@@ -108,7 +108,7 @@ impl ClaudeCodeHookAdapter {
             if let Some(ref sandbox_name) = defaults.sandbox {
                 let bash_input = self.parse_bash_input()?;
                 Some(UpdatedInput {
-                    command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command),
+                    command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command)?,
                 })
             } else {
                 None
@@ -146,21 +146,22 @@ impl ClaudeCodeHookAdapter {
     fn sandbox_updated_input(
         sandbox: &SandboxInfo,
         original_command: &str,
-    ) -> Option<UpdatedInput> {
+    ) -> Result<Option<UpdatedInput>, anyhow::Error> {
         match sandbox {
-            SandboxInfo::Preset(Some(preset)) => Some(UpdatedInput {
-                command: Self::wrap_with_sandbox(preset, original_command),
-            }),
-            _ => None,
+            SandboxInfo::Preset(Some(preset)) => Ok(Some(UpdatedInput {
+                command: Self::wrap_with_sandbox(preset, original_command)?,
+            })),
+            _ => Ok(None),
         }
     }
 
     /// Wrap a command with `runok exec --sandbox <preset> -- <quoted_command>`.
     /// The command is shell-quoted to prevent shell metacharacters (e.g. `&&`,
     /// `||`, `;`, `|`) from being interpreted outside the sandbox.
-    fn wrap_with_sandbox(preset: &str, command: &str) -> String {
-        let quoted = shlex::try_quote(command).unwrap_or_else(|_| command.into());
-        format!("runok exec --sandbox {preset} -- {quoted}")
+    fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
+        let quoted = shlex::try_quote(command)
+            .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+        Ok(format!("runok exec --sandbox {preset} -- {quoted}"))
     }
 }
 
@@ -481,7 +482,8 @@ mod tests {
         #[case] command: &str,
         #[case] expected_command: Option<&str>,
     ) {
-        let result = ClaudeCodeHookAdapter::sandbox_updated_input(&sandbox, command);
+        let result = ClaudeCodeHookAdapter::sandbox_updated_input(&sandbox, command)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"));
         match expected_command {
             Some(expected) => {
                 let updated = result.unwrap_or_else(|| panic!("expected Some(UpdatedInput)"));
@@ -507,8 +509,15 @@ mod tests {
     #[case::compound_semicolon("cmd1; cmd2", "runok exec --sandbox restricted -- 'cmd1; cmd2'")]
     fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
         assert_eq!(
-            ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command),
+            ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command)
+                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
             expected,
         );
+    }
+
+    #[rstest]
+    fn wrap_with_sandbox_rejects_nul_byte() {
+        let command = "echo \0hello";
+        assert!(ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command).is_err());
     }
 }
