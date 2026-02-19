@@ -1,3 +1,4 @@
+pub mod check_adapter;
 pub mod hook_adapter;
 
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
