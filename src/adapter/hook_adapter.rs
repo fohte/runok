@@ -63,10 +63,14 @@ impl ClaudeCodeHookAdapter {
         Self { input }
     }
 
+    fn parse_bash_input(&self) -> Result<BashToolInput, anyhow::Error> {
+        Ok(serde_json::from_value(self.input.tool_input.clone())?)
+    }
+
     /// Build a HookOutput for a given action result.
     /// Separated from I/O for testability.
     fn build_action_output(&self, result: &ActionResult) -> Result<HookOutput, anyhow::Error> {
-        let bash_input: BashToolInput = serde_json::from_value(self.input.tool_input.clone())?;
+        let bash_input = self.parse_bash_input()?;
 
         let (decision, reason, updated_input) = match &result.action {
             Action::Allow => {
@@ -102,8 +106,7 @@ impl ClaudeCodeHookAdapter {
 
         let updated_input = if decision == "allow" {
             if let Some(ref sandbox_name) = defaults.sandbox {
-                let bash_input: BashToolInput =
-                    serde_json::from_value(self.input.tool_input.clone())?;
+                let bash_input = self.parse_bash_input()?;
                 Some(UpdatedInput {
                     command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command),
                 })
@@ -167,7 +170,7 @@ impl Endpoint for ClaudeCodeHookAdapter {
             return Ok(None);
         }
 
-        let bash_input: BashToolInput = serde_json::from_value(self.input.tool_input.clone())?;
+        let bash_input = self.parse_bash_input()?;
         Ok(Some(bash_input.command))
     }
 
