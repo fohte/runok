@@ -159,11 +159,13 @@ impl ClaudeCodeHookAdapter {
     /// The command is shell-quoted to prevent shell metacharacters (e.g. `&&`,
     /// `||`, `;`, `|`) from being interpreted outside the sandbox.
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
-        let quoted = shlex::try_quote(command)
+        let quoted_preset = shlex::try_quote(preset)
+            .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
+        let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
-        // preset is a sandbox name from the config file (definitions.sandbox key),
-        // not external input, so it does not need shell quoting.
-        Ok(format!("runok exec --sandbox {preset} -- {quoted}"))
+        Ok(format!(
+            "runok exec --sandbox {quoted_preset} -- {quoted_command}"
+        ))
     }
 }
 
@@ -512,6 +514,25 @@ mod tests {
     fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
         assert_eq!(
             ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command)
+                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::preset_with_spaces(
+        "my preset",
+        "echo hello",
+        "runok exec --sandbox 'my preset' -- 'echo hello'"
+    )]
+    #[case::preset_with_special_chars("pre$et", "ls", "runok exec --sandbox 'pre$et' -- ls")]
+    fn wrap_with_sandbox_quotes_preset(
+        #[case] preset: &str,
+        #[case] command: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            ClaudeCodeHookAdapter::wrap_with_sandbox(preset, command)
                 .unwrap_or_else(|e| panic!("unexpected error: {e}")),
             expected,
         );
