@@ -1,3 +1,5 @@
+pub mod hook_adapter;
+
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
 use crate::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
