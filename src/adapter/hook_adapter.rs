@@ -161,6 +161,8 @@ impl ClaudeCodeHookAdapter {
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
         let quoted = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+        // preset is a sandbox name from the config file (definitions.sandbox key),
+        // not external input, so it does not need shell quoting.
         Ok(format!("runok exec --sandbox {preset} -- {quoted}"))
     }
 }
