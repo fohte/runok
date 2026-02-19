@@ -281,7 +281,10 @@ fn normalize_reference_key(reference: &str, base_dir: &Path) -> String {
     let parsed = parse_preset_reference(reference);
     match parsed {
         Ok(PresetReference::Local(_)) => {
-            let path = canonicalize_best_effort(&base_dir.join(reference));
+            // Resolve with ~/expansion, fall back to simple join if resolution fails
+            let resolved = resolve_local_path(reference, base_dir, home_dir)
+                .unwrap_or_else(|_| base_dir.join(reference));
+            let path = canonicalize_best_effort(&resolved);
             path.to_string_lossy().to_string()
         }
         _ => reference.to_string(),
@@ -289,13 +292,20 @@ fn normalize_reference_key(reference: &str, base_dir: &Path) -> String {
 }
 
 /// Determine the base directory for a preset's own extends resolution.
+///
+/// For local presets, resolves the reference (including `~/` expansion) and
+/// returns the parent directory of the resolved path. For remote presets,
+/// the parent's base directory is used as-is.
 fn determine_preset_base_dir(reference: &str, parent_base_dir: &Path) -> PathBuf {
     let parsed = parse_preset_reference(reference);
     match parsed {
         Ok(PresetReference::Local(_)) => {
-            // For local presets, resolve relative to the preset file's directory
-            let path = parent_base_dir.join(reference);
-            path.parent()
+            // Resolve the full path using the same logic as load_local_preset
+            // so that ~/presets/base.yml is correctly expanded.
+            let resolved = resolve_local_path(reference, parent_base_dir, home_dir)
+                .unwrap_or_else(|_| parent_base_dir.join(reference));
+            resolved
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| parent_base_dir.to_path_buf())
         }
