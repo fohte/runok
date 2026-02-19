@@ -105,10 +105,7 @@ impl ClaudeCodeHookAdapter {
                 let bash_input: BashToolInput =
                     serde_json::from_value(self.input.tool_input.clone())?;
                 Some(UpdatedInput {
-                    command: format!(
-                        "runok exec --sandbox {sandbox_name} -- {}",
-                        bash_input.command
-                    ),
+                    command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command),
                 })
             } else {
                 None
@@ -149,10 +146,18 @@ impl ClaudeCodeHookAdapter {
     ) -> Option<UpdatedInput> {
         match sandbox {
             SandboxInfo::Preset(Some(preset)) => Some(UpdatedInput {
-                command: format!("runok exec --sandbox {preset} -- {original_command}"),
+                command: Self::wrap_with_sandbox(preset, original_command),
             }),
             _ => None,
         }
+    }
+
+    /// Wrap a command with `runok exec --sandbox <preset> -- <quoted_command>`.
+    /// The command is shell-quoted to prevent shell metacharacters (e.g. `&&`,
+    /// `||`, `;`, `|`) from being interpreted outside the sandbox.
+    fn wrap_with_sandbox(preset: &str, command: &str) -> String {
+        let quoted = shlex::try_quote(command).unwrap_or_else(|_| command.into());
+        format!("runok exec --sandbox {preset} -- {quoted}")
     }
 }
 
@@ -264,7 +269,7 @@ mod tests {
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output("allow", None, Some("runok exec --sandbox restricted -- git status")),
+        make_output("allow", None, Some("runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -358,7 +363,7 @@ mod tests {
             make_output(
                 "allow",
                 None,
-                Some("runok exec --sandbox restricted -- npm install"),
+                Some("runok exec --sandbox restricted -- 'npm install'"),
             ),
         );
     }
@@ -464,7 +469,7 @@ mod tests {
     #[case::preset_some(
         SandboxInfo::Preset(Some("restricted".to_string())),
         "echo hello",
-        Some("runok exec --sandbox restricted -- echo hello"),
+        Some("runok exec --sandbox restricted -- 'echo hello'"),
     )]
     #[case::preset_none(SandboxInfo::Preset(None), "echo hello", None)]
     #[case::merged_policy(SandboxInfo::MergedPolicy(None), "echo hello", None)]
@@ -481,5 +486,26 @@ mod tests {
             }
             None => assert!(result.is_none()),
         }
+    }
+
+    // --- wrap_with_sandbox quotes shell metacharacters ---
+
+    #[rstest]
+    #[case::simple_command("ls", "runok exec --sandbox restricted -- ls")]
+    #[case::command_with_spaces("git status", "runok exec --sandbox restricted -- 'git status'")]
+    #[case::compound_and(
+        "safe-cmd && dangerous-cmd",
+        "runok exec --sandbox restricted -- 'safe-cmd && dangerous-cmd'"
+    )]
+    #[case::compound_pipe(
+        "cat file | grep secret",
+        "runok exec --sandbox restricted -- 'cat file | grep secret'"
+    )]
+    #[case::compound_semicolon("cmd1; cmd2", "runok exec --sandbox restricted -- 'cmd1; cmd2'")]
+    fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
+        assert_eq!(
+            ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command),
+            expected,
+        );
     }
 }
