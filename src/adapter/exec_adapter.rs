@@ -267,7 +267,43 @@ mod tests {
         assert_eq!(result, exit_code);
     }
 
+    #[rstest]
+    fn handle_action_allow_with_merged_policy() {
+        let adapter = ExecAdapter::new(
+            vec!["git".into(), "status".into()],
+            Some("default-preset".into()),
+            Box::new(MockExecutor::new(0)),
+        );
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Allow,
+                sandbox: SandboxInfo::MergedPolicy(None),
+            })
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
     // --- handle_action: Deny ---
+
+    #[rstest]
+    fn handle_action_deny_with_fix_suggestion() {
+        let adapter = ExecAdapter::new(
+            vec!["rm".into(), "-rf".into(), "/".into()],
+            None,
+            Box::new(MockExecutor::new(0)),
+        );
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Deny(DenyResponse {
+                    message: Some("dangerous command".to_string()),
+                    fix_suggestion: Some("use rm with specific paths".to_string()),
+                    matched_rule: "rm -rf /".to_string(),
+                }),
+                sandbox: SandboxInfo::Preset(None),
+            })
+            .unwrap();
+        assert_eq!(result, 3);
+    }
 
     #[rstest]
     #[case::with_message(Some("dangerous command".to_string()))]
@@ -309,6 +345,24 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result, 3);
+    }
+
+    // --- handle_action: Default ---
+
+    #[rstest]
+    fn handle_action_default_returns_exit_0() {
+        let adapter = ExecAdapter::new(
+            vec!["git".into(), "status".into()],
+            None,
+            Box::new(MockExecutor::new(0)),
+        );
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Default,
+                sandbox: SandboxInfo::Preset(None),
+            })
+            .unwrap();
+        assert_eq!(result, 0);
     }
 
     // --- handle_no_match ---
