@@ -22,6 +22,11 @@ pub enum PresetError {
     InvalidReference(String),
     #[error("circular reference detected: {}", .cycle.join(" → "))]
     CircularReference { cycle: Vec<String> },
+    #[error("maximum extends depth ({max_depth}) exceeded: {}", .chain.join(" → "))]
+    MaxExtendsDepthExceeded {
+        chain: Vec<String>,
+        max_depth: usize,
+    },
     #[error("cache error: {0}")]
     Cache(String),
     #[error("git clone failed for '{reference}': {message}")]
@@ -147,6 +152,22 @@ mod tests {
     )]
     fn preset_error_display(#[case] error: PresetError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
+    }
+
+    #[test]
+    fn preset_error_max_extends_depth_exceeded() {
+        let error = PresetError::MaxExtendsDepthExceeded {
+            chain: vec![
+                "a.yml".to_string(),
+                "b.yml".to_string(),
+                "c.yml".to_string(),
+            ],
+            max_depth: 10,
+        };
+        assert_eq!(
+            error.to_string(),
+            "maximum extends depth (10) exceeded: a.yml → b.yml → c.yml"
+        );
     }
 
     #[test]
