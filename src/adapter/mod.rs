@@ -1,5 +1,6 @@
 pub mod check_adapter;
 pub mod exec_adapter;
+pub mod hook_adapter;
 
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
