@@ -1,8 +1,25 @@
-use crate::config::{Config, Defaults};
+use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
-use crate::rules::rule_engine::{
-    Action, EvalContext, EvalResult, evaluate_command, evaluate_compound,
-};
+use crate::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
+
+/// Unified evaluation result for the adapter layer.
+///
+/// For single commands, carries the sandbox preset name (to be resolved later).
+/// For compound commands, carries the already-merged sandbox policy.
+#[derive(Debug)]
+pub struct ActionResult {
+    pub action: Action,
+    pub sandbox: SandboxInfo,
+}
+
+/// Sandbox information from rule evaluation, varying by command type.
+#[derive(Debug)]
+pub enum SandboxInfo {
+    /// Single command: preset name to be resolved by the adapter.
+    Preset(Option<String>),
+    /// Compound command: already-merged policy from `evaluate_compound`.
+    MergedPolicy(Option<MergedSandboxPolicy>),
+}
 
 /// Abstracts protocol-specific input/output differences across
 /// exec, check, and Claude Code hook endpoints.
@@ -12,8 +29,8 @@ pub trait Endpoint {
     /// (e.g., `tool_name != "Bash"` in Claude Code hooks).
     fn extract_command(&self) -> Result<Option<String>, anyhow::Error>;
 
-    /// Convert an `EvalResult` into protocol-specific output and return the exit code.
-    fn handle_action(&self, result: EvalResult) -> Result<i32, anyhow::Error>;
+    /// Convert an `ActionResult` into protocol-specific output and return the exit code.
+    fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error>;
 
     /// Handle the case when no rule matched or the action is `Default`.
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error>;
@@ -43,31 +60,29 @@ pub fn run(endpoint: &dyn Endpoint, config: &Config) -> i32 {
     // Determine if the command is compound (contains pipes, &&, ||, ;)
     let commands = extract_commands(&command).unwrap_or_else(|_| vec![command.clone()]);
 
-    if commands.len() > 1 {
+    let action_result = if commands.len() > 1 {
         match evaluate_compound(config, &command, &context) {
-            Ok(compound_result) => {
-                if matches!(compound_result.action, Action::Default) {
-                    return endpoint.handle_no_match(&defaults).unwrap_or(0);
-                }
-                let result = EvalResult {
-                    action: compound_result.action,
-                    sandbox_preset: None,
-                };
-                endpoint.handle_action(result).unwrap_or(1)
-            }
-            Err(e) => endpoint.handle_error(e.into()),
+            Ok(compound_result) => ActionResult {
+                action: compound_result.action,
+                sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+            },
+            Err(e) => return endpoint.handle_error(e.into()),
         }
     } else {
         match evaluate_command(config, &command, &context) {
-            Ok(result) => {
-                if matches!(result.action, Action::Default) {
-                    return endpoint.handle_no_match(&defaults).unwrap_or(0);
-                }
-                endpoint.handle_action(result).unwrap_or(1)
-            }
-            Err(e) => endpoint.handle_error(e.into()),
+            Ok(result) => ActionResult {
+                action: result.action,
+                sandbox: SandboxInfo::Preset(result.sandbox_preset),
+            },
+            Err(e) => return endpoint.handle_error(e.into()),
         }
+    };
+
+    if matches!(action_result.action, Action::Default) {
+        return endpoint.handle_no_match(&defaults).unwrap_or(0);
     }
+
+    endpoint.handle_action(action_result).unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -87,6 +102,7 @@ mod tests {
         called_handle_no_match: RefCell<bool>,
         called_handle_error: RefCell<bool>,
         last_action: RefCell<Option<Action>>,
+        last_sandbox: RefCell<Option<SandboxInfo>>,
         last_defaults_action: RefCell<Option<Option<ActionKind>>>,
     }
 
@@ -101,6 +117,7 @@ mod tests {
                 called_handle_no_match: RefCell::new(false),
                 called_handle_error: RefCell::new(false),
                 last_action: RefCell::new(None),
+                last_sandbox: RefCell::new(None),
                 last_defaults_action: RefCell::new(None),
             }
         }
@@ -129,9 +146,10 @@ mod tests {
             }
         }
 
-        fn handle_action(&self, result: EvalResult) -> Result<i32, anyhow::Error> {
+        fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
             *self.called_handle_action.borrow_mut() = true;
             *self.last_action.borrow_mut() = Some(result.action);
+            *self.last_sandbox.borrow_mut() = Some(result.sandbox);
             Ok(self.action_exit_code)
         }
 
@@ -236,74 +254,38 @@ mod tests {
         assert_eq!(exit_code, 2);
     }
 
-    // --- command matches allow rule -> handle_action with Allow ---
+    // --- rule match dispatches to handle_action with correct Action variant ---
 
     #[rstest]
-    fn allow_match_calls_handle_action() {
-        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
-        let config = make_config(vec![allow_rule("git status")]);
-        let exit_code = run(&endpoint, &config);
+    #[case::allow("git status", allow_rule("git status"), Action::Allow)]
+    #[case::deny("rm -rf /", deny_rule("rm -rf /"), Action::Deny(crate::rules::rule_engine::DenyResponse { message: None, fix_suggestion: None, matched_rule: "rm -rf /".to_string() }))]
+    #[case::ask("terraform apply", ask_rule("terraform apply"), Action::Ask(Some("please confirm".to_string())))]
+    fn rule_match_calls_handle_action(
+        #[case] command: &str,
+        #[case] rule: RuleEntry,
+        #[case] expected_action: Action,
+    ) {
+        let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
+        let config = make_config(vec![rule]);
+        run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_action.borrow());
         assert!(!*endpoint.called_handle_no_match.borrow());
-        assert_eq!(exit_code, 0);
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Allow)
-        ));
-    }
 
-    // --- command matches deny rule -> handle_action with Deny ---
-
-    #[rstest]
-    fn deny_match_calls_handle_action() {
-        let endpoint = MockEndpoint::new(Ok(Some("rm -rf /".to_string()))).with_action_exit_code(3);
-        let config = make_config(vec![deny_rule("rm -rf /")]);
-        let exit_code = run(&endpoint, &config);
-
-        assert!(*endpoint.called_handle_action.borrow());
-        assert_eq!(exit_code, 3);
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Deny(_))
-        ));
-    }
-
-    // --- command matches ask rule -> handle_action with Ask ---
-
-    #[rstest]
-    fn ask_match_calls_handle_action() {
-        let endpoint = MockEndpoint::new(Ok(Some("terraform apply".to_string())));
-        let config = make_config(vec![ask_rule("terraform apply")]);
-        let exit_code = run(&endpoint, &config);
-
-        assert!(*endpoint.called_handle_action.borrow());
-        assert_eq!(exit_code, 0);
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Ask(_))
-        ));
+        let last_action = endpoint.last_action.borrow();
+        assert_eq!(
+            std::mem::discriminant(last_action.as_ref().unwrap()),
+            std::mem::discriminant(&expected_action)
+        );
     }
 
     // --- no matching rule -> handle_no_match ---
 
     #[rstest]
-    fn no_match_calls_handle_no_match() {
-        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
-        let config = make_config(vec![allow_rule("git status")]);
-        let exit_code = run(&endpoint, &config);
-
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
-        assert_eq!(exit_code, 0);
-    }
-
-    // --- empty config (no rules) -> handle_no_match ---
-
-    #[rstest]
-    fn empty_config_calls_handle_no_match() {
-        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
-        let config = Config::default();
+    #[case::no_matching_rule("unknown-command", make_config(vec![allow_rule("git status")]))]
+    #[case::empty_config("git status", Config::default())]
+    fn no_match_calls_handle_no_match(#[case] command: &str, #[case] config: Config) {
+        let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
         let exit_code = run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_no_match.borrow());
@@ -350,6 +332,11 @@ mod tests {
             *endpoint.last_action.borrow(),
             Some(Action::Deny(_))
         ));
+        // Compound commands carry MergedPolicy sandbox info
+        assert!(matches!(
+            *endpoint.last_sandbox.borrow(),
+            Some(SandboxInfo::MergedPolicy(_))
+        ));
     }
 
     // --- compound command: all default -> handle_no_match ---
@@ -365,7 +352,7 @@ mod tests {
         assert_eq!(exit_code, 0);
     }
 
-    // --- handle_action exit code is propagated ---
+    // --- exit code propagation ---
 
     #[rstest]
     #[case::exit_0(0)]
@@ -380,8 +367,6 @@ mod tests {
         assert_eq!(result, exit_code);
     }
 
-    // --- handle_error exit code is propagated ---
-
     #[rstest]
     #[case::exit_2(2)]
     #[case::exit_1(1)]
@@ -392,8 +377,6 @@ mod tests {
 
         assert_eq!(result, exit_code);
     }
-
-    // --- handle_no_match exit code is propagated ---
 
     #[rstest]
     #[case::exit_0(0)]
@@ -406,7 +389,7 @@ mod tests {
         assert_eq!(result, exit_code);
     }
 
-    // --- deny rule includes EvalResult with sandbox_preset ---
+    // --- sandbox_preset is propagated via SandboxInfo::Preset ---
 
     #[rstest]
     fn allow_with_sandbox_preset_passes_to_handle_action() {
@@ -427,5 +410,11 @@ mod tests {
             *endpoint.last_action.borrow(),
             Some(Action::Allow)
         ));
+        match &*endpoint.last_sandbox.borrow() {
+            Some(SandboxInfo::Preset(Some(preset))) => {
+                assert_eq!(preset, "restricted");
+            }
+            other => panic!("expected SandboxInfo::Preset(Some(\"restricted\")), got {other:?}"),
+        }
     }
 }
