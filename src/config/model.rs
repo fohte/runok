@@ -64,6 +64,95 @@ pub struct SandboxPreset {
     pub network: Option<NetworkPolicy>,
 }
 
+/// Merged sandbox policy produced by aggregating multiple `SandboxPreset`s.
+///
+/// Unlike `SandboxPreset` which uses `Option` fields (unset = inherit from
+/// defaults), `MergedSandboxPolicy` has concrete resolved values ready for
+/// enforcement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergedSandboxPolicy {
+    pub writable: Vec<String>,
+    pub deny: Vec<String>,
+    pub network_allow: Option<Vec<String>>,
+}
+
+impl SandboxPreset {
+    /// Merge multiple sandbox presets using Strictest Wins policy.
+    ///
+    /// - `writable` (writable roots): intersection across all presets
+    /// - `deny` (read-only subpaths): union across all presets
+    /// - `network.allow`: intersection; if any preset has no `network.allow`
+    ///   (meaning no network access), the result has no network access
+    ///
+    /// Returns `None` if the input slice is empty.
+    pub fn merge_strictest(presets: &[&SandboxPreset]) -> Option<MergedSandboxPolicy> {
+        if presets.is_empty() {
+            return None;
+        }
+
+        let mut writable: Option<HashSet<String>> = None;
+        let mut deny: HashSet<String> = HashSet::new();
+        let mut network_allow: Option<HashSet<String>> = None;
+        let mut any_network_restricted = false;
+
+        for preset in presets {
+            // writable: intersection
+            if let Some(fs) = &preset.fs {
+                if let Some(w) = &fs.writable {
+                    let w_set: HashSet<String> = w.iter().cloned().collect();
+                    writable = Some(match writable {
+                        Some(existing) => existing.intersection(&w_set).cloned().collect(),
+                        None => w_set,
+                    });
+                }
+
+                // deny: union
+                if let Some(d) = &fs.deny {
+                    deny.extend(d.iter().cloned());
+                }
+            }
+
+            // network.allow: intersection (if any preset restricts network, restrict all)
+            if let Some(net) = &preset.network {
+                match &net.allow {
+                    Some(allowed) => {
+                        let a_set: HashSet<String> = allowed.iter().cloned().collect();
+                        network_allow = Some(match network_allow {
+                            Some(existing) => existing.intersection(&a_set).cloned().collect(),
+                            None => a_set,
+                        });
+                    }
+                    None => {
+                        any_network_restricted = true;
+                    }
+                }
+            }
+        }
+
+        let final_network = if any_network_restricted {
+            Some(vec![])
+        } else {
+            network_allow.map(|s| {
+                let mut v: Vec<String> = s.into_iter().collect();
+                v.sort();
+                v
+            })
+        };
+
+        let mut writable_vec: Vec<String> = writable.unwrap_or_default().into_iter().collect();
+        writable_vec.sort();
+
+        let mut deny_vec: Vec<String> = deny.into_iter().collect();
+        deny_vec.sort();
+
+        Some(MergedSandboxPolicy {
+            writable: writable_vec,
+            deny: deny_vec,
+            network_allow: final_network,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct FsPolicy {
     pub writable: Option<Vec<String>>,
@@ -1213,5 +1302,132 @@ mod tests {
               - rules[1]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')"}
         .trim_start();
         assert_eq!(err.to_string(), expected);
+    }
+
+    // === SandboxPreset::merge_strictest ===
+
+    #[test]
+    fn merge_strictest_empty_returns_none() {
+        assert_eq!(SandboxPreset::merge_strictest(&[]), None);
+    }
+
+    #[test]
+    fn merge_strictest_single_preset() {
+        let preset = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(vec!["/tmp".to_string(), "/home".to_string()]),
+                deny: Some(vec!["/etc".to_string()]),
+            }),
+            network: Some(NetworkPolicy {
+                allow: Some(vec!["github.com".to_string()]),
+            }),
+        };
+        let result = SandboxPreset::merge_strictest(&[&preset]).unwrap();
+        assert_eq!(result.writable, vec!["/home", "/tmp"]);
+        assert_eq!(result.deny, vec!["/etc"]);
+        assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
+    }
+
+    #[rstest]
+    #[case::non_empty_intersection(
+        vec!["/tmp".to_string(), "/home".to_string(), "/var".to_string()],
+        vec!["/tmp".to_string(), "/var".to_string()],
+        vec!["/tmp", "/var"],
+    )]
+    #[case::empty_intersection(
+        vec!["/tmp".to_string()],
+        vec!["/home".to_string()],
+        vec![],
+    )]
+    fn merge_strictest_writable_intersection(
+        #[case] writable_a: Vec<String>,
+        #[case] writable_b: Vec<String>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let a = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(writable_a),
+                deny: None,
+            }),
+            network: None,
+        };
+        let b = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(writable_b),
+                deny: None,
+            }),
+            network: None,
+        };
+        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
+        assert_eq!(result.writable, expected);
+    }
+
+    #[test]
+    fn merge_strictest_deny_union() {
+        let a = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(vec!["/tmp".to_string()]),
+                deny: Some(vec!["/etc/passwd".to_string()]),
+            }),
+            network: None,
+        };
+        let b = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(vec!["/tmp".to_string()]),
+                deny: Some(vec!["/etc/shadow".to_string()]),
+            }),
+            network: None,
+        };
+        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
+        assert_eq!(result.deny, vec!["/etc/passwd", "/etc/shadow"]);
+    }
+
+    #[rstest]
+    #[case::intersection(
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]) }),
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]) }),
+        Some(vec!["github.com".to_string()]),
+    )]
+    #[case::none_means_restricted(
+        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string()]) }),
+        Some(NetworkPolicy { allow: None }),
+        Some(vec![]),
+    )]
+    fn merge_strictest_network(
+        #[case] network_a: Option<NetworkPolicy>,
+        #[case] network_b: Option<NetworkPolicy>,
+        #[case] expected: Option<Vec<String>>,
+    ) {
+        let a = SandboxPreset {
+            fs: None,
+            network: network_a,
+        };
+        let b = SandboxPreset {
+            fs: None,
+            network: network_b,
+        };
+        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
+        assert_eq!(result.network_allow, expected);
+    }
+
+    #[test]
+    fn merge_strictest_no_fs_preserves_other() {
+        let a = SandboxPreset {
+            fs: Some(FsPolicy {
+                writable: Some(vec!["/tmp".to_string()]),
+                deny: Some(vec!["/etc".to_string()]),
+            }),
+            network: None,
+        };
+        let b = SandboxPreset {
+            fs: None,
+            network: Some(NetworkPolicy {
+                allow: Some(vec!["github.com".to_string()]),
+            }),
+        };
+        let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
+        assert_eq!(result.writable, vec!["/tmp"]);
+        assert_eq!(result.deny, vec!["/etc"]);
+        assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
     }
 }
