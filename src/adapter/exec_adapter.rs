@@ -99,6 +99,9 @@ impl Endpoint for ExecAdapter {
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
         match defaults.action {
             Some(ActionKind::Allow) | None => {
+                if self.args.is_empty() {
+                    return Ok(0);
+                }
                 let command_input = self.command_input();
                 let exit_code = self.executor.exec(&command_input, None)?;
                 Ok(exit_code)
@@ -437,6 +440,17 @@ mod tests {
         let result = adapter.handle_no_match(&defaults).unwrap();
         assert_eq!(result, expected_exit_code);
         assert_eq!(*executor.lock().unwrap(), should_execute);
+    }
+
+    #[rstest]
+    fn handle_no_match_empty_args_returns_0() {
+        let adapter = ExecAdapter::new(vec![], None, Box::new(MockExecutor::new(0)));
+        let defaults = Defaults {
+            action: None,
+            sandbox: None,
+        };
+        let result = adapter.handle_no_match(&defaults).unwrap();
+        assert_eq!(result, 0);
     }
 
     // --- handle_error ---
