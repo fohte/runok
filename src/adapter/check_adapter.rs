@@ -12,7 +12,7 @@ pub struct CheckInput {
 }
 
 /// JSON response written to stdout by `runok check`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct CheckOutput {
     pub decision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,49 +52,59 @@ impl CheckAdapter {
     }
 }
 
+/// Build a `CheckOutput` from an `ActionResult`.
+fn build_check_output(result: &ActionResult) -> CheckOutput {
+    let (decision, reason, fix_suggestion) = match &result.action {
+        Action::Allow => ("allow".to_string(), None, None),
+        Action::Deny(deny) => (
+            "deny".to_string(),
+            deny.message.clone(),
+            deny.fix_suggestion.clone(),
+        ),
+        Action::Ask(message) => ("ask".to_string(), message.clone(), None),
+        Action::Default => ("ask".to_string(), None, None),
+    };
+
+    let sandbox = build_sandbox_info(&result.sandbox);
+
+    CheckOutput {
+        decision,
+        reason,
+        fix_suggestion,
+        sandbox,
+    }
+}
+
+/// Build a `CheckOutput` for the no-match case based on defaults.
+fn build_no_match_output(defaults: &Defaults) -> CheckOutput {
+    let decision = match defaults.action {
+        Some(ActionKind::Allow) => "allow",
+        Some(ActionKind::Deny) => "deny",
+        Some(ActionKind::Ask) | None => "ask",
+    };
+
+    CheckOutput {
+        decision: decision.to_string(),
+        reason: None,
+        fix_suggestion: None,
+        sandbox: None,
+    }
+}
+
 impl Endpoint for CheckAdapter {
     fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
         Ok(Some(self.command.clone()))
     }
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-        let (decision, reason, fix_suggestion) = match &result.action {
-            Action::Allow => ("allow".to_string(), None, None),
-            Action::Deny(deny) => (
-                "deny".to_string(),
-                deny.message.clone(),
-                deny.fix_suggestion.clone(),
-            ),
-            Action::Ask(message) => ("ask".to_string(), message.clone(), None),
-            Action::Default => ("ask".to_string(), None, None),
-        };
-
-        let sandbox = build_sandbox_info(&result.sandbox);
-
-        let output = CheckOutput {
-            decision,
-            reason,
-            fix_suggestion,
-            sandbox,
-        };
+        let output = build_check_output(&result);
         let json = serde_json::to_string(&output)?;
         println!("{json}");
         Ok(0)
     }
 
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
-        let decision = match defaults.action {
-            Some(ActionKind::Allow) => "allow",
-            Some(ActionKind::Deny) => "deny",
-            Some(ActionKind::Ask) | None => "ask",
-        };
-
-        let output = CheckOutput {
-            decision: decision.to_string(),
-            reason: None,
-            fix_suggestion: None,
-            sandbox: None,
-        };
+        let output = build_no_match_output(defaults);
         let json = serde_json::to_string(&output)?;
         println!("{json}");
         Ok(0)
@@ -147,13 +157,10 @@ mod tests {
     // --- CheckAdapter construction ---
 
     #[rstest]
-    #[case::from_command("ls -la")]
-    #[case::from_stdin_input("git push")]
-    fn extract_command_returns_the_command(#[case] command: &str) {
-        let adapter = CheckAdapter::from_command(command.to_string());
+    fn from_command_extracts_command() {
+        let adapter = CheckAdapter::from_command("ls -la".to_string());
         let result = adapter.extract_command();
-        assert!(result.is_ok());
-        assert_eq!(result.ok(), Some(Some(command.to_string())));
+        assert_eq!(result.ok(), Some(Some("ls -la".to_string())));
     }
 
     #[rstest]
@@ -163,14 +170,17 @@ mod tests {
         };
         let adapter = CheckAdapter::from_stdin(input);
         let result = adapter.extract_command();
-        assert!(result.is_ok());
         assert_eq!(result.ok(), Some(Some("docker run hello".to_string())));
     }
 
-    // --- handle_action: decision mapping ---
+    // --- build_check_output: decision mapping ---
 
     #[rstest]
-    #[case::allow(Action::Allow, SandboxInfo::Preset(None), "allow", None, None)]
+    #[case::allow(
+        Action::Allow,
+        SandboxInfo::Preset(None),
+        CheckOutput { decision: "allow".to_string(), reason: None, fix_suggestion: None, sandbox: None },
+    )]
     #[case::deny(
         Action::Deny(DenyResponse {
             message: Some("dangerous command".to_string()),
@@ -178,91 +188,90 @@ mod tests {
             matched_rule: "rm -rf *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        "deny",
-        Some("dangerous command"),
-        Some("use rm with caution"),
+        CheckOutput {
+            decision: "deny".to_string(),
+            reason: Some("dangerous command".to_string()),
+            fix_suggestion: Some("use rm with caution".to_string()),
+            sandbox: None,
+        },
     )]
     #[case::ask_with_message(
         Action::Ask(Some("please confirm".to_string())),
         SandboxInfo::Preset(None),
-        "ask",
-        Some("please confirm"),
-        None,
+        CheckOutput { decision: "ask".to_string(), reason: Some("please confirm".to_string()), fix_suggestion: None, sandbox: None },
     )]
-    #[case::ask_without_message(Action::Ask(None), SandboxInfo::Preset(None), "ask", None, None)]
-    fn handle_action_produces_correct_json(
+    #[case::ask_without_message(
+        Action::Ask(None),
+        SandboxInfo::Preset(None),
+        CheckOutput { decision: "ask".to_string(), reason: None, fix_suggestion: None, sandbox: None },
+    )]
+    #[case::with_sandbox_preset(
+        Action::Allow,
+        SandboxInfo::Preset(Some("restricted".to_string())),
+        CheckOutput {
+            decision: "allow".to_string(),
+            reason: None,
+            fix_suggestion: None,
+            sandbox: Some(CheckSandboxInfo { preset: "restricted".to_string(), writable_roots: None, network_allowed: None }),
+        },
+    )]
+    fn build_check_output_maps_action_to_output(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
-        #[case] expected_decision: &str,
-        #[case] expected_reason: Option<&str>,
-        #[case] expected_fix: Option<&str>,
+        #[case] expected: CheckOutput,
     ) {
-        let adapter = CheckAdapter::from_command("test".to_string());
         let result = ActionResult { action, sandbox };
-
-        // Capture stdout by parsing the return value (exit code) and re-verifying
-        // the JSON structure via build_sandbox_info + CheckOutput construction
-        let exit_code = adapter.handle_action(result);
-        assert!(exit_code.is_ok());
-        assert_eq!(exit_code.ok(), Some(0));
-
-        // Verify the mapping logic directly (stdout capture is not straightforward in unit tests)
-        let output_decision = expected_decision;
-        let output_reason = expected_reason.map(|s| s.to_string());
-        let output_fix = expected_fix.map(|s| s.to_string());
-        assert_eq!(output_decision, expected_decision);
-        assert_eq!(output_reason, expected_reason.map(|s| s.to_string()));
-        assert_eq!(output_fix, expected_fix.map(|s| s.to_string()));
+        assert_eq!(build_check_output(&result), expected);
     }
+
+    // --- handle_action: exit code ---
 
     #[rstest]
-    fn handle_action_always_returns_exit_0() {
+    #[case::allow(Action::Allow)]
+    #[case::deny(Action::Deny(DenyResponse {
+        message: None,
+        fix_suggestion: None,
+        matched_rule: "test".to_string(),
+    }))]
+    #[case::ask(Action::Ask(None))]
+    fn handle_action_always_returns_exit_0(#[case] action: Action) {
         let adapter = CheckAdapter::from_command("test".to_string());
-        let cases = vec![
-            Action::Allow,
-            Action::Deny(DenyResponse {
-                message: None,
-                fix_suggestion: None,
-                matched_rule: "test".to_string(),
-            }),
-            Action::Ask(None),
-        ];
-        for action in cases {
-            let result = ActionResult {
-                action,
-                sandbox: SandboxInfo::Preset(None),
-            };
-            assert_eq!(adapter.handle_action(result).ok(), Some(0));
-        }
+        let result = ActionResult {
+            action,
+            sandbox: SandboxInfo::Preset(None),
+        };
+        assert_eq!(adapter.handle_action(result).ok(), Some(0));
     }
 
-    // --- handle_no_match: defaults mapping ---
+    // --- build_no_match_output: defaults mapping ---
 
     #[rstest]
     #[case::default_ask(None, "ask")]
     #[case::explicit_allow(Some(ActionKind::Allow), "allow")]
     #[case::explicit_deny(Some(ActionKind::Deny), "deny")]
     #[case::explicit_ask(Some(ActionKind::Ask), "ask")]
-    fn handle_no_match_maps_defaults(
+    fn build_no_match_output_maps_defaults(
         #[case] action_kind: Option<ActionKind>,
         #[case] expected_decision: &str,
     ) {
-        let adapter = CheckAdapter::from_command("test".to_string());
         let defaults = Defaults {
             action: action_kind,
             sandbox: None,
         };
-        let exit_code = adapter.handle_no_match(&defaults);
-        assert!(exit_code.is_ok());
-        assert_eq!(exit_code.ok(), Some(0));
+        let output = build_no_match_output(&defaults);
+        assert_eq!(output.decision, expected_decision);
+        assert_eq!(output.reason, None);
+        assert_eq!(output.fix_suggestion, None);
+        assert_eq!(output.sandbox, None);
+    }
 
-        // The decision mapping is verified via the match arms:
-        let decision = match defaults.action {
-            Some(ActionKind::Allow) => "allow",
-            Some(ActionKind::Deny) => "deny",
-            Some(ActionKind::Ask) | None => "ask",
-        };
-        assert_eq!(decision, expected_decision);
+    // --- handle_no_match: exit code ---
+
+    #[rstest]
+    fn handle_no_match_returns_exit_0() {
+        let adapter = CheckAdapter::from_command("test".to_string());
+        let defaults = Defaults::default();
+        assert_eq!(adapter.handle_no_match(&defaults).ok(), Some(0));
     }
 
     // --- handle_error ---
