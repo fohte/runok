@@ -28,8 +28,12 @@ pub fn route_check(
     let mut stdin_input = String::new();
     stdin.read_to_string(&mut stdin_input)?;
 
-    // 3. Try JSON parse first (backwards-compatible)
-    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&stdin_input) {
+    // 3. Try JSON object parse first (backwards-compatible).
+    //    Only JSON objects are valid protocol inputs (HookInput, CheckInput).
+    //    Non-object JSON values (true, 42, "hello", []) fall through to plaintext.
+    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&stdin_input)
+        && json_value.is_object()
+    {
         return route_json(args, json_value);
     }
 
@@ -212,6 +216,27 @@ mod tests {
             ),
             Ok(_) => panic!("expected an error"),
         }
+    }
+
+    // === route_check: non-object JSON falls through to plaintext ===
+
+    #[rstest]
+    #[case::json_true("true", "true")]
+    #[case::json_number("42", "42")]
+    #[case::json_string(r#""hello""#, r#""hello""#)]
+    fn route_check_non_object_json_treated_as_plaintext(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+    ) {
+        let args = check_args(None, None);
+        let route = route_check(&args, input.as_bytes());
+        let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
+        assert_eq!(
+            endpoint
+                .extract_command()
+                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
+            Some(expected_command.to_string())
+        );
     }
 
     // === route_check: plaintext stdin ===
