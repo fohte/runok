@@ -65,7 +65,10 @@ impl SandboxPolicy {
     /// Build a `SandboxPolicy` from writable roots, read-only subpaths, and network flag.
     ///
     /// Automatically adds protected paths (.git, .gitmodules, .runok) to read_only_subpaths
-    /// and normalizes all paths (expanding `~` to `$HOME` and canonicalizing where possible).
+    /// and normalizes all paths (expanding `~` to `$HOME` and canonicalizing).
+    ///
+    /// Returns an error if any path cannot be canonicalized (e.g., does not exist),
+    /// preventing TOCTOU attacks via symlinks to non-existent paths.
     pub fn build(
         writable_roots: Vec<String>,
         read_only_subpaths: Vec<String>,
@@ -74,28 +77,27 @@ impl SandboxPolicy {
         let mut resolved_writable: Vec<PathBuf> = Vec::new();
         for path in &writable_roots {
             let expanded = expand_tilde(path);
-            let canonical = try_canonicalize(&expanded);
+            let canonical = canonicalize_path(&expanded)?;
             resolved_writable.push(canonical);
         }
         resolved_writable.sort();
         resolved_writable.dedup();
 
-        let mut resolved_readonly: Vec<PathBuf> = Vec::new();
+        let mut readonly_set: HashSet<PathBuf> = HashSet::new();
         for path in &read_only_subpaths {
             let expanded = expand_tilde(path);
-            let canonical = try_canonicalize(&expanded);
-            resolved_readonly.push(canonical);
+            let canonical = canonicalize_path(&expanded)?;
+            readonly_set.insert(canonical);
         }
 
-        // Auto-add protected paths
+        // Protected paths are relative markers resolved at sandbox enforcement time,
+        // so they are added without canonicalization.
         for protected in PROTECTED_PATHS {
-            let p = PathBuf::from(protected);
-            if !resolved_readonly.contains(&p) {
-                resolved_readonly.push(p);
-            }
+            readonly_set.insert(PathBuf::from(protected));
         }
+
+        let mut resolved_readonly: Vec<PathBuf> = readonly_set.into_iter().collect();
         resolved_readonly.sort();
-        resolved_readonly.dedup();
 
         Ok(SandboxPolicy {
             writable_roots: resolved_writable,
@@ -172,11 +174,15 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
-/// Try to canonicalize a path; fall back to the original if canonicalization fails
-/// (e.g., the path does not exist yet).
-fn try_canonicalize(path: &str) -> PathBuf {
+/// Canonicalize a path, returning an error if the path does not exist or cannot be resolved.
+///
+/// Failing instead of silently falling back prevents TOCTOU attacks where an attacker
+/// creates a symlink at a non-existent path after policy creation but before enforcement.
+fn canonicalize_path(path: &str) -> Result<PathBuf, SandboxError> {
     let p = PathBuf::from(path);
-    p.canonicalize().unwrap_or(p)
+    p.canonicalize().map_err(|e| {
+        SandboxError::SetupFailed(format!("cannot canonicalize path '{}': {}", path, e))
+    })
 }
 
 /// Trait for executing commands in a sandboxed environment.
@@ -880,9 +886,10 @@ mod tests {
     #[rstest]
     fn build_expands_tilde_in_writable_roots() {
         let home = std::env::var("HOME").unwrap();
-        let policy = SandboxPolicy::build(vec!["~/projects".to_string()], vec![], true).unwrap();
+        // Use ~ (home directory itself) which always exists
+        let policy = SandboxPolicy::build(vec!["~".to_string()], vec![], true).unwrap();
 
-        let expected = PathBuf::from(format!("{home}/projects"));
+        let expected = PathBuf::from(&home).canonicalize().unwrap();
         assert!(
             policy.writable_roots.iter().any(|p| p == &expected),
             "expected {expected:?} in {:?}",
@@ -893,11 +900,12 @@ mod tests {
     #[rstest]
     fn build_expands_tilde_in_read_only_subpaths() {
         let home = std::env::var("HOME").unwrap();
-        let policy =
-            SandboxPolicy::build(vec!["/tmp".to_string()], vec!["~/.ssh".to_string()], true)
-                .unwrap();
+        // Use ~/.config which typically exists on macOS/Linux
+        let policy = SandboxPolicy::build(vec![], vec!["~/.config".to_string()], true).unwrap();
 
-        let expected = PathBuf::from(format!("{home}/.ssh"));
+        let expected = PathBuf::from(format!("{home}/.config"))
+            .canonicalize()
+            .unwrap();
         assert!(
             policy.read_only_subpaths.iter().any(|p| p == &expected),
             "expected {expected:?} in {:?}",
@@ -921,15 +929,31 @@ mod tests {
     }
 
     #[rstest]
-    fn build_preserves_nonexistent_paths() {
-        let policy =
-            SandboxPolicy::build(vec!["/nonexistent_path_12345".to_string()], vec![], true)
-                .unwrap();
-
+    fn build_rejects_nonexistent_writable_path() {
+        let result =
+            SandboxPolicy::build(vec!["/nonexistent_path_12345".to_string()], vec![], true);
+        assert!(result.is_err());
         assert!(
-            policy
-                .writable_roots
-                .contains(&PathBuf::from("/nonexistent_path_12345"))
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot canonicalize path")
+        );
+    }
+
+    #[rstest]
+    fn build_rejects_nonexistent_readonly_path() {
+        let result = SandboxPolicy::build(
+            vec![],
+            vec!["/nonexistent_readonly_path_12345".to_string()],
+            true,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot canonicalize path")
         );
     }
 
