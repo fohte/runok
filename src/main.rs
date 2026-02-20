@@ -1,4 +1,3 @@
-use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -19,6 +18,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 enum Commands {
     /// Execute a command with permission checks and optional sandboxing
     Exec(ExecArgs),
@@ -27,6 +27,7 @@ enum Commands {
 }
 
 #[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct ExecArgs {
     /// Sandbox preset name
     #[arg(long)]
@@ -38,6 +39,7 @@ struct ExecArgs {
 }
 
 #[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct CheckArgs {
     /// Command string to check (skips stdin)
     #[arg(long)]
@@ -67,7 +69,7 @@ fn main() -> ExitCode {
             let endpoint = ExecAdapter::new(args.command, args.sandbox, Box::new(executor));
             adapter::run(&endpoint, &config)
         }
-        Commands::Check(args) => match route_check(&args) {
+        Commands::Check(args) => match route_check(&args, std::io::stdin()) {
             Ok(endpoint) => adapter::run(endpoint.as_ref(), &config),
             Err(e) => {
                 eprintln!("runok: {e}");
@@ -80,14 +82,18 @@ fn main() -> ExitCode {
 }
 
 /// Route `runok check` to the appropriate adapter based on CLI args and stdin content.
-fn route_check(args: &CheckArgs) -> Result<Box<dyn Endpoint>, anyhow::Error> {
+fn route_check(
+    args: &CheckArgs,
+    mut stdin: impl std::io::Read,
+) -> Result<Box<dyn Endpoint>, anyhow::Error> {
     // 1. --command CLI argument → always generic mode (no stdin)
     if let Some(command) = &args.command {
         return Ok(Box::new(CheckAdapter::from_command(command.clone())));
     }
 
     // 2. Read stdin JSON once
-    let stdin_input = read_stdin_to_string()?;
+    let mut stdin_input = String::new();
+    stdin.read_to_string(&mut stdin_input)?;
     let json_value: serde_json::Value =
         serde_json::from_str(&stdin_input).map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
 
@@ -119,17 +125,11 @@ fn route_check(args: &CheckArgs) -> Result<Box<dyn Endpoint>, anyhow::Error> {
     }
 }
 
-fn read_stdin_to_string() -> Result<String, anyhow::Error> {
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf)?;
-    Ok(buf)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
-    use serde_json::json;
 
     /// Helper: build CheckArgs for testing
     fn check_args(command: Option<&str>, format: Option<&str>) -> CheckArgs {
@@ -139,104 +139,120 @@ mod tests {
         }
     }
 
+    // === route_check: --command flag ===
+
     #[rstest]
-    #[case::command_arg("git status")]
-    #[case::command_arg_with_args("ls -la /tmp")]
-    fn route_check_with_command_arg_returns_check_adapter(#[case] cmd: &str) {
+    #[case::simple_command("git status")]
+    #[case::command_with_flags("ls -la /tmp")]
+    fn route_check_with_command_arg(#[case] cmd: &str) {
         let args = check_args(Some(cmd), None);
-        let endpoint = route_check(&args);
-        assert!(endpoint.is_ok());
-        // Verify the endpoint extracts the correct command
-        let ep = endpoint.unwrap();
-        let extracted = ep.extract_command().unwrap();
-        assert_eq!(extracted, Some(cmd.to_string()));
+        let endpoint = route_check(&args, std::io::empty()).unwrap();
+        assert_eq!(endpoint.extract_command().unwrap(), Some(cmd.to_string()));
     }
 
-    // Tests for stdin-based routing require injecting stdin, which is not feasible
-    // in unit tests. The auto-detection logic is tested via JSON parsing below.
+    // === route_check: stdin auto-detection ===
 
     #[rstest]
-    #[case::has_tool_name(json!({"toolName": "Bash", "sessionId": "s"}), true)]
-    #[case::has_command_only(json!({"command": "git status"}), false)]
-    fn auto_detect_format(#[case] value: serde_json::Value, #[case] is_hook_format: bool) {
-        // Mirrors the auto-detect logic in route_check: HookInput uses camelCase JSON keys
-        let detected = value.get("toolName").is_some();
-        assert_eq!(detected, is_hook_format);
-    }
-
-    #[rstest]
-    fn auto_detect_unknown_format_has_no_known_fields() {
-        let value = json!({"unknown_field": "value"});
-        let has_tool_name = value.get("toolName").is_some();
-        let has_command = value.get("command").is_some();
-        assert!(!has_tool_name);
-        assert!(!has_command);
-    }
-
-    #[rstest]
-    fn cli_exec_parses_correctly() {
-        let cli = Cli::parse_from(["runok", "exec", "--", "git", "status"]);
-        match cli.command {
-            Commands::Exec(args) => {
-                assert_eq!(args.command, vec!["git", "status"]);
-                assert!(args.sandbox.is_none());
+    #[case::claude_code_hook(
+        indoc! {r#"
+            {
+                "toolName": "Bash",
+                "sessionId": "s",
+                "transcriptPath": "/tmp",
+                "cwd": "/tmp",
+                "permissionMode": "default",
+                "hookEventName": "PreToolUse",
+                "toolInput": {"command": "git status"},
+                "toolUseId": "123"
             }
-            _ => panic!("expected Exec subcommand"),
+        "#},
+        Some("git status"),
+    )]
+    #[case::generic_check(r#"{"command": "git status"}"#, Some("git status"))]
+    fn route_check_stdin_auto_detect(
+        #[case] stdin_json: &str,
+        #[case] expected_command: Option<&str>,
+    ) {
+        let args = check_args(None, None);
+        let endpoint = route_check(&args, stdin_json.as_bytes()).unwrap();
+        assert_eq!(
+            endpoint.extract_command().unwrap(),
+            expected_command.map(String::from)
+        );
+    }
+
+    #[rstest]
+    fn route_check_stdin_unknown_format_returns_error() {
+        let args = check_args(None, None);
+        let result = route_check(&args, r#"{"unknown_field": "value"}"#.as_bytes());
+        match result {
+            Err(e) => assert!(
+                e.to_string().contains("Unknown input format"),
+                "error was: {e}"
+            ),
+            Ok(_) => panic!("expected an error"),
         }
     }
 
+    // === route_check: --format flag ===
+
     #[rstest]
-    fn cli_exec_with_sandbox_parses_correctly() {
-        let cli = Cli::parse_from(["runok", "exec", "--sandbox", "strict", "--", "ls"]);
-        match cli.command {
-            Commands::Exec(args) => {
-                assert_eq!(args.command, vec!["ls"]);
-                assert_eq!(args.sandbox.as_deref(), Some("strict"));
+    fn route_check_explicit_format_claude_code_hook() {
+        let args = check_args(None, Some("claude-code-hook"));
+        let stdin_json = indoc! {r#"
+            {
+                "toolName": "Bash",
+                "sessionId": "s",
+                "transcriptPath": "/tmp",
+                "cwd": "/tmp",
+                "permissionMode": "default",
+                "hookEventName": "PreToolUse",
+                "toolInput": {"command": "ls"},
+                "toolUseId": "456"
             }
-            _ => panic!("expected Exec subcommand"),
-        }
+        "#};
+        let endpoint = route_check(&args, stdin_json.as_bytes()).unwrap();
+        assert_eq!(endpoint.extract_command().unwrap(), Some("ls".to_string()));
     }
 
     #[rstest]
-    fn cli_check_with_command_parses_correctly() {
-        let cli = Cli::parse_from(["runok", "check", "--command", "git status"]);
-        match cli.command {
-            Commands::Check(args) => {
-                assert_eq!(args.command.as_deref(), Some("git status"));
-                assert!(args.format.is_none());
-            }
-            _ => panic!("expected Check subcommand"),
+    fn route_check_unknown_format_returns_error() {
+        let args = check_args(None, Some("invalid-format"));
+        let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes());
+        match result {
+            Err(e) => assert!(
+                e.to_string().contains("Unknown format: 'invalid-format'"),
+                "error was: {e}"
+            ),
+            Ok(_) => panic!("expected an error"),
         }
     }
 
-    #[rstest]
-    fn cli_check_with_format_parses_correctly() {
-        let cli = Cli::parse_from(["runok", "check", "--format", "claude-code-hook"]);
-        match cli.command {
-            Commands::Check(args) => {
-                assert!(args.command.is_none());
-                assert_eq!(args.format.as_deref(), Some("claude-code-hook"));
-            }
-            _ => panic!("expected Check subcommand"),
-        }
-    }
+    // === CLI argument parsing ===
 
     #[rstest]
-    fn cli_check_with_both_command_and_format_parses_correctly() {
-        let cli = Cli::parse_from([
-            "runok",
-            "check",
-            "--command",
-            "ls",
-            "--format",
-            "claude-code-hook",
-        ]);
-        match cli.command {
-            Commands::Check(args) => {
-                assert_eq!(args.command.as_deref(), Some("ls"));
-                assert_eq!(args.format.as_deref(), Some("claude-code-hook"));
-            }
-            _ => panic!("expected Check subcommand"),
-        }
+    #[case::exec_simple(
+        &["runok", "exec", "--", "git", "status"],
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None }),
+    )]
+    #[case::exec_with_sandbox(
+        &["runok", "exec", "--sandbox", "strict", "--", "ls"],
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: Some("strict".into()) }),
+    )]
+    #[case::check_with_command(
+        &["runok", "check", "--command", "git status"],
+        Commands::Check(CheckArgs { command: Some("git status".into()), format: None }),
+    )]
+    #[case::check_with_format(
+        &["runok", "check", "--format", "claude-code-hook"],
+        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()) }),
+    )]
+    #[case::check_with_both(
+        &["runok", "check", "--command", "ls", "--format", "claude-code-hook"],
+        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()) }),
+    )]
+    fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
+        let cli = Cli::parse_from(argv);
+        assert_eq!(cli.command, expected);
     }
 }
