@@ -52,33 +52,35 @@ struct CheckArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    let loader = DefaultConfigLoader::new();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let config = match loader.load(&cwd) {
+    let exit_code = run_command(cli.command, &cwd, std::io::stdin());
+    ExitCode::from(exit_code as u8)
+}
+
+fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
+    let loader = DefaultConfigLoader::new();
+    let config = match loader.load(cwd) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: config error: {e}");
-            return ExitCode::from(2);
+            return 2;
         }
     };
 
-    let exit_code = match cli.command {
+    match command {
         Commands::Exec(args) => {
             let executor = ProcessCommandExecutor::new_without_sandbox();
             let endpoint = ExecAdapter::new(args.command, args.sandbox, Box::new(executor));
             adapter::run(&endpoint, &config)
         }
-        Commands::Check(args) => match route_check(&args, std::io::stdin()) {
+        Commands::Check(args) => match route_check(&args, stdin) {
             Ok(endpoint) => adapter::run(endpoint.as_ref(), &config),
             Err(e) => {
                 eprintln!("runok: {e}");
                 2
             }
         },
-    };
-
-    ExitCode::from(exit_code as u8)
+    }
 }
 
 /// Route `runok check` to the appropriate adapter based on CLI args and stdin content.
@@ -247,6 +249,42 @@ mod tests {
             ),
             Ok(_) => panic!("expected an error"),
         }
+    }
+
+    // === run_command ===
+
+    #[rstest]
+    fn run_command_check_with_command_returns_zero() {
+        let cmd = Commands::Check(CheckArgs {
+            command: Some("echo hello".into()),
+            format: None,
+        });
+        let cwd = std::env::current_dir().unwrap();
+        let exit_code = run_command(cmd, &cwd, std::io::empty());
+        // Without a config, default action is "ask" → exit 0 (CheckAdapter outputs JSON)
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn run_command_check_with_invalid_stdin_returns_two() {
+        let cmd = Commands::Check(CheckArgs {
+            command: None,
+            format: None,
+        });
+        let cwd = std::env::current_dir().unwrap();
+        let exit_code = run_command(cmd, &cwd, "not json".as_bytes());
+        assert_eq!(exit_code, 2);
+    }
+
+    #[rstest]
+    fn run_command_check_with_stdin_json_returns_zero() {
+        let cmd = Commands::Check(CheckArgs {
+            command: None,
+            format: None,
+        });
+        let cwd = std::env::current_dir().unwrap();
+        let exit_code = run_command(cmd, &cwd, r#"{"command": "ls"}"#.as_bytes());
+        assert_eq!(exit_code, 0);
     }
 
     // === CLI argument parsing ===
