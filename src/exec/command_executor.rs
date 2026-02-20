@@ -216,6 +216,9 @@ impl SandboxPolicy {
     /// Converts string paths to `PathBuf`, expands `~`, canonicalizes paths,
     /// and adds protected paths.
     pub fn from_merged(policy: &crate::config::MergedSandboxPolicy) -> Result<Self, SandboxError> {
+        // Host-level filtering is not yet supported; collapse to a boolean.
+        // None (no restriction) => allowed, Some([...]) with hosts => allowed,
+        // Some([]) (explicit deny-all) => not allowed.
         let network_allowed = match &policy.network_allow {
             None => true,
             Some(hosts) => !hosts.is_empty(),
