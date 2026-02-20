@@ -101,6 +101,8 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
 
 /// Resolve an `Action::Default` against the user's configured defaults,
 /// producing a concrete action (Allow/Ask/Deny) for dry-run reporting.
+/// When no default is configured (`None`), leaves the action as `Default`
+/// so each adapter's `handle_dry_run` can apply its own interpretation.
 fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
     use crate::config::ActionKind;
     action_result.action = match defaults.action {
@@ -110,7 +112,8 @@ fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> Act
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        Some(ActionKind::Ask) | None => Action::Ask(None),
+        Some(ActionKind::Ask) => Action::Ask(None),
+        None => return action_result, // keep Action::Default
     };
     action_result
 }
@@ -684,6 +687,13 @@ mod tests {
         assert!(*endpoint.called_handle_dry_run.borrow());
         assert!(!*endpoint.called_handle_no_match.borrow());
         assert_eq!(exit_code, 0);
+
+        // With no configured defaults, Action::Default is preserved
+        let last = endpoint.last_action.borrow();
+        assert!(
+            matches!(last.as_ref(), Some(Action::Default)),
+            "expected Action::Default, got {last:?}"
+        );
     }
 
     #[rstest]
