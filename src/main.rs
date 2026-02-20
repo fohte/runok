@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Commands, route_check};
+use cli::{CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
 use runok::exec::command_executor::ProcessCommandExecutor;
@@ -19,11 +19,19 @@ fn main() -> ExitCode {
 
 fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
     let loader = DefaultConfigLoader::new();
+
+    // Exit code for config errors depends on the subcommand:
+    // exec → 1 (general error), check → 2 (input/internal error)
+    let config_error_exit_code = match &command {
+        Commands::Exec(_) => 1,
+        Commands::Check(_) => 2,
+    };
+
     let config = match loader.load(cwd) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: config error: {e}");
-            return 2;
+            return config_error_exit_code;
         }
     };
 
@@ -47,7 +55,19 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 verbose: args.verbose,
             };
             match route_check(&args, stdin) {
-                Ok(endpoint) => adapter::run_with_options(endpoint.as_ref(), &config, &options),
+                Ok(CheckRoute::Single(endpoint)) => {
+                    adapter::run_with_options(endpoint.as_ref(), &config, &options)
+                }
+                Ok(CheckRoute::Multi(adapters)) => {
+                    let mut worst_exit = 0;
+                    for ep in &adapters {
+                        let code = adapter::run_with_options(ep, &config, &options);
+                        if code > worst_exit {
+                            worst_exit = code;
+                        }
+                    }
+                    worst_exit
+                }
                 Err(e) => {
                     eprintln!("runok: {e}");
                     2
@@ -61,6 +81,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
 mod tests {
     use super::*;
     use cli::CheckArgs;
+    use indoc::indoc;
     use rstest::rstest;
 
     #[rstest]
@@ -71,21 +92,21 @@ mod tests {
             dry_run: false,
             verbose: false,
         });
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, std::io::empty());
         assert_eq!(exit_code, 0);
     }
 
     #[rstest]
-    fn run_command_check_with_invalid_stdin_returns_two() {
+    fn run_command_check_with_empty_stdin_returns_two() {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
             dry_run: false,
             verbose: false,
         });
-        let cwd = std::env::current_dir().unwrap();
-        let exit_code = run_command(cmd, &cwd, "not json".as_bytes());
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let exit_code = run_command(cmd, &cwd, "".as_bytes());
         assert_eq!(exit_code, 2);
     }
 
@@ -97,8 +118,38 @@ mod tests {
             dry_run: false,
             verbose: false,
         });
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, r#"{"command": "ls"}"#.as_bytes());
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn run_command_check_with_plaintext_stdin_returns_zero() {
+        let cmd = Commands::Check(CheckArgs {
+            command: None,
+            format: None,
+            dry_run: false,
+            verbose: false,
+        });
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let exit_code = run_command(cmd, &cwd, "echo hello\n".as_bytes());
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn run_command_check_with_multiline_plaintext_stdin_returns_zero() {
+        let cmd = Commands::Check(CheckArgs {
+            command: None,
+            format: None,
+            dry_run: false,
+            verbose: false,
+        });
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let input = indoc! {"
+            echo hello
+            ls -la
+        "};
+        let exit_code = run_command(cmd, &cwd, input.as_bytes());
         assert_eq!(exit_code, 0);
     }
 }

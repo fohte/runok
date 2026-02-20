@@ -2,7 +2,7 @@ mod route;
 
 use clap::{Parser, Subcommand};
 
-pub use route::route_check;
+pub use route::{CheckRoute, route_check};
 
 #[derive(Parser)]
 #[command(name = "runok")]

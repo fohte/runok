@@ -105,7 +105,9 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             if options.verbose {
                 eprintln!("[verbose] No command to evaluate");
             }
-            return endpoint.handle_no_match(&defaults).unwrap_or(0);
+            return endpoint
+                .handle_no_match(&defaults)
+                .unwrap_or_else(|e| endpoint.handle_error(e));
         }
         Err(e) => return endpoint.handle_error(e),
     };
@@ -172,19 +174,27 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             if options.verbose {
                 eprintln!("[verbose] Dry-run mode: skipping execution");
             }
-            return endpoint.handle_dry_run(action_result).unwrap_or(1);
+            return endpoint
+                .handle_dry_run(action_result)
+                .unwrap_or_else(|e| endpoint.handle_error(e));
         }
-        return endpoint.handle_no_match(&defaults).unwrap_or(0);
+        return endpoint
+            .handle_no_match(&defaults)
+            .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
     if options.dry_run {
         if options.verbose {
             eprintln!("[verbose] Dry-run mode: skipping execution");
         }
-        return endpoint.handle_dry_run(action_result).unwrap_or(1);
+        return endpoint
+            .handle_dry_run(action_result)
+            .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
-    endpoint.handle_action(action_result).unwrap_or(1)
+    endpoint
+        .handle_action(action_result)
+        .unwrap_or_else(|e| endpoint.handle_error(e))
 }
 
 #[cfg(test)]
@@ -201,6 +211,8 @@ mod tests {
         no_match_exit_code: i32,
         error_exit_code: i32,
         dry_run_exit_code: i32,
+        action_should_fail: bool,
+        no_match_should_fail: bool,
         called_handle_action: RefCell<bool>,
         called_handle_no_match: RefCell<bool>,
         called_handle_error: RefCell<bool>,
@@ -218,6 +230,8 @@ mod tests {
                 no_match_exit_code: 0,
                 error_exit_code: 2,
                 dry_run_exit_code: 0,
+                action_should_fail: false,
+                no_match_should_fail: false,
                 called_handle_action: RefCell::new(false),
                 called_handle_no_match: RefCell::new(false),
                 called_handle_error: RefCell::new(false),
@@ -242,6 +256,16 @@ mod tests {
             self.error_exit_code = code;
             self
         }
+
+        fn with_action_failure(mut self) -> Self {
+            self.action_should_fail = true;
+            self
+        }
+
+        fn with_no_match_failure(mut self) -> Self {
+            self.no_match_should_fail = true;
+            self
+        }
     }
 
     impl Endpoint for MockEndpoint {
@@ -256,12 +280,18 @@ mod tests {
             *self.called_handle_action.borrow_mut() = true;
             *self.last_action.borrow_mut() = Some(result.action);
             *self.last_sandbox.borrow_mut() = Some(result.sandbox);
+            if self.action_should_fail {
+                return Err(anyhow::anyhow!("action handler failed"));
+            }
             Ok(self.action_exit_code)
         }
 
         fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
             *self.called_handle_no_match.borrow_mut() = true;
             *self.last_defaults_action.borrow_mut() = Some(defaults.action);
+            if self.no_match_should_fail {
+                return Err(anyhow::anyhow!("no match handler failed"));
+            }
             Ok(self.no_match_exit_code)
         }
 
@@ -500,6 +530,40 @@ mod tests {
         let result = run(&endpoint, &config);
 
         assert_eq!(result, exit_code);
+    }
+
+    // --- handle_action error falls back to handle_error ---
+
+    #[rstest]
+    fn handle_action_error_delegates_to_handle_error() {
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())))
+            .with_action_failure()
+            .with_error_exit_code(2);
+        let config = make_config(vec![allow_rule("git status")]);
+        let result = run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(*endpoint.called_handle_error.borrow());
+        assert_eq!(result, 2);
+    }
+
+    // --- handle_no_match error falls back to handle_error ---
+
+    #[rstest]
+    #[case::extract_none(Ok(None))]
+    #[case::no_matching_rule(Ok(Some("unknown-command".to_string())))]
+    fn handle_no_match_error_delegates_to_handle_error(
+        #[case] command: Result<Option<String>, String>,
+    ) {
+        let endpoint = MockEndpoint::new(command)
+            .with_no_match_failure()
+            .with_error_exit_code(2);
+        let config = Config::default();
+        let result = run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_no_match.borrow());
+        assert!(*endpoint.called_handle_error.borrow());
+        assert_eq!(result, 2);
     }
 
     // --- sandbox_preset is propagated via SandboxInfo::Preset ---

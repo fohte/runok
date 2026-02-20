@@ -74,12 +74,12 @@ impl Endpoint for ExecAdapter {
                 Ok(exit_code)
             }
             Action::Deny(deny_response) => {
-                let msg = deny_response
-                    .message
-                    .unwrap_or_else(|| format!("command denied: {}", deny_response.matched_rule));
-                eprintln!("runok: {}", msg);
-                if let Some(suggestion) = deny_response.fix_suggestion {
-                    eprintln!("runok: suggestion: {}", suggestion);
+                eprintln!("runok: denied: {}", deny_response.matched_rule);
+                if let Some(ref message) = deny_response.message {
+                    eprintln!("  reason: {}", message);
+                }
+                if let Some(ref suggestion) = deny_response.fix_suggestion {
+                    eprintln!("  suggestion: {}", suggestion);
                 }
                 Ok(3)
             }
