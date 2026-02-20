@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
 use crate::config::{ActionKind, Defaults};
-use crate::rules::rule_engine::Action;
+use crate::rules::rule_engine::{Action, DenyResponse};
 
 /// Claude Code PreToolUse Hook input (stdin JSON).
 #[derive(Debug, Deserialize)]
@@ -58,6 +58,19 @@ pub struct ClaudeCodeHookAdapter {
     input: HookInput,
 }
 
+/// Build a combined reason string from a `DenyResponse`, including
+/// the matched rule, optional message, and optional fix suggestion.
+fn build_deny_reason(deny: &DenyResponse) -> String {
+    let mut reason = format!("denied: {}", deny.matched_rule);
+    if let Some(ref message) = deny.message {
+        reason.push_str(&format!(" ({})", message));
+    }
+    if let Some(ref suggestion) = deny.fix_suggestion {
+        reason.push_str(&format!(" [suggestion: {}]", suggestion));
+    }
+    reason
+}
+
 impl ClaudeCodeHookAdapter {
     pub fn new(input: HookInput) -> Self {
         Self { input }
@@ -77,7 +90,10 @@ impl ClaudeCodeHookAdapter {
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("allow", None, updated)
             }
-            Action::Deny(deny_response) => ("deny", deny_response.message.clone(), None),
+            Action::Deny(deny_response) => {
+                let reason = build_deny_reason(deny_response);
+                ("deny", Some(reason), None)
+            }
             Action::Ask(message) => ("ask", message.clone(), None),
             Action::Default => {
                 // run() dispatches Default to handle_no_match, but handle safely.
@@ -286,7 +302,7 @@ mod tests {
             matched_rule: "rm -rf /".to_string(),
         }),
         SandboxInfo::Preset(None),
-        make_output("deny", Some("not allowed"), None),
+        make_output("deny", Some("denied: rm -rf / (not allowed)"), None),
     )]
     #[case::deny_without_message(
         Action::Deny(DenyResponse {
@@ -295,7 +311,16 @@ mod tests {
             matched_rule: "rm *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        make_output("deny", None, None),
+        make_output("deny", Some("denied: rm *"), None),
+    )]
+    #[case::deny_with_message_and_suggestion(
+        Action::Deny(DenyResponse {
+            message: Some("force push is not allowed".to_string()),
+            fix_suggestion: Some("git push --force-with-lease".to_string()),
+            matched_rule: "git push -f *".to_string(),
+        }),
+        SandboxInfo::Preset(None),
+        make_output("deny", Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
     )]
     #[case::ask_with_message(
         Action::Ask(Some("please confirm".to_string())),
