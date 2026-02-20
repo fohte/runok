@@ -36,6 +36,19 @@ pub struct RunOptions {
     pub verbose: bool,
 }
 
+/// Describes what should happen after command evaluation.
+/// Separates the "what happened" decision from "how to handle it",
+/// ensuring dry-run is checked at exactly one point.
+enum Dispatch {
+    /// A rule matched and produced an action (Allow/Deny/Ask).
+    Matched(ActionResult),
+    /// No rule matched; fall back to defaults.
+    NoMatch {
+        action_result: ActionResult,
+        defaults: Defaults,
+    },
+}
+
 /// Abstracts protocol-specific input/output differences across
 /// exec, check, and Claude Code hook endpoints.
 pub trait Endpoint {
@@ -166,35 +179,44 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         }
     };
 
-    if matches!(action_result.action, Action::Default) {
+    // Determine dispatch target
+    let dispatch = if matches!(action_result.action, Action::Default) {
         if options.verbose {
             eprintln!("[verbose] No matching rule, using default behavior");
         }
-        if options.dry_run {
-            if options.verbose {
-                eprintln!("[verbose] Dry-run mode: skipping execution");
-            }
-            return endpoint
-                .handle_dry_run(action_result)
-                .unwrap_or_else(|e| endpoint.handle_error(e));
+        Dispatch::NoMatch {
+            action_result,
+            defaults,
         }
-        return endpoint
-            .handle_no_match(&defaults)
-            .unwrap_or_else(|e| endpoint.handle_error(e));
-    }
+    } else {
+        Dispatch::Matched(action_result)
+    };
 
+    // Single dry-run checkpoint: all dispatch paths are covered here
     if options.dry_run {
         if options.verbose {
             eprintln!("[verbose] Dry-run mode: skipping execution");
         }
+        let action_result = match dispatch {
+            Dispatch::Matched(ar)
+            | Dispatch::NoMatch {
+                action_result: ar, ..
+            } => ar,
+        };
         return endpoint
             .handle_dry_run(action_result)
             .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
-    endpoint
-        .handle_action(action_result)
-        .unwrap_or_else(|e| endpoint.handle_error(e))
+    // Normal execution
+    match dispatch {
+        Dispatch::Matched(action_result) => endpoint
+            .handle_action(action_result)
+            .unwrap_or_else(|e| endpoint.handle_error(e)),
+        Dispatch::NoMatch { defaults, .. } => endpoint
+            .handle_no_match(&defaults)
+            .unwrap_or_else(|e| endpoint.handle_error(e)),
+    }
 }
 
 #[cfg(test)]
