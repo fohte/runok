@@ -122,6 +122,34 @@ impl Endpoint for ExecAdapter {
         eprintln!("runok: error: {}", error);
         1
     }
+
+    fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+        match &result.action {
+            Action::Allow => {
+                eprintln!("runok: dry-run: command would be allowed");
+            }
+            Action::Deny(deny_response) => {
+                let msg = deny_response
+                    .message
+                    .as_deref()
+                    .unwrap_or("command would be denied");
+                eprintln!("runok: dry-run: {}", msg);
+                if let Some(suggestion) = &deny_response.fix_suggestion {
+                    eprintln!("runok: dry-run: suggestion: {}", suggestion);
+                }
+            }
+            Action::Ask(message) => {
+                let msg = message
+                    .as_deref()
+                    .unwrap_or("command would require confirmation");
+                eprintln!("runok: dry-run: {}", msg);
+            }
+            Action::Default => {
+                eprintln!("runok: dry-run: no matching rule (default behavior)");
+            }
+        }
+        Ok(0)
+    }
 }
 
 #[cfg(test)]
@@ -497,5 +525,64 @@ mod tests {
 
         let captured = executed_command.lock().unwrap();
         assert_eq!(*captured, Some(expected));
+    }
+
+    // --- handle_dry_run ---
+
+    #[rstest]
+    #[case::allow(Action::Allow, 0)]
+    #[case::deny(
+        Action::Deny(DenyResponse {
+            message: Some("dangerous".to_string()),
+            fix_suggestion: Some("use safer command".to_string()),
+            matched_rule: "rm *".to_string(),
+        }),
+        0
+    )]
+    #[case::ask(
+        Action::Ask(Some("please confirm".to_string())),
+        0
+    )]
+    #[case::default_action(Action::Default, 0)]
+    fn handle_dry_run_always_returns_exit_0(
+        #[case] action: Action,
+        #[case] expected_exit_code: i32,
+    ) {
+        let adapter = ExecAdapter::new(
+            vec!["git".into(), "status".into()],
+            None,
+            Box::new(MockExecutor::new(42)),
+        );
+        let result = adapter
+            .handle_dry_run(ActionResult {
+                action,
+                sandbox: SandboxInfo::Preset(None),
+            })
+            .unwrap();
+        assert_eq!(result, expected_exit_code);
+    }
+
+    #[rstest]
+    fn handle_dry_run_does_not_execute_command() {
+        let captured: std::sync::Arc<std::sync::Mutex<Option<CommandInput>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        let adapter = ExecAdapter::new(
+            vec!["git".into(), "status".into()],
+            None,
+            Box::new(CapturingExecutor {
+                captured: captured.clone(),
+            }),
+        );
+
+        adapter
+            .handle_dry_run(ActionResult {
+                action: Action::Allow,
+                sandbox: SandboxInfo::Preset(None),
+            })
+            .unwrap();
+
+        // Command should NOT be executed in dry-run mode
+        assert!(captured.lock().unwrap().is_none());
     }
 }

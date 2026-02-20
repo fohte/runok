@@ -9,7 +9,7 @@ use crate::rules::command_parser::{
     FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
 };
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
-use crate::rules::pattern_matcher::{extract_placeholder, matches};
+use crate::rules::pattern_matcher::{extract_placeholder, matches_with_captures};
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
 
 /// Context for rule evaluation, providing environment variables and
@@ -29,12 +29,25 @@ impl EvalContext {
     }
 }
 
+/// Information about a single rule match, used for verbose logging.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleMatchInfo {
+    /// The action kind of the matched rule (allow, deny, ask).
+    pub action_kind: ActionKind,
+    /// The pattern string that matched.
+    pub pattern: String,
+    /// Tokens captured by wildcards (`*`) in the pattern.
+    pub matched_tokens: Vec<String>,
+}
+
 /// Result of rule evaluation: an action and an optional sandbox preset name.
 #[derive(Debug, PartialEq)]
 pub struct EvalResult {
     pub action: Action,
     /// Sandbox preset name from the matched rule, or `None` to fall back to `defaults.sandbox`.
     pub sandbox_preset: Option<String>,
+    /// Details of all rules that matched, for verbose logging.
+    pub matched_rules: Vec<RuleMatchInfo>,
 }
 
 /// Result of compound command evaluation: an action and an optional merged
@@ -216,6 +229,7 @@ fn evaluate_command_inner(
             return Ok(EvalResult {
                 action: Action::Default,
                 sandbox_preset: None,
+                matched_rules: Vec::new(),
             });
         }
     };
@@ -225,6 +239,7 @@ fn evaluate_command_inner(
 
     // Collect all matched rules with their parsed patterns
     let mut matched: Vec<MatchedRule> = Vec::new();
+    let mut match_infos: Vec<RuleMatchInfo> = Vec::new();
 
     for rule in rules {
         let (action_kind, pattern_str) = match rule.action_and_pattern() {
@@ -236,7 +251,8 @@ fn evaluate_command_inner(
         let schema = build_flag_schema(&pattern);
         let parsed_command = parse_command(command, &schema)?;
 
-        if !matches(&pattern, &parsed_command, definitions) {
+        let captures = matches_with_captures(&pattern, &parsed_command, definitions);
+        if captures.is_none() {
             continue;
         }
 
@@ -249,6 +265,12 @@ fn evaluate_command_inner(
                 Err(e) => return Err(e.into()),
             }
         }
+
+        match_infos.push(RuleMatchInfo {
+            action_kind,
+            pattern: pattern_str.to_string(),
+            matched_tokens: captures.unwrap_or_default(),
+        });
 
         matched.push(MatchedRule {
             action_kind,
@@ -264,6 +286,7 @@ fn evaluate_command_inner(
         return Ok(EvalResult {
             action: Action::Default,
             sandbox_preset: None,
+            matched_rules: match_infos,
         });
     }
 
@@ -292,6 +315,7 @@ fn evaluate_command_inner(
         Some(EvalResult {
             action,
             sandbox_preset,
+            matched_rules: match_infos,
         })
     };
 
@@ -362,10 +386,19 @@ fn try_unwrap_wrapper(
 
 /// Merge two evaluation results using Explicit Deny Wins priority.
 fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
+    let mut combined_rules = a.matched_rules;
+    combined_rules.extend(b.matched_rules.clone());
+
     if action_priority(&b.action) > action_priority(&a.action) {
-        b
+        EvalResult {
+            matched_rules: combined_rules,
+            ..b
+        }
     } else {
-        a
+        EvalResult {
+            matched_rules: combined_rules,
+            ..a
+        }
     }
 }
 

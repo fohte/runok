@@ -4,7 +4,9 @@ pub mod hook_adapter;
 
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
-use crate::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
+use crate::rules::rule_engine::{
+    Action, EvalContext, RuleMatchInfo, evaluate_command, evaluate_compound,
+};
 
 /// Unified evaluation result for the adapter layer.
 ///
@@ -25,6 +27,15 @@ pub enum SandboxInfo {
     MergedPolicy(Option<MergedSandboxPolicy>),
 }
 
+/// Options that modify the behavior of `run()`.
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    /// When true, skip command execution and only report what would happen.
+    pub dry_run: bool,
+    /// When true, output detailed rule matching information to stderr.
+    pub verbose: bool,
+}
+
 /// Abstracts protocol-specific input/output differences across
 /// exec, check, and Claude Code hook endpoints.
 pub trait Endpoint {
@@ -41,6 +52,38 @@ pub trait Endpoint {
 
     /// Handle an error with protocol-specific error reporting. Returns the exit code.
     fn handle_error(&self, error: anyhow::Error) -> i32;
+
+    /// Handle the dry-run case: report what would happen without executing.
+    /// Default implementation delegates to `handle_action`.
+    fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+        self.handle_action(result)
+    }
+}
+
+/// Log verbose details about matched rules to stderr.
+fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
+    if matched_rules.is_empty() {
+        eprintln!("[verbose] No rules matched");
+        return;
+    }
+    for info in matched_rules {
+        let action_label = match info.action_kind {
+            crate::config::ActionKind::Allow => "allow",
+            crate::config::ActionKind::Ask => "ask",
+            crate::config::ActionKind::Deny => "deny",
+        };
+        if info.matched_tokens.is_empty() {
+            eprintln!(
+                "[verbose] Rule matched: {} '{}'",
+                action_label, info.pattern
+            );
+        } else {
+            eprintln!(
+                "[verbose] Rule matched: {} '{}' (matched tokens: {:?})",
+                action_label, info.pattern, info.matched_tokens
+            );
+        }
+    }
 }
 
 /// Run the common evaluation flow for any endpoint.
@@ -49,41 +92,90 @@ pub trait Endpoint {
 /// 2. Evaluate the command against the config rules
 /// 3. Dispatch to the appropriate handler based on the result
 pub fn run(endpoint: &dyn Endpoint, config: &Config) -> i32 {
+    run_with_options(endpoint, config, &RunOptions::default())
+}
+
+/// Run the common evaluation flow with options controlling dry-run and verbose behavior.
+pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunOptions) -> i32 {
     let defaults = config.defaults.clone().unwrap_or_default();
 
     let command = match endpoint.extract_command() {
         Ok(Some(cmd)) => cmd,
         Ok(None) => {
+            if options.verbose {
+                eprintln!("[verbose] No command to evaluate");
+            }
             return endpoint.handle_no_match(&defaults).unwrap_or(0);
         }
         Err(e) => return endpoint.handle_error(e),
     };
+
+    if options.verbose {
+        eprintln!("[verbose] Evaluating command: {:?}", command);
+    }
 
     let context = EvalContext::from_env();
 
     // Determine if the command is compound (contains pipes, &&, ||, ;)
     let commands = extract_commands(&command).unwrap_or_else(|_| vec![command.clone()]);
 
+    if options.verbose && commands.len() > 1 {
+        eprintln!(
+            "[verbose] Compound command detected ({} sub-commands)",
+            commands.len()
+        );
+        for (i, cmd) in commands.iter().enumerate() {
+            eprintln!("[verbose]   sub-command {}: {:?}", i + 1, cmd);
+        }
+    }
+
     let action_result = if commands.len() > 1 {
         match evaluate_compound(config, &command, &context) {
-            Ok(compound_result) => ActionResult {
-                action: compound_result.action,
-                sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
-            },
+            Ok(compound_result) => {
+                if options.verbose {
+                    eprintln!(
+                        "[verbose] Compound evaluation result: {:?}",
+                        compound_result.action
+                    );
+                }
+                ActionResult {
+                    action: compound_result.action,
+                    sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+                }
+            }
             Err(e) => return endpoint.handle_error(e.into()),
         }
     } else {
         match evaluate_command(config, &command, &context) {
-            Ok(result) => ActionResult {
-                action: result.action,
-                sandbox: SandboxInfo::Preset(result.sandbox_preset),
-            },
+            Ok(result) => {
+                if options.verbose {
+                    log_matched_rules(&result.matched_rules);
+                    eprintln!("[verbose] Evaluation result: {:?}", result.action);
+                    if let Some(ref preset) = result.sandbox_preset {
+                        eprintln!("[verbose] Sandbox preset: {:?}", preset);
+                    }
+                }
+                ActionResult {
+                    action: result.action,
+                    sandbox: SandboxInfo::Preset(result.sandbox_preset),
+                }
+            }
             Err(e) => return endpoint.handle_error(e.into()),
         }
     };
 
     if matches!(action_result.action, Action::Default) {
+        if options.verbose {
+            eprintln!("[verbose] No matching rule, using default behavior");
+        }
         return endpoint.handle_no_match(&defaults).unwrap_or(0);
+    }
+
+    if options.dry_run {
+        if options.verbose {
+            eprintln!("[verbose] Dry-run mode: skipping execution");
+        }
+        return endpoint.handle_dry_run(action_result).unwrap_or(1);
     }
 
     endpoint.handle_action(action_result).unwrap_or(1)
@@ -102,9 +194,11 @@ mod tests {
         action_exit_code: i32,
         no_match_exit_code: i32,
         error_exit_code: i32,
+        dry_run_exit_code: i32,
         called_handle_action: RefCell<bool>,
         called_handle_no_match: RefCell<bool>,
         called_handle_error: RefCell<bool>,
+        called_handle_dry_run: RefCell<bool>,
         last_action: RefCell<Option<Action>>,
         last_sandbox: RefCell<Option<SandboxInfo>>,
         last_defaults_action: RefCell<Option<Option<ActionKind>>>,
@@ -117,9 +211,11 @@ mod tests {
                 action_exit_code: 0,
                 no_match_exit_code: 0,
                 error_exit_code: 2,
+                dry_run_exit_code: 0,
                 called_handle_action: RefCell::new(false),
                 called_handle_no_match: RefCell::new(false),
                 called_handle_error: RefCell::new(false),
+                called_handle_dry_run: RefCell::new(false),
                 last_action: RefCell::new(None),
                 last_sandbox: RefCell::new(None),
                 last_defaults_action: RefCell::new(None),
@@ -166,6 +262,13 @@ mod tests {
         fn handle_error(&self, _error: anyhow::Error) -> i32 {
             *self.called_handle_error.borrow_mut() = true;
             self.error_exit_code
+        }
+
+        fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+            *self.called_handle_dry_run.borrow_mut() = true;
+            *self.last_action.borrow_mut() = Some(result.action);
+            *self.last_sandbox.borrow_mut() = Some(result.sandbox);
+            Ok(self.dry_run_exit_code)
         }
     }
 
@@ -420,5 +523,71 @@ mod tests {
             }
             other => panic!("expected SandboxInfo::Preset(Some(\"restricted\")), got {other:?}"),
         }
+    }
+
+    // --- dry-run: calls handle_dry_run instead of handle_action ---
+
+    #[rstest]
+    fn dry_run_calls_handle_dry_run_instead_of_handle_action() {
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = make_config(vec![allow_rule("git status")]);
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_dry_run.borrow());
+        assert!(!*endpoint.called_handle_action.borrow());
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn dry_run_with_deny_calls_handle_dry_run() {
+        let endpoint = MockEndpoint::new(Ok(Some("rm -rf /".to_string())));
+        let config = make_config(vec![deny_rule("rm -rf /")]);
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_dry_run.borrow());
+        assert!(!*endpoint.called_handle_action.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Deny(_))
+        ));
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn dry_run_with_no_match_still_calls_handle_no_match() {
+        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
+        let config = make_config(vec![allow_rule("git status")]);
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        // No match -> handle_no_match, not handle_dry_run
+        assert!(*endpoint.called_handle_no_match.borrow());
+        assert!(!*endpoint.called_handle_dry_run.borrow());
+        assert_eq!(exit_code, 0);
+    }
+
+    // --- run_with_options defaults to same behavior as run ---
+
+    #[rstest]
+    fn run_with_default_options_behaves_like_run() {
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = make_config(vec![allow_rule("git status")]);
+        let options = RunOptions::default();
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_dry_run.borrow());
+        assert_eq!(exit_code, 0);
     }
 }
