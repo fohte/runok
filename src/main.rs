@@ -98,10 +98,9 @@ fn route_check(args: &CheckArgs) -> Result<Box<dyn Endpoint>, anyhow::Error> {
                 let hook_input: HookInput = serde_json::from_value(json_value)?;
                 Ok(Box::new(ClaudeCodeHookAdapter::new(hook_input)))
             }
-            _ => {
-                let check_input: CheckInput = serde_json::from_value(json_value)?;
-                Ok(Box::new(CheckAdapter::from_stdin(check_input)))
-            }
+            unknown => Err(anyhow::anyhow!(
+                "Unknown format: '{unknown}'. Valid formats: claude-code-hook"
+            )),
         };
     }
 
