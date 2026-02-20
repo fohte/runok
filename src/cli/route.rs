@@ -33,7 +33,14 @@ pub fn route_check(
         return route_json(args, json_value);
     }
 
-    // 4. JSON parse failed → treat as plaintext (one command per line, skip empty lines)
+    // 4. --format requires JSON; plaintext fallback is not allowed when --format is specified
+    if let Some(format) = &args.format {
+        return Err(anyhow::anyhow!(
+            "JSON parse error: input must be valid JSON when --format '{format}' is specified"
+        ));
+    }
+
+    // 5. JSON parse failed, no --format → treat as plaintext (one command per line, skip empty lines)
     let commands: Vec<String> = stdin_input
         .lines()
         .map(|line| line.trim())
@@ -186,6 +193,21 @@ mod tests {
         match result {
             Err(e) => assert!(
                 e.to_string().contains("Unknown input format"),
+                "error was: {e}"
+            ),
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
+    // === route_check: --format with non-JSON stdin ===
+
+    #[rstest]
+    fn route_check_format_with_non_json_stdin_returns_error() {
+        let args = check_args(None, Some("claude-code-hook"));
+        let result = route_check(&args, "not valid json".as_bytes());
+        match result {
+            Err(e) => assert!(
+                e.to_string().contains("JSON parse error") && e.to_string().contains("--format"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),
