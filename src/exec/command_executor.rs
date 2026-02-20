@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     #[rstest]
-    fn from_merged_no_network_allow_means_restricted() {
+    fn from_merged_no_network_allow_means_allowed() {
         use crate::config::MergedSandboxPolicy;
 
         let merged = MergedSandboxPolicy {
