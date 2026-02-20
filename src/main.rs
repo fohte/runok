@@ -19,11 +19,19 @@ fn main() -> ExitCode {
 
 fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
     let loader = DefaultConfigLoader::new();
+
+    // Exit code for config errors depends on the subcommand:
+    // exec → 1 (general error), check → 2 (input/internal error)
+    let config_error_exit_code = match &command {
+        Commands::Exec(_) => 1,
+        Commands::Check(_) => 2,
+    };
+
     let config = match loader.load(cwd) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: config error: {e}");
-            return 2;
+            return config_error_exit_code;
         }
     };
 
