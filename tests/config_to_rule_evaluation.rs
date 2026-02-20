@@ -1,6 +1,9 @@
+mod common;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use common::ExpectedAction;
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
@@ -321,11 +324,7 @@ fn config_validation_collects_multiple_errors() {
 
     match config.validate() {
         Err(ConfigError::Validation(errors)) => {
-            assert!(
-                errors.len() >= 2,
-                "expected at least 2 errors, got: {:?}",
-                errors
-            );
+            assert_eq!(errors.len(), 3, "expected 3 errors, got: {:?}", errors);
         }
         other => panic!("expected Validation error, got: {:?}", other),
     }
@@ -384,43 +383,4 @@ fn full_config_evaluates_correctly(
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected.assert_matches(&result.action);
-}
-
-// ========================================
-// Helper
-// ========================================
-
-/// Test-only enum for parameterizing expected actions in `#[case]` attributes.
-#[derive(Debug)]
-enum ExpectedAction {
-    Allow,
-    Deny,
-    Ask,
-    Default,
-}
-
-impl ExpectedAction {
-    fn assert_matches(&self, actual: &Action) {
-        match self {
-            ExpectedAction::Allow => {
-                assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual)
-            }
-            ExpectedAction::Deny => assert!(
-                matches!(actual, Action::Deny(_)),
-                "expected Deny, got {:?}",
-                actual
-            ),
-            ExpectedAction::Ask => assert!(
-                matches!(actual, Action::Ask(_)),
-                "expected Ask, got {:?}",
-                actual
-            ),
-            ExpectedAction::Default => assert_eq!(
-                *actual,
-                Action::Default,
-                "expected Default, got {:?}",
-                actual
-            ),
-        }
-    }
 }

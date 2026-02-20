@@ -1,10 +1,13 @@
+mod common;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use common::ExpectedAction;
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::parse_config;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use runok::rules::rule_engine::{EvalContext, evaluate_command};
 
 #[fixture]
 fn empty_context() -> EvalContext {
@@ -245,43 +248,4 @@ fn negation_matches_everything_except(
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected.assert_matches(&result.action);
-}
-
-// ========================================
-// Helper
-// ========================================
-
-/// Test-only enum for parameterizing expected actions in `#[case]` attributes.
-#[derive(Debug)]
-enum ExpectedAction {
-    Allow,
-    Deny,
-    Ask,
-    Default,
-}
-
-impl ExpectedAction {
-    fn assert_matches(&self, actual: &Action) {
-        match self {
-            ExpectedAction::Allow => {
-                assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual)
-            }
-            ExpectedAction::Deny => assert!(
-                matches!(actual, Action::Deny(_)),
-                "expected Deny, got {:?}",
-                actual
-            ),
-            ExpectedAction::Ask => assert!(
-                matches!(actual, Action::Ask(_)),
-                "expected Ask, got {:?}",
-                actual
-            ),
-            ExpectedAction::Default => assert_eq!(
-                *actual,
-                Action::Default,
-                "expected Default, got {:?}",
-                actual
-            ),
-        }
-    }
 }

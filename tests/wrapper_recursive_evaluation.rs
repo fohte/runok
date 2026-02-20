@@ -1,6 +1,9 @@
+mod common;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use common::ExpectedAction;
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, parse_config};
@@ -189,47 +192,4 @@ fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
-}
-
-// ========================================
-// Helper
-// ========================================
-
-/// Test-only enum for parameterizing expected actions in `#[case]` attributes.
-#[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "all variants are needed for exhaustive matching even if not all are used in #[case] attributes"
-)]
-enum ExpectedAction {
-    Allow,
-    Deny,
-    Ask,
-    Default,
-}
-
-impl ExpectedAction {
-    fn assert_matches(&self, actual: &Action) {
-        match self {
-            ExpectedAction::Allow => {
-                assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual)
-            }
-            ExpectedAction::Deny => assert!(
-                matches!(actual, Action::Deny(_)),
-                "expected Deny, got {:?}",
-                actual
-            ),
-            ExpectedAction::Ask => assert!(
-                matches!(actual, Action::Ask(_)),
-                "expected Ask, got {:?}",
-                actual
-            ),
-            ExpectedAction::Default => assert_eq!(
-                *actual,
-                Action::Default,
-                "expected Default, got {:?}",
-                actual
-            ),
-        }
-    }
 }
