@@ -99,6 +99,22 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
     }
 }
 
+/// Resolve an `Action::Default` against the user's configured defaults,
+/// producing a concrete action (Allow/Ask/Deny) for dry-run reporting.
+fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
+    use crate::config::ActionKind;
+    action_result.action = match defaults.action {
+        Some(ActionKind::Allow) => Action::Allow,
+        Some(ActionKind::Deny) => Action::Deny(crate::rules::rule_engine::DenyResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
+        Some(ActionKind::Ask) | None => Action::Ask(None),
+    };
+    action_result
+}
+
 /// Run the common evaluation flow for any endpoint.
 ///
 /// 1. Extract the command from protocol-specific input
@@ -198,10 +214,11 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             eprintln!("[verbose] Dry-run mode: skipping execution");
         }
         let action_result = match dispatch {
-            Dispatch::Matched(ar)
-            | Dispatch::NoMatch {
-                action_result: ar, ..
-            } => ar,
+            Dispatch::Matched(ar) => ar,
+            Dispatch::NoMatch {
+                action_result,
+                defaults,
+            } => resolve_no_match(action_result, &defaults),
         };
         return endpoint
             .handle_dry_run(action_result)
@@ -667,6 +684,42 @@ mod tests {
         assert!(*endpoint.called_handle_dry_run.borrow());
         assert!(!*endpoint.called_handle_no_match.borrow());
         assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    #[case::deny(ActionKind::Deny, "Deny")]
+    #[case::allow(ActionKind::Allow, "Allow")]
+    #[case::ask(ActionKind::Ask, "Ask")]
+    fn dry_run_with_no_match_resolves_defaults_action(
+        #[case] default_action: ActionKind,
+        #[case] expected_variant: &str,
+    ) {
+        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            defaults: Some(Defaults {
+                action: Some(default_action),
+                sandbox: None,
+            }),
+            ..Default::default()
+        };
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_dry_run.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert_eq!(exit_code, 0);
+
+        let last = endpoint.last_action.borrow();
+        let action = last.as_ref().expect("action should be recorded");
+        let variant = format!("{action:?}");
+        assert!(
+            variant.starts_with(expected_variant),
+            "expected action starting with '{expected_variant}', got '{variant}'"
+        );
     }
 
     // --- run_with_options defaults to same behavior as run ---
