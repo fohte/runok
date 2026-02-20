@@ -1,9 +1,13 @@
+#[expect(
+    dead_code,
+    reason = "shared test helper module: not all helpers are used in this file"
+)]
 mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::ExpectedAction;
+use common::{ActionAssertion, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::parse_config;
@@ -22,11 +26,11 @@ fn empty_context() -> EvalContext {
 // ========================================
 
 #[rstest]
-#[case::env_matches_deny("prod", ExpectedAction::Deny)]
-#[case::env_does_not_match_default("dev", ExpectedAction::Default)]
+#[case::env_matches_deny("prod", assert_deny as ActionAssertion)]
+#[case::env_does_not_match_default("dev", assert_default as ActionAssertion)]
 fn env_variable_controls_rule_application(
     #[case] aws_profile: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -42,7 +46,7 @@ fn env_variable_controls_rule_application(
     };
 
     let result = evaluate_command(&config, "aws s3 ls", &context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 #[rstest]
@@ -120,13 +124,13 @@ fn when_satisfied_deny_wins_over_allow() {
 // ========================================
 
 #[rstest]
-#[case::short_flag_post_denied("curl -X POST https://example.com", ExpectedAction::Deny)]
-#[case::short_flag_get_default("curl -X GET https://example.com", ExpectedAction::Default)]
-#[case::long_flag_post_denied("curl --request POST https://example.com", ExpectedAction::Deny)]
-#[case::long_flag_get_default("curl --request GET https://example.com", ExpectedAction::Default)]
+#[case::short_flag_post_denied("curl -X POST https://example.com", assert_deny as ActionAssertion)]
+#[case::short_flag_get_default("curl -X GET https://example.com", assert_default as ActionAssertion)]
+#[case::long_flag_post_denied("curl --request POST https://example.com", assert_deny as ActionAssertion)]
+#[case::long_flag_get_default("curl --request GET https://example.com", assert_default as ActionAssertion)]
 fn flag_condition_with_flag_with_value_pattern(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     // FlagWithValue pattern (-X|--request POST|*) tells the command parser
@@ -140,7 +144,7 @@ fn flag_condition_with_flag_with_value_pattern(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -148,11 +152,11 @@ fn flag_condition_with_flag_with_value_pattern(
 // ========================================
 
 #[rstest]
-#[case::prod_url_denied("curl https://prod.example.com/api", ExpectedAction::Deny)]
-#[case::dev_url_default("curl https://dev.example.com/api", ExpectedAction::Default)]
+#[case::prod_url_denied("curl https://prod.example.com/api", assert_deny as ActionAssertion)]
+#[case::dev_url_default("curl https://dev.example.com/api", assert_default as ActionAssertion)]
 fn argument_condition_controls_rule(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -163,7 +167,7 @@ fn argument_condition_controls_rule(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -171,11 +175,11 @@ fn argument_condition_controls_rule(
 // ========================================
 
 #[rstest]
-#[case::sensitive_path_denied("cat /etc/passwd", ExpectedAction::Deny)]
-#[case::safe_path_default("cat /tmp/safe.txt", ExpectedAction::Default)]
+#[case::sensitive_path_denied("cat /etc/passwd", assert_deny as ActionAssertion)]
+#[case::safe_path_default("cat /tmp/safe.txt", assert_default as ActionAssertion)]
 fn paths_in_when_clause(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -192,7 +196,7 @@ fn paths_in_when_clause(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================

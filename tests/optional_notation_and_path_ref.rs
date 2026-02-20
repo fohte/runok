@@ -3,7 +3,7 @@ mod common;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::ExpectedAction;
+use common::{ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::parse_config;
@@ -22,13 +22,13 @@ fn empty_context() -> EvalContext {
 // ========================================
 
 #[rstest]
-#[case::without_flag("curl https://example.com", ExpectedAction::Allow)]
-#[case::with_short_flag("curl -X GET https://example.com", ExpectedAction::Allow)]
-#[case::with_long_flag("curl --request GET https://example.com", ExpectedAction::Allow)]
-#[case::with_wrong_value("curl -X POST https://example.com", ExpectedAction::Default)]
+#[case::without_flag("curl https://example.com", assert_allow as ActionAssertion)]
+#[case::with_short_flag("curl -X GET https://example.com", assert_allow as ActionAssertion)]
+#[case::with_long_flag("curl --request GET https://example.com", assert_allow as ActionAssertion)]
+#[case::with_wrong_value("curl -X POST https://example.com", assert_default as ActionAssertion)]
 fn optional_flag_with_value(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -38,7 +38,7 @@ fn optional_flag_with_value(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -46,12 +46,12 @@ fn optional_flag_with_value(
 // ========================================
 
 #[rstest]
-#[case::without_c("git status", ExpectedAction::Allow)]
-#[case::with_c("git -C /some/path status", ExpectedAction::Allow)]
-#[case::with_c_different_path("git -C /another/path status", ExpectedAction::Allow)]
+#[case::without_c("git status", assert_allow as ActionAssertion)]
+#[case::with_c("git -C /some/path status", assert_allow as ActionAssertion)]
+#[case::with_c_different_path("git -C /another/path status", assert_allow as ActionAssertion)]
 fn optional_flag_with_wildcard_value(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -61,7 +61,7 @@ fn optional_flag_with_wildcard_value(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -69,11 +69,11 @@ fn optional_flag_with_wildcard_value(
 // ========================================
 
 #[rstest]
-#[case::without_f("rm file.txt", ExpectedAction::Allow)]
-#[case::with_f("rm -f file.txt", ExpectedAction::Allow)]
+#[case::without_f("rm file.txt", assert_allow as ActionAssertion)]
+#[case::with_f("rm -f file.txt", assert_allow as ActionAssertion)]
 fn optional_boolean_flag(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -83,7 +83,7 @@ fn optional_boolean_flag(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -91,15 +91,15 @@ fn optional_boolean_flag(
 // ========================================
 
 #[rstest]
-#[case::env_file("cat .env", ExpectedAction::Deny)]
-#[case::env_local("cat .envrc", ExpectedAction::Deny)]
-#[case::etc_passwd("cat /etc/passwd", ExpectedAction::Deny)]
-#[case::etc_shadow("cat /etc/shadow", ExpectedAction::Deny)]
-#[case::safe_file("cat /tmp/safe.txt", ExpectedAction::Default)]
-#[case::readme("cat README.md", ExpectedAction::Default)]
+#[case::env_file("cat .env", assert_deny as ActionAssertion)]
+#[case::env_local("cat .envrc", assert_deny as ActionAssertion)]
+#[case::etc_passwd("cat /etc/passwd", assert_deny as ActionAssertion)]
+#[case::etc_shadow("cat /etc/shadow", assert_deny as ActionAssertion)]
+#[case::safe_file("cat /tmp/safe.txt", assert_default as ActionAssertion)]
+#[case::readme("cat README.md", assert_default as ActionAssertion)]
 fn path_ref_matches_defined_paths(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -116,7 +116,7 @@ fn path_ref_matches_defined_paths(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -124,12 +124,12 @@ fn path_ref_matches_defined_paths(
 // ========================================
 
 #[rstest]
-#[case::log_read_denied("cat /var/log/syslog", ExpectedAction::Deny)]
-#[case::config_read_denied("cat /etc/config.yml", ExpectedAction::Deny)]
-#[case::safe_allowed("cat /tmp/notes.txt", ExpectedAction::Default)]
+#[case::log_read_denied("cat /var/log/syslog", assert_deny as ActionAssertion)]
+#[case::config_read_denied("cat /etc/config.yml", assert_deny as ActionAssertion)]
+#[case::safe_allowed("cat /tmp/notes.txt", assert_default as ActionAssertion)]
 fn multiple_path_groups(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -148,7 +148,7 @@ fn multiple_path_groups(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -156,12 +156,12 @@ fn multiple_path_groups(
 // ========================================
 
 #[rstest]
-#[case::without_force("git push origin main", ExpectedAction::Deny)]
-#[case::with_force("git push --force origin main", ExpectedAction::Deny)]
-#[case::with_short_force("git push -f origin main", ExpectedAction::Deny)]
+#[case::without_force("git push origin main", assert_deny as ActionAssertion)]
+#[case::with_force("git push --force origin main", assert_deny as ActionAssertion)]
+#[case::with_short_force("git push -f origin main", assert_deny as ActionAssertion)]
 fn optional_flag_in_deny_rule(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -171,7 +171,7 @@ fn optional_flag_in_deny_rule(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -179,13 +179,13 @@ fn optional_flag_in_deny_rule(
 // ========================================
 
 #[rstest]
-#[case::sensitive_no_flag("rm .env", ExpectedAction::Deny)]
-#[case::sensitive_with_flag("rm -f .envrc", ExpectedAction::Deny)]
-#[case::safe_no_flag("rm temp.txt", ExpectedAction::Default)]
-#[case::safe_with_flag("rm -f temp.txt", ExpectedAction::Default)]
+#[case::sensitive_no_flag("rm .env", assert_deny as ActionAssertion)]
+#[case::sensitive_with_flag("rm -f .envrc", assert_deny as ActionAssertion)]
+#[case::safe_no_flag("rm temp.txt", assert_default as ActionAssertion)]
+#[case::safe_with_flag("rm -f temp.txt", assert_default as ActionAssertion)]
 fn optional_flag_with_path_ref(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -200,7 +200,7 @@ fn optional_flag_with_path_ref(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -208,13 +208,13 @@ fn optional_flag_with_path_ref(
 // ========================================
 
 #[rstest]
-#[case::post("curl -X POST https://api.com", ExpectedAction::Deny)]
-#[case::put("curl -X PUT https://api.com", ExpectedAction::Deny)]
-#[case::patch("curl -X PATCH https://api.com", ExpectedAction::Deny)]
-#[case::get("curl -X GET https://api.com", ExpectedAction::Default)]
+#[case::post("curl -X POST https://api.com", assert_deny as ActionAssertion)]
+#[case::put("curl -X PUT https://api.com", assert_deny as ActionAssertion)]
+#[case::patch("curl -X PATCH https://api.com", assert_deny as ActionAssertion)]
+#[case::get("curl -X GET https://api.com", assert_default as ActionAssertion)]
 fn alternation_matches_any_variant(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -224,7 +224,7 @@ fn alternation_matches_any_variant(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -232,12 +232,12 @@ fn alternation_matches_any_variant(
 // ========================================
 
 #[rstest]
-#[case::post_denied("curl -X POST https://api.com", ExpectedAction::Ask)]
-#[case::delete_denied("curl -X DELETE https://api.com", ExpectedAction::Ask)]
-#[case::get_not_matched("curl -X GET https://api.com", ExpectedAction::Default)]
+#[case::post_denied("curl -X POST https://api.com", assert_ask as ActionAssertion)]
+#[case::delete_denied("curl -X DELETE https://api.com", assert_ask as ActionAssertion)]
+#[case::get_not_matched("curl -X GET https://api.com", assert_default as ActionAssertion)]
 fn negation_matches_everything_except(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -247,5 +247,5 @@ fn negation_matches_everything_except(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }

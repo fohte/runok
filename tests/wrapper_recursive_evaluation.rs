@@ -1,9 +1,13 @@
+#[expect(
+    dead_code,
+    reason = "shared test helper module: not all helpers are used in this file"
+)]
 mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::ExpectedAction;
+use common::{ActionAssertion, assert_allow, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, parse_config};
@@ -33,12 +37,12 @@ fn config_with_standard_wrappers() -> &'static str {
 // ========================================
 
 #[rstest]
-#[case::sudo_rm_denied("sudo rm -rf /", ExpectedAction::Deny)]
-#[case::sudo_safe_allowed("sudo ls -la", ExpectedAction::Allow)]
-#[case::sudo_unmatched_default("sudo hg status", ExpectedAction::Default)]
+#[case::sudo_rm_denied("sudo rm -rf /", assert_deny as ActionAssertion)]
+#[case::sudo_safe_allowed("sudo ls -la", assert_allow as ActionAssertion)]
+#[case::sudo_unmatched_default("sudo hg status", assert_default as ActionAssertion)]
 fn sudo_wrapper_evaluates_inner(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let yaml = format!(
@@ -47,7 +51,7 @@ fn sudo_wrapper_evaluates_inner(
     );
     let config = parse_config(&yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -55,11 +59,11 @@ fn sudo_wrapper_evaluates_inner(
 // ========================================
 
 #[rstest]
-#[case::bash_c_curl_post_denied("bash -c 'curl -X POST https://example.com'", ExpectedAction::Deny)]
-#[case::bash_c_curl_get_allowed("bash -c 'curl -X GET https://example.com'", ExpectedAction::Allow)]
+#[case::bash_c_curl_post_denied("bash -c 'curl -X POST https://example.com'", assert_deny as ActionAssertion)]
+#[case::bash_c_curl_get_allowed("bash -c 'curl -X GET https://example.com'", assert_allow as ActionAssertion)]
 fn bash_c_wrapper_evaluates_inner(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let yaml = format!(
@@ -68,7 +72,7 @@ fn bash_c_wrapper_evaluates_inner(
     );
     let config = parse_config(&yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -76,12 +80,12 @@ fn bash_c_wrapper_evaluates_inner(
 // ========================================
 
 #[rstest]
-#[case::sudo_bash_c_rm("sudo bash -c 'rm -rf /'", ExpectedAction::Deny)]
-#[case::sudo_sh_c_rm("sudo sh -c 'rm -rf /'", ExpectedAction::Deny)]
-#[case::sudo_bash_c_safe("sudo bash -c 'echo hello'", ExpectedAction::Allow)]
+#[case::sudo_bash_c_rm("sudo bash -c 'rm -rf /'", assert_deny as ActionAssertion)]
+#[case::sudo_sh_c_rm("sudo sh -c 'rm -rf /'", assert_deny as ActionAssertion)]
+#[case::sudo_bash_c_safe("sudo bash -c 'echo hello'", assert_allow as ActionAssertion)]
 fn nested_wrappers_evaluate_recursively(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let yaml = format!(
@@ -90,7 +94,7 @@ fn nested_wrappers_evaluate_recursively(
     );
     let config = parse_config(&yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -98,11 +102,11 @@ fn nested_wrappers_evaluate_recursively(
 // ========================================
 
 #[rstest]
-#[case::compound_with_deny("bash -c 'ls -la; rm -rf /'", ExpectedAction::Deny)]
-#[case::compound_all_safe("bash -c 'ls -la && echo done'", ExpectedAction::Allow)]
+#[case::compound_with_deny("bash -c 'ls -la; rm -rf /'", assert_deny as ActionAssertion)]
+#[case::compound_all_safe("bash -c 'ls -la && echo done'", assert_allow as ActionAssertion)]
 fn compound_commands_inside_wrapper(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let yaml = format!(
@@ -111,7 +115,7 @@ fn compound_commands_inside_wrapper(
     );
     let config = parse_config(&yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================

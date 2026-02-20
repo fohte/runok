@@ -3,7 +3,7 @@ mod common;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::ExpectedAction;
+use common::{ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
@@ -28,7 +28,7 @@ fn empty_context() -> EvalContext {
           - allow: 'git status'
     "},
     "git status",
-    ExpectedAction::Allow,
+    assert_allow as ActionAssertion,
 )]
 #[case::deny_matches(
     indoc! {"
@@ -36,7 +36,7 @@ fn empty_context() -> EvalContext {
           - deny: 'rm -rf /'
     "},
     "rm -rf /",
-    ExpectedAction::Deny,
+    assert_deny as ActionAssertion,
 )]
 #[case::ask_matches(
     indoc! {"
@@ -44,7 +44,7 @@ fn empty_context() -> EvalContext {
           - ask: 'git push *'
     "},
     "git push origin main",
-    ExpectedAction::Ask,
+    assert_ask as ActionAssertion,
 )]
 #[case::no_match_returns_default(
     indoc! {"
@@ -52,17 +52,17 @@ fn empty_context() -> EvalContext {
           - allow: 'git status'
     "},
     "hg status",
-    ExpectedAction::Default,
+    assert_default as ActionAssertion,
 )]
 fn yaml_config_evaluates_commands(
     #[case] yaml: &str,
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -77,7 +77,7 @@ fn yaml_config_evaluates_commands(
           - deny: 'git push -f|--force *'
     "},
     "git push --force origin",
-    ExpectedAction::Deny,
+    assert_deny as ActionAssertion,
 )]
 #[case::deny_over_ask(
     indoc! {"
@@ -86,7 +86,7 @@ fn yaml_config_evaluates_commands(
           - deny: 'git push -f|--force *'
     "},
     "git push --force origin",
-    ExpectedAction::Deny,
+    assert_deny as ActionAssertion,
 )]
 #[case::ask_over_allow(
     indoc! {"
@@ -95,7 +95,7 @@ fn yaml_config_evaluates_commands(
           - ask: 'git push *'
     "},
     "git push origin",
-    ExpectedAction::Ask,
+    assert_ask as ActionAssertion,
 )]
 #[case::deny_wins_over_both(
     indoc! {"
@@ -105,17 +105,17 @@ fn yaml_config_evaluates_commands(
           - deny: 'git push -f|--force *'
     "},
     "git push --force origin",
-    ExpectedAction::Deny,
+    assert_deny as ActionAssertion,
 )]
 fn explicit_deny_wins(
     #[case] yaml: &str,
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
 
 // ========================================
@@ -358,13 +358,13 @@ fn allow_rule_with_sandbox_propagates_preset(empty_context: EvalContext) {
 // ========================================
 
 #[rstest]
-#[case::allowed_command("git status", ExpectedAction::Allow)]
-#[case::denied_command("rm -rf /", ExpectedAction::Deny)]
-#[case::asked_command("git push origin main", ExpectedAction::Ask)]
-#[case::unmatched_command("hg status", ExpectedAction::Default)]
+#[case::allowed_command("git status", assert_allow as ActionAssertion)]
+#[case::denied_command("rm -rf /", assert_deny as ActionAssertion)]
+#[case::asked_command("git push origin main", assert_ask as ActionAssertion)]
+#[case::unmatched_command("hg status", assert_default as ActionAssertion)]
 fn full_config_evaluates_correctly(
     #[case] command: &str,
-    #[case] expected: ExpectedAction,
+    #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {"
@@ -382,5 +382,5 @@ fn full_config_evaluates_correctly(
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected.assert_matches(&result.action);
+    expected(&result.action);
 }
