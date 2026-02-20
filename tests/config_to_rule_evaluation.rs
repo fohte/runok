@@ -1,9 +1,6 @@
-mod common;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::{ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
@@ -383,4 +380,39 @@ fn full_config_evaluates_correctly(
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
+}
+
+// ========================================
+// Helpers
+// ========================================
+
+type ActionAssertion = fn(&Action);
+
+fn assert_allow(actual: &Action) {
+    assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual);
+}
+
+fn assert_deny(actual: &Action) {
+    assert!(
+        matches!(actual, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        actual
+    );
+}
+
+fn assert_ask(actual: &Action) {
+    assert!(
+        matches!(actual, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        actual
+    );
+}
+
+fn assert_default(actual: &Action) {
+    assert_eq!(
+        *actual,
+        Action::Default,
+        "expected Default, got {:?}",
+        actual
+    );
 }

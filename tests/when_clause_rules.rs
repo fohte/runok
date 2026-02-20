@@ -1,13 +1,6 @@
-#[expect(
-    dead_code,
-    reason = "shared test helper module: not all helpers are used in this file"
-)]
-mod common;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::{ActionAssertion, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::parse_config;
@@ -275,4 +268,27 @@ fn when_clause_with_logical_and() {
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// Helpers
+// ========================================
+
+type ActionAssertion = fn(&Action);
+
+fn assert_deny(actual: &Action) {
+    assert!(
+        matches!(actual, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        actual
+    );
+}
+
+fn assert_default(actual: &Action) {
+    assert_eq!(
+        *actual,
+        Action::Default,
+        "expected Default, got {:?}",
+        actual
+    );
 }

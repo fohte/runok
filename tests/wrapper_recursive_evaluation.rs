@@ -1,13 +1,6 @@
-#[expect(
-    dead_code,
-    reason = "shared test helper module: not all helpers are used in this file"
-)]
-mod common;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use common::{ActionAssertion, assert_allow, assert_default, assert_deny};
 use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::{Config, parse_config};
@@ -196,4 +189,31 @@ fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
+}
+
+// ========================================
+// Helpers
+// ========================================
+
+type ActionAssertion = fn(&Action);
+
+fn assert_allow(actual: &Action) {
+    assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual);
+}
+
+fn assert_deny(actual: &Action) {
+    assert!(
+        matches!(actual, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        actual
+    );
+}
+
+fn assert_default(actual: &Action) {
+    assert_eq!(
+        *actual,
+        Action::Default,
+        "expected Default, got {:?}",
+        actual
+    );
 }
