@@ -54,10 +54,9 @@ pub fn run(endpoint: &dyn Endpoint, config: &Config) -> i32 {
     let command = match endpoint.extract_command() {
         Ok(Some(cmd)) => cmd,
         Ok(None) => {
-            return match endpoint.handle_no_match(&defaults) {
-                Ok(code) => code,
-                Err(e) => endpoint.handle_error(e),
-            };
+            return endpoint
+                .handle_no_match(&defaults)
+                .unwrap_or_else(|e| endpoint.handle_error(e));
         }
         Err(e) => return endpoint.handle_error(e),
     };
@@ -86,16 +85,14 @@ pub fn run(endpoint: &dyn Endpoint, config: &Config) -> i32 {
     };
 
     if matches!(action_result.action, Action::Default) {
-        return match endpoint.handle_no_match(&defaults) {
-            Ok(code) => code,
-            Err(e) => endpoint.handle_error(e),
-        };
+        return endpoint
+            .handle_no_match(&defaults)
+            .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
-    match endpoint.handle_action(action_result) {
-        Ok(code) => code,
-        Err(e) => endpoint.handle_error(e),
-    }
+    endpoint
+        .handle_action(action_result)
+        .unwrap_or_else(|e| endpoint.handle_error(e))
 }
 
 #[cfg(test)]
