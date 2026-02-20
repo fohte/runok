@@ -216,12 +216,18 @@ impl SandboxPolicy {
     /// Converts string paths to `PathBuf`, expands `~`, canonicalizes paths,
     /// and adds protected paths.
     pub fn from_merged(policy: &crate::config::MergedSandboxPolicy) -> Result<Self, SandboxError> {
-        // Host-level filtering is not yet supported; collapse to a boolean.
-        // None (no restriction) => allowed, Some([...]) with hosts => allowed,
-        // Some([]) (explicit deny-all) => not allowed.
         let network_allowed = match &policy.network_allow {
+            // No restriction specified => all network access allowed
             None => true,
-            Some(hosts) => !hosts.is_empty(),
+            // Explicit deny-all (empty list) => no network access
+            Some(hosts) if hosts.is_empty() => false,
+            // Host-level filtering is not yet supported
+            Some(hosts) => {
+                return Err(SandboxError::SetupFailed(format!(
+                    "host-level network filtering is not yet supported (got: {})",
+                    hosts.join(", "),
+                )));
+            }
         };
         Self::build(
             policy.writable.clone(),
@@ -1121,7 +1127,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string()],
             deny: vec!["/etc/passwd".to_string()],
-            network_allow: Some(vec!["github.com".to_string()]),
+            network_allow: None,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
 
@@ -1133,6 +1139,22 @@ mod tests {
         // Protected paths should be auto-added
         assert!(policy.read_only_subpaths.contains(&PathBuf::from(".git")));
         assert!(policy.read_only_subpaths.contains(&PathBuf::from(".runok")));
+    }
+
+    #[rstest]
+    fn from_merged_rejects_host_level_network_filtering() {
+        use crate::config::MergedSandboxPolicy;
+
+        let merged = MergedSandboxPolicy {
+            writable: vec!["/tmp".to_string()],
+            deny: vec![],
+            network_allow: Some(vec!["github.com".to_string()]),
+        };
+        let err = SandboxPolicy::from_merged(&merged).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("host-level network filtering is not yet supported")
+        );
     }
 
     #[rstest]
