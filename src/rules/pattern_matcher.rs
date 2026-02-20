@@ -29,7 +29,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     // Match pattern tokens against raw_tokens (excluding the command name at index 0)
     let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
     let steps = Cell::new(0usize);
-    match_tokens_inner(&pattern.tokens, &cmd_tokens, definitions, &steps)
+    match_tokens_core(&pattern.tokens, &cmd_tokens, definitions, &steps, None)
 }
 
 /// Like `matches`, but also returns the tokens captured by wildcards (`*`).
@@ -47,12 +47,12 @@ pub fn matches_with_captures(
     let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
     let steps = Cell::new(0usize);
     let mut captures = Vec::new();
-    if match_tokens_capturing(
+    if match_tokens_core(
         &pattern.tokens,
         &cmd_tokens,
         definitions,
         &steps,
-        &mut captures,
+        Some(&mut captures),
     ) {
         Some(captures.into_iter().map(|s| s.to_string()).collect())
     } else {
@@ -62,13 +62,17 @@ pub fn matches_with_captures(
 
 /// Core recursive matcher operating on `&[&str]` slices.
 ///
+/// When `captures` is `Some`, wildcard-matched tokens are recorded.
+/// When `None`, only a boolean match result is produced.
+///
 /// `steps` tracks the total number of recursive calls to prevent exponential
 /// blowup from patterns with multiple consecutive wildcards.
-fn match_tokens_inner(
+fn match_tokens_core<'a>(
     pattern_tokens: &[PatternToken],
-    cmd_tokens: &[&str],
+    cmd_tokens: &[&'a str],
     definitions: &Definitions,
     steps: &Cell<usize>,
+    mut captures: Option<&mut Vec<&'a str>>,
 ) -> bool {
     let count = steps.get() + 1;
     steps.set(count);
@@ -85,7 +89,15 @@ fn match_tokens_inner(
         PatternToken::Wildcard => {
             // Wildcard matches zero or more tokens (greedy with backtracking)
             for skip in 0..=cmd_tokens.len() {
-                if match_tokens_inner(rest, &cmd_tokens[skip..], definitions, steps) {
+                if let Some(ref mut caps) = captures {
+                    let saved_len = caps.len();
+                    caps.extend_from_slice(&cmd_tokens[..skip]);
+                    if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, Some(*caps))
+                    {
+                        return true;
+                    }
+                    caps.truncate(saved_len);
+                } else if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, None) {
                     return true;
                 }
             }
@@ -97,7 +109,7 @@ fn match_tokens_inner(
                 return false;
             }
             if cmd_tokens[0] == s.as_str() {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
             }
@@ -108,7 +120,7 @@ fn match_tokens_inner(
                 return false;
             }
             if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
             }
@@ -124,7 +136,13 @@ fn match_tokens_inner(
                 {
                     // Remove the flag and its value, continue matching
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    if match_tokens_inner(rest, &remaining, definitions, steps) {
+                    if let Some(ref mut caps) = captures {
+                        let saved_len = caps.len();
+                        if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps)) {
+                            return true;
+                        }
+                        caps.truncate(saved_len);
+                    } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
                         return true;
                     }
                 }
@@ -137,21 +155,33 @@ fn match_tokens_inner(
                 return false;
             }
             if !match_single_token(inner, cmd_tokens[0], definitions) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
             }
         }
 
         PatternToken::Optional(inner_tokens) => {
-            // Try matching with the optional tokens present (consuming command tokens)
-            if match_optional_present(inner_tokens, rest, cmd_tokens, definitions, steps) {
+            // Try matching with the optional tokens present by chaining them
+            // with the remaining pattern tokens
+            let combined: Vec<PatternToken> = inner_tokens
+                .iter()
+                .cloned()
+                .chain(rest.iter().cloned())
+                .collect();
+            if let Some(ref mut caps) = captures {
+                let saved_len = caps.len();
+                if match_tokens_core(&combined, cmd_tokens, definitions, steps, Some(*caps)) {
+                    return true;
+                }
+                caps.truncate(saved_len);
+            } else if match_tokens_core(&combined, cmd_tokens, definitions, steps, None) {
                 return true;
             }
             // Try matching without the optional tokens (skip the Optional entirely),
             // but verify that the optional's flags are actually absent from the command
             if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_inner(rest, cmd_tokens, definitions, steps);
+                return match_tokens_core(rest, cmd_tokens, definitions, steps, captures);
             }
             false
         }
@@ -163,7 +193,7 @@ fn match_tokens_inner(
             let paths = resolve_paths(name, definitions);
             let normalized_cmd = normalize_path(cmd_tokens[0]);
             if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
             }
@@ -176,129 +206,7 @@ fn match_tokens_inner(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            match_tokens_inner(rest, &cmd_tokens[1..], definitions, steps)
-        }
-    }
-}
-
-/// Like `match_tokens_inner` but captures the tokens consumed by each Wildcard.
-fn match_tokens_capturing<'a>(
-    pattern_tokens: &[PatternToken],
-    cmd_tokens: &[&'a str],
-    definitions: &Definitions,
-    steps: &Cell<usize>,
-    captures: &mut Vec<&'a str>,
-) -> bool {
-    let count = steps.get() + 1;
-    steps.set(count);
-    if count > MAX_MATCH_STEPS {
-        return false;
-    }
-
-    let Some((first, rest)) = pattern_tokens.split_first() else {
-        return cmd_tokens.is_empty();
-    };
-
-    match first {
-        PatternToken::Wildcard => {
-            for skip in 0..=cmd_tokens.len() {
-                let saved_len = captures.len();
-                captures.extend_from_slice(&cmd_tokens[..skip]);
-                if match_tokens_capturing(rest, &cmd_tokens[skip..], definitions, steps, captures) {
-                    return true;
-                }
-                captures.truncate(saved_len);
-            }
-            false
-        }
-
-        PatternToken::Literal(s) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if cmd_tokens[0] == s.as_str() {
-                match_tokens_capturing(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Alternation(alts) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
-                match_tokens_capturing(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::FlagWithValue { aliases, value } => {
-            for i in 0..cmd_tokens.len() {
-                if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
-                    && i + 1 < cmd_tokens.len()
-                    && match_single_token(value, cmd_tokens[i + 1], definitions)
-                {
-                    let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    let saved_len = captures.len();
-                    if match_tokens_capturing(rest, &remaining, definitions, steps, captures) {
-                        return true;
-                    }
-                    captures.truncate(saved_len);
-                }
-            }
-            false
-        }
-
-        PatternToken::Negation(inner) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if !match_single_token(inner, cmd_tokens[0], definitions) {
-                match_tokens_capturing(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Optional(inner_tokens) => {
-            // Try with optional present, propagating captures
-            let combined: Vec<PatternToken> = inner_tokens
-                .iter()
-                .cloned()
-                .chain(rest.iter().cloned())
-                .collect();
-            let saved_len = captures.len();
-            if match_tokens_capturing(&combined, cmd_tokens, definitions, steps, captures) {
-                return true;
-            }
-            captures.truncate(saved_len);
-            // Try without the optional tokens
-            if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_capturing(rest, cmd_tokens, definitions, steps, captures);
-            }
-            false
-        }
-
-        PatternToken::PathRef(name) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            let paths = resolve_paths(name, definitions);
-            let normalized_cmd = normalize_path(cmd_tokens[0]);
-            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                match_tokens_capturing(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Placeholder(_) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            match_tokens_capturing(rest, &cmd_tokens[1..], definitions, steps, captures)
+            match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
         }
     }
 }
@@ -512,136 +420,6 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
         }
     }
     true
-}
-
-/// Try to match optional inner tokens against the beginning of cmd_tokens
-/// using order-independent matching for FlagWithValue tokens within the
-/// optional group.
-fn match_optional_present(
-    optional_tokens: &[PatternToken],
-    remaining_pattern: &[PatternToken],
-    cmd_tokens: &[&str],
-    definitions: &Definitions,
-    steps: &Cell<usize>,
-) -> bool {
-    // Chain optional tokens with remaining pattern to avoid cloning.
-    let combined: Vec<&PatternToken> = optional_tokens
-        .iter()
-        .chain(remaining_pattern.iter())
-        .collect();
-    match_tokens_ref(&combined, cmd_tokens, definitions, steps)
-}
-
-/// Same as [`match_tokens_inner`] but operates on `&[&PatternToken]` to avoid
-/// cloning when chaining optional groups with the remaining pattern.
-fn match_tokens_ref(
-    pattern_tokens: &[&PatternToken],
-    cmd_tokens: &[&str],
-    definitions: &Definitions,
-    steps: &Cell<usize>,
-) -> bool {
-    let count = steps.get() + 1;
-    steps.set(count);
-    if count > MAX_MATCH_STEPS {
-        return false;
-    }
-
-    let Some((first, rest)) = pattern_tokens.split_first() else {
-        return cmd_tokens.is_empty();
-    };
-
-    match first {
-        PatternToken::Wildcard => {
-            for skip in 0..=cmd_tokens.len() {
-                if match_tokens_ref(rest, &cmd_tokens[skip..], definitions, steps) {
-                    return true;
-                }
-            }
-            false
-        }
-
-        PatternToken::Literal(s) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if cmd_tokens[0] == s.as_str() {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Alternation(alts) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::FlagWithValue { aliases, value } => {
-            for i in 0..cmd_tokens.len() {
-                if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
-                    && i + 1 < cmd_tokens.len()
-                    && match_single_token(value, cmd_tokens[i + 1], definitions)
-                {
-                    let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    if match_tokens_ref(rest, &remaining, definitions, steps) {
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-
-        PatternToken::Negation(inner) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if !match_single_token(inner, cmd_tokens[0], definitions) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Optional(inner_tokens) => {
-            // "present" path: chain inner tokens with rest
-            let combined: Vec<&PatternToken> =
-                inner_tokens.iter().chain(rest.iter().copied()).collect();
-            if match_tokens_ref(&combined, cmd_tokens, definitions, steps) {
-                return true;
-            }
-            // "absent" path
-            if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_ref(rest, cmd_tokens, definitions, steps);
-            }
-            false
-        }
-
-        PatternToken::PathRef(name) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            let paths = resolve_paths(name, definitions);
-            let normalized_cmd = normalize_path(cmd_tokens[0]);
-            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Placeholder(_) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            match_tokens_ref(rest, &cmd_tokens[1..], definitions, steps)
-        }
-    }
 }
 
 /// Check if a single pattern token matches a single command token.
