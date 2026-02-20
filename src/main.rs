@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use cli::{CheckRoute, Cli, Commands, route_check};
-use runok::adapter;
+use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
 use runok::exec::command_executor::ProcessCommandExecutor;
 
@@ -37,31 +37,43 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
 
     match command {
         Commands::Exec(args) => {
+            let options = RunOptions {
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+            };
             let executor = ProcessCommandExecutor::new_without_sandbox();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
                 Box::new(executor),
             );
-            adapter::run(&endpoint, &config)
+            adapter::run_with_options(&endpoint, &config, &options)
         }
-        Commands::Check(args) => match route_check(&args, stdin) {
-            Ok(CheckRoute::Single(endpoint)) => adapter::run(endpoint.as_ref(), &config),
-            Ok(CheckRoute::Multi(adapters)) => {
-                let mut worst_exit = 0;
-                for ep in &adapters {
-                    let code = adapter::run(ep, &config);
-                    if code > worst_exit {
-                        worst_exit = code;
-                    }
+        Commands::Check(args) => {
+            let options = RunOptions {
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+            };
+            match route_check(&args, stdin) {
+                Ok(CheckRoute::Single(endpoint)) => {
+                    adapter::run_with_options(endpoint.as_ref(), &config, &options)
                 }
-                worst_exit
+                Ok(CheckRoute::Multi(adapters)) => {
+                    let mut worst_exit = 0;
+                    for ep in &adapters {
+                        let code = adapter::run_with_options(ep, &config, &options);
+                        if code > worst_exit {
+                            worst_exit = code;
+                        }
+                    }
+                    worst_exit
+                }
+                Err(e) => {
+                    eprintln!("runok: {e}");
+                    2
+                }
             }
-            Err(e) => {
-                eprintln!("runok: {e}");
-                2
-            }
-        },
+        }
     }
 }
 
@@ -77,6 +89,8 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: Some("echo hello".into()),
             format: None,
+            dry_run: false,
+            verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, std::io::empty());
@@ -88,6 +102,8 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
+            dry_run: false,
+            verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "".as_bytes());
@@ -99,6 +115,8 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
+            dry_run: false,
+            verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, r#"{"command": "ls"}"#.as_bytes());
@@ -110,6 +128,8 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
+            dry_run: false,
+            verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "echo hello\n".as_bytes());
@@ -121,6 +141,8 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
+            dry_run: false,
+            verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let input = indoc! {"

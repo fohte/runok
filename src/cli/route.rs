@@ -120,6 +120,8 @@ mod tests {
         CheckArgs {
             command: command.map(String::from),
             format: format.map(String::from),
+            dry_run: false,
+            verbose: false,
         }
     }
 
