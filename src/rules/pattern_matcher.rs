@@ -263,10 +263,18 @@ fn match_tokens_capturing<'a>(
         }
 
         PatternToken::Optional(inner_tokens) => {
-            // Try with optional present: delegate to non-capturing match for simplicity
-            if match_optional_present(inner_tokens, rest, cmd_tokens, definitions, steps) {
+            // Try with optional present, propagating captures
+            let combined: Vec<PatternToken> = inner_tokens
+                .iter()
+                .cloned()
+                .chain(rest.iter().cloned())
+                .collect();
+            let saved_len = captures.len();
+            if match_tokens_capturing(&combined, cmd_tokens, definitions, steps, captures) {
                 return true;
             }
+            captures.truncate(saved_len);
+            // Try without the optional tokens
             if optional_flags_absent(inner_tokens, cmd_tokens) {
                 return match_tokens_capturing(rest, cmd_tokens, definitions, steps, captures);
             }
@@ -1101,6 +1109,16 @@ mod tests {
         "git *",
         "git remote add origin",
         Some(vec!["remote".to_string(), "add".to_string(), "origin".to_string()])
+    )]
+    #[case::wildcard_in_optional(
+        "git [-C *] status",
+        "git -C /tmp status",
+        Some(vec!["/tmp".to_string()])
+    )]
+    #[case::optional_absent_no_captures(
+        "git [-C *] status",
+        "git status",
+        Some(vec![])
     )]
     #[case::no_match("git status", "ls -la", None)]
     #[case::different_command("git *", "ls -la", None)]

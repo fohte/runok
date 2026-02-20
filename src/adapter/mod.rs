@@ -168,6 +168,12 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         if options.verbose {
             eprintln!("[verbose] No matching rule, using default behavior");
         }
+        if options.dry_run {
+            if options.verbose {
+                eprintln!("[verbose] Dry-run mode: skipping execution");
+            }
+            return endpoint.handle_dry_run(action_result).unwrap_or(1);
+        }
         return endpoint.handle_no_match(&defaults).unwrap_or(0);
     }
 
@@ -562,7 +568,7 @@ mod tests {
     }
 
     #[rstest]
-    fn dry_run_with_no_match_still_calls_handle_no_match() {
+    fn dry_run_with_no_match_calls_handle_dry_run() {
         let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
         let config = make_config(vec![allow_rule("git status")]);
         let options = RunOptions {
@@ -571,9 +577,9 @@ mod tests {
         };
         let exit_code = run_with_options(&endpoint, &config, &options);
 
-        // No match -> handle_no_match, not handle_dry_run
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_dry_run.borrow());
+        // No match + dry-run -> handle_dry_run, not handle_no_match
+        assert!(*endpoint.called_handle_dry_run.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
         assert_eq!(exit_code, 0);
     }
 

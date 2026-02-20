@@ -387,17 +387,19 @@ fn try_unwrap_wrapper(
 /// Merge two evaluation results using Explicit Deny Wins priority.
 fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
     let mut combined_rules = a.matched_rules;
-    combined_rules.extend(b.matched_rules.clone());
+    combined_rules.extend(b.matched_rules);
 
     if action_priority(&b.action) > action_priority(&a.action) {
         EvalResult {
+            action: b.action,
+            sandbox_preset: b.sandbox_preset,
             matched_rules: combined_rules,
-            ..b
         }
     } else {
         EvalResult {
+            action: a.action,
+            sandbox_preset: a.sandbox_preset,
             matched_rules: combined_rules,
-            ..a
         }
     }
 }
