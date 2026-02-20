@@ -194,6 +194,27 @@ mod tests {
         }
     }
 
+    #[rstest]
+    fn route_check_stdin_invalid_json_returns_error() {
+        let args = check_args(None, None);
+        let result = route_check(&args, "not valid json".as_bytes());
+        match result {
+            Err(e) => assert!(e.to_string().contains("JSON parse error"), "error was: {e}"),
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
+    #[rstest]
+    fn route_check_command_flag_takes_precedence_over_stdin() {
+        // --command is specified, so stdin content is irrelevant
+        let args = check_args(Some("echo hello"), Some("claude-code-hook"));
+        let endpoint = route_check(&args, std::io::empty()).unwrap();
+        assert_eq!(
+            endpoint.extract_command().unwrap(),
+            Some("echo hello".to_string())
+        );
+    }
+
     // === route_check: --format flag ===
 
     #[rstest]
