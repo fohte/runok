@@ -58,14 +58,8 @@ pub struct SandboxPolicy {
     pub network_allowed: bool,
 }
 
-/// Protected paths that are automatically added to read_only_subpaths.
-const PROTECTED_PATHS: &[&str] = &[".git", ".gitmodules", ".runok"];
-
 impl SandboxPolicy {
     /// Build a `SandboxPolicy` from writable roots, read-only subpaths, and network flag.
-    ///
-    /// Automatically adds protected paths (.git, .gitmodules, .runok) to read_only_subpaths
-    /// and normalizes all paths.
     ///
     /// - `writable_roots` are canonicalized to prevent TOCTOU attacks via symlinks.
     ///   Returns an error if any writable path cannot be canonicalized.
@@ -92,12 +86,6 @@ impl SandboxPolicy {
         for path in &read_only_subpaths {
             let expanded = expand_tilde(path);
             readonly_set.insert(PathBuf::from(expanded));
-        }
-
-        // Protected paths are relative markers resolved at sandbox enforcement time,
-        // so they are added without canonicalization.
-        for protected in PROTECTED_PATHS {
-            readonly_set.insert(PathBuf::from(protected));
         }
 
         let mut resolved_readonly: Vec<PathBuf> = readonly_set.into_iter().collect();
@@ -863,9 +851,6 @@ mod tests {
 
     // === SandboxPolicy::build ===
 
-    // PROTECTED_PATHS sorted: [".git", ".gitmodules", ".runok"]
-    // This is the baseline for read_only_subpaths when no deny paths are given.
-
     /// Parameterized deny-only cases for `build()`.
     /// writable_roots is empty so no canonicalization needed; expected
     /// read_only_subpaths is fully hardcoded.
@@ -873,38 +858,32 @@ mod tests {
     #[case::empty_deny(
         vec![],
         true,
-        // expected read_only_subpaths (sorted):
-        vec![".git", ".gitmodules", ".runok"],
+        vec![],
     )]
     #[case::glob_pattern(
         vec![".env*"],
         true,
-        vec![".env*", ".git", ".gitmodules", ".runok"],
+        vec![".env*"],
     )]
     #[case::recursive_glob(
         vec!["/etc/**"],
         false,
-        vec!["/etc/**", ".git", ".gitmodules", ".runok"],
+        vec!["/etc/**"],
     )]
     #[case::nonexistent_path(
         vec!["/nonexistent_readonly_12345"],
         true,
-        vec!["/nonexistent_readonly_12345", ".git", ".gitmodules", ".runok"],
+        vec!["/nonexistent_readonly_12345"],
     )]
     #[case::duplicate_deduped(
         vec![".env", ".env"],
         true,
-        vec![".env", ".git", ".gitmodules", ".runok"],
-    )]
-    #[case::overlaps_with_protected(
-        vec![".git"],
-        true,
-        vec![".git", ".gitmodules", ".runok"],
+        vec![".env"],
     )]
     #[case::multiple_deny(
         vec![".secrets", "/etc/shadow"],
         false,
-        vec!["/etc/shadow", ".git", ".gitmodules", ".runok", ".secrets"],
+        vec!["/etc/shadow", ".secrets"],
     )]
     fn build_deny_paths(
         #[case] deny: Vec<&str>,
@@ -930,20 +909,13 @@ mod tests {
     }
 
     /// Writable-roots tests require canonicalization which is environment-dependent,
-    /// so they use individual tests with canonical() calls as test setup.
+    /// so they use individual tests with canonicalize() calls as test setup.
     #[rstest]
     fn build_single_writable() {
         let policy = SandboxPolicy::build(vec!["/tmp".to_string()], vec![], true).unwrap();
         let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
         assert_eq!(policy.writable_roots, vec![canonical_tmp]);
-        assert_eq!(
-            policy.read_only_subpaths,
-            vec![
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-            ]
-        );
+        assert!(policy.read_only_subpaths.is_empty());
         assert!(policy.network_allowed);
     }
 
@@ -954,7 +926,6 @@ mod tests {
                 .unwrap();
         let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
         let canonical_var = PathBuf::from("/var").canonicalize().unwrap();
-        // Production sorts writable_roots; assert exact order matches.
         assert_eq!(policy.writable_roots, vec![canonical_tmp, canonical_var]);
     }
 
@@ -980,15 +951,7 @@ mod tests {
         let home = std::env::var("HOME").unwrap();
         let policy = SandboxPolicy::build(vec![], vec!["~/.ssh/**".to_string()], true).unwrap();
         let tilde_expanded = PathBuf::from(format!("{home}/.ssh/**"));
-        assert_eq!(
-            policy.read_only_subpaths,
-            vec![
-                tilde_expanded,
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-            ]
-        );
+        assert_eq!(policy.read_only_subpaths, vec![tilde_expanded]);
     }
 
     #[rstest]
@@ -1003,13 +966,7 @@ mod tests {
         assert_eq!(policy.writable_roots, vec![canonical_tmp]);
         assert_eq!(
             policy.read_only_subpaths,
-            vec![
-                PathBuf::from("/etc/shadow"),
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-                PathBuf::from(".secrets"),
-            ]
+            vec![PathBuf::from("/etc/shadow"), PathBuf::from(".secrets"),]
         );
         assert!(!policy.network_allowed);
     }
@@ -1190,13 +1147,7 @@ mod tests {
         assert!(!policy.network_allowed);
         assert_eq!(
             policy.read_only_subpaths,
-            vec![
-                PathBuf::from("/etc/shadow"),
-                PathBuf::from(".env*"),
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-            ]
+            vec![PathBuf::from("/etc/shadow"), PathBuf::from(".env*"),]
         );
     }
 
@@ -1216,12 +1167,7 @@ mod tests {
         assert!(policy.network_allowed);
         assert_eq!(
             policy.read_only_subpaths,
-            vec![
-                PathBuf::from(format!("{home}/.ssh/**")),
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-            ]
+            vec![PathBuf::from(format!("{home}/.ssh/**"))]
         );
     }
 
@@ -1238,14 +1184,7 @@ mod tests {
 
         assert!(policy.writable_roots.is_empty());
         assert!(policy.network_allowed);
-        assert_eq!(
-            policy.read_only_subpaths,
-            vec![
-                PathBuf::from(".git"),
-                PathBuf::from(".gitmodules"),
-                PathBuf::from(".runok"),
-            ]
-        );
+        assert!(policy.read_only_subpaths.is_empty());
     }
 
     #[rstest]
