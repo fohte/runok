@@ -1005,9 +1005,9 @@ mod tests {
         assert_eq!(deny, &expected_deny);
     }
 
-    #[test]
-    fn expand_sandbox_path_refs_undefined_name() {
-        let mut config = parse_config(indoc! {"
+    #[rstest]
+    #[case::undefined_name(
+        indoc! {"
             definitions:
               sandbox:
                 restricted:
@@ -1015,16 +1015,11 @@ mod tests {
                     writable: [./tmp]
                     deny:
                       - '<path:nonexistent>'
-        "})
-        .unwrap();
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("nonexistent"));
-        assert!(err.to_string().contains("undefined path"));
-    }
-
-    #[test]
-    fn expand_sandbox_path_refs_no_paths_defined() {
-        let mut config = parse_config(indoc! {"
+        "},
+        "nonexistent",
+    )]
+    #[case::no_paths_defined(
+        indoc! {"
             definitions:
               sandbox:
                 restricted:
@@ -1032,10 +1027,13 @@ mod tests {
                     writable: [./tmp]
                     deny:
                       - '<path:sensitive>'
-        "})
-        .unwrap();
+        "},
+        "sensitive",
+    )]
+    fn expand_sandbox_path_refs_errors(#[case] yaml: &str, #[case] expected_name: &str) {
+        let mut config = parse_config(yaml).unwrap();
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("sensitive"));
+        assert!(err.to_string().contains(expected_name));
         assert!(err.to_string().contains("undefined path"));
     }
 
