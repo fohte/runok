@@ -1,3 +1,4 @@
+mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod optional_notation_and_path_ref;
 mod when_clause_rules;
