@@ -170,14 +170,17 @@ impl Config {
     /// Replaces each `<path:name>` entry with the corresponding path list
     /// from `definitions.paths`. Returns a validation error if a referenced
     /// path name is not defined.
-    fn expand_sandbox_path_refs(&mut self) -> Result<(), crate::config::ConfigError> {
+    /// Expand `<path:name>` references in sandbox preset `fs.deny` lists,
+    /// collecting all errors so they can be reported together with other
+    /// validation errors.
+    fn expand_sandbox_path_refs(&mut self, errors: &mut Vec<String>) {
         // Clone paths to avoid borrowing self.definitions both immutably and mutably.
         let paths = self.definitions.as_ref().and_then(|d| d.paths.clone());
 
         let sandbox = self.definitions.as_mut().and_then(|d| d.sandbox.as_mut());
 
         let Some(sandbox) = sandbox else {
-            return Ok(());
+            return;
         };
 
         for (preset_name, preset) in sandbox.iter_mut() {
@@ -194,21 +197,20 @@ impl Config {
                     .strip_prefix("<path:")
                     .and_then(|s| s.strip_suffix('>'))
                 {
-                    let path_list = paths.as_ref().and_then(|p| p.get(name)).ok_or_else(|| {
-                        crate::config::ConfigError::Validation(vec![format!(
+                    match paths.as_ref().and_then(|p| p.get(name)) {
+                        Some(path_list) => expanded.extend(path_list.iter().cloned()),
+                        None => errors.push(format!(
                             "sandbox preset '{}': fs.deny references undefined path '{}'. \
-                                 Define it in definitions.paths.{}",
+                             Define it in definitions.paths.{}",
                             preset_name, name, name
-                        )])
-                    })?;
-                    expanded.extend(path_list.iter().cloned());
+                        )),
+                    }
                 } else {
                     expanded.push(entry.clone());
                 }
             }
             *deny = expanded;
         }
-        Ok(())
     }
 
     /// Validate the config structure.
@@ -222,9 +224,9 @@ impl Config {
     /// - deny rules must not have a sandbox attribute
     /// - sandbox values must reference names defined in definitions.sandbox
     pub fn validate(&mut self) -> Result<(), crate::config::ConfigError> {
-        self.expand_sandbox_path_refs()?;
-
         let mut errors = Vec::new();
+
+        self.expand_sandbox_path_refs(&mut errors);
 
         // Reject <path:name> references inside definitions.paths values.
         // The <path:name> syntax is only valid in pattern contexts (rule
