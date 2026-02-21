@@ -2,7 +2,7 @@ use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_contex
 
 use indoc::indoc;
 use rstest::rstest;
-use runok::config::parse_config;
+use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_compound};
 
@@ -118,11 +118,9 @@ fn action_aggregation_priority(
 // ========================================
 
 #[rstest]
-fn sandbox_strictest_wins_writable_roots_intersection(empty_context: EvalContext) {
-    // preset_a: writable [./src, ./tmp]
-    // preset_b: writable [./tmp, ./build]
-    // intersection: [./tmp]
-    let config = parse_config(indoc! {"
+#[case::writable_roots_intersection(
+    "cargo build --release | cargo test --all",
+    indoc! {"
         rules:
           - allow: 'cargo build *'
             sandbox: preset_a
@@ -136,27 +134,16 @@ fn sandbox_strictest_wins_writable_roots_intersection(empty_context: EvalContext
             preset_b:
               fs:
                 writable: [./tmp, ./build]
-    "})
-    .unwrap();
-
-    let result = evaluate_compound(
-        &config,
-        "cargo build --release | cargo test --all",
-        &empty_context,
-    )
-    .unwrap();
-
-    assert_eq!(result.action, Action::Allow);
-    let policy = result.sandbox_policy.unwrap();
-    assert_eq!(policy.writable, vec!["./tmp"]);
-}
-
-#[rstest]
-fn sandbox_strictest_wins_deny_paths_union(empty_context: EvalContext) {
-    // preset_a: deny [/etc/passwd]
-    // preset_b: deny [/etc/shadow]
-    // union: [/etc/passwd, /etc/shadow]
-    let config = parse_config(indoc! {"
+    "},
+    MergedSandboxPolicy {
+        writable: vec!["./tmp".to_string()],
+        deny: vec![],
+        network_allow: None,
+    },
+)]
+#[case::deny_paths_union(
+    "cmd_a run && cmd_b run",
+    indoc! {"
         rules:
           - allow: 'cmd_a *'
             sandbox: preset_a
@@ -170,22 +157,16 @@ fn sandbox_strictest_wins_deny_paths_union(empty_context: EvalContext) {
             preset_b:
               fs:
                 deny: [/etc/shadow]
-    "})
-    .unwrap();
-
-    let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
-
-    assert_eq!(result.action, Action::Allow);
-    let policy = result.sandbox_policy.unwrap();
-    assert_eq!(policy.deny, vec!["/etc/passwd", "/etc/shadow"]);
-}
-
-#[rstest]
-fn sandbox_strictest_wins_network_intersection(empty_context: EvalContext) {
-    // preset_a: network allow [api.example.com, cdn.example.com]
-    // preset_b: network allow [api.example.com, logs.example.com]
-    // intersection: [api.example.com]
-    let config = parse_config(indoc! {"
+    "},
+    MergedSandboxPolicy {
+        writable: vec![],
+        deny: vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()],
+        network_allow: None,
+    },
+)]
+#[case::network_intersection(
+    "cmd_a run && cmd_b run",
+    indoc! {"
         rules:
           - allow: 'cmd_a *'
             sandbox: preset_a
@@ -199,17 +180,24 @@ fn sandbox_strictest_wins_network_intersection(empty_context: EvalContext) {
             preset_b:
               network:
                 allow: [api.example.com, logs.example.com]
-    "})
-    .unwrap();
-
-    let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
+    "},
+    MergedSandboxPolicy {
+        writable: vec![],
+        deny: vec![],
+        network_allow: Some(vec!["api.example.com".to_string()]),
+    },
+)]
+fn sandbox_strictest_wins_aggregation(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected_policy: MergedSandboxPolicy,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
 
     assert_eq!(result.action, Action::Allow);
-    let policy = result.sandbox_policy.unwrap();
-    assert_eq!(
-        policy.network_allow,
-        Some(vec!["api.example.com".to_string()])
-    );
+    assert_eq!(result.sandbox_policy.unwrap(), expected_policy);
 }
 
 // ========================================
