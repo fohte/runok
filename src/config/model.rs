@@ -165,16 +165,65 @@ pub struct NetworkPolicy {
 }
 
 impl Config {
+    /// Expand `<path:name>` references in sandbox preset `fs.deny` lists.
+    ///
+    /// Replaces each `<path:name>` entry with the corresponding path list
+    /// from `definitions.paths`. Returns a validation error if a referenced
+    /// path name is not defined.
+    fn expand_sandbox_path_refs(&mut self) -> Result<(), crate::config::ConfigError> {
+        // Clone paths to avoid borrowing self.definitions both immutably and mutably.
+        let paths = self.definitions.as_ref().and_then(|d| d.paths.clone());
+
+        let sandbox = self.definitions.as_mut().and_then(|d| d.sandbox.as_mut());
+
+        let Some(sandbox) = sandbox else {
+            return Ok(());
+        };
+
+        for (preset_name, preset) in sandbox.iter_mut() {
+            let Some(fs) = preset.fs.as_mut() else {
+                continue;
+            };
+            let Some(deny) = fs.deny.as_mut() else {
+                continue;
+            };
+
+            let mut expanded = Vec::new();
+            for entry in deny.iter() {
+                if let Some(name) = entry
+                    .strip_prefix("<path:")
+                    .and_then(|s| s.strip_suffix('>'))
+                {
+                    let path_list = paths.as_ref().and_then(|p| p.get(name)).ok_or_else(|| {
+                        crate::config::ConfigError::Validation(vec![format!(
+                            "sandbox preset '{}': fs.deny references undefined path '{}'. \
+                                 Define it in definitions.paths.{}",
+                            preset_name, name, name
+                        )])
+                    })?;
+                    expanded.extend(path_list.iter().cloned());
+                } else {
+                    expanded.push(entry.clone());
+                }
+            }
+            *deny = expanded;
+        }
+        Ok(())
+    }
+
     /// Validate the config structure.
     ///
     /// Collects all validation errors and returns them at once so that users
     /// can fix every issue in a single pass.
     ///
     /// Checks:
+    /// - Sandbox preset `<path:name>` references resolve to `definitions.paths`
     /// - Each rule entry has exactly one of deny/allow/ask set
     /// - deny rules must not have a sandbox attribute
     /// - sandbox values must reference names defined in definitions.sandbox
-    pub fn validate(&self) -> Result<(), crate::config::ConfigError> {
+    pub fn validate(&mut self) -> Result<(), crate::config::ConfigError> {
+        self.expand_sandbox_path_refs()?;
+
         let rules = match &self.rules {
             Some(rules) => rules,
             None => return Ok(()),
@@ -769,7 +818,7 @@ mod tests {
 
     #[test]
     fn validate_valid_config() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - deny: 'rm -rf /'
               - allow: 'git status'
@@ -781,13 +830,13 @@ mod tests {
 
     #[test]
     fn validate_config_without_rules() {
-        let config = parse_config("{}").unwrap();
+        let mut config = parse_config("{}").unwrap();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn validate_errors_on_rule_with_no_action() {
-        let config = Config {
+        let mut config = Config {
             extends: None,
             defaults: None,
             rules: Some(vec![RuleEntry {
@@ -807,7 +856,7 @@ mod tests {
 
     #[test]
     fn validate_errors_on_rule_with_multiple_actions() {
-        let config = Config {
+        let mut config = Config {
             extends: None,
             defaults: None,
             rules: Some(vec![RuleEntry {
@@ -827,7 +876,7 @@ mod tests {
 
     #[test]
     fn validate_errors_on_deny_with_sandbox() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - deny: 'rm -rf /'
                 sandbox: restricted
@@ -845,7 +894,7 @@ mod tests {
 
     #[test]
     fn validate_errors_on_undefined_sandbox_name() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - allow: 'python3 *'
                 sandbox: nonexistent
@@ -858,7 +907,7 @@ mod tests {
 
     #[test]
     fn validate_errors_on_undefined_sandbox_name_with_empty_definitions() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - allow: 'python3 *'
                 sandbox: restricted
@@ -875,7 +924,7 @@ mod tests {
 
     #[test]
     fn validate_allow_with_valid_sandbox() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - allow: 'python3 *'
                 sandbox: restricted
@@ -891,7 +940,7 @@ mod tests {
 
     #[test]
     fn validate_ask_with_valid_sandbox() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - ask: 'npm run *'
                 sandbox: restricted
@@ -905,9 +954,94 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    // === expand_sandbox_path_refs ===
+
+    #[rstest]
+    #[case::single_path_ref(
+        indoc! {"
+            definitions:
+              paths:
+                sensitive:
+                  - /etc/passwd
+                  - /etc/shadow
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+                    deny:
+                      - '<path:sensitive>'
+        "},
+        vec!["/etc/passwd", "/etc/shadow"],
+    )]
+    #[case::mixed_concrete_and_ref(
+        indoc! {"
+            definitions:
+              paths:
+                sensitive:
+                  - /etc/passwd
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+                    deny:
+                      - /root/.ssh
+                      - '<path:sensitive>'
+                      - /var/log
+        "},
+        vec!["/root/.ssh", "/etc/passwd", "/var/log"],
+    )]
+    fn expand_sandbox_path_refs_success(#[case] yaml: &str, #[case] expected_deny: Vec<&str>) {
+        let mut config = parse_config(yaml).unwrap();
+        config.validate().unwrap();
+
+        let deny = config
+            .definitions
+            .as_ref()
+            .and_then(|d| d.sandbox.as_ref())
+            .and_then(|s| s.get("restricted"))
+            .and_then(|p| p.fs.as_ref())
+            .and_then(|f| f.deny.as_ref())
+            .unwrap();
+        assert_eq!(deny, &expected_deny);
+    }
+
+    #[test]
+    fn expand_sandbox_path_refs_undefined_name() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+                    deny:
+                      - '<path:nonexistent>'
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("nonexistent"));
+        assert!(err.to_string().contains("undefined path"));
+    }
+
+    #[test]
+    fn expand_sandbox_path_refs_no_paths_defined() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+                    deny:
+                      - '<path:sensitive>'
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("sensitive"));
+        assert!(err.to_string().contains("undefined path"));
+    }
+
     #[test]
     fn validate_collects_all_errors() {
-        let config = Config {
+        let mut config = Config {
             extends: None,
             defaults: None,
             rules: Some(vec![
@@ -1284,7 +1418,7 @@ mod tests {
 
     #[test]
     fn validate_includes_rule_index_in_error() {
-        let config = parse_config(indoc! {"
+        let mut config = parse_config(indoc! {"
             rules:
               - allow: 'git status'
               - deny: 'rm -rf /'
