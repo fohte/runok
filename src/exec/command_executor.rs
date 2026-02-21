@@ -65,10 +65,12 @@ impl SandboxPolicy {
     /// Build a `SandboxPolicy` from writable roots, read-only subpaths, and network flag.
     ///
     /// Automatically adds protected paths (.git, .gitmodules, .runok) to read_only_subpaths
-    /// and normalizes all paths (expanding `~` to `$HOME` and canonicalizing).
+    /// and normalizes all paths.
     ///
-    /// Returns an error if any path cannot be canonicalized (e.g., does not exist),
-    /// preventing TOCTOU attacks via symlinks to non-existent paths.
+    /// - `writable_roots` are canonicalized to prevent TOCTOU attacks via symlinks.
+    ///   Returns an error if any writable path cannot be canonicalized.
+    /// - `read_only_subpaths` (deny paths) only have `~` expanded, not canonicalized,
+    ///   because they may contain glob patterns (e.g., `.env*`, `~/.ssh/**`).
     pub fn build(
         writable_roots: Vec<String>,
         read_only_subpaths: Vec<String>,
@@ -83,11 +85,13 @@ impl SandboxPolicy {
         resolved_writable.sort();
         resolved_writable.dedup();
 
+        // Deny paths may contain glob patterns (e.g., `.env*`, `~/.ssh/**`, `/etc/**`)
+        // from expanded `<path:name>` references, so they cannot be canonicalized.
+        // Only expand `~` to $HOME.
         let mut readonly_set: HashSet<PathBuf> = HashSet::new();
         for path in &read_only_subpaths {
             let expanded = expand_tilde(path);
-            let canonical = canonicalize_path(&expanded)?;
-            readonly_set.insert(canonical);
+            readonly_set.insert(PathBuf::from(expanded));
         }
 
         // Protected paths are relative markers resolved at sandbox enforcement time,
@@ -884,25 +888,29 @@ mod tests {
     }
 
     #[rstest]
-    #[case::writable_roots("~", None)]
-    #[case::read_only_subpaths("~/.config", Some("~/.config"))]
-    fn build_expands_tilde(#[case] tilde_path: &str, #[case] readonly: Option<&str>) {
+    fn build_expands_tilde_in_writable_roots() {
         let home = std::env::var("HOME").unwrap();
-        let (writable, read_only) = match readonly {
-            Some(ro) => (vec![], vec![ro.to_string()]),
-            None => (vec![tilde_path.to_string()], vec![]),
-        };
-        let policy = SandboxPolicy::build(writable, read_only, true).unwrap();
+        let policy = SandboxPolicy::build(vec!["~".to_string()], vec![], true).unwrap();
 
-        let expanded = tilde_path.replacen('~', &home, 1);
-        let expected = PathBuf::from(&expanded).canonicalize().unwrap();
-        let paths = match readonly {
-            Some(_) => &policy.read_only_subpaths,
-            None => &policy.writable_roots,
-        };
+        let expected = PathBuf::from(&home).canonicalize().unwrap();
         assert!(
-            paths.iter().any(|p| p == &expected),
-            "expected {expected:?} in {paths:?}"
+            policy.writable_roots.iter().any(|p| p == &expected),
+            "expected {expected:?} in {:?}",
+            policy.writable_roots
+        );
+    }
+
+    #[rstest]
+    fn build_expands_tilde_in_deny_paths() {
+        let home = std::env::var("HOME").unwrap();
+        let policy = SandboxPolicy::build(vec![], vec!["~/.config".to_string()], true).unwrap();
+
+        // Deny paths are not canonicalized, only tilde-expanded
+        let expected = PathBuf::from(format!("{home}/.config"));
+        assert!(
+            policy.read_only_subpaths.iter().any(|p| p == &expected),
+            "expected {expected:?} in {:?}",
+            policy.read_only_subpaths
         );
     }
 
@@ -922,19 +930,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::writable(vec!["/nonexistent_path_12345".to_string()], vec![])]
-    #[case::readonly(vec![], vec!["/nonexistent_readonly_path_12345".to_string()])]
-    fn build_rejects_nonexistent_path(
-        #[case] writable: Vec<String>,
-        #[case] read_only: Vec<String>,
-    ) {
-        let result = SandboxPolicy::build(writable, read_only, true);
+    fn build_rejects_nonexistent_writable_path() {
+        let result =
+            SandboxPolicy::build(vec!["/nonexistent_path_12345".to_string()], vec![], true);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
                 .contains("cannot canonicalize path")
+        );
+    }
+
+    #[rstest]
+    #[case::glob_pattern(".env*")]
+    #[case::recursive_glob("~/.ssh/**")]
+    #[case::nonexistent_path("/nonexistent_readonly_path_12345")]
+    fn build_accepts_deny_paths_without_canonicalization(#[case] deny_path: &str) {
+        let policy = SandboxPolicy::build(vec![], vec![deny_path.to_string()], true).unwrap();
+
+        let expanded = expand_tilde(deny_path);
+        assert!(
+            policy
+                .read_only_subpaths
+                .contains(&PathBuf::from(&expanded)),
+            "expected {expanded:?} in {:?}",
+            policy.read_only_subpaths
         );
     }
 
