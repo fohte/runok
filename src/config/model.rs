@@ -224,9 +224,35 @@ impl Config {
     pub fn validate(&mut self) -> Result<(), crate::config::ConfigError> {
         self.expand_sandbox_path_refs()?;
 
+        let mut errors = Vec::new();
+
+        // Reject <path:name> references inside definitions.paths values.
+        // The <path:name> syntax is only valid in pattern contexts (rule
+        // patterns, fs.deny), not inside path definitions themselves.
+        if let Some(defs) = &self.definitions
+            && let Some(paths) = &defs.paths
+        {
+            for (key, values) in paths {
+                for value in values {
+                    if value.starts_with("<path:") && value.ends_with('>') {
+                        errors.push(format!(
+                            "definitions.paths.{key}: value '{value}' contains a <path:name> \
+                             reference. Path definitions must contain concrete paths, not references"
+                        ));
+                    }
+                }
+            }
+        }
+
         let rules = match &self.rules {
             Some(rules) => rules,
-            None => return Ok(()),
+            None => {
+                return if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::config::ConfigError::Validation(errors))
+                };
+            }
         };
 
         let defined_sandboxes: std::collections::HashSet<&str> = self
@@ -235,8 +261,6 @@ impl Config {
             .and_then(|d| d.sandbox.as_ref())
             .map(|s| s.keys().map(|k| k.as_str()).collect())
             .unwrap_or_default();
-
-        let mut errors = Vec::new();
 
         for (i, rule) in rules.iter().enumerate() {
             let action = match rule.action_and_pattern() {
@@ -1035,6 +1059,31 @@ mod tests {
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains(expected_name));
         assert!(err.to_string().contains("undefined path"));
+    }
+
+    #[test]
+    fn validate_rejects_path_ref_in_definitions_paths() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              paths:
+                sensitive:
+                  - /etc/passwd
+                  - '<path:more_sensitive>'
+                more_sensitive:
+                  - /etc/shadow
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("definitions.paths.sensitive"),
+            "error should mention the path key: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("concrete paths, not references"),
+            "error should explain the constraint: {}",
+            err
+        );
     }
 
     #[test]
