@@ -136,15 +136,10 @@ fn merged_policy_to_sandbox_info(policy: &MergedSandboxPolicy) -> CheckSandboxIn
         Some(policy.writable.clone())
     };
 
-    let network_allowed = policy
-        .network_allow
-        .as_ref()
-        .map(|allowed| !allowed.is_empty());
-
     CheckSandboxInfo {
         preset: "merged".to_string(),
         writable_roots,
-        network_allowed,
+        network_allowed: Some(policy.network_allowed),
     }
 }
 
@@ -310,11 +305,11 @@ mod tests {
     }
 
     #[rstest]
-    fn build_sandbox_info_from_merged_policy() {
+    fn build_sandbox_info_from_merged_policy_network_allowed() {
         let policy = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string(), "/home".to_string()],
             deny: vec!["/etc".to_string()],
-            network_allow: Some(vec!["example.com".to_string()]),
+            network_allowed: true,
         };
         let info = SandboxInfo::MergedPolicy(Some(policy));
         let result = build_sandbox_info(&info);
@@ -329,30 +324,11 @@ mod tests {
     }
 
     #[rstest]
-    fn build_sandbox_info_merged_policy_empty_network() {
-        let policy = MergedSandboxPolicy {
-            writable: vec![],
-            deny: vec![],
-            network_allow: Some(vec![]),
-        };
-        let info = SandboxInfo::MergedPolicy(Some(policy));
-        let result = build_sandbox_info(&info);
-        assert_eq!(
-            result,
-            Some(CheckSandboxInfo {
-                preset: "merged".to_string(),
-                writable_roots: None,
-                network_allowed: Some(false),
-            })
-        );
-    }
-
-    #[rstest]
-    fn build_sandbox_info_merged_policy_no_network() {
+    fn build_sandbox_info_from_merged_policy_network_denied() {
         let policy = MergedSandboxPolicy {
             writable: vec!["/workspace".to_string()],
             deny: vec![],
-            network_allow: None,
+            network_allowed: false,
         };
         let info = SandboxInfo::MergedPolicy(Some(policy));
         let result = build_sandbox_info(&info);
@@ -361,7 +337,7 @@ mod tests {
             Some(CheckSandboxInfo {
                 preset: "merged".to_string(),
                 writable_roots: Some(vec!["/workspace".to_string()]),
-                network_allowed: None,
+                network_allowed: Some(false),
             })
         );
     }

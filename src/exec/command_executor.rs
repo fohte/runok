@@ -1,7 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::process::Command;
 
 use super::ExecError;
+use super::error::SandboxError;
 
 /// The execution mode for a command, determined by command form and sandbox presence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +47,140 @@ impl CommandInput {
     }
 }
 
-/// Stub sandbox policy for Phase 2. The actual implementation will provide
-/// filesystem and network restrictions.
-#[derive(Debug, Clone)]
+/// Sandbox policy defining filesystem and network restrictions for command execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicy {
-    _private: (),
+    /// Writable root directories (cwd is always included by the caller).
+    pub writable_roots: Vec<PathBuf>,
+    /// Read-only subpaths that are always protected (e.g., .git, .runok).
+    pub read_only_subpaths: Vec<PathBuf>,
+    /// Whether network access is allowed.
+    pub network_allowed: bool,
+}
+
+impl SandboxPolicy {
+    /// Build a `SandboxPolicy` from writable roots, read-only subpaths, and network flag.
+    ///
+    /// - `writable_roots` are canonicalized to prevent TOCTOU attacks via symlinks.
+    ///   Returns an error if any writable path cannot be canonicalized.
+    /// - `read_only_subpaths` (deny paths) only have `~` expanded, not canonicalized,
+    ///   because they may contain glob patterns (e.g., `.env*`, `~/.ssh/**`).
+    pub fn build(
+        writable_roots: Vec<String>,
+        read_only_subpaths: Vec<String>,
+        network_allowed: bool,
+    ) -> Result<Self, SandboxError> {
+        let mut resolved_writable: Vec<PathBuf> = Vec::new();
+        for path in &writable_roots {
+            let expanded = expand_tilde(path);
+            let canonical = canonicalize_path(&expanded)?;
+            resolved_writable.push(canonical);
+        }
+        resolved_writable.sort();
+        resolved_writable.dedup();
+
+        // Deny paths may contain glob patterns (e.g., `.env*`, `~/.ssh/**`, `/etc/**`)
+        // from expanded `<path:name>` references, so they cannot be canonicalized.
+        // Only expand `~` to $HOME.
+        let mut readonly_set: HashSet<PathBuf> = HashSet::new();
+        for path in &read_only_subpaths {
+            let expanded = expand_tilde(path);
+            readonly_set.insert(PathBuf::from(expanded));
+        }
+
+        let mut resolved_readonly: Vec<PathBuf> = readonly_set.into_iter().collect();
+        resolved_readonly.sort();
+
+        Ok(SandboxPolicy {
+            writable_roots: resolved_writable,
+            read_only_subpaths: resolved_readonly,
+            network_allowed,
+        })
+    }
+
+    /// Merge multiple policies using Strictest Wins strategy.
+    ///
+    /// - `writable_roots`: intersection (narrowest write scope)
+    /// - `read_only_subpaths`: union (broadest protection)
+    /// - `network_allowed`: false if any policy disallows it
+    ///
+    /// Returns an error if all policies have non-empty writable_roots but
+    /// share no common paths (genuine conflict).
+    pub fn merge(policies: &[SandboxPolicy]) -> Result<SandboxPolicy, SandboxError> {
+        if policies.is_empty() {
+            return Err(SandboxError::SetupFailed(
+                "no policies to merge".to_string(),
+            ));
+        }
+        if policies.len() == 1 {
+            return Ok(policies[0].clone());
+        }
+
+        // writable_roots: intersection
+        let mut writable_set: HashSet<PathBuf> =
+            policies[0].writable_roots.iter().cloned().collect();
+        for policy in &policies[1..] {
+            let other: HashSet<PathBuf> = policy.writable_roots.iter().cloned().collect();
+            writable_set = writable_set.intersection(&other).cloned().collect();
+        }
+
+        // Empty intersection is a conflict only when ALL policies declared
+        // non-empty writable roots but share nothing in common. If any policy
+        // has empty writable_roots, it intentionally imposes "no writes allowed"
+        // and the empty result is that constraint being applied, not a conflict.
+        let all_non_empty = policies.iter().all(|p| !p.writable_roots.is_empty());
+        if writable_set.is_empty() && all_non_empty {
+            return Err(SandboxError::SetupFailed(
+                "conflicting sandbox policies: no common writable roots".to_string(),
+            ));
+        }
+
+        // read_only_subpaths: union
+        let mut readonly_set: HashSet<PathBuf> = HashSet::new();
+        for policy in policies {
+            readonly_set.extend(policy.read_only_subpaths.iter().cloned());
+        }
+
+        // network_allowed: all must be true
+        let network_allowed = policies.iter().all(|p| p.network_allowed);
+
+        let mut writable_roots: Vec<PathBuf> = writable_set.into_iter().collect();
+        writable_roots.sort();
+
+        let mut read_only_subpaths: Vec<PathBuf> = readonly_set.into_iter().collect();
+        read_only_subpaths.sort();
+
+        Ok(SandboxPolicy {
+            writable_roots,
+            read_only_subpaths,
+            network_allowed,
+        })
+    }
+}
+
+/// Expand `~` at the start of a path to the value of `$HOME`.
+fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    } else if path == "~"
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return home;
+    }
+    path.to_string()
+}
+
+/// Canonicalize a path, returning an error if the path does not exist or cannot be resolved.
+///
+/// Failing instead of silently falling back prevents TOCTOU attacks where an attacker
+/// creates a symlink at a non-existent path after policy creation but before enforcement.
+fn canonicalize_path(path: &str) -> Result<PathBuf, SandboxError> {
+    let p = PathBuf::from(path);
+    p.canonicalize().map_err(|e| {
+        SandboxError::SetupFailed(format!("cannot canonicalize path '{}': {}", path, e))
+    })
 }
 
 /// Trait for executing commands in a sandboxed environment.
@@ -73,6 +205,20 @@ impl SandboxExecutor for StubSandboxExecutor {
             std::io::ErrorKind::Unsupported,
             "sandbox execution is not yet implemented",
         )))
+    }
+}
+
+impl SandboxPolicy {
+    /// Build a `SandboxPolicy` from a `MergedSandboxPolicy` (config layer).
+    ///
+    /// Converts string paths to `PathBuf`, expands `~`, canonicalizes paths,
+    /// and adds protected paths.
+    pub fn from_merged(policy: &crate::config::MergedSandboxPolicy) -> Result<Self, SandboxError> {
+        Self::build(
+            policy.writable.clone(),
+            policy.deny.clone(),
+            policy.network_allowed,
+        )
     }
 }
 
@@ -367,6 +513,14 @@ mod tests {
     use rstest::{fixture, rstest};
     use std::cell::RefCell;
 
+    fn stub_sandbox_policy() -> SandboxPolicy {
+        SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            read_only_subpaths: vec![PathBuf::from(".git")],
+            network_allowed: true,
+        }
+    }
+
     #[fixture]
     fn executor() -> ProcessCommandExecutor<StubSandboxExecutor> {
         ProcessCommandExecutor::new_without_sandbox()
@@ -375,16 +529,18 @@ mod tests {
     // === ExecMode determination ===
 
     #[rstest]
-    #[case::single_no_sandbox(None, false, ExecMode::TransparentProxy)]
-    #[case::single_with_sandbox(Some(&SandboxPolicy { _private: () }), false, ExecMode::SpawnAndWait)]
-    #[case::compound_no_sandbox(None, true, ExecMode::ShellExec)]
-    #[case::compound_with_sandbox(Some(&SandboxPolicy { _private: () }), true, ExecMode::ShellExec)]
+    #[case::single_no_sandbox(false, false, ExecMode::TransparentProxy)]
+    #[case::single_with_sandbox(true, false, ExecMode::SpawnAndWait)]
+    #[case::compound_no_sandbox(false, true, ExecMode::ShellExec)]
+    #[case::compound_with_sandbox(true, true, ExecMode::ShellExec)]
     fn determine_exec_mode(
         executor: ProcessCommandExecutor<StubSandboxExecutor>,
-        #[case] sandbox: Option<&SandboxPolicy>,
+        #[case] has_sandbox: bool,
         #[case] is_compound: bool,
         #[case] expected: ExecMode,
     ) {
+        let policy = stub_sandbox_policy();
+        let sandbox = if has_sandbox { Some(&policy) } else { None };
         let mode = executor.determine_exec_mode(sandbox, is_compound);
 
         if cfg!(unix) {
@@ -458,7 +614,7 @@ mod tests {
     #[test]
     fn exec_argv_with_sandbox_calls_sandbox_executor() {
         let executor = ProcessCommandExecutor::new(StubSandboxExecutor);
-        let policy = SandboxPolicy { _private: () };
+        let policy = stub_sandbox_policy();
 
         let result = executor.exec(
             &CommandInput::Argv(vec!["echo".into(), "test".into()]),
@@ -472,7 +628,7 @@ mod tests {
     #[test]
     fn exec_shell_with_sandbox_calls_sandbox_executor() {
         let executor = ProcessCommandExecutor::new(StubSandboxExecutor);
-        let policy = SandboxPolicy { _private: () };
+        let policy = stub_sandbox_policy();
 
         let result = executor.exec(
             &CommandInput::Shell("echo a && echo b".into()),
@@ -554,35 +710,35 @@ mod tests {
     #[rstest]
     #[case::argv_existing(
         CommandInput::Argv(vec!["sh".into()]),
-        None,
+        false,
         true,
         "sh",
         ExecMode::TransparentProxy
     )]
     #[case::argv_nonexistent(
         CommandInput::Argv(vec!["__nonexistent_cmd_99__".into()]),
-        None,
+        false,
         false,
         "__nonexistent_cmd_99__",
         ExecMode::TransparentProxy
     )]
     #[case::shell_compound(
         CommandInput::Shell("echo hello".into()),
-        None,
+        false,
         true,
         "sh",
         ExecMode::ShellExec
     )]
     #[case::argv_empty(
         CommandInput::Argv(vec![]),
-        None,
+        false,
         false,
         "",
         ExecMode::TransparentProxy
     )]
     #[case::argv_with_sandbox(
         CommandInput::Argv(vec!["sh".into()]),
-        Some(&SandboxPolicy { _private: () }),
+        true,
         true,
         "sh",
         ExecMode::SpawnAndWait
@@ -590,11 +746,13 @@ mod tests {
     fn dry_run(
         executor: ProcessCommandExecutor<StubSandboxExecutor>,
         #[case] command: CommandInput,
-        #[case] sandbox: Option<&SandboxPolicy>,
+        #[case] has_sandbox: bool,
         #[case] expected_valid: bool,
         #[case] expected_program: &str,
         #[case] expected_mode: ExecMode,
     ) {
+        let policy = stub_sandbox_policy();
+        let sandbox = if has_sandbox { Some(&policy) } else { None };
         let result = executor.dry_run(&command, sandbox);
 
         assert_eq!(result.is_valid, expected_valid);
@@ -643,7 +801,7 @@ mod tests {
     #[test]
     fn exec_argv_with_mock_sandbox_returns_exit_code() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(0));
-        let policy = SandboxPolicy { _private: () };
+        let policy = stub_sandbox_policy();
 
         let code = executor
             .exec(
@@ -661,7 +819,7 @@ mod tests {
     #[test]
     fn exec_argv_with_mock_sandbox_nonzero() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(42));
-        let policy = SandboxPolicy { _private: () };
+        let policy = stub_sandbox_policy();
 
         let code = executor
             .exec(
@@ -675,7 +833,7 @@ mod tests {
     #[test]
     fn exec_shell_with_mock_sandbox_passes_sh_c() {
         let executor = ProcessCommandExecutor::new(MockSandboxExecutor::new(7));
-        let policy = SandboxPolicy { _private: () };
+        let policy = stub_sandbox_policy();
 
         let code = executor
             .exec(
@@ -689,5 +847,375 @@ mod tests {
         let invocations = executor.sandbox_executor.invocations.borrow();
         assert_eq!(invocations.len(), 1);
         assert_eq!(invocations[0], vec!["sh", "-c", "echo a && echo b"]);
+    }
+
+    // === SandboxPolicy::build ===
+
+    /// Parameterized deny-only cases for `build()`.
+    /// writable_roots is empty so no canonicalization needed; expected
+    /// read_only_subpaths is fully hardcoded.
+    #[rstest]
+    #[case::empty_deny(
+        vec![],
+        true,
+        vec![],
+    )]
+    #[case::glob_pattern(
+        vec![".env*"],
+        true,
+        vec![".env*"],
+    )]
+    #[case::recursive_glob(
+        vec!["/etc/**"],
+        false,
+        vec!["/etc/**"],
+    )]
+    #[case::nonexistent_path(
+        vec!["/nonexistent_readonly_12345"],
+        true,
+        vec!["/nonexistent_readonly_12345"],
+    )]
+    #[case::duplicate_deduped(
+        vec![".env", ".env"],
+        true,
+        vec![".env"],
+    )]
+    #[case::multiple_deny(
+        vec![".secrets", "/etc/shadow"],
+        false,
+        vec!["/etc/shadow", ".secrets"],
+    )]
+    fn build_deny_paths(
+        #[case] deny: Vec<&str>,
+        #[case] network: bool,
+        #[case] expected_readonly: Vec<&str>,
+    ) {
+        let policy = SandboxPolicy::build(
+            vec![],
+            deny.iter().map(|s| s.to_string()).collect(),
+            network,
+        )
+        .unwrap();
+
+        assert!(policy.writable_roots.is_empty());
+        assert_eq!(policy.network_allowed, network);
+        assert_eq!(
+            policy.read_only_subpaths,
+            expected_readonly
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Writable-roots tests require canonicalization which is environment-dependent,
+    /// so they use individual tests with canonicalize() calls as test setup.
+    #[rstest]
+    fn build_single_writable() {
+        let policy = SandboxPolicy::build(vec!["/tmp".to_string()], vec![], true).unwrap();
+        let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_tmp]);
+        assert!(policy.read_only_subpaths.is_empty());
+        assert!(policy.network_allowed);
+    }
+
+    #[rstest]
+    fn build_multiple_writable() {
+        let policy =
+            SandboxPolicy::build(vec!["/tmp".to_string(), "/var".to_string()], vec![], true)
+                .unwrap();
+        let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
+        let canonical_var = PathBuf::from("/var").canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_tmp, canonical_var]);
+    }
+
+    #[rstest]
+    fn build_duplicate_writable_deduped() {
+        let policy =
+            SandboxPolicy::build(vec!["/tmp".to_string(), "/tmp".to_string()], vec![], true)
+                .unwrap();
+        let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_tmp]);
+    }
+
+    #[rstest]
+    fn build_tilde_writable() {
+        let home = std::env::var("HOME").unwrap();
+        let policy = SandboxPolicy::build(vec!["~".to_string()], vec![], true).unwrap();
+        let canonical_home = PathBuf::from(&home).canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_home]);
+    }
+
+    #[rstest]
+    fn build_tilde_deny() {
+        let home = std::env::var("HOME").unwrap();
+        let policy = SandboxPolicy::build(vec![], vec!["~/.ssh/**".to_string()], true).unwrap();
+        let tilde_expanded = PathBuf::from(format!("{home}/.ssh/**"));
+        assert_eq!(policy.read_only_subpaths, vec![tilde_expanded]);
+    }
+
+    #[rstest]
+    fn build_writable_and_deny_together() {
+        let policy = SandboxPolicy::build(
+            vec!["/tmp".to_string()],
+            vec![".secrets".to_string(), "/etc/shadow".to_string()],
+            false,
+        )
+        .unwrap();
+        let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_tmp]);
+        assert_eq!(
+            policy.read_only_subpaths,
+            vec![PathBuf::from("/etc/shadow"), PathBuf::from(".secrets"),]
+        );
+        assert!(!policy.network_allowed);
+    }
+
+    #[rstest]
+    fn build_rejects_nonexistent_writable_path() {
+        let result =
+            SandboxPolicy::build(vec!["/nonexistent_path_12345".to_string()], vec![], true);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot canonicalize path")
+        );
+    }
+
+    // === SandboxPolicy::merge ===
+
+    #[rstest]
+    fn merge_empty_returns_error() {
+        let result = SandboxPolicy::merge(&[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no policies to merge")
+        );
+    }
+
+    #[rstest]
+    fn merge_single_returns_clone() {
+        let policy = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home")],
+            read_only_subpaths: vec![PathBuf::from(".git")],
+            network_allowed: true,
+        };
+        let merged = SandboxPolicy::merge(std::slice::from_ref(&policy)).unwrap();
+        assert_eq!(merged, policy);
+    }
+
+    /// Parameterized writable_roots merge cases.
+    #[rstest]
+    #[case::partial_overlap(
+        vec![vec!["/tmp", "/home", "/var"], vec!["/tmp", "/var"]],
+        Ok(vec!["/tmp", "/var"]),
+    )]
+    #[case::identical(
+        vec![vec!["/tmp", "/var"], vec!["/tmp", "/var"]],
+        Ok(vec!["/tmp", "/var"]),
+    )]
+    #[case::no_overlap_two_non_empty(
+        vec![vec!["/tmp"], vec!["/home"]],
+        Err("no common writable roots"),
+    )]
+    #[case::both_empty(
+        vec![vec![], vec![]],
+        Ok(vec![]),
+    )]
+    #[case::one_empty_one_non_empty(
+        vec![vec!["/tmp"], vec![]],
+        Ok(vec![]),
+    )]
+    #[case::three_way_success(
+        vec![vec!["/a", "/b", "/c"], vec!["/a", "/b"], vec!["/a", "/c"]],
+        Ok(vec!["/a"]),
+    )]
+    #[case::three_way_one_empty(
+        vec![vec!["/tmp"], vec![], vec!["/tmp"]],
+        Ok(vec![]),
+    )]
+    #[case::three_way_conflict(
+        vec![vec!["/a", "/b"], vec!["/b", "/c"], vec!["/c", "/a"]],
+        Err("no common writable roots"),
+    )]
+    fn merge_writable_roots(
+        #[case] roots_per_policy: Vec<Vec<&str>>,
+        #[case] expected: Result<Vec<&str>, &str>,
+    ) {
+        let policies: Vec<SandboxPolicy> = roots_per_policy
+            .iter()
+            .map(|roots| SandboxPolicy {
+                writable_roots: roots.iter().map(PathBuf::from).collect(),
+                read_only_subpaths: vec![],
+                network_allowed: true,
+            })
+            .collect();
+        let result = SandboxPolicy::merge(&policies);
+        match expected {
+            Ok(expected_roots) => {
+                let merged = result.unwrap();
+                let mut expected_paths: Vec<PathBuf> =
+                    expected_roots.iter().map(PathBuf::from).collect();
+                expected_paths.sort();
+                assert_eq!(merged.writable_roots, expected_paths);
+            }
+            Err(msg) => {
+                assert!(
+                    result.unwrap_err().to_string().contains(msg),
+                    "expected error containing {msg:?}"
+                );
+            }
+        }
+    }
+
+    /// Parameterized read_only_subpaths merge cases.
+    #[rstest]
+    #[case::disjoint(
+        vec![vec![".git"], vec![".runok"]],
+        vec![".git", ".runok"],
+    )]
+    #[case::overlapping_deduped(
+        vec![vec![".git", ".env"], vec![".env", ".runok"]],
+        vec![".env", ".git", ".runok"],
+    )]
+    #[case::one_empty(
+        vec![vec![".git"], vec![]],
+        vec![".git"],
+    )]
+    #[case::both_empty(
+        vec![vec![], vec![]],
+        vec![],
+    )]
+    fn merge_read_only_subpaths(
+        #[case] paths_per_policy: Vec<Vec<&str>>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let policies: Vec<SandboxPolicy> = paths_per_policy
+            .iter()
+            .map(|paths| SandboxPolicy {
+                writable_roots: vec![PathBuf::from("/tmp")],
+                read_only_subpaths: paths.iter().map(PathBuf::from).collect(),
+                network_allowed: true,
+            })
+            .collect();
+        let merged = SandboxPolicy::merge(&policies).unwrap();
+        let mut expected_paths: Vec<PathBuf> = expected.iter().map(PathBuf::from).collect();
+        expected_paths.sort();
+        assert_eq!(merged.read_only_subpaths, expected_paths);
+    }
+
+    #[rstest]
+    #[case::both_true(true, true, true)]
+    #[case::first_false(false, true, false)]
+    #[case::second_false(true, false, false)]
+    #[case::both_false(false, false, false)]
+    fn merge_network_allowed(#[case] net_a: bool, #[case] net_b: bool, #[case] expected: bool) {
+        let a = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            read_only_subpaths: vec![],
+            network_allowed: net_a,
+        };
+        let b = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            read_only_subpaths: vec![],
+            network_allowed: net_b,
+        };
+        let merged = SandboxPolicy::merge(&[a, b]).unwrap();
+        assert_eq!(merged.network_allowed, expected);
+    }
+
+    // === SandboxPolicy::from_merged ===
+
+    #[rstest]
+    fn from_merged_basic() {
+        use crate::config::MergedSandboxPolicy;
+
+        let merged = MergedSandboxPolicy {
+            writable: vec!["/tmp".to_string()],
+            deny: vec![".env*".to_string(), "/etc/shadow".to_string()],
+            network_allowed: false,
+        };
+        let policy = SandboxPolicy::from_merged(&merged).unwrap();
+
+        let canonical_tmp = PathBuf::from("/tmp").canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![canonical_tmp]);
+        assert!(!policy.network_allowed);
+        assert_eq!(
+            policy.read_only_subpaths,
+            vec![PathBuf::from("/etc/shadow"), PathBuf::from(".env*"),]
+        );
+    }
+
+    #[rstest]
+    fn from_merged_glob_and_tilde_deny() {
+        use crate::config::MergedSandboxPolicy;
+
+        let home = std::env::var("HOME").unwrap();
+        let merged = MergedSandboxPolicy {
+            writable: vec![],
+            deny: vec!["~/.ssh/**".to_string()],
+            network_allowed: true,
+        };
+        let policy = SandboxPolicy::from_merged(&merged).unwrap();
+
+        assert!(policy.writable_roots.is_empty());
+        assert!(policy.network_allowed);
+        assert_eq!(
+            policy.read_only_subpaths,
+            vec![PathBuf::from(format!("{home}/.ssh/**"))]
+        );
+    }
+
+    #[rstest]
+    fn from_merged_all_empty() {
+        use crate::config::MergedSandboxPolicy;
+
+        let merged = MergedSandboxPolicy {
+            writable: vec![],
+            deny: vec![],
+            network_allowed: true,
+        };
+        let policy = SandboxPolicy::from_merged(&merged).unwrap();
+
+        assert!(policy.writable_roots.is_empty());
+        assert!(policy.network_allowed);
+        assert!(policy.read_only_subpaths.is_empty());
+    }
+
+    #[rstest]
+    fn from_merged_rejects_nonexistent_writable() {
+        use crate::config::MergedSandboxPolicy;
+
+        let merged = MergedSandboxPolicy {
+            writable: vec!["/nonexistent_12345".to_string()],
+            deny: vec![],
+            network_allowed: true,
+        };
+        let result = SandboxPolicy::from_merged(&merged);
+        assert!(result.is_err());
+    }
+
+    // === expand_tilde ===
+
+    #[rstest]
+    #[case::tilde_prefix("~/foo", true)]
+    #[case::tilde_only("~", true)]
+    #[case::no_tilde("/tmp", false)]
+    #[case::tilde_in_middle("/home/~user", false)]
+    fn expand_tilde_cases(#[case] input: &str, #[case] should_expand: bool) {
+        let result = expand_tilde(input);
+        if should_expand {
+            assert!(
+                !result.starts_with('~'),
+                "tilde should be expanded: {result}"
+            );
+        } else {
+            assert_eq!(result, input);
+        }
     }
 }
