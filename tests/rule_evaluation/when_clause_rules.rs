@@ -1,18 +1,12 @@
+use super::{ActionAssertion, assert_default, assert_deny, empty_context};
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use indoc::indoc;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use runok::config::parse_config;
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
-
-#[fixture]
-fn empty_context() -> EvalContext {
-    EvalContext {
-        env: HashMap::new(),
-        cwd: PathBuf::from("/tmp"),
-    }
-}
 
 // ========================================
 // Environment variable conditions
@@ -268,27 +262,4 @@ fn when_clause_with_logical_and() {
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Default);
-}
-
-// ========================================
-// Helpers
-// ========================================
-
-type ActionAssertion = fn(&Action);
-
-fn assert_deny(actual: &Action) {
-    assert!(
-        matches!(actual, Action::Deny(_)),
-        "expected Deny, got {:?}",
-        actual
-    );
-}
-
-fn assert_default(actual: &Action) {
-    assert_eq!(
-        *actual,
-        Action::Default,
-        "expected Default, got {:?}",
-        actual
-    );
 }

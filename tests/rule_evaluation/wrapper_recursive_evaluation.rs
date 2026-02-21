@@ -1,19 +1,10 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
 
 use indoc::indoc;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use runok::config::{Config, parse_config};
 use runok::rules::RuleError;
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
-
-#[fixture]
-fn empty_context() -> EvalContext {
-    EvalContext {
-        env: HashMap::new(),
-        cwd: PathBuf::from("/tmp"),
-    }
-}
 
 fn config_with_standard_wrappers() -> &'static str {
     indoc! {"
@@ -189,31 +180,4 @@ fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
-}
-
-// ========================================
-// Helpers
-// ========================================
-
-type ActionAssertion = fn(&Action);
-
-fn assert_allow(actual: &Action) {
-    assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual);
-}
-
-fn assert_deny(actual: &Action) {
-    assert!(
-        matches!(actual, Action::Deny(_)),
-        "expected Deny, got {:?}",
-        actual
-    );
-}
-
-fn assert_default(actual: &Action) {
-    assert_eq!(
-        *actual,
-        Action::Default,
-        "expected Default, got {:?}",
-        actual
-    );
 }

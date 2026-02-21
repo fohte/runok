@@ -1,18 +1,11 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use super::{
+    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
+};
 
 use indoc::indoc;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use runok::config::parse_config;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
-
-#[fixture]
-fn empty_context() -> EvalContext {
-    EvalContext {
-        env: HashMap::new(),
-        cwd: PathBuf::from("/tmp"),
-    }
-}
+use runok::rules::rule_engine::{EvalContext, evaluate_command};
 
 // ========================================
 // Optional notation: curl [-X|--request GET] *
@@ -245,39 +238,4 @@ fn negation_matches_everything_except(
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
-}
-
-// ========================================
-// Helpers
-// ========================================
-
-type ActionAssertion = fn(&Action);
-
-fn assert_allow(actual: &Action) {
-    assert_eq!(*actual, Action::Allow, "expected Allow, got {:?}", actual);
-}
-
-fn assert_deny(actual: &Action) {
-    assert!(
-        matches!(actual, Action::Deny(_)),
-        "expected Deny, got {:?}",
-        actual
-    );
-}
-
-fn assert_ask(actual: &Action) {
-    assert!(
-        matches!(actual, Action::Ask(_)),
-        "expected Ask, got {:?}",
-        actual
-    );
-}
-
-fn assert_default(actual: &Action) {
-    assert_eq!(
-        *actual,
-        Action::Default,
-        "expected Default, got {:?}",
-        actual
-    );
 }
