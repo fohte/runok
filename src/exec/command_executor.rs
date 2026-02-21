@@ -863,53 +863,73 @@ mod tests {
 
     // === SandboxPolicy::build ===
 
-    /// Compute expected writable_roots: tilde-expand, canonicalize, dedup, sort.
-    fn expected_writable_roots(inputs: &[&str]) -> Vec<PathBuf> {
-        let mut set: HashSet<PathBuf> = HashSet::new();
-        for path in inputs {
-            let expanded = expand_tilde(path);
-            let canonical = PathBuf::from(&expanded)
-                .canonicalize()
-                .unwrap_or_else(|e| panic!("test setup: cannot canonicalize '{expanded}': {e}"));
-            set.insert(canonical);
-        }
-        let mut v: Vec<PathBuf> = set.into_iter().collect();
-        v.sort();
-        v
+    // Canonical paths for test fixtures (environment-dependent).
+    fn canonical(path: &str) -> PathBuf {
+        PathBuf::from(path).canonicalize().unwrap()
     }
 
-    /// Compute expected read_only_subpaths: tilde-expand deny inputs, dedup,
-    /// merge with protected paths, sort.
-    fn expected_read_only_subpaths(deny_inputs: &[&str]) -> Vec<PathBuf> {
-        let mut set: HashSet<PathBuf> = HashSet::new();
-        for path in deny_inputs {
-            let expanded = expand_tilde(path);
-            set.insert(PathBuf::from(expanded));
-        }
-        for protected in PROTECTED_PATHS {
-            set.insert(PathBuf::from(protected));
-        }
-        let mut v: Vec<PathBuf> = set.into_iter().collect();
+    fn protected_paths() -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = PROTECTED_PATHS.iter().map(PathBuf::from).collect();
         v.sort();
         v
     }
 
     /// Parameterized success cases for `build()`.
+    /// Each case specifies concrete expected values for writable_roots and
+    /// read_only_subpaths (sorted). Protected paths (.git, .gitmodules, .runok)
+    /// are always appended to expected_readonly by the test body.
     #[rstest]
-    #[case::empty_inputs(vec![], vec![], true)]
-    #[case::single_writable(vec!["/tmp"], vec![], true)]
-    #[case::multiple_writable(vec!["/tmp", "/var"], vec![], true)]
-    #[case::duplicate_writable_deduped(vec!["/tmp", "/tmp"], vec![], true)]
-    #[case::tilde_writable(vec!["~"], vec![], true)]
-    #[case::deny_glob_pattern(vec![], vec![".env*"], true)]
-    #[case::deny_recursive_glob(vec![], vec!["/etc/**"], false)]
-    #[case::deny_nonexistent_path(vec![], vec!["/nonexistent_readonly_12345"], true)]
-    #[case::deny_duplicate_deduped(vec![], vec![".env", ".env"], true)]
-    #[case::writable_and_deny_together(vec!["/tmp"], vec![".secrets", "/etc/shadow"], false)]
-    #[case::deny_overlaps_with_protected_path(vec![], vec![".git"], true)]
-    #[case::network_denied(vec![], vec![], false)]
-    #[case::tilde_deny(vec![], vec!["~/.ssh/**"], true)]
-    fn build_success(#[case] writable: Vec<&str>, #[case] deny: Vec<&str>, #[case] network: bool) {
+    #[case::empty_inputs(
+        vec![], vec![], true,
+        vec![], vec![],
+    )]
+    #[case::single_writable(
+        vec!["/tmp"], vec![], true,
+        vec!["/tmp"], vec![],
+    )]
+    #[case::multiple_writable(
+        vec!["/tmp", "/var"], vec![], true,
+        vec!["/tmp", "/var"], vec![],
+    )]
+    #[case::duplicate_writable_deduped(
+        vec!["/tmp", "/tmp"], vec![], true,
+        vec!["/tmp"], vec![],
+    )]
+    #[case::deny_glob_pattern(
+        vec![], vec![".env*"], true,
+        vec![], vec![".env*"],
+    )]
+    #[case::deny_recursive_glob(
+        vec![], vec!["/etc/**"], false,
+        vec![], vec!["/etc/**"],
+    )]
+    #[case::deny_nonexistent_path(
+        vec![], vec!["/nonexistent_readonly_12345"], true,
+        vec![], vec!["/nonexistent_readonly_12345"],
+    )]
+    #[case::deny_duplicate_deduped(
+        vec![], vec![".env", ".env"], true,
+        vec![], vec![".env"],
+    )]
+    #[case::writable_and_deny_together(
+        vec!["/tmp"], vec![".secrets", "/etc/shadow"], false,
+        vec!["/tmp"], vec![".secrets", "/etc/shadow"],
+    )]
+    #[case::deny_overlaps_with_protected_path(
+        vec![], vec![".git"], true,
+        vec![], vec![],  // .git is already in protected paths, no extra entries
+    )]
+    #[case::network_denied(
+        vec![], vec![], false,
+        vec![], vec![],
+    )]
+    fn build_success(
+        #[case] writable: Vec<&str>,
+        #[case] deny: Vec<&str>,
+        #[case] network: bool,
+        #[case] expected_writable_raw: Vec<&str>,
+        #[case] expected_deny_extra: Vec<&str>,
+    ) {
         let policy = SandboxPolicy::build(
             writable.iter().map(|s| s.to_string()).collect(),
             deny.iter().map(|s| s.to_string()).collect(),
@@ -917,12 +937,43 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(policy.writable_roots, expected_writable_roots(&writable));
-        assert_eq!(
-            policy.read_only_subpaths,
-            expected_read_only_subpaths(&deny)
-        );
+        // writable_roots: canonicalize each expected path
+        let mut expected_writable: Vec<PathBuf> =
+            expected_writable_raw.iter().map(|p| canonical(p)).collect();
+        expected_writable.sort();
+        assert_eq!(policy.writable_roots, expected_writable);
+
+        // read_only_subpaths: expected_deny_extra + protected paths (sorted)
+        let mut expected_readonly: Vec<PathBuf> = expected_deny_extra
+            .iter()
+            .map(PathBuf::from)
+            .chain(PROTECTED_PATHS.iter().map(PathBuf::from))
+            .collect();
+        expected_readonly.sort();
+        assert_eq!(policy.read_only_subpaths, expected_readonly);
+
         assert_eq!(policy.network_allowed, network);
+    }
+
+    #[rstest]
+    fn build_expands_tilde_in_writable() {
+        let home = std::env::var("HOME").unwrap();
+        let policy = SandboxPolicy::build(vec!["~".to_string()], vec![], true).unwrap();
+        let expected = PathBuf::from(&home).canonicalize().unwrap();
+        assert_eq!(policy.writable_roots, vec![expected]);
+    }
+
+    #[rstest]
+    fn build_expands_tilde_in_deny() {
+        let home = std::env::var("HOME").unwrap();
+        let policy = SandboxPolicy::build(vec![], vec!["~/.ssh/**".to_string()], true).unwrap();
+        let tilde_expanded = PathBuf::from(format!("{home}/.ssh/**"));
+        assert!(
+            policy.read_only_subpaths.contains(&tilde_expanded),
+            "expected {tilde_expanded:?} in {:?}",
+            policy.read_only_subpaths
+        );
+        assert_eq!(policy.read_only_subpaths.len(), PROTECTED_PATHS.len() + 1);
     }
 
     #[rstest]
@@ -1085,34 +1136,66 @@ mod tests {
 
     // === SandboxPolicy::from_merged ===
 
-    /// Parameterized `from_merged()` cases covering writable/deny/network combinations.
     #[rstest]
-    #[case::basic_with_deny(vec!["/tmp"], vec!["/etc/passwd"], true)]
-    #[case::glob_deny(vec!["/tmp"], vec![".env*", "/etc/**"], true)]
-    #[case::tilde_deny(vec!["/tmp"], vec!["~/.ssh/**"], false)]
-    #[case::empty_writable(vec![], vec![".secrets"], true)]
-    #[case::empty_deny(vec!["/tmp"], vec![], true)]
-    #[case::all_empty(vec![], vec![], false)]
-    fn from_merged_success(
-        #[case] writable: Vec<&str>,
-        #[case] deny: Vec<&str>,
-        #[case] network: bool,
-    ) {
+    fn from_merged_basic() {
         use crate::config::MergedSandboxPolicy;
 
         let merged = MergedSandboxPolicy {
-            writable: writable.iter().map(|s| s.to_string()).collect(),
-            deny: deny.iter().map(|s| s.to_string()).collect(),
-            network_allowed: network,
+            writable: vec!["/tmp".to_string()],
+            deny: vec![".env*".to_string(), "/etc/shadow".to_string()],
+            network_allowed: false,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
 
-        assert_eq!(policy.writable_roots, expected_writable_roots(&writable));
-        assert_eq!(
-            policy.read_only_subpaths,
-            expected_read_only_subpaths(&deny)
-        );
-        assert_eq!(policy.network_allowed, network);
+        assert_eq!(policy.writable_roots, vec![canonical("/tmp")]);
+        assert!(!policy.network_allowed);
+
+        // read_only_subpaths = deny entries + protected paths
+        let mut expected_readonly: HashSet<PathBuf> = HashSet::new();
+        expected_readonly.insert(PathBuf::from(".env*"));
+        expected_readonly.insert(PathBuf::from("/etc/shadow"));
+        for p in PROTECTED_PATHS {
+            expected_readonly.insert(PathBuf::from(p));
+        }
+        let mut expected_readonly: Vec<PathBuf> = expected_readonly.into_iter().collect();
+        expected_readonly.sort();
+        assert_eq!(policy.read_only_subpaths, expected_readonly);
+    }
+
+    #[rstest]
+    fn from_merged_glob_and_tilde_deny() {
+        use crate::config::MergedSandboxPolicy;
+
+        let home = std::env::var("HOME").unwrap();
+        let merged = MergedSandboxPolicy {
+            writable: vec![],
+            deny: vec!["~/.ssh/**".to_string()],
+            network_allowed: true,
+        };
+        let policy = SandboxPolicy::from_merged(&merged).unwrap();
+
+        assert!(policy.writable_roots.is_empty());
+        assert!(policy.network_allowed);
+
+        let tilde_expanded = PathBuf::from(format!("{home}/.ssh/**"));
+        assert!(policy.read_only_subpaths.contains(&tilde_expanded));
+        assert_eq!(policy.read_only_subpaths.len(), PROTECTED_PATHS.len() + 1);
+    }
+
+    #[rstest]
+    fn from_merged_all_empty() {
+        use crate::config::MergedSandboxPolicy;
+
+        let merged = MergedSandboxPolicy {
+            writable: vec![],
+            deny: vec![],
+            network_allowed: true,
+        };
+        let policy = SandboxPolicy::from_merged(&merged).unwrap();
+
+        assert!(policy.writable_roots.is_empty());
+        assert!(policy.network_allowed);
+        assert_eq!(policy.read_only_subpaths, protected_paths());
     }
 
     #[rstest]
