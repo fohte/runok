@@ -131,7 +131,11 @@ impl SandboxPolicy {
             writable_set = writable_set.intersection(&other).cloned().collect();
         }
 
-        if writable_set.is_empty() {
+        // Empty intersection is a conflict only when at least one policy
+        // declared writable roots. If all policies have empty writable_roots,
+        // they agree on "no writes allowed".
+        let any_has_writable = policies.iter().any(|p| !p.writable_roots.is_empty());
+        if writable_set.is_empty() && any_has_writable {
             return Err(SandboxError::SetupFailed(
                 "conflicting sandbox policies: no common writable roots".to_string(),
             ));
@@ -1010,6 +1014,22 @@ mod tests {
                 .to_string()
                 .contains("no common writable roots")
         );
+    }
+
+    #[rstest]
+    fn merge_both_empty_writable_roots_succeeds() {
+        let a = SandboxPolicy {
+            writable_roots: vec![],
+            read_only_subpaths: vec![PathBuf::from(".git")],
+            network_allowed: true,
+        };
+        let b = SandboxPolicy {
+            writable_roots: vec![],
+            read_only_subpaths: vec![PathBuf::from(".runok")],
+            network_allowed: true,
+        };
+        let merged = SandboxPolicy::merge(&[a, b]).unwrap();
+        assert!(merged.writable_roots.is_empty());
     }
 
     #[rstest]
