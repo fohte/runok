@@ -1188,9 +1188,7 @@ mod tests {
                             writable: Some(vec!["/tmp".to_string()]),
                             deny: None,
                         }),
-                        network: Some(NetworkPolicy {
-                            allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]),
-                        }),
+                        network: Some(NetworkPolicy { allow: Some(true) }),
                     },
                 ),
                 (
@@ -1200,9 +1198,7 @@ mod tests {
                             writable: Some(vec!["/tmp".to_string()]),
                             deny: None,
                         }),
-                        network: Some(NetworkPolicy {
-                            allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]),
-                        }),
+                        network: Some(NetworkPolicy { allow: Some(true) }),
                     },
                 ),
             ]),
@@ -1215,7 +1211,7 @@ mod tests {
         )
         .unwrap();
         let policy = result.sandbox_policy.unwrap();
-        assert_eq!(policy.network_allow, Some(vec!["github.com".to_string()]));
+        assert!(policy.network_allowed);
     }
 
     #[rstest]
@@ -1233,9 +1229,7 @@ mod tests {
                             writable: Some(vec!["/tmp".to_string()]),
                             deny: None,
                         }),
-                        network: Some(NetworkPolicy {
-                            allow: Some(vec!["github.com".to_string()]),
-                        }),
+                        network: Some(NetworkPolicy { allow: Some(true) }),
                     },
                 ),
                 (
@@ -1245,7 +1239,7 @@ mod tests {
                             writable: Some(vec!["/tmp".to_string()]),
                             deny: None,
                         }),
-                        network: Some(NetworkPolicy { allow: None }),
+                        network: Some(NetworkPolicy { allow: Some(false) }),
                     },
                 ),
             ]),
@@ -1258,8 +1252,8 @@ mod tests {
         )
         .unwrap();
         let policy = result.sandbox_policy.unwrap();
-        // network.allow: None in no_net means no network allowed -> empty list
-        assert_eq!(policy.network_allow, Some(vec![]));
+        // One preset denies network -> result is denied
+        assert!(!policy.network_allowed);
     }
 
     // ========================================
@@ -1419,9 +1413,7 @@ mod tests {
                         writable: Some(vec!["/tmp".to_string()]),
                         deny: None,
                     }),
-                    network: Some(NetworkPolicy {
-                        allow: Some(vec!["pypi.org".to_string()]),
-                    }),
+                    network: Some(NetworkPolicy { allow: Some(true) }),
                 },
             )]),
         );
@@ -1430,7 +1422,7 @@ mod tests {
         assert_eq!(result.action, Action::Allow);
         let policy = result.sandbox_policy.unwrap();
         assert_eq!(policy.writable, vec!["/tmp"]);
-        assert_eq!(policy.network_allow, Some(vec!["pypi.org".to_string()]));
+        assert!(policy.network_allowed);
     }
 
     #[rstest]

@@ -216,23 +216,10 @@ impl SandboxPolicy {
     /// Converts string paths to `PathBuf`, expands `~`, canonicalizes paths,
     /// and adds protected paths.
     pub fn from_merged(policy: &crate::config::MergedSandboxPolicy) -> Result<Self, SandboxError> {
-        let network_allowed = match &policy.network_allow {
-            // No restriction specified => all network access allowed
-            None => true,
-            // Explicit deny-all (empty list) => no network access
-            Some(hosts) if hosts.is_empty() => false,
-            // Host-level filtering is not yet supported
-            Some(hosts) => {
-                return Err(SandboxError::SetupFailed(format!(
-                    "host-level network filtering is not yet supported (got: {})",
-                    hosts.join(", "),
-                )));
-            }
-        };
         Self::build(
             policy.writable.clone(),
             policy.deny.clone(),
-            network_allowed,
+            policy.network_allowed,
         )
     }
 }
@@ -1127,7 +1114,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string()],
             deny: vec!["/etc/passwd".to_string()],
-            network_allow: None,
+            network_allowed: true,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
 
@@ -1142,45 +1129,18 @@ mod tests {
     }
 
     #[rstest]
-    fn from_merged_rejects_host_level_network_filtering() {
+    #[case::network_allowed(true, true)]
+    #[case::network_denied(false, false)]
+    fn from_merged_network_flag(#[case] input: bool, #[case] expected: bool) {
         use crate::config::MergedSandboxPolicy;
 
         let merged = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string()],
             deny: vec![],
-            network_allow: Some(vec!["github.com".to_string()]),
-        };
-        let err = SandboxPolicy::from_merged(&merged).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("host-level network filtering is not yet supported")
-        );
-    }
-
-    #[rstest]
-    fn from_merged_no_network_allow_means_allowed() {
-        use crate::config::MergedSandboxPolicy;
-
-        let merged = MergedSandboxPolicy {
-            writable: vec!["/tmp".to_string()],
-            deny: vec![],
-            network_allow: None,
+            network_allowed: input,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
-        assert!(policy.network_allowed);
-    }
-
-    #[rstest]
-    fn from_merged_empty_network_allow_means_no_network() {
-        use crate::config::MergedSandboxPolicy;
-
-        let merged = MergedSandboxPolicy {
-            writable: vec!["/tmp".to_string()],
-            deny: vec![],
-            network_allow: Some(vec![]),
-        };
-        let policy = SandboxPolicy::from_merged(&merged).unwrap();
-        assert!(!policy.network_allowed);
+        assert_eq!(policy.network_allowed, expected);
     }
 
     // === expand_tilde ===

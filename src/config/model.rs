@@ -73,7 +73,7 @@ pub struct SandboxPreset {
 pub struct MergedSandboxPolicy {
     pub writable: Vec<String>,
     pub deny: Vec<String>,
-    pub network_allow: Option<Vec<String>>,
+    pub network_allowed: bool,
 }
 
 impl SandboxPreset {
@@ -81,8 +81,8 @@ impl SandboxPreset {
     ///
     /// - `writable` (writable roots): intersection across all presets
     /// - `deny` (read-only subpaths): union across all presets
-    /// - `network.allow`: intersection; if any preset has no `network.allow`
-    ///   (meaning no network access), the result has no network access
+    /// - `network_allowed`: AND; if any preset denies network, the result denies it.
+    ///   Presets without a `network` section default to allowed.
     ///
     /// Returns `None` if the input slice is empty.
     pub fn merge_strictest(presets: &[&SandboxPreset]) -> Option<MergedSandboxPolicy> {
@@ -92,8 +92,8 @@ impl SandboxPreset {
 
         let mut writable: Option<HashSet<String>> = None;
         let mut deny: HashSet<String> = HashSet::new();
-        let mut network_allow: Option<HashSet<String>> = None;
-        let mut any_network_restricted = false;
+        // Default to allowed; any explicit deny overrides.
+        let mut network_allowed = true;
 
         for preset in presets {
             // writable: intersection
@@ -112,32 +112,13 @@ impl SandboxPreset {
                 }
             }
 
-            // network.allow: intersection (if any preset restricts network, restrict all)
-            if let Some(net) = &preset.network {
-                match &net.allow {
-                    Some(allowed) => {
-                        let a_set: HashSet<String> = allowed.iter().cloned().collect();
-                        network_allow = Some(match network_allow {
-                            Some(existing) => existing.intersection(&a_set).cloned().collect(),
-                            None => a_set,
-                        });
-                    }
-                    None => {
-                        any_network_restricted = true;
-                    }
-                }
+            // network: AND (if any preset explicitly sets allow: false, deny all)
+            if let Some(net) = &preset.network
+                && let Some(false) = net.allow
+            {
+                network_allowed = false;
             }
         }
-
-        let final_network = if any_network_restricted {
-            Some(vec![])
-        } else {
-            network_allow.map(|s| {
-                let mut v: Vec<String> = s.into_iter().collect();
-                v.sort();
-                v
-            })
-        };
 
         let mut writable_vec: Vec<String> = writable.unwrap_or_default().into_iter().collect();
         writable_vec.sort();
@@ -148,7 +129,7 @@ impl SandboxPreset {
         Some(MergedSandboxPolicy {
             writable: writable_vec,
             deny: deny_vec,
-            network_allow: final_network,
+            network_allowed,
         })
     }
 }
@@ -161,7 +142,7 @@ pub struct FsPolicy {
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct NetworkPolicy {
-    pub allow: Option<Vec<String>>,
+    pub allow: Option<bool>,
 }
 
 impl Config {
@@ -548,7 +529,7 @@ mod tests {
                     deny:
                       - "<path:sensitive>"
                   network:
-                    allow: [github.com, "*.github.com", pypi.org]
+                    allow: true
         "#})
         .unwrap()
         .definitions
@@ -565,14 +546,7 @@ mod tests {
         assert_eq!(fs.deny, Some(vec!["<path:sensitive>".to_string()]));
 
         let network = restricted.network.as_ref().unwrap();
-        assert_eq!(
-            network.allow,
-            Some(vec![
-                "github.com".to_string(),
-                "*.github.com".to_string(),
-                "pypi.org".to_string(),
-            ])
-        );
+        assert_eq!(network.allow, Some(true));
     }
 
     #[rstest]
@@ -646,7 +620,7 @@ mod tests {
                     deny:
                       - "<path:sensitive>"
                   network:
-                    allow: [github.com, "*.github.com", pypi.org]
+                    allow: true
 
               wrappers:
                 - 'sudo <cmd>'
@@ -1207,9 +1181,7 @@ mod tests {
                     "restricted".to_string(),
                     SandboxPreset {
                         fs: None,
-                        network: Some(NetworkPolicy {
-                            allow: Some(vec!["github.com".to_string()]),
-                        }),
+                        network: Some(NetworkPolicy { allow: Some(true) }),
                     },
                 )])),
                 ..Definitions::default()
@@ -1318,14 +1290,12 @@ mod tests {
                 writable: Some(vec!["/tmp".to_string(), "/home".to_string()]),
                 deny: Some(vec!["/etc".to_string()]),
             }),
-            network: Some(NetworkPolicy {
-                allow: Some(vec!["github.com".to_string()]),
-            }),
+            network: Some(NetworkPolicy { allow: Some(true) }),
         };
         let result = SandboxPreset::merge_strictest(&[&preset]).unwrap();
         assert_eq!(result.writable, vec!["/home", "/tmp"]);
         assert_eq!(result.deny, vec!["/etc"]);
-        assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
+        assert!(result.network_allowed);
     }
 
     #[rstest]
@@ -1383,20 +1353,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::intersection(
-        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "pypi.org".to_string()]) }),
-        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string(), "npmjs.org".to_string()]) }),
-        Some(vec!["github.com".to_string()]),
+    #[case::both_allowed(
+        Some(NetworkPolicy { allow: Some(true) }),
+        Some(NetworkPolicy { allow: Some(true) }),
+        true,
     )]
-    #[case::none_means_restricted(
-        Some(NetworkPolicy { allow: Some(vec!["github.com".to_string()]) }),
-        Some(NetworkPolicy { allow: None }),
-        Some(vec![]),
+    #[case::one_denied(
+        Some(NetworkPolicy { allow: Some(true) }),
+        Some(NetworkPolicy { allow: Some(false) }),
+        false,
+    )]
+    #[case::both_denied(
+        Some(NetworkPolicy { allow: Some(false) }),
+        Some(NetworkPolicy { allow: Some(false) }),
+        false,
+    )]
+    #[case::none_defaults_to_allowed(
+        Some(NetworkPolicy { allow: Some(true) }),
+        None,
+        true,
     )]
     fn merge_strictest_network(
         #[case] network_a: Option<NetworkPolicy>,
         #[case] network_b: Option<NetworkPolicy>,
-        #[case] expected: Option<Vec<String>>,
+        #[case] expected: bool,
     ) {
         let a = SandboxPreset {
             fs: None,
@@ -1407,7 +1387,7 @@ mod tests {
             network: network_b,
         };
         let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
-        assert_eq!(result.network_allow, expected);
+        assert_eq!(result.network_allowed, expected);
     }
 
     #[test]
@@ -1421,13 +1401,11 @@ mod tests {
         };
         let b = SandboxPreset {
             fs: None,
-            network: Some(NetworkPolicy {
-                allow: Some(vec!["github.com".to_string()]),
-            }),
+            network: Some(NetworkPolicy { allow: Some(true) }),
         };
         let result = SandboxPreset::merge_strictest(&[&a, &b]).unwrap();
         assert_eq!(result.writable, vec!["/tmp"]);
         assert_eq!(result.deny, vec!["/etc"]);
-        assert_eq!(result.network_allow, Some(vec!["github.com".to_string()]));
+        assert!(result.network_allowed);
     }
 }
