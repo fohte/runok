@@ -138,7 +138,7 @@ fn action_aggregation_priority(
     MergedSandboxPolicy {
         writable: vec!["./tmp".to_string()],
         deny: vec![],
-        network_allow: None,
+        network_allowed: true,
     },
 )]
 #[case::deny_paths_union(
@@ -161,10 +161,10 @@ fn action_aggregation_priority(
     MergedSandboxPolicy {
         writable: vec![],
         deny: vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()],
-        network_allow: None,
+        network_allowed: true,
     },
 )]
-#[case::network_intersection(
+#[case::network_denied_by_any(
     "cmd_a run && cmd_b run",
     indoc! {"
         rules:
@@ -176,15 +176,15 @@ fn action_aggregation_priority(
           sandbox:
             preset_a:
               network:
-                allow: [api.example.com, cdn.example.com]
+                allow: true
             preset_b:
               network:
-                allow: [api.example.com, logs.example.com]
+                allow: false
     "},
     MergedSandboxPolicy {
         writable: vec![],
         deny: vec![],
-        network_allow: Some(vec!["api.example.com".to_string()]),
+        network_allowed: false,
     },
 )]
 fn sandbox_strictest_wins_aggregation(
