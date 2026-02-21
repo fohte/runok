@@ -3,7 +3,7 @@ lefthook = "2.1.0"
 "cargo:ast-grep" = "0.40.5"
 
 # sandbox runtime for tests
-"npm:@anthropic-ai/sandbox-runtime" = "0.0.34"
+"npm:@anthropic-ai/sandbox-runtime" = "0.0.37"
 
 # lefthook hooks
 actionlint = "1.7.10"
