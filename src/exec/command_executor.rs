@@ -116,7 +116,8 @@ impl SandboxPolicy {
     /// - `read_only_subpaths`: union (broadest protection)
     /// - `network_allowed`: false if any policy disallows it
     ///
-    /// Returns an error if the resulting writable_roots is empty (conflicting constraints).
+    /// Returns an error if two or more policies have non-empty writable_roots
+    /// with no common paths (genuine conflict).
     pub fn merge(policies: &[SandboxPolicy]) -> Result<SandboxPolicy, SandboxError> {
         if policies.is_empty() {
             return Err(SandboxError::SetupFailed(
@@ -135,11 +136,15 @@ impl SandboxPolicy {
             writable_set = writable_set.intersection(&other).cloned().collect();
         }
 
-        // Empty intersection is a conflict only when at least one policy
-        // declared writable roots. If all policies have empty writable_roots,
-        // they agree on "no writes allowed".
-        let any_has_writable = policies.iter().any(|p| !p.writable_roots.is_empty());
-        if writable_set.is_empty() && any_has_writable {
+        // Empty intersection is a conflict only when two or more policies
+        // declared non-empty writable roots but share nothing in common.
+        // If only one (or zero) policies have non-empty writable_roots,
+        // the empty result means "no writes allowed" (strictest wins).
+        let non_empty_count = policies
+            .iter()
+            .filter(|p| !p.writable_roots.is_empty())
+            .count();
+        if writable_set.is_empty() && non_empty_count >= 2 {
             return Err(SandboxError::SetupFailed(
                 "conflicting sandbox policies: no common writable roots".to_string(),
             ));
@@ -1047,6 +1052,25 @@ mod tests {
         let b = SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![PathBuf::from(".runok")],
+            network_allowed: true,
+        };
+        let merged = SandboxPolicy::merge(&[a, b]).unwrap();
+        assert!(merged.writable_roots.is_empty());
+    }
+
+    #[rstest]
+    fn merge_one_empty_writable_roots_yields_empty() {
+        // Empty writable_roots means "no writes allowed" (strictest constraint).
+        // Merging with a non-empty policy should yield empty (strictest wins),
+        // not error.
+        let a = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp")],
+            read_only_subpaths: vec![],
+            network_allowed: true,
+        };
+        let b = SandboxPolicy {
+            writable_roots: vec![],
+            read_only_subpaths: vec![],
             network_allowed: true,
         };
         let merged = SandboxPolicy::merge(&[a, b]).unwrap();
