@@ -54,30 +54,6 @@ fn each_command_in_compound_is_evaluated_individually(
 }
 
 // ========================================
-// Realistic compound: curl | jq && rm
-// ========================================
-
-#[rstest]
-fn curl_pipe_jq_and_rm_evaluates_each_command(empty_context: EvalContext) {
-    let config = parse_config(indoc! {"
-        rules:
-          - allow: 'curl *'
-          - allow: 'jq *'
-          - deny: 'rm *'
-    "})
-    .unwrap();
-
-    // rm tmp.json triggers deny, so the entire compound is denied
-    let result = evaluate_compound(
-        &config,
-        "curl url | jq '.data' && rm tmp.json",
-        &empty_context,
-    )
-    .unwrap();
-    assert!(matches!(result.action, Action::Deny(_)));
-}
-
-// ========================================
 // Action aggregation: any deny -> overall deny
 // ========================================
 
