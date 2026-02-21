@@ -880,32 +880,25 @@ mod tests {
     }
 
     #[rstest]
-    fn build_expands_tilde_in_writable_roots() {
+    #[case::writable_roots("~", None)]
+    #[case::read_only_subpaths("~/.config", Some("~/.config"))]
+    fn build_expands_tilde(#[case] tilde_path: &str, #[case] readonly: Option<&str>) {
         let home = std::env::var("HOME").unwrap();
-        // Use ~ (home directory itself) which always exists
-        let policy = SandboxPolicy::build(vec!["~".to_string()], vec![], true).unwrap();
+        let (writable, read_only) = match readonly {
+            Some(ro) => (vec![], vec![ro.to_string()]),
+            None => (vec![tilde_path.to_string()], vec![]),
+        };
+        let policy = SandboxPolicy::build(writable, read_only, true).unwrap();
 
-        let expected = PathBuf::from(&home).canonicalize().unwrap();
+        let expanded = tilde_path.replacen('~', &home, 1);
+        let expected = PathBuf::from(&expanded).canonicalize().unwrap();
+        let paths = match readonly {
+            Some(_) => &policy.read_only_subpaths,
+            None => &policy.writable_roots,
+        };
         assert!(
-            policy.writable_roots.iter().any(|p| p == &expected),
-            "expected {expected:?} in {:?}",
-            policy.writable_roots
-        );
-    }
-
-    #[rstest]
-    fn build_expands_tilde_in_read_only_subpaths() {
-        let home = std::env::var("HOME").unwrap();
-        // Use ~/.config which typically exists on macOS/Linux
-        let policy = SandboxPolicy::build(vec![], vec!["~/.config".to_string()], true).unwrap();
-
-        let expected = PathBuf::from(format!("{home}/.config"))
-            .canonicalize()
-            .unwrap();
-        assert!(
-            policy.read_only_subpaths.iter().any(|p| p == &expected),
-            "expected {expected:?} in {:?}",
-            policy.read_only_subpaths
+            paths.iter().any(|p| p == &expected),
+            "expected {expected:?} in {paths:?}"
         );
     }
 
@@ -925,9 +918,13 @@ mod tests {
     }
 
     #[rstest]
-    fn build_rejects_nonexistent_writable_path() {
-        let result =
-            SandboxPolicy::build(vec!["/nonexistent_path_12345".to_string()], vec![], true);
+    #[case::writable(vec!["/nonexistent_path_12345".to_string()], vec![])]
+    #[case::readonly(vec![], vec!["/nonexistent_readonly_path_12345".to_string()])]
+    fn build_rejects_nonexistent_path(
+        #[case] writable: Vec<String>,
+        #[case] read_only: Vec<String>,
+    ) {
+        let result = SandboxPolicy::build(writable, read_only, true);
         assert!(result.is_err());
         assert!(
             result
@@ -938,28 +935,11 @@ mod tests {
     }
 
     #[rstest]
-    fn build_rejects_nonexistent_readonly_path() {
-        let result = SandboxPolicy::build(
-            vec![],
-            vec!["/nonexistent_readonly_path_12345".to_string()],
-            true,
-        );
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("cannot canonicalize path")
-        );
-    }
-
-    #[rstest]
-    fn build_sets_network_allowed() {
-        let allowed = SandboxPolicy::build(vec![], vec![], true).unwrap();
-        assert!(allowed.network_allowed);
-
-        let disallowed = SandboxPolicy::build(vec![], vec![], false).unwrap();
-        assert!(!disallowed.network_allowed);
+    #[case::allowed(true, true)]
+    #[case::denied(false, false)]
+    fn build_sets_network_allowed(#[case] input: bool, #[case] expected: bool) {
+        let policy = SandboxPolicy::build(vec![], vec![], input).unwrap();
+        assert_eq!(policy.network_allowed, expected);
     }
 
     // === SandboxPolicy::merge ===
