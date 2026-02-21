@@ -72,7 +72,7 @@ impl ConfigLoader for DefaultConfigLoader {
             .map(|p| Self::read_and_parse(&p))
             .transpose()?;
 
-        let config = global.unwrap_or_default().merge(local.unwrap_or_default());
+        let mut config = global.unwrap_or_default().merge(local.unwrap_or_default());
 
         config.validate()?;
         Ok(config)
