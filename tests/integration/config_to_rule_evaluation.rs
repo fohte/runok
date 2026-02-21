@@ -262,7 +262,7 @@ fn preset_merge_wrappers_appended() {
     "}).unwrap(),
     "deny rule cannot have a sandbox",
 )]
-fn config_validation_rejects_invalid(#[case] config: Config, #[case] expected_error: &str) {
+fn config_validation_rejects_invalid(#[case] mut config: Config, #[case] expected_error: &str) {
     let err = config.validate().unwrap_err();
     assert!(
         err.to_string().contains(expected_error),
@@ -274,7 +274,7 @@ fn config_validation_rejects_invalid(#[case] config: Config, #[case] expected_er
 
 #[rstest]
 fn config_validation_rejects_undefined_sandbox() {
-    let config = parse_config(indoc! {"
+    let mut config = parse_config(indoc! {"
         rules:
           - allow: 'python3 *'
             sandbox: nonexistent
@@ -288,7 +288,7 @@ fn config_validation_rejects_undefined_sandbox() {
 
 #[rstest]
 fn config_validation_collects_multiple_errors() {
-    let config = Config {
+    let mut config = Config {
         rules: Some(vec![
             RuleEntry {
                 deny: None,
