@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# Bootstrap the development environment.
+#
+# Usage:
+#   scripts/bootstrap              # Full setup (mise + lefthook + dependencies)
+#   scripts/bootstrap --worktree   # Worktree setup (mise + dependencies only)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
+worktree=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --worktree)
+      worktree=true
+      shift
+      ;;
+    *)
+      echo "Error: Unknown argument: $1" >&2
+      echo "Usage: $0 [--worktree]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Install tool versions managed by mise
+if command -v mise > /dev/null 2>&1; then
+  mise install
+fi
+
+# Install git hooks via lefthook (skip for worktrees — they share the parent's .git/hooks)
+if [ "$worktree" = false ] && command -v lefthook > /dev/null 2>&1; then
+  lefthook install
+fi
+
+# Fetch Rust dependencies
+cargo fetch
