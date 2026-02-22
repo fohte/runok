@@ -269,6 +269,10 @@ impl SandboxExecutor for LinuxSandboxExecutor {
 
         Ok(exit_code_from_status(status))
     }
+
+    fn is_supported(&self) -> bool {
+        self.helper_path.exists()
+    }
 }
 
 /// Find the runok-linux-sandbox helper binary.
