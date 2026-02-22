@@ -48,7 +48,7 @@ impl CommandInput {
 }
 
 /// Sandbox policy defining filesystem and network restrictions for command execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SandboxPolicy {
     /// Writable root directories (cwd is always included by the caller).
     pub writable_roots: Vec<PathBuf>,
@@ -184,6 +184,11 @@ fn canonicalize_path(path: &str) -> Result<PathBuf, SandboxError> {
 }
 
 /// Trait for executing commands in a sandboxed environment.
+///
+/// Platform-specific implementations:
+/// - macOS: `MacOsSandboxExecutor` (seatbelt/SBPL via sandbox-exec)
+/// - Linux: `LinuxSandboxExecutor` (bubblewrap + landlock + seccomp via helper binary)
+/// - Fallback: `StubSandboxExecutor` (returns unsupported error)
 pub trait SandboxExecutor {
     /// Execute a command within a sandbox, returning the exit code.
     fn exec_sandboxed(&self, command: &[String], policy: &SandboxPolicy) -> Result<i32, ExecError>;
@@ -210,6 +215,78 @@ impl SandboxExecutor for StubSandboxExecutor {
     fn is_supported(&self) -> bool {
         false
     }
+}
+
+/// Linux sandbox executor that delegates to the runok-linux-sandbox helper binary.
+///
+/// The helper binary applies bubblewrap (namespace isolation), landlock (filesystem
+/// access control), and seccomp (network control) before executing the command.
+#[cfg(target_os = "linux")]
+pub struct LinuxSandboxExecutor {
+    helper_path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxSandboxExecutor {
+    /// Create a new LinuxSandboxExecutor by finding the helper binary.
+    ///
+    /// Search order:
+    /// 1. Same directory as the current executable
+    /// 2. PATH lookup via `which`
+    pub fn new() -> Result<Self, super::error::SandboxError> {
+        let helper_path =
+            find_linux_sandbox_helper().ok_or(super::error::SandboxError::NotSupported)?;
+        Ok(Self { helper_path })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl SandboxExecutor for LinuxSandboxExecutor {
+    fn exec_sandboxed(&self, command: &[String], policy: &SandboxPolicy) -> Result<i32, ExecError> {
+        let policy_json = serde_json::to_string(policy).map_err(|e| {
+            ExecError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("failed to serialize sandbox policy: {e}"),
+            ))
+        })?;
+
+        let cwd = std::env::current_dir().map_err(ExecError::Io)?;
+
+        let status = Command::new(&self.helper_path)
+            .arg("--policy")
+            .arg(&policy_json)
+            .arg("--cwd")
+            .arg(&cwd)
+            .arg("--")
+            .args(command)
+            .status()
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    ExecError::NotFound(self.helper_path.display().to_string())
+                }
+                _ => ExecError::Io(e),
+            })?;
+
+        Ok(exit_code_from_status(status))
+    }
+}
+
+/// Find the runok-linux-sandbox helper binary.
+///
+/// This is a standalone function for use in non-Linux builds (e.g., testing path
+/// discovery logic). On Linux, prefer `LinuxSandboxExecutor::new()`.
+pub fn find_linux_sandbox_helper() -> Option<PathBuf> {
+    // 1. Same directory as the current executable
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let helper = dir.join("runok-linux-sandbox");
+        if helper.exists() {
+            return Some(helper);
+        }
+    }
+    // 2. PATH lookup
+    which::which("runok-linux-sandbox").ok()
 }
 
 impl SandboxPolicy {
@@ -1225,5 +1302,77 @@ mod tests {
         } else {
             assert_eq!(result, input);
         }
+    }
+
+    // === SandboxPolicy serialization ===
+
+    #[rstest]
+    fn sandbox_policy_round_trip_serialization() {
+        let policy = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user/project")],
+            read_only_subpaths: vec![
+                PathBuf::from("/home/user/project/.git"),
+                PathBuf::from(".env*"),
+            ],
+            network_allowed: false,
+        };
+
+        let json = serde_json::to_string(&policy).expect("should serialize");
+        let deserialized: SandboxPolicy = serde_json::from_str(&json).expect("should deserialize");
+
+        assert_eq!(policy, deserialized);
+    }
+
+    #[rstest]
+    fn sandbox_policy_deserialize_from_json() {
+        let json = r#"{
+            "writable_roots": ["/tmp"],
+            "read_only_subpaths": [".git"],
+            "network_allowed": true
+        }"#;
+
+        let policy: SandboxPolicy = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(policy.writable_roots, vec![PathBuf::from("/tmp")]);
+        assert_eq!(policy.read_only_subpaths, vec![PathBuf::from(".git")]);
+        assert!(policy.network_allowed);
+    }
+
+    // === Helper binary discovery ===
+
+    #[rstest]
+    fn find_linux_sandbox_helper_returns_none_when_not_installed() {
+        // The helper binary is not installed in the test environment,
+        // so the function exercises both the exe-dir check and PATH
+        // fallback, returning None.
+        let result = super::find_linux_sandbox_helper();
+        assert!(result.is_none());
+    }
+
+    // === DryRunError conversion and display ===
+
+    #[rstest]
+    #[case::not_found(
+        ExecError::NotFound("foo".into()),
+        DryRunError::NotFound("foo".into()),
+        "command not found: foo"
+    )]
+    #[case::permission_denied(
+        ExecError::PermissionDenied("bar".into()),
+        DryRunError::PermissionDenied("bar".into()),
+        "permission denied: bar"
+    )]
+    #[case::io_error(
+        ExecError::Io(std::io::Error::other("disk failure")),
+        DryRunError::Io("disk failure".into()),
+        "io error: disk failure"
+    )]
+    fn dry_run_error_from_exec_error(
+        #[case] exec_err: ExecError,
+        #[case] expected: DryRunError,
+        #[case] display: &str,
+    ) {
+        let converted: DryRunError = exec_err.into();
+        assert_eq!(converted, expected);
+        assert_eq!(converted.to_string(), display);
     }
 }
