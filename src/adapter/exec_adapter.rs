@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
-use crate::config::{ActionKind, Defaults};
-use crate::exec::command_executor::{CommandExecutor, CommandInput};
+use crate::config::{ActionKind, Defaults, MergedSandboxPolicy, SandboxPreset};
+use crate::exec::command_executor::{CommandExecutor, CommandInput, SandboxPolicy};
 use crate::rules::command_parser::shell_quote_join;
 use crate::rules::rule_engine::Action;
 
@@ -12,6 +14,7 @@ use crate::rules::rule_engine::Action;
 pub struct ExecAdapter {
     args: Vec<String>,
     sandbox_preset: Option<String>,
+    sandbox_definitions: HashMap<String, SandboxPreset>,
     executor: Box<dyn CommandExecutor>,
 }
 
@@ -24,8 +27,15 @@ impl ExecAdapter {
         Self {
             args,
             sandbox_preset,
+            sandbox_definitions: HashMap::new(),
             executor,
         }
+    }
+
+    /// Set sandbox preset definitions for resolving preset names to policies.
+    pub fn with_sandbox_definitions(mut self, definitions: HashMap<String, SandboxPreset>) -> Self {
+        self.sandbox_definitions = definitions;
+        self
     }
 
     fn command_input(&self) -> CommandInput {
@@ -34,6 +44,31 @@ impl ExecAdapter {
         } else {
             CommandInput::Argv(self.args.clone())
         }
+    }
+
+    /// Resolve a sandbox preset name to a `SandboxPolicy`.
+    fn resolve_sandbox_policy(
+        &self,
+        preset_name: &str,
+    ) -> Result<Option<SandboxPolicy>, anyhow::Error> {
+        let preset = match self.sandbox_definitions.get(preset_name) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let merged = SandboxPreset::merge_strictest(&[preset]);
+        match merged {
+            Some(policy) => {
+                let sandbox_policy = SandboxPolicy::from_merged(&policy)?;
+                Ok(Some(sandbox_policy))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Build a `SandboxPolicy` from a `MergedSandboxPolicy`.
+    fn build_sandbox_policy(merged: &MergedSandboxPolicy) -> Result<SandboxPolicy, anyhow::Error> {
+        Ok(SandboxPolicy::from_merged(merged)?)
     }
 }
 
@@ -55,22 +90,22 @@ impl Endpoint for ExecAdapter {
             Action::Allow => {
                 let command_input = self.command_input();
 
-                // Determine sandbox policy from the result or from the constructor preset
-                let sandbox = match result.sandbox {
-                    SandboxInfo::Preset(ref preset) => {
-                        // Use the rule's preset, falling back to the constructor preset
-                        preset.as_ref().or(self.sandbox_preset.as_ref())
+                // Resolve sandbox policy from the result or constructor preset
+                let policy = match &result.sandbox {
+                    SandboxInfo::Preset(preset) => {
+                        let preset_name = preset.as_ref().or(self.sandbox_preset.as_ref());
+                        match preset_name {
+                            Some(name) => self.resolve_sandbox_policy(name)?,
+                            None => None,
+                        }
                     }
-                    SandboxInfo::MergedPolicy(_) => {
-                        // MergedPolicy is for compound commands; sandbox execution
-                        // with merged policies is not yet implemented (Phase 2)
-                        None
+                    SandboxInfo::MergedPolicy(Some(merged)) => {
+                        Some(Self::build_sandbox_policy(merged)?)
                     }
+                    SandboxInfo::MergedPolicy(None) => None,
                 };
 
-                // Sandbox execution is Phase 2; for now, execute without sandbox
-                let _ = sandbox;
-                let exit_code = self.executor.exec(&command_input, None)?;
+                let exit_code = self.executor.exec(&command_input, policy.as_ref())?;
                 Ok(exit_code)
             }
             Action::Deny(deny_response) => {

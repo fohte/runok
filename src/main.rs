@@ -8,7 +8,8 @@ use clap::Parser;
 use cli::{CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
-use runok::exec::command_executor::ProcessCommandExecutor;
+use runok::exec::command_executor::{ProcessCommandExecutor, SandboxExecutor};
+use runok::exec::macos_sandbox::MacOsSandboxExecutor;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -41,12 +42,25 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 dry_run: args.dry_run,
                 verbose: args.verbose,
             };
-            let executor = ProcessCommandExecutor::new_without_sandbox();
+            let executor: Box<dyn runok::exec::command_executor::CommandExecutor> = {
+                let macos_executor = MacOsSandboxExecutor::new();
+                if macos_executor.is_supported() {
+                    Box::new(ProcessCommandExecutor::new(macos_executor))
+                } else {
+                    Box::new(ProcessCommandExecutor::new_without_sandbox())
+                }
+            };
+            let sandbox_defs = config
+                .definitions
+                .as_ref()
+                .and_then(|d| d.sandbox.clone())
+                .unwrap_or_default();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
-                Box::new(executor),
-            );
+                executor,
+            )
+            .with_sandbox_definitions(sandbox_defs);
             adapter::run_with_options(&endpoint, &config, &options)
         }
         Commands::Check(args) => {

@@ -184,12 +184,12 @@ fn canonicalize_path(path: &str) -> Result<PathBuf, SandboxError> {
 }
 
 /// Trait for executing commands in a sandboxed environment.
-///
-/// Phase 2 will provide real implementations (macOS seatbelt, Linux landlock/seccomp).
-/// For now, only a stub is provided.
 pub trait SandboxExecutor {
     /// Execute a command within a sandbox, returning the exit code.
     fn exec_sandboxed(&self, command: &[String], policy: &SandboxPolicy) -> Result<i32, ExecError>;
+
+    /// Returns whether the sandbox mechanism is available on the current system.
+    fn is_supported(&self) -> bool;
 }
 
 /// Stub sandbox executor that returns an error indicating sandbox is not yet supported.
@@ -205,6 +205,10 @@ impl SandboxExecutor for StubSandboxExecutor {
             std::io::ErrorKind::Unsupported,
             "sandbox execution is not yet implemented",
         )))
+    }
+
+    fn is_supported(&self) -> bool {
+        false
     }
 }
 
@@ -795,6 +799,10 @@ mod tests {
         ) -> Result<i32, ExecError> {
             self.invocations.borrow_mut().push(command.to_vec());
             Ok(self.exit_code)
+        }
+
+        fn is_supported(&self) -> bool {
+            true
         }
     }
 
