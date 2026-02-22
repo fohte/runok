@@ -163,3 +163,44 @@ fn exec_command(command: &[String]) -> Result<(), SandboxError> {
     // execvp only returns on error
     Err(SandboxError::Exec(std::io::Error::last_os_error()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    // === exec_command error paths ===
+
+    #[rstest]
+    fn exec_command_rejects_empty_command() {
+        let err = exec_command(&[]).unwrap_err();
+        assert!(
+            matches!(err, SandboxError::InvalidPolicy(_)),
+            "empty command should return InvalidPolicy, got: {err}"
+        );
+    }
+
+    #[rstest]
+    fn exec_command_rejects_nul_byte_in_argument() {
+        let err = exec_command(&["hello\0world".to_string()]).unwrap_err();
+        assert!(
+            matches!(err, SandboxError::InvalidPolicy(_)),
+            "NUL byte should return InvalidPolicy, got: {err}"
+        );
+    }
+
+    // === exit_code_from_status ===
+
+    #[rstest]
+    #[case::success("true", 0)]
+    #[case::failure("false", 1)]
+    #[case::exit_42("sh -c 'exit 42'", 42)]
+    fn exit_code_from_status_returns_code(#[case] cmd: &str, #[case] expected: i32) {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let status = std::process::Command::new(parts[0])
+            .args(&parts[1..])
+            .status()
+            .expect("command should run");
+        assert_eq!(exit_code_from_status(status), expected);
+    }
+}

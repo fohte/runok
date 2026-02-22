@@ -1336,4 +1336,32 @@ mod tests {
         let result = super::find_linux_sandbox_helper();
         assert!(result.is_none());
     }
+
+    // === DryRunError conversion and display ===
+
+    #[rstest]
+    #[case::not_found(
+        ExecError::NotFound("foo".into()),
+        DryRunError::NotFound("foo".into()),
+        "command not found: foo"
+    )]
+    #[case::permission_denied(
+        ExecError::PermissionDenied("bar".into()),
+        DryRunError::PermissionDenied("bar".into()),
+        "permission denied: bar"
+    )]
+    #[case::io_error(
+        ExecError::Io(std::io::Error::other("disk failure")),
+        DryRunError::Io("disk failure".into()),
+        "io error: disk failure"
+    )]
+    fn dry_run_error_from_exec_error(
+        #[case] exec_err: ExecError,
+        #[case] expected: DryRunError,
+        #[case] display: &str,
+    ) {
+        let converted: DryRunError = exec_err.into();
+        assert_eq!(converted, expected);
+        assert_eq!(converted.to_string(), display);
+    }
 }

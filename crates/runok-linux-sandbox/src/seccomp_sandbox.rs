@@ -120,6 +120,13 @@ mod tests {
     }
 
     #[rstest]
+    fn apply_seccomp_skips_filter_when_network_allowed() {
+        // When network is allowed, apply_seccomp should return Ok immediately
+        // without installing any seccomp filter.
+        assert!(apply_seccomp(true).is_ok());
+    }
+
+    #[rstest]
     fn describe_rules_network_blocked_has_socket_rule() {
         let rules = describe_seccomp_rules(false);
         assert_eq!(rules.len(), 1);
