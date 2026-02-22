@@ -8,7 +8,28 @@ use clap::Parser;
 use cli::{CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
-use runok::exec::command_executor::ProcessCommandExecutor;
+#[cfg(target_os = "linux")]
+use runok::exec::command_executor::LinuxSandboxExecutor;
+use runok::exec::command_executor::{CommandExecutor, ProcessCommandExecutor};
+
+/// Create the appropriate command executor for the current platform.
+///
+/// On Linux, attempts to find the runok-linux-sandbox helper binary and use
+/// the LinuxSandboxExecutor. Falls back to the stub executor if not found.
+/// On other platforms, always uses the stub executor.
+fn create_executor() -> Box<dyn CommandExecutor> {
+    #[cfg(target_os = "linux")]
+    {
+        match LinuxSandboxExecutor::new() {
+            Ok(sandbox) => return Box::new(ProcessCommandExecutor::new(sandbox)),
+            Err(_) => {
+                // Fall through to stub
+            }
+        }
+    }
+
+    Box::new(ProcessCommandExecutor::new_without_sandbox())
+}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -41,11 +62,11 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 dry_run: args.dry_run,
                 verbose: args.verbose,
             };
-            let executor = ProcessCommandExecutor::new_without_sandbox();
+            let executor = create_executor();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
-                Box::new(executor),
+                executor,
             );
             adapter::run_with_options(&endpoint, &config, &options)
         }
@@ -80,7 +101,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cli::CheckArgs;
+    use cli::{CheckArgs, ExecArgs};
     use indoc::indoc;
     use rstest::rstest;
 
@@ -133,6 +154,26 @@ mod tests {
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "echo hello\n".as_bytes());
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn create_executor_returns_executor() {
+        let executor = create_executor();
+        // Verify executor works by validating a known command
+        assert!(executor.validate(&["sh".to_string()]).is_ok());
+    }
+
+    #[rstest]
+    fn run_command_exec_with_dry_run() {
+        let cmd = Commands::Exec(ExecArgs {
+            command: vec!["echo".into(), "hello".into()],
+            sandbox: None,
+            dry_run: true,
+            verbose: false,
+        });
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let exit_code = run_command(cmd, &cwd, std::io::empty());
         assert_eq!(exit_code, 0);
     }
 
