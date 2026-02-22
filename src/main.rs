@@ -8,7 +8,28 @@ use clap::Parser;
 use cli::{CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
-use runok::exec::command_executor::ProcessCommandExecutor;
+#[cfg(target_os = "linux")]
+use runok::exec::command_executor::LinuxSandboxExecutor;
+use runok::exec::command_executor::{CommandExecutor, ProcessCommandExecutor};
+
+/// Create the appropriate command executor for the current platform.
+///
+/// On Linux, attempts to find the runok-linux-sandbox helper binary and use
+/// the LinuxSandboxExecutor. Falls back to the stub executor if not found.
+/// On other platforms, always uses the stub executor.
+fn create_executor() -> Box<dyn CommandExecutor> {
+    #[cfg(target_os = "linux")]
+    {
+        match LinuxSandboxExecutor::new() {
+            Ok(sandbox) => return Box::new(ProcessCommandExecutor::new(sandbox)),
+            Err(_) => {
+                // Fall through to stub
+            }
+        }
+    }
+
+    Box::new(ProcessCommandExecutor::new_without_sandbox())
+}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -41,11 +62,11 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 dry_run: args.dry_run,
                 verbose: args.verbose,
             };
-            let executor = ProcessCommandExecutor::new_without_sandbox();
+            let executor = create_executor();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
-                Box::new(executor),
+                executor,
             );
             adapter::run_with_options(&endpoint, &config, &options)
         }
