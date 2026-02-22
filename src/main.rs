@@ -10,14 +10,26 @@ use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
 use runok::exec::command_executor::LinuxSandboxExecutor;
+#[cfg(target_os = "macos")]
+use runok::exec::command_executor::SandboxExecutor;
 use runok::exec::command_executor::{CommandExecutor, ProcessCommandExecutor};
+#[cfg(target_os = "macos")]
+use runok::exec::macos_sandbox::MacOsSandboxExecutor;
 
 /// Create the appropriate command executor for the current platform.
 ///
+/// On macOS, uses MacOsSandboxExecutor (seatbelt/SBPL via sandbox-exec).
 /// On Linux, attempts to find the runok-linux-sandbox helper binary and use
 /// the LinuxSandboxExecutor. Falls back to the stub executor if not found.
-/// On other platforms, always uses the stub executor.
 fn create_executor() -> Box<dyn CommandExecutor> {
+    #[cfg(target_os = "macos")]
+    {
+        let macos_executor = MacOsSandboxExecutor::new();
+        if macos_executor.is_supported() {
+            return Box::new(ProcessCommandExecutor::new(macos_executor));
+        }
+    }
+
     #[cfg(target_os = "linux")]
     {
         match LinuxSandboxExecutor::new() {
@@ -63,11 +75,17 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 verbose: args.verbose,
             };
             let executor = create_executor();
+            let sandbox_defs = config
+                .definitions
+                .as_ref()
+                .and_then(|d| d.sandbox.clone())
+                .unwrap_or_default();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
                 executor,
-            );
+            )
+            .with_sandbox_definitions(sandbox_defs);
             adapter::run_with_options(&endpoint, &config, &options)
         }
         Commands::Check(args) => {
