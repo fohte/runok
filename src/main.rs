@@ -101,7 +101,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cli::CheckArgs;
+    use cli::{CheckArgs, ExecArgs};
     use indoc::indoc;
     use rstest::rstest;
 
@@ -154,6 +154,26 @@ mod tests {
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "echo hello\n".as_bytes());
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn create_executor_returns_executor() {
+        let executor = create_executor();
+        // Verify executor works by validating a known command
+        assert!(executor.validate(&["sh".to_string()]).is_ok());
+    }
+
+    #[rstest]
+    fn run_command_exec_with_dry_run() {
+        let cmd = Commands::Exec(ExecArgs {
+            command: vec!["echo".into(), "hello".into()],
+            sandbox: None,
+            dry_run: true,
+            verbose: false,
+        });
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let exit_code = run_command(cmd, &cwd, std::io::empty());
         assert_eq!(exit_code, 0);
     }
 
