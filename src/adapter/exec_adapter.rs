@@ -53,7 +53,12 @@ impl ExecAdapter {
     ) -> Result<Option<SandboxPolicy>, anyhow::Error> {
         let preset = match self.sandbox_definitions.get(preset_name) {
             Some(p) => p,
-            None => return Ok(None),
+            None => {
+                anyhow::bail!(
+                    "sandbox preset '{}' is not defined in definitions.sandbox",
+                    preset_name
+                );
+            }
         };
 
         // `merge_strictest` with a non-empty slice always returns `Some`.
@@ -345,6 +350,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result, 0);
+    }
+
+    #[rstest]
+    fn handle_action_allow_errors_on_undefined_sandbox_preset() {
+        let adapter = ExecAdapter::new(
+            vec!["echo".into(), "hello".into()],
+            Some("nonexistent".into()),
+            Box::new(MockExecutor::new(0)),
+        );
+        let result = adapter.handle_action(ActionResult {
+            action: Action::Allow,
+            sandbox: SandboxInfo::Preset(None),
+        });
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent"),
+            "error should mention the preset name: {}",
+            err
+        );
     }
 
     // --- handle_action: Deny ---
