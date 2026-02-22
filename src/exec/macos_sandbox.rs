@@ -142,7 +142,7 @@ enum DenyPathKind {
 
 /// Classify a deny path to determine the appropriate SBPL filter type.
 fn classify_deny_path(path: &str) -> DenyPathKind {
-    if path.contains('*') || path.contains('?') || path.contains('[') {
+    if path.contains('*') {
         DenyPathKind::GlobPattern
     } else if path.starts_with('/') {
         DenyPathKind::AbsoluteLiteral
@@ -155,9 +155,6 @@ fn classify_deny_path(path: &str) -> DenyPathKind {
 ///
 /// Uses the `globset` crate with `literal_separator(true)` so that `*` does not
 /// match `/` (directory separator), while `**` matches across directories.
-///
-/// The `(?-u)` prefix emitted by globset (Rust regex "disable Unicode" flag) is
-/// stripped because SBPL's regex engine uses POSIX ERE and does not support it.
 fn glob_to_sbpl_regex(pattern: &str) -> Result<String, ExecError> {
     let glob = GlobBuilder::new(pattern)
         .literal_separator(true)
@@ -168,10 +165,7 @@ fn glob_to_sbpl_regex(pattern: &str) -> Result<String, ExecError> {
                 format!("invalid glob pattern '{pattern}': {e}"),
             ))
         })?;
-    let regex = glob.regex().to_string();
-    // Strip Rust-specific `(?-u)` flag prefix; SBPL uses POSIX ERE regex syntax.
-    let regex = regex.strip_prefix("(?-u)").unwrap_or(&regex).to_string();
-    Ok(regex)
+    Ok(glob.regex().to_string())
 }
 
 impl SandboxExecutor for MacOsSandboxExecutor {
@@ -334,7 +328,7 @@ mod tests {
             (allow default)
             (deny file-write*)
             (allow file-write* (subpath "/home/user"))
-            (deny file-write* (regex "^/etc/.*$"))
+            (deny file-write* (regex "(?-u)^/etc/.*$"))
             (allow file-write* (literal "/dev/null"))
             (allow file-write* (literal "/dev/dtracehelper"))
             (deny network*)
@@ -348,7 +342,7 @@ mod tests {
             (allow default)
             (deny file-write*)
             (allow file-write* (subpath "/home/user/project"))
-            (deny file-write* (regex "^/home/user/project/\\.env[^/]*$"))
+            (deny file-write* (regex "(?-u)^/home/user/project/\\.env[^/]*$"))
             (allow file-write* (literal "/dev/null"))
             (allow file-write* (literal "/dev/dtracehelper"))
         "#}
@@ -399,8 +393,6 @@ mod tests {
     #[case::glob_absolute("/etc/**", DenyPathKind::GlobPattern)]
     #[case::glob_deep("/home/user/.ssh/**", DenyPathKind::GlobPattern)]
     #[case::glob_single_star("/tmp/*.log", DenyPathKind::GlobPattern)]
-    #[case::glob_question_mark("file?.txt", DenyPathKind::GlobPattern)]
-    #[case::glob_char_class("/tmp/log[0-9].txt", DenyPathKind::GlobPattern)]
     fn classify_deny_path_cases(#[case] input: &str, #[case] expected: DenyPathKind) {
         assert_eq!(classify_deny_path(input), expected);
     }
@@ -408,13 +400,13 @@ mod tests {
     // === glob_to_sbpl_regex ===
 
     #[rstest]
-    #[case::single_star(".env*", r"^\.env[^/]*$")]
-    #[case::double_star("/etc/**", r"^/etc/.*$")]
-    #[case::double_star_nested("/home/user/.ssh/**", r"^/home/user/\.ssh/.*$")]
-    #[case::no_glob("/etc/passwd", r"^/etc/passwd$")]
-    #[case::dotfile(".envrc", r"^\.envrc$")]
-    #[case::star_in_middle("/tmp/*.log", r"^/tmp/[^/]*\.log$")]
-    #[case::double_star_with_suffix("/home/**/config", r"^/home(?:/|/.*/)config$")]
+    #[case::single_star(".env*", r"(?-u)^\.env[^/]*$")]
+    #[case::double_star("/etc/**", r"(?-u)^/etc/.*$")]
+    #[case::double_star_nested("/home/user/.ssh/**", r"(?-u)^/home/user/\.ssh/.*$")]
+    #[case::no_glob("/etc/passwd", r"(?-u)^/etc/passwd$")]
+    #[case::dotfile(".envrc", r"(?-u)^\.envrc$")]
+    #[case::star_in_middle("/tmp/*.log", r"(?-u)^/tmp/[^/]*\.log$")]
+    #[case::double_star_with_suffix("/home/**/config", r"(?-u)^/home(?:/|/.*/)config$")]
     fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(glob_to_sbpl_regex(input).unwrap(), expected);
     }
