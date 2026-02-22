@@ -1330,8 +1330,29 @@ mod tests {
 
     #[rstest]
     fn find_linux_sandbox_helper_returns_none_when_not_installed() {
-        // In the test environment, the helper binary is unlikely to be installed
-        // This test just verifies the function doesn't panic
-        let _result = super::find_linux_sandbox_helper();
+        // In the test environment, the helper binary is not installed,
+        // so the function should return None.
+        let result = super::find_linux_sandbox_helper();
+        assert!(
+            result.is_none(),
+            "helper should not be found in test environment"
+        );
+    }
+
+    #[rstest]
+    fn find_linux_sandbox_helper_finds_binary_in_exe_dir() {
+        let exe_dir = std::env::current_exe()
+            .expect("current_exe should succeed")
+            .parent()
+            .expect("exe should have parent")
+            .to_path_buf();
+
+        let fake_helper = exe_dir.join("runok-linux-sandbox");
+        std::fs::write(&fake_helper, "").expect("should create fake helper");
+
+        let result = super::find_linux_sandbox_helper();
+        let _ = std::fs::remove_file(&fake_helper);
+
+        assert_eq!(result, Some(fake_helper));
     }
 }
