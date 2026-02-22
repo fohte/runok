@@ -10,7 +10,10 @@ use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
 use runok::exec::command_executor::LinuxSandboxExecutor;
-use runok::exec::command_executor::{CommandExecutor, ProcessCommandExecutor, SandboxExecutor};
+#[cfg(target_os = "macos")]
+use runok::exec::command_executor::SandboxExecutor;
+use runok::exec::command_executor::{CommandExecutor, ProcessCommandExecutor};
+#[cfg(target_os = "macos")]
 use runok::exec::macos_sandbox::MacOsSandboxExecutor;
 
 /// Create the appropriate command executor for the current platform.
