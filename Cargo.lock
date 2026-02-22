@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "runok"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cel-interpreter",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "runok-linux-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
