@@ -140,7 +140,7 @@ enum DenyPathKind {
 
 /// Classify a deny path to determine the appropriate SBPL filter type.
 fn classify_deny_path(path: &str) -> DenyPathKind {
-    if path.contains('*') || path.contains('?') || path.contains('[') {
+    if path.contains('*') || path.contains('?') || path.contains('[') || path.contains('{') {
         DenyPathKind::GlobPattern
     } else if path.starts_with('/') {
         DenyPathKind::AbsoluteLiteral
@@ -159,6 +159,7 @@ fn classify_deny_path(path: &str) -> DenyPathKind {
 /// - `*` matches any characters except `/` → `[^/]*`
 /// - `?` matches any single character except `/` → `[^/]`
 /// - `[...]` is passed through as a POSIX character class
+/// - `{a,b,c}` is converted to alternation `(a|b|c)`
 /// - Regex metacharacters in literal context are escaped
 fn glob_to_sbpl_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
@@ -194,6 +195,45 @@ fn glob_to_sbpl_regex(pattern: &str) -> String {
                 regex.push(']');
                 i += 1;
             }
+        } else if chars[i] == '{' {
+            // Convert brace expansion `{a,b,c}` to alternation `(a|b|c)`.
+            // Each alternative is recursively converted through the same rules.
+            i += 1;
+            let mut alternatives: Vec<String> = Vec::new();
+            let mut current = String::new();
+            let mut depth = 1;
+            while i < len && depth > 0 {
+                if chars[i] == '{' {
+                    current.push(chars[i]);
+                    depth += 1;
+                } else if chars[i] == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        alternatives.push(current);
+                        current = String::new();
+                    } else {
+                        current.push(chars[i]);
+                    }
+                } else if chars[i] == ',' && depth == 1 {
+                    alternatives.push(current);
+                    current = String::new();
+                } else {
+                    current.push(chars[i]);
+                }
+                i += 1;
+            }
+            // Convert each alternative through glob_to_sbpl_regex and strip the `^` anchor
+            let alt_regexes: Vec<String> = alternatives
+                .iter()
+                .map(|alt| {
+                    let r = glob_to_sbpl_regex(alt);
+                    // Strip the leading `^` since we embed inside a group
+                    r.strip_prefix('^').unwrap_or(&r).to_string()
+                })
+                .collect();
+            regex.push('(');
+            regex.push_str(&alt_regexes.join("|"));
+            regex.push(')');
         } else if is_regex_metachar(chars[i]) {
             regex.push('\\');
             regex.push(chars[i]);
@@ -208,10 +248,7 @@ fn glob_to_sbpl_regex(pattern: &str) -> String {
 }
 
 fn is_regex_metachar(c: char) -> bool {
-    matches!(
-        c,
-        '.' | '+' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\'
-    )
+    matches!(c, '.' | '+' | '(' | ')' | '|' | '^' | '$' | '\\')
 }
 
 impl SandboxExecutor for MacOsSandboxExecutor {
@@ -439,6 +476,7 @@ mod tests {
     #[case::glob_single_star("/tmp/*.log", DenyPathKind::GlobPattern)]
     #[case::glob_question_mark("file?.txt", DenyPathKind::GlobPattern)]
     #[case::glob_char_class("/tmp/log[0-9].txt", DenyPathKind::GlobPattern)]
+    #[case::glob_brace("*.{js,ts}", DenyPathKind::GlobPattern)]
     fn classify_deny_path_cases(#[case] input: &str, #[case] expected: DenyPathKind) {
         assert_eq!(classify_deny_path(input), expected);
     }
@@ -455,6 +493,8 @@ mod tests {
     #[case::double_star_with_suffix("/home/**/config", r"^/home/.*/config")]
     #[case::question_mark("file?.txt", r"^file[^/]\.txt")]
     #[case::char_class("/tmp/log[0-9].txt", r"^/tmp/log[0-9]\.txt")]
+    #[case::brace_expansion("*.{js,ts}", r"^[^/]*\.(js|ts)")]
+    #[case::brace_with_path("/home/**/*.{conf,cfg}", r"^/home/.*/[^/]*\.(conf|cfg)")]
     fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(glob_to_sbpl_regex(input), expected);
     }
@@ -511,6 +551,14 @@ mod tests {
     }
 
     // === Integration: exec_sandboxed on macOS ===
+    //
+    // These tests call sandbox-exec, which cannot nest inside another sandbox
+    // (e.g., when `srt` wraps the test runner). Skip when `SANDBOX_RUNTIME=1`.
+
+    #[cfg(target_os = "macos")]
+    fn skip_if_nested_sandbox() -> bool {
+        std::env::var("SANDBOX_RUNTIME").is_ok()
+    }
 
     #[cfg(target_os = "macos")]
     #[fixture]
@@ -534,6 +582,9 @@ mod tests {
         macos_executor: MacOsSandboxExecutor,
         default_policy: SandboxPolicy,
     ) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
         let command = vec!["true".to_string()];
         let exit_code = macos_executor
             .exec_sandboxed(&command, &default_policy)
@@ -547,6 +598,9 @@ mod tests {
         macos_executor: MacOsSandboxExecutor,
         default_policy: SandboxPolicy,
     ) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
         let command = vec!["false".to_string()];
         let exit_code = macos_executor
             .exec_sandboxed(&command, &default_policy)
@@ -560,6 +614,9 @@ mod tests {
         macos_executor: MacOsSandboxExecutor,
         default_policy: SandboxPolicy,
     ) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
         let dir = std::env::temp_dir();
         let test_file = dir.join("runok_sandbox_test_deny_write");
 
@@ -583,6 +640,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[rstest]
     fn exec_sandboxed_allows_write_to_writable_root(macos_executor: MacOsSandboxExecutor) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
         let dir = std::env::temp_dir();
         let canonical_dir = dir.canonicalize().unwrap();
         let test_file = canonical_dir.join("runok_sandbox_test_allow_write");
