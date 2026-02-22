@@ -1,8 +1,6 @@
 use std::path::Path;
 use std::process::Command;
 
-use globset::GlobBuilder;
-
 use super::ExecError;
 use super::command_executor::{SandboxExecutor, SandboxPolicy, exit_code_from_status};
 
@@ -89,14 +87,14 @@ impl MacOsSandboxExecutor {
                 DenyPathKind::GlobPattern => {
                     if path_str.starts_with('/') {
                         // Absolute glob: convert directly to regex
-                        let regex = glob_to_sbpl_regex(&path_str)?;
+                        let regex = glob_to_sbpl_regex(&path_str);
                         let escaped = sbpl_escape_string(&regex);
                         sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
                     } else {
                         // Relative glob: resolve against each writable_root
                         for root in &policy.writable_roots {
                             let full_pattern = format!("{}/{}", root.to_string_lossy(), path_str);
-                            let regex = glob_to_sbpl_regex(&full_pattern)?;
+                            let regex = glob_to_sbpl_regex(&full_pattern);
                             let escaped = sbpl_escape_string(&regex);
                             sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
                         }
@@ -153,19 +151,46 @@ fn classify_deny_path(path: &str) -> DenyPathKind {
 
 /// Convert a glob pattern to a regex string suitable for SBPL `(regex ...)` filter.
 ///
-/// Uses the `globset` crate with `literal_separator(true)` so that `*` does not
-/// match `/` (directory separator), while `**` matches across directories.
-fn glob_to_sbpl_regex(pattern: &str) -> Result<String, ExecError> {
-    let glob = GlobBuilder::new(pattern)
-        .literal_separator(true)
-        .build()
-        .map_err(|e| {
-            ExecError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid glob pattern '{pattern}': {e}"),
-            ))
-        })?;
-    Ok(glob.regex().to_string())
+/// Conversion rules:
+/// - `**` matches any characters including `/` (directory separator) → `.*`
+/// - `*` matches any characters except `/` → `[^/]*`
+/// - Regex metacharacters in non-glob parts are escaped
+fn glob_to_sbpl_regex(pattern: &str) -> String {
+    let mut regex = String::from("^");
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            regex.push_str(".*");
+            i += 2;
+            // Skip trailing `/` after `**` only when `**` is at the end of the pattern
+            // (e.g., `/etc/**`). When followed by more path components (e.g., `**/config`),
+            // keep the `/` so the regex correctly requires a directory separator.
+            if i < chars.len() && chars[i] == '/' && i + 1 >= chars.len() {
+                i += 1;
+            }
+        } else if chars[i] == '*' {
+            regex.push_str("[^/]*");
+            i += 1;
+        } else if is_regex_metachar(chars[i]) {
+            regex.push('\\');
+            regex.push(chars[i]);
+            i += 1;
+        } else {
+            regex.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    regex
+}
+
+fn is_regex_metachar(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '?' | '\\'
+    )
 }
 
 impl SandboxExecutor for MacOsSandboxExecutor {
@@ -326,7 +351,7 @@ mod tests {
             (allow default)
             (deny file-write*)
             (allow file-write* (subpath "/home/user"))
-            (deny file-write* (regex "(?-u)^/etc/.*$"))
+            (deny file-write* (regex "^/etc/.*"))
             (allow file-write* (literal "/dev/null"))
             (allow file-write* (literal "/dev/dtracehelper"))
             (deny network*)
@@ -340,7 +365,7 @@ mod tests {
             (allow default)
             (deny file-write*)
             (allow file-write* (subpath "/home/user/project"))
-            (deny file-write* (regex "(?-u)^/home/user/project/\\.env[^/]*$"))
+            (deny file-write* (regex "^/home/user/project/\\.env[^/]*"))
             (allow file-write* (literal "/dev/null"))
             (allow file-write* (literal "/dev/dtracehelper"))
         "#}
@@ -398,15 +423,15 @@ mod tests {
     // === glob_to_sbpl_regex ===
 
     #[rstest]
-    #[case::single_star(".env*", r"(?-u)^\.env[^/]*$")]
-    #[case::double_star("/etc/**", r"(?-u)^/etc/.*$")]
-    #[case::double_star_nested("/home/user/.ssh/**", r"(?-u)^/home/user/\.ssh/.*$")]
-    #[case::no_glob("/etc/passwd", r"(?-u)^/etc/passwd$")]
-    #[case::dotfile(".envrc", r"(?-u)^\.envrc$")]
-    #[case::star_in_middle("/tmp/*.log", r"(?-u)^/tmp/[^/]*\.log$")]
-    #[case::double_star_with_suffix("/home/**/config", r"(?-u)^/home(?:/|/.*/)config$")]
+    #[case::single_star(".env*", r"^\.env[^/]*")]
+    #[case::double_star("/etc/**", "^/etc/.*")]
+    #[case::double_star_nested("/home/user/.ssh/**", r"^/home/user/\.ssh/.*")]
+    #[case::no_glob("/etc/passwd", "^/etc/passwd")]
+    #[case::dotfile(".envrc", r"^\.envrc")]
+    #[case::star_in_middle("/tmp/*.log", r"^/tmp/[^/]*\.log")]
+    #[case::double_star_with_suffix("/home/**/config", r"^/home/.*/config")]
     fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(glob_to_sbpl_regex(input).unwrap(), expected);
+        assert_eq!(glob_to_sbpl_regex(input), expected);
     }
 
     // === build_command ===
