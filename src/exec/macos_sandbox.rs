@@ -140,7 +140,7 @@ enum DenyPathKind {
 
 /// Classify a deny path to determine the appropriate SBPL filter type.
 fn classify_deny_path(path: &str) -> DenyPathKind {
-    if path.contains('*') {
+    if path.contains('*') || path.contains('?') || path.contains('[') {
         DenyPathKind::GlobPattern
     } else if path.starts_with('/') {
         DenyPathKind::AbsoluteLiteral
@@ -149,30 +149,51 @@ fn classify_deny_path(path: &str) -> DenyPathKind {
     }
 }
 
-/// Convert a glob pattern to a regex string suitable for SBPL `(regex ...)` filter.
+/// Convert a glob pattern to a POSIX ERE regex string for SBPL `(regex ...)` filter.
+///
+/// Generates POSIX ERE directly to avoid compatibility issues with external crates
+/// whose regex output may use Rust-specific syntax unsupported by SBPL.
 ///
 /// Conversion rules:
 /// - `**` matches any characters including `/` (directory separator) → `.*`
 /// - `*` matches any characters except `/` → `[^/]*`
-/// - Regex metacharacters in non-glob parts are escaped
+/// - `?` matches any single character except `/` → `[^/]`
+/// - `[...]` is passed through as a POSIX character class
+/// - Regex metacharacters in literal context are escaped
 fn glob_to_sbpl_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
     let chars: Vec<char> = pattern.chars().collect();
+    let len = chars.len();
     let mut i = 0;
 
-    while i < chars.len() {
-        if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+    while i < len {
+        if chars[i] == '*' && i + 1 < len && chars[i + 1] == '*' {
             regex.push_str(".*");
             i += 2;
             // Skip trailing `/` after `**` only when `**` is at the end of the pattern
             // (e.g., `/etc/**`). When followed by more path components (e.g., `**/config`),
             // keep the `/` so the regex correctly requires a directory separator.
-            if i < chars.len() && chars[i] == '/' && i + 1 >= chars.len() {
+            if i < len && chars[i] == '/' && i + 1 >= len {
                 i += 1;
             }
         } else if chars[i] == '*' {
             regex.push_str("[^/]*");
             i += 1;
+        } else if chars[i] == '?' {
+            regex.push_str("[^/]");
+            i += 1;
+        } else if chars[i] == '[' {
+            // Pass through character class `[...]` as-is
+            regex.push('[');
+            i += 1;
+            while i < len && chars[i] != ']' {
+                regex.push(chars[i]);
+                i += 1;
+            }
+            if i < len {
+                regex.push(']');
+                i += 1;
+            }
         } else if is_regex_metachar(chars[i]) {
             regex.push('\\');
             regex.push(chars[i]);
@@ -189,7 +210,7 @@ fn glob_to_sbpl_regex(pattern: &str) -> String {
 fn is_regex_metachar(c: char) -> bool {
     matches!(
         c,
-        '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '?' | '\\'
+        '.' | '+' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\'
     )
 }
 
@@ -416,6 +437,8 @@ mod tests {
     #[case::glob_absolute("/etc/**", DenyPathKind::GlobPattern)]
     #[case::glob_deep("/home/user/.ssh/**", DenyPathKind::GlobPattern)]
     #[case::glob_single_star("/tmp/*.log", DenyPathKind::GlobPattern)]
+    #[case::glob_question_mark("file?.txt", DenyPathKind::GlobPattern)]
+    #[case::glob_char_class("/tmp/log[0-9].txt", DenyPathKind::GlobPattern)]
     fn classify_deny_path_cases(#[case] input: &str, #[case] expected: DenyPathKind) {
         assert_eq!(classify_deny_path(input), expected);
     }
@@ -430,6 +453,8 @@ mod tests {
     #[case::dotfile(".envrc", r"^\.envrc")]
     #[case::star_in_middle("/tmp/*.log", r"^/tmp/[^/]*\.log")]
     #[case::double_star_with_suffix("/home/**/config", r"^/home/.*/config")]
+    #[case::question_mark("file?.txt", r"^file[^/]\.txt")]
+    #[case::char_class("/tmp/log[0-9].txt", r"^/tmp/log[0-9]\.txt")]
     fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(glob_to_sbpl_regex(input), expected);
     }
