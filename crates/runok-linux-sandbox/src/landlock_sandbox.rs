@@ -1,5 +1,5 @@
 use landlock::{
-    ABI, Access, AccessFs, CompatLevel, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
     RulesetCreatedAttr,
 };
 
