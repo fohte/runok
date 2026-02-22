@@ -43,12 +43,15 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
     }
 
     // /tmp is often needed for temporary files; only add if not already covered
-    // by a writable root (either /tmp itself or a parent of /tmp)
-    let tmp_in_writable = policy
+    // by a writable root. Skip when /tmp itself, a parent (e.g. "/"), or a child
+    // under /tmp (e.g. "/tmp/myproject") is a writable root. Adding /tmp write
+    // access when only a child is writable would grant overly broad permissions.
+    let tmp = std::path::Path::new("/tmp");
+    let tmp_overlaps_writable = policy
         .writable_roots
         .iter()
-        .any(|r| std::path::Path::new("/tmp").starts_with(r));
-    if !tmp_in_writable {
+        .any(|r| tmp.starts_with(r) || r.starts_with(tmp));
+    if !tmp_overlaps_writable {
         ruleset = add_path_rule_if_exists(ruleset, std::path::Path::new("/tmp"), access_rw)?;
     }
 
