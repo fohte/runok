@@ -192,13 +192,12 @@ mod tests {
     // === exit_code_from_status ===
 
     #[rstest]
-    #[case::success("true", 0)]
-    #[case::failure("false", 1)]
-    #[case::exit_42("sh -c 'exit 42'", 42)]
-    fn exit_code_from_status_returns_code(#[case] cmd: &str, #[case] expected: i32) {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let status = std::process::Command::new(parts[0])
-            .args(&parts[1..])
+    #[case::success(&["true"], 0)]
+    #[case::failure(&["false"], 1)]
+    #[case::exit_42(&["sh", "-c", "exit 42"], 42)]
+    fn exit_code_from_status_returns_code(#[case] cmd: &[&str], #[case] expected: i32) {
+        let status = std::process::Command::new(cmd[0])
+            .args(&cmd[1..])
             .status()
             .expect("command should run");
         assert_eq!(exit_code_from_status(status), expected);
