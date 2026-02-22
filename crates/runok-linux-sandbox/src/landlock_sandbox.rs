@@ -13,8 +13,11 @@ use crate::policy::SandboxPolicy;
 /// 2. Default: entire filesystem is governed by the ruleset (no rule = no access)
 /// 3. Add read-only access to root `/` as the baseline
 /// 4. Add read-write access to writable_roots
-/// 5. Re-apply read-only access to read_only_subpaths (overrides writable)
-/// 6. Always allow read-write to /dev/null (needed by many programs)
+/// 5. Always allow read-write to /dev/null (needed by many programs)
+///
+/// Note: Landlock rules within a single ruleset are additive (union of permissions).
+/// Read-only enforcement on subpaths of writable_roots is handled by bubblewrap's
+/// mount ordering (`--ro-bind` after `--bind`), not by landlock.
 pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
@@ -29,47 +32,29 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
         .set_no_new_privs(true);
 
     // Root filesystem is read-only by default
-    ruleset = add_path_rule(ruleset, "/", access_ro)?;
+    ruleset = add_path_rule(ruleset, std::path::Path::new("/"), access_ro)?;
 
     // /dev/null must be read-write for many programs
-    ruleset = add_path_rule(ruleset, "/dev/null", access_rw)?;
+    ruleset = add_path_rule(ruleset, std::path::Path::new("/dev/null"), access_rw)?;
 
     // /dev/zero, /dev/urandom, /dev/random are commonly needed
     for dev_path in &["/dev/zero", "/dev/urandom", "/dev/random"] {
-        ruleset = add_path_rule_if_exists(ruleset, dev_path, access_ro)?;
+        ruleset = add_path_rule_if_exists(ruleset, std::path::Path::new(dev_path), access_ro)?;
     }
 
-    // /tmp is often needed for temporary files; only add if not in writable_roots
-    // to avoid duplicate rules
-    let tmp_in_writable = policy.writable_roots.iter().any(|r| {
-        r.as_os_str() == "/tmp"
-            || r.starts_with("/tmp/")
-            || std::path::Path::new("/tmp").starts_with(r)
-    });
+    // /tmp is often needed for temporary files; only add if not already covered
+    // by a writable root (either /tmp itself or a parent of /tmp)
+    let tmp_in_writable = policy
+        .writable_roots
+        .iter()
+        .any(|r| std::path::Path::new("/tmp").starts_with(r));
     if !tmp_in_writable {
-        ruleset = add_path_rule_if_exists(ruleset, "/tmp", access_rw)?;
+        ruleset = add_path_rule_if_exists(ruleset, std::path::Path::new("/tmp"), access_rw)?;
     }
 
     // Add writable roots
     for root in &policy.writable_roots {
-        ruleset = add_path_rule(
-            ruleset,
-            root.to_str()
-                .ok_or_else(|| SandboxError::Landlock("non-UTF8 path".to_string()))?,
-            access_rw,
-        )?;
-    }
-
-    // Re-apply read-only to protected subpaths (overrides writable)
-    for subpath in &policy.read_only_subpaths {
-        let path_str = subpath
-            .to_str()
-            .ok_or_else(|| SandboxError::Landlock("non-UTF8 path".to_string()))?;
-        // Skip glob patterns - landlock operates on actual filesystem paths
-        if path_str.contains('*') || path_str.contains('?') {
-            continue;
-        }
-        ruleset = add_path_rule_if_exists(ruleset, path_str, access_ro)?;
+        ruleset = add_path_rule(ruleset, root, access_rw)?;
     }
 
     ruleset
@@ -81,22 +66,23 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
 
 fn add_path_rule(
     ruleset: landlock::RulesetCreated,
-    path: &str,
+    path: &std::path::Path,
     access: landlock::BitFlags<AccessFs>,
 ) -> Result<landlock::RulesetCreated, SandboxError> {
-    let fd = PathFd::new(path)
-        .map_err(|e| SandboxError::Landlock(format!("cannot open path '{path}': {e}")))?;
-    ruleset
-        .add_rule(PathBeneath::new(fd, access))
-        .map_err(|e| SandboxError::Landlock(format!("add_rule for '{path}' failed: {e}")))
+    let fd = PathFd::new(path).map_err(|e| {
+        SandboxError::Landlock(format!("cannot open path '{}': {e}", path.display()))
+    })?;
+    ruleset.add_rule(PathBeneath::new(fd, access)).map_err(|e| {
+        SandboxError::Landlock(format!("add_rule for '{}' failed: {e}", path.display()))
+    })
 }
 
 fn add_path_rule_if_exists(
     ruleset: landlock::RulesetCreated,
-    path: &str,
+    path: &std::path::Path,
     access: landlock::BitFlags<AccessFs>,
 ) -> Result<landlock::RulesetCreated, SandboxError> {
-    if !std::path::Path::new(path).exists() {
+    if !path.exists() {
         return Ok(ruleset);
     }
     add_path_rule(ruleset, path, access)
@@ -104,6 +90,9 @@ fn add_path_rule_if_exists(
 
 /// Build the list of landlock rules for inspection/testing purposes.
 /// Returns pairs of (path, is_writable).
+///
+/// Note: read_only_subpaths are not included because landlock rules are
+/// additive. Read-only enforcement is handled by bubblewrap's mount ordering.
 pub fn build_landlock_rules(policy: &SandboxPolicy) -> Vec<(String, bool)> {
     let mut rules = Vec::new();
 
@@ -115,18 +104,7 @@ pub fn build_landlock_rules(policy: &SandboxPolicy) -> Vec<(String, bool)> {
 
     // Writable roots
     for root in &policy.writable_roots {
-        if let Some(path_str) = root.to_str() {
-            rules.push((path_str.to_string(), true));
-        }
-    }
-
-    // Read-only subpaths
-    for subpath in &policy.read_only_subpaths {
-        if let Some(path_str) = subpath.to_str() {
-            if !path_str.contains('*') && !path_str.contains('?') {
-                rules.push((path_str.to_string(), false));
-            }
-        }
+        rules.push((root.to_string_lossy().to_string(), true));
     }
 
     rules
@@ -150,7 +128,6 @@ mod tests {
             ("/dev/null", true),
             ("/tmp", true),
             ("/home/user/project", true),
-            ("/home/user/project/.git", false),
         ]
     )]
     #[case::no_writable(
@@ -164,24 +141,7 @@ mod tests {
             ("/dev/null", true),
         ]
     )]
-    #[case::glob_patterns_skipped(
-        SandboxPolicy {
-            writable_roots: vec![PathBuf::from("/tmp")],
-            read_only_subpaths: vec![
-                PathBuf::from(".env*"),
-                PathBuf::from("/etc/**"),
-                PathBuf::from("/home/user/.git"),
-            ],
-            network_allowed: true,
-        },
-        vec![
-            ("/", false),
-            ("/dev/null", true),
-            ("/tmp", true),
-            ("/home/user/.git", false),
-        ]
-    )]
-    #[case::multiple_writable_and_readonly(
+    #[case::multiple_writable(
         SandboxPolicy {
             writable_roots: vec![
                 PathBuf::from("/workspace"),
@@ -189,7 +149,6 @@ mod tests {
             ],
             read_only_subpaths: vec![
                 PathBuf::from("/workspace/.git"),
-                PathBuf::from("/workspace/.runok"),
             ],
             network_allowed: false,
         },
@@ -198,8 +157,6 @@ mod tests {
             ("/dev/null", true),
             ("/workspace", true),
             ("/var/tmp", true),
-            ("/workspace/.git", false),
-            ("/workspace/.runok", false),
         ]
     )]
     fn build_rules_from_policy(#[case] policy: SandboxPolicy, #[case] expected: Vec<(&str, bool)>) {
