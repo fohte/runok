@@ -493,7 +493,7 @@ fn spawn_and_wait(command: &[String]) -> Result<i32, ExecError> {
 ///
 /// On Unix, if the process was killed by a signal, return 128 + signal number
 /// (standard shell convention). On other platforms, default to 1 for non-zero exits.
-fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
+pub(crate) fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }

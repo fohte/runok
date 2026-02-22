@@ -56,14 +56,12 @@ impl ExecAdapter {
             None => return Ok(None),
         };
 
-        let merged = SandboxPreset::merge_strictest(&[preset]);
-        match merged {
-            Some(policy) => {
-                let sandbox_policy = SandboxPolicy::from_merged(&policy)?;
-                Ok(Some(sandbox_policy))
-            }
-            None => Ok(None),
-        }
+        // `merge_strictest` with a non-empty slice always returns `Some`.
+        let Some(merged) = SandboxPreset::merge_strictest(&[preset]) else {
+            unreachable!("merge_strictest with a non-empty slice always returns Some");
+        };
+        let sandbox_policy = SandboxPolicy::from_merged(&merged)?;
+        Ok(Some(sandbox_policy))
     }
 
     /// Build a `SandboxPolicy` from a `MergedSandboxPolicy`.

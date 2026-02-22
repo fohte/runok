@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use super::ExecError;
-use super::command_executor::{SandboxExecutor, SandboxPolicy};
+use super::command_executor::{SandboxExecutor, SandboxPolicy, exit_code_from_status};
 
 /// macOS sandbox executor using sandbox-exec (Seatbelt/SBPL).
 ///
@@ -114,30 +114,13 @@ impl SandboxExecutor for MacOsSandboxExecutor {
     }
 }
 
-/// Extract the exit code from a process exit status.
-fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            return 128 + signal;
-        }
-    }
-
-    1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     fn policy_with_writable(roots: Vec<&str>) -> SandboxPolicy {
         SandboxPolicy {
@@ -158,111 +141,82 @@ mod tests {
     // === SBPL generation ===
 
     #[rstest]
-    fn generate_sbpl_minimal_policy() {
-        let policy = SandboxPolicy {
+    #[case::minimal(
+        SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
             network_allowed: true,
-        };
-        let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
-
-        assert_eq!(
-            sbpl,
-            indoc! {r#"
-                (version 1)
-                (allow default)
-                (deny file-write*)
-                (allow file-write* (literal "/dev/null"))
-                (allow file-write* (literal "/dev/dtracehelper"))
-            "#}
-        );
-    }
-
-    #[rstest]
-    fn generate_sbpl_with_writable_roots() {
-        let policy = policy_with_writable(vec!["/tmp", "/home/user/project"]);
-        let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
-
-        assert_eq!(
-            sbpl,
-            indoc! {r#"
-                (version 1)
-                (allow default)
-                (deny file-write*)
-                (allow file-write* (subpath "/tmp"))
-                (allow file-write* (subpath "/home/user/project"))
-                (allow file-write* (literal "/dev/null"))
-                (allow file-write* (literal "/dev/dtracehelper"))
-            "#}
-        );
-    }
-
-    #[rstest]
-    fn generate_sbpl_with_read_only_subpaths() {
-        let policy = full_policy(
+        },
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::with_writable_roots(
+        policy_with_writable(vec!["/tmp", "/home/user/project"]),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/tmp"))
+            (allow file-write* (subpath "/home/user/project"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::with_read_only_subpaths(
+        full_policy(
             vec!["/home/user/project"],
             vec!["/home/user/project/.git", "/home/user/project/.runok"],
             true,
-        );
-        let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
-
-        assert_eq!(
-            sbpl,
-            indoc! {r#"
-                (version 1)
-                (allow default)
-                (deny file-write*)
-                (allow file-write* (subpath "/home/user/project"))
-                (deny file-write* (subpath "/home/user/project/.git"))
-                (deny file-write* (subpath "/home/user/project/.runok"))
-                (allow file-write* (literal "/dev/null"))
-                (allow file-write* (literal "/dev/dtracehelper"))
-            "#}
-        );
-    }
-
-    #[rstest]
-    fn generate_sbpl_network_denied() {
-        let policy = SandboxPolicy {
+        ),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user/project"))
+            (deny file-write* (subpath "/home/user/project/.git"))
+            (deny file-write* (subpath "/home/user/project/.runok"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::network_denied(
+        SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
             network_allowed: false,
-        };
+        },
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+            (deny network*)
+            (allow network* (local unix-socket))
+        "#}
+    )]
+    #[case::full_policy(
+        full_policy(vec!["/home/user"], vec!["/home/user/.git"], false),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user"))
+            (deny file-write* (subpath "/home/user/.git"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+            (deny network*)
+            (allow network* (local unix-socket))
+        "#}
+    )]
+    fn generate_sbpl(#[case] policy: SandboxPolicy, #[case] expected_sbpl: &str) {
         let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
-
-        assert_eq!(
-            sbpl,
-            indoc! {r#"
-                (version 1)
-                (allow default)
-                (deny file-write*)
-                (allow file-write* (literal "/dev/null"))
-                (allow file-write* (literal "/dev/dtracehelper"))
-                (deny network*)
-                (allow network* (local unix-socket))
-            "#}
-        );
-    }
-
-    #[rstest]
-    fn generate_sbpl_full_policy() {
-        let policy = full_policy(vec!["/home/user"], vec!["/home/user/.git"], false);
-        let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
-
-        assert_eq!(
-            sbpl,
-            indoc! {r#"
-                (version 1)
-                (allow default)
-                (deny file-write*)
-                (allow file-write* (subpath "/home/user"))
-                (deny file-write* (subpath "/home/user/.git"))
-                (allow file-write* (literal "/dev/null"))
-                (allow file-write* (literal "/dev/dtracehelper"))
-                (deny network*)
-                (allow network* (local unix-socket))
-            "#}
-        );
+        assert_eq!(sbpl, expected_sbpl);
     }
 
     // === sbpl_escape_string ===
@@ -330,55 +284,67 @@ mod tests {
     // === Integration: exec_sandboxed on macOS ===
 
     #[cfg(target_os = "macos")]
-    #[rstest]
-    fn exec_sandboxed_runs_command_successfully() {
-        let executor = MacOsSandboxExecutor::new();
-        let policy = SandboxPolicy {
+    #[fixture]
+    fn macos_executor() -> MacOsSandboxExecutor {
+        MacOsSandboxExecutor::new()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[fixture]
+    fn default_policy() -> SandboxPolicy {
+        SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
             network_allowed: true,
-        };
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn exec_sandboxed_runs_command_successfully(
+        macos_executor: MacOsSandboxExecutor,
+        default_policy: SandboxPolicy,
+    ) {
         let command = vec!["true".to_string()];
-        let exit_code = executor.exec_sandboxed(&command, &policy).unwrap();
+        let exit_code = macos_executor
+            .exec_sandboxed(&command, &default_policy)
+            .unwrap();
         assert_eq!(exit_code, 0);
     }
 
     #[cfg(target_os = "macos")]
     #[rstest]
-    fn exec_sandboxed_returns_nonzero_exit_code() {
-        let executor = MacOsSandboxExecutor::new();
-        let policy = SandboxPolicy {
-            writable_roots: vec![],
-            read_only_subpaths: vec![],
-            network_allowed: true,
-        };
+    fn exec_sandboxed_returns_nonzero_exit_code(
+        macos_executor: MacOsSandboxExecutor,
+        default_policy: SandboxPolicy,
+    ) {
         let command = vec!["false".to_string()];
-        let exit_code = executor.exec_sandboxed(&command, &policy).unwrap();
+        let exit_code = macos_executor
+            .exec_sandboxed(&command, &default_policy)
+            .unwrap();
         assert_eq!(exit_code, 1);
     }
 
     #[cfg(target_os = "macos")]
     #[rstest]
-    fn exec_sandboxed_denies_write_outside_writable_roots() {
-        let executor = MacOsSandboxExecutor::new();
+    fn exec_sandboxed_denies_write_outside_writable_roots(
+        macos_executor: MacOsSandboxExecutor,
+        default_policy: SandboxPolicy,
+    ) {
         let dir = std::env::temp_dir();
         let test_file = dir.join("runok_sandbox_test_deny_write");
 
         // Clean up from previous test runs
         let _ = std::fs::remove_file(&test_file);
 
-        let policy = SandboxPolicy {
-            writable_roots: vec![],
-            read_only_subpaths: vec![],
-            network_allowed: true,
-        };
-
         let command = vec![
             "sh".to_string(),
             "-c".to_string(),
             format!("touch {}", test_file.display()),
         ];
-        let exit_code = executor.exec_sandboxed(&command, &policy).unwrap();
+        let exit_code = macos_executor
+            .exec_sandboxed(&command, &default_policy)
+            .unwrap();
 
         // The command should fail because writing is denied
         assert_ne!(exit_code, 0, "touch should fail when writes are denied");
@@ -387,8 +353,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[rstest]
-    fn exec_sandboxed_allows_write_to_writable_root() {
-        let executor = MacOsSandboxExecutor::new();
+    fn exec_sandboxed_allows_write_to_writable_root(macos_executor: MacOsSandboxExecutor) {
         let dir = std::env::temp_dir();
         let canonical_dir = dir.canonicalize().unwrap();
         let test_file = canonical_dir.join("runok_sandbox_test_allow_write");
@@ -407,7 +372,7 @@ mod tests {
             "-c".to_string(),
             format!("touch {}", test_file.display()),
         ];
-        let exit_code = executor.exec_sandboxed(&command, &policy).unwrap();
+        let exit_code = macos_executor.exec_sandboxed(&command, &policy).unwrap();
 
         assert_eq!(exit_code, 0, "touch should succeed in writable root");
         assert!(test_file.exists(), "file should be created");
