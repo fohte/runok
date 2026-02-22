@@ -40,6 +40,11 @@ impl MacOsSandboxExecutor {
     /// - Denies writes to read_only_subpaths (overrides writable_roots)
     /// - Controls network access based on `network_allowed`
     /// - Always allows process-exec, mach-*, sysctl-read, and signal for basic operation
+    ///
+    /// Deny paths are classified and mapped to the appropriate SBPL filter:
+    /// - Absolute paths use `(subpath ...)` for exact subtree matching
+    /// - Relative paths are resolved against each writable_root
+    /// - Glob patterns (`*`, `**`) are converted to `(regex ...)` filters
     pub fn generate_sbpl(policy: &SandboxPolicy) -> Result<String, ExecError> {
         let mut sbpl = String::new();
 
@@ -57,11 +62,45 @@ impl MacOsSandboxExecutor {
             sbpl.push_str(&format!("(allow file-write* (subpath {escaped}))\n"));
         }
 
-        // Deny writes to read_only_subpaths (takes precedence over writable_roots)
-        for subpath in &policy.read_only_subpaths {
-            let path_str = subpath.to_string_lossy();
-            let escaped = sbpl_escape_string(&path_str);
-            sbpl.push_str(&format!("(deny file-write* (subpath {escaped}))\n"));
+        // Deny writes to read_only_subpaths (takes precedence over writable_roots).
+        // Paths are classified to use the correct SBPL filter type:
+        // - Absolute literal paths -> (subpath ...)
+        // - Relative literal paths -> resolved against each writable_root -> (subpath ...)
+        // - Glob patterns -> converted to regex -> (regex ...)
+        for deny_path in &policy.read_only_subpaths {
+            let path_str = deny_path.to_string_lossy();
+            match classify_deny_path(&path_str) {
+                DenyPathKind::AbsoluteLiteral => {
+                    let escaped = sbpl_escape_string(&path_str);
+                    sbpl.push_str(&format!("(deny file-write* (subpath {escaped}))\n"));
+                }
+                DenyPathKind::RelativeLiteral => {
+                    // Resolve against each writable_root. When writable_roots is empty,
+                    // all writes are already globally denied so the deny rule is redundant.
+                    for root in &policy.writable_roots {
+                        let full_path = root.join(&*path_str);
+                        let full_str = full_path.to_string_lossy();
+                        let escaped = sbpl_escape_string(&full_str);
+                        sbpl.push_str(&format!("(deny file-write* (subpath {escaped}))\n"));
+                    }
+                }
+                DenyPathKind::GlobPattern => {
+                    if path_str.starts_with('/') {
+                        // Absolute glob: convert directly to regex
+                        let regex = glob_to_sbpl_regex(&path_str);
+                        let escaped = sbpl_escape_string(&regex);
+                        sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
+                    } else {
+                        // Relative glob: resolve against each writable_root
+                        for root in &policy.writable_roots {
+                            let full_pattern = format!("{}/{}", root.to_string_lossy(), path_str);
+                            let regex = glob_to_sbpl_regex(&full_pattern);
+                            let escaped = sbpl_escape_string(&regex);
+                            sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
+                        }
+                    }
+                }
+            }
         }
 
         // Allow writes to /dev/null and temporary directories needed for process execution
@@ -83,6 +122,75 @@ impl MacOsSandboxExecutor {
 fn sbpl_escape_string(s: &str) -> String {
     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
+}
+
+/// Classification of deny path patterns for SBPL filter selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DenyPathKind {
+    /// Absolute path without glob characters (e.g., `/etc/shadow`).
+    /// Uses SBPL `(subpath ...)` filter.
+    AbsoluteLiteral,
+    /// Relative path without glob characters (e.g., `.git`, `.secrets`).
+    /// Resolved against each writable_root, then uses `(subpath ...)`.
+    RelativeLiteral,
+    /// Path containing glob characters `*` or `**` (e.g., `.env*`, `/etc/**`).
+    /// Converted to SBPL `(regex ...)` filter.
+    GlobPattern,
+}
+
+/// Classify a deny path to determine the appropriate SBPL filter type.
+fn classify_deny_path(path: &str) -> DenyPathKind {
+    if path.contains('*') {
+        DenyPathKind::GlobPattern
+    } else if path.starts_with('/') {
+        DenyPathKind::AbsoluteLiteral
+    } else {
+        DenyPathKind::RelativeLiteral
+    }
+}
+
+/// Convert a glob pattern to a regex string suitable for SBPL `(regex ...)` filter.
+///
+/// Conversion rules:
+/// - `**` matches any characters including `/` (directory separator) → `.*`
+/// - `*` matches any characters except `/` → `[^/]*`
+/// - Regex metacharacters in non-glob parts are escaped
+fn glob_to_sbpl_regex(pattern: &str) -> String {
+    let mut regex = String::from("^");
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            regex.push_str(".*");
+            i += 2;
+            // Skip trailing `/` after `**` only when `**` is at the end of the pattern
+            // (e.g., `/etc/**`). When followed by more path components (e.g., `**/config`),
+            // keep the `/` so the regex correctly requires a directory separator.
+            if i < chars.len() && chars[i] == '/' && i + 1 >= chars.len() {
+                i += 1;
+            }
+        } else if chars[i] == '*' {
+            regex.push_str("[^/]*");
+            i += 1;
+        } else if is_regex_metachar(chars[i]) {
+            regex.push('\\');
+            regex.push(chars[i]);
+            i += 1;
+        } else {
+            regex.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    regex
+}
+
+fn is_regex_metachar(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '?' | '\\'
+    )
 }
 
 impl SandboxExecutor for MacOsSandboxExecutor {
@@ -214,6 +322,72 @@ mod tests {
             (allow network* (local unix-socket))
         "#}
     )]
+    #[case::relative_deny_resolved(
+        full_policy(vec!["/home/user/project"], vec![".git"], true),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user/project"))
+            (deny file-write* (subpath "/home/user/project/.git"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::relative_deny_no_writable_roots(
+        full_policy(vec![], vec![".git"], true),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::glob_absolute_deny(
+        full_policy(vec!["/home/user"], vec!["/etc/**"], false),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user"))
+            (deny file-write* (regex "^/etc/.*"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+            (deny network*)
+            (allow network* (local unix-socket))
+        "#}
+    )]
+    #[case::glob_relative_deny(
+        full_policy(vec!["/home/user/project"], vec![".env*"], true),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user/project"))
+            (deny file-write* (regex "^/home/user/project/\\.env[^/]*"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
+    #[case::multiple_roots_with_relative_deny(
+        full_policy(
+            vec!["/home/user/project", "/tmp/workspace"],
+            vec![".git"],
+            true,
+        ),
+        indoc! {r#"
+            (version 1)
+            (allow default)
+            (deny file-write*)
+            (allow file-write* (subpath "/home/user/project"))
+            (allow file-write* (subpath "/tmp/workspace"))
+            (deny file-write* (subpath "/home/user/project/.git"))
+            (deny file-write* (subpath "/tmp/workspace/.git"))
+            (allow file-write* (literal "/dev/null"))
+            (allow file-write* (literal "/dev/dtracehelper"))
+        "#}
+    )]
     fn generate_sbpl(#[case] policy: SandboxPolicy, #[case] expected_sbpl: &str) {
         let sbpl = MacOsSandboxExecutor::generate_sbpl(&policy).unwrap();
         assert_eq!(sbpl, expected_sbpl);
@@ -228,6 +402,36 @@ mod tests {
     #[case::with_quotes("/path\"dir", "\"/path\\\"dir\"")]
     fn sbpl_escape(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sbpl_escape_string(input), expected);
+    }
+
+    // === classify_deny_path ===
+
+    #[rstest]
+    #[case::absolute_path("/etc/shadow", DenyPathKind::AbsoluteLiteral)]
+    #[case::absolute_dir("/home/user/.git", DenyPathKind::AbsoluteLiteral)]
+    #[case::relative_dotfile(".git", DenyPathKind::RelativeLiteral)]
+    #[case::relative_secrets(".secrets", DenyPathKind::RelativeLiteral)]
+    #[case::relative_dotenv(".env", DenyPathKind::RelativeLiteral)]
+    #[case::glob_relative(".env*", DenyPathKind::GlobPattern)]
+    #[case::glob_absolute("/etc/**", DenyPathKind::GlobPattern)]
+    #[case::glob_deep("/home/user/.ssh/**", DenyPathKind::GlobPattern)]
+    #[case::glob_single_star("/tmp/*.log", DenyPathKind::GlobPattern)]
+    fn classify_deny_path_cases(#[case] input: &str, #[case] expected: DenyPathKind) {
+        assert_eq!(classify_deny_path(input), expected);
+    }
+
+    // === glob_to_sbpl_regex ===
+
+    #[rstest]
+    #[case::single_star(".env*", r"^\.env[^/]*")]
+    #[case::double_star("/etc/**", "^/etc/.*")]
+    #[case::double_star_nested("/home/user/.ssh/**", r"^/home/user/\.ssh/.*")]
+    #[case::no_glob("/etc/passwd", "^/etc/passwd")]
+    #[case::dotfile(".envrc", r"^\.envrc")]
+    #[case::star_in_middle("/tmp/*.log", r"^/tmp/[^/]*\.log")]
+    #[case::double_star_with_suffix("/home/**/config", r"^/home/.*/config")]
+    fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(glob_to_sbpl_regex(input), expected);
     }
 
     // === build_command ===
