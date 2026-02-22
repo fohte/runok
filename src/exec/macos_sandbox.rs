@@ -203,9 +203,7 @@ mod tests {
     use std::path::PathBuf;
 
     use indoc::indoc;
-    #[cfg(target_os = "macos")]
-    use rstest::fixture;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     fn policy_with_writable(roots: Vec<&str>) -> SandboxPolicy {
         SandboxPolicy {
