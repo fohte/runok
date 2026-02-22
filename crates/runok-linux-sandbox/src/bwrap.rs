@@ -48,11 +48,11 @@ pub fn build_bwrap_args(
         }
     }
 
-    // /tmp should be writable (tmpfs) unless it's already in writable_roots
+    // /tmp should be writable (tmpfs) unless it's already covered by a writable root
     let tmp_in_writable = policy
         .writable_roots
         .iter()
-        .any(|r| r.as_os_str() == "/tmp");
+        .any(|r| std::path::Path::new("/tmp").starts_with(r));
     if !tmp_in_writable {
         args.extend(["--tmpfs".to_string(), "/tmp".to_string()]);
     }
@@ -255,6 +255,26 @@ mod tests {
         assert!(
             !args.windows(2).any(|w| w == ["--tmpfs", "/tmp"]),
             "should NOT have --tmpfs /tmp when /tmp is in writable_roots"
+        );
+    }
+
+    #[rstest]
+    fn bwrap_args_no_tmpfs_when_parent_is_writable() {
+        let policy = SandboxPolicy {
+            writable_roots: vec![PathBuf::from("/")],
+            read_only_subpaths: vec![],
+            network_allowed: true,
+        };
+        let args = build_bwrap_args(
+            &policy,
+            Path::new("/"),
+            Path::new("/usr/bin/runok-linux-sandbox"),
+            "{}",
+            &["ls".to_string()],
+        );
+        assert!(
+            !args.windows(2).any(|w| w == ["--tmpfs", "/tmp"]),
+            "should NOT have --tmpfs /tmp when a parent of /tmp is in writable_roots"
         );
     }
 
