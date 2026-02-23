@@ -239,6 +239,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         | "compound_statement"
         | "else_clause"
         | "command_substitution"
+        | "process_substitution"
         | "while_statement"
         | "if_statement"
         | "elif_clause" => {
@@ -282,6 +283,13 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // variable_assignment: transparent container — skip the assignment itself
+        // and recursively find command_substitution / process_substitution nodes
+        // anywhere in the subtree (they may be nested inside string nodes when
+        // the value is quoted, e.g. X="$(cmd)").
+        "variable_assignment" => {
+            collect_substitutions_recursive(node, source, commands);
+        }
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
@@ -301,6 +309,28 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
                 commands.push(text.to_string());
+            }
+        }
+    }
+}
+
+/// Recursively walk a subtree to find `command_substitution` and
+/// `process_substitution` nodes, then hand them off to `collect_commands`.
+/// Used by `variable_assignment` to reach substitutions nested inside
+/// `string` nodes (e.g. `X="$(cmd)"`).
+fn collect_substitutions_recursive(
+    node: tree_sitter::Node,
+    source: &[u8],
+    commands: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "command_substitution" | "process_substitution" => {
+                collect_commands(child, source, commands);
+            }
+            _ => {
+                collect_substitutions_recursive(child, source, commands);
             }
         }
     }
@@ -632,6 +662,35 @@ mod tests {
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: variable assignments
+    // ========================================
+
+    #[rstest]
+    #[case::assignment_then_command("X=1 && echo hello", vec!["echo hello"])]
+    #[case::assignment_with_cmd_substitution("X=$(echo test)", vec!["echo test"])]
+    #[case::assignment_with_cmd_substitution_and_command(
+        "X=$(rm -rf /) && echo hello",
+        vec!["rm -rf /", "echo hello"]
+    )]
+    #[case::multiple_assignments("A=1 && B=2 && echo done", vec!["echo done"])]
+    #[case::assignment_with_backtick_substitution("X=`ls`", vec!["ls"])]
+    #[case::quoted_cmd_substitution(r#"X="$(echo test)""#, vec!["echo test"])]
+    #[case::quoted_backtick_substitution(r#"X="`ls`""#, vec!["ls"])]
+    #[case::process_substitution_in_assignment("X=<(cat file)", vec!["cat file"])]
+    fn extract_variable_assignments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extract_bare_variable_assignment_returns_empty() {
+        // A bare variable assignment (no command substitution) produces no commands,
+        // which extract_commands treats as a syntax error since there's nothing to evaluate.
+        let result = extract_commands("X=1");
+        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
     }
 
     // ========================================
