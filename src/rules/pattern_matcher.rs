@@ -230,15 +230,17 @@ pub fn extract_placeholder(
 
     let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
     let steps = Cell::new(0usize);
+    let mut captured = Vec::new();
     let mut all_candidates: Vec<Vec<&str>> = Vec::new();
     extract_placeholder_all(
         &pattern.tokens,
         &cmd_tokens,
         definitions,
         &steps,
-        &mut Vec::new(),
+        &mut captured,
         &mut all_candidates,
     )?;
+    // Filter out empty captures (from patterns without a <cmd> placeholder).
     Ok(all_candidates
         .into_iter()
         .filter(|c| !c.is_empty())
@@ -248,9 +250,12 @@ pub fn extract_placeholder(
 
 /// Collects all possible `<cmd>` captures from a wrapper pattern match.
 ///
-/// Similar to the former `extract_placeholder_inner`, but instead of returning
-/// on the first successful match, it continues to explore all valid alignments
-/// and pushes each successful capture into `all_candidates`.
+/// Explores all valid alignments of pattern tokens against command tokens and
+/// pushes each successful capture into `all_candidates`. Only `<cmd>`
+/// placeholders contribute to the captured tokens; other placeholder names
+/// consume tokens without capturing. Empty captures (when the pattern has no
+/// `<cmd>` or `<cmd>` would capture nothing) are excluded by requiring at
+/// least one token for `<cmd>`.
 fn extract_placeholder_all<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
@@ -285,6 +290,8 @@ fn extract_placeholder_all<'a>(
                     all_candidates.push(captured.clone());
                     captured.truncate(saved_len);
                 } else if cmd_tokens.len() == 1 {
+                    // Non-<cmd> placeholder consumes exactly one token without
+                    // adding it to captured (only <cmd> tokens are captured).
                     all_candidates.push(captured.clone());
                 }
             } else if !cmd_tokens.is_empty() {
