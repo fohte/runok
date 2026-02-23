@@ -376,7 +376,9 @@ fn try_unwrap_wrapper(
 
             let mut result: Option<EvalResult> = None;
             for cmd in &sub_commands {
-                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                let mut sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                // Resolve Action::Default before merging, same as evaluate_compound
+                sub_result.action = resolve_default_action(sub_result.action, config);
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
                     None => sub_result,
@@ -1051,6 +1053,31 @@ mod tests {
         let config = make_config_with_wrappers(vec![deny_rule("echo *")], vec!["sudo <cmd>"]);
         let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
         assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    #[rstest]
+    fn wrapper_compound_unmatched_resolved_via_defaults_action(empty_context: EvalContext) {
+        // bash -c 'echo hello; unknown_cmd' with defaults.action = ask
+        // should resolve the unmatched "unknown_cmd" to Ask, not silently allow.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            definitions: Some(Definitions {
+                wrappers: Some(vec!["bash -c <cmd>".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result =
+            evaluate_command(&config, "bash -c 'echo hello; unknown_cmd'", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
     }
 
     // ========================================
