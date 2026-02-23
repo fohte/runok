@@ -22,7 +22,7 @@ const MAX_MATCH_STEPS: usize = 10_000;
 /// Returns `true` if any valid alignment of pattern tokens against
 /// `command.raw_tokens` succeeds.
 pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definitions) -> bool {
-    if pattern.command != command.command {
+    if !pattern.command.matches(&command.command) {
         return false;
     }
 
@@ -40,7 +40,7 @@ pub fn matches_with_captures(
     command: &ParsedCommand,
     definitions: &Definitions,
 ) -> Option<Vec<String>> {
-    if pattern.command != command.command {
+    if !pattern.command.matches(&command.command) {
         return None;
     }
 
@@ -225,7 +225,7 @@ pub fn extract_placeholder(
     command: &ParsedCommand,
     definitions: &Definitions,
 ) -> Result<Option<Vec<String>>, RuleError> {
-    if pattern.command != command.command {
+    if !pattern.command.matches(&command.command) {
         return Ok(None);
     }
 
@@ -738,6 +738,29 @@ mod tests {
     }
 
     // ========================================
+    // Wildcard command name matching
+    // ========================================
+
+    #[rstest]
+    #[case::help_flag("* --help", "git --help", true)]
+    #[case::version_flag("* --version", "node --version", true)]
+    #[case::any_command_any_args("* *", "ls -la", true)]
+    #[case::wildcard_only("*", "git", true)]
+    #[case::wildcard_command_no_match_extra_args("*", "git status", false)]
+    #[case::wildcard_command_flag_mismatch("* --help", "git --version", false)]
+    #[case::wildcard_command_missing_flag("* --help", "git", false)]
+    fn wildcard_command_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected
+        );
+    }
+
+    // ========================================
     // Unmatched cases
     // ========================================
 
@@ -900,6 +923,8 @@ mod tests {
     )]
     #[case::no_match("git status", "ls -la", None)]
     #[case::different_command("git *", "ls -la", None)]
+    #[case::wildcard_command_captures("* *", "git status", Some(vec!["status".to_string()]))]
+    #[case::wildcard_command_no_args("*", "git", Some(vec![]))]
     fn matches_with_captures_returns_expected(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

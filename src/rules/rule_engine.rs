@@ -682,6 +682,36 @@ mod tests {
     }
 
     // ========================================
+    // Wildcard command name in rules
+    // ========================================
+
+    #[rstest]
+    #[case::help_matches("* --help", "git --help", true)]
+    #[case::version_matches("* --version", "node --version", true)]
+    #[case::no_match_without_flag("* --help", "git status", false)]
+    fn wildcard_command_matching(
+        #[case] pattern: &str,
+        #[case] command: &str,
+        #[case] expected_allow: bool,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config(vec![allow_rule(pattern)]);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        if expected_allow {
+            assert_eq!(result.action, Action::Allow);
+        } else {
+            assert_eq!(result.action, Action::Default);
+        }
+    }
+
+    #[rstest]
+    fn wildcard_command_deny_wins_over_wildcard_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("* --help"), deny_rule("rm *")]);
+        let result = evaluate_command(&config, "rm --help", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    // ========================================
     // When clause filtering
     // ========================================
 

@@ -3,10 +3,30 @@
 
 use super::pattern_lexer::LexToken;
 
+/// Represents the command name part of a pattern, which can be
+/// either a literal string or a wildcard (`*`) that matches any command.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandPattern {
+    /// Matches a specific command name (e.g., "git", "curl").
+    Literal(String),
+    /// Matches any command name (`*`).
+    Wildcard,
+}
+
+impl CommandPattern {
+    /// Check if this command pattern matches the given command name.
+    pub fn matches(&self, command: &str) -> bool {
+        match self {
+            CommandPattern::Literal(s) => s == command,
+            CommandPattern::Wildcard => true,
+        }
+    }
+}
+
 /// A parsed pattern consisting of a command name and a sequence of tokens.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
-    pub command: String,
+    pub command: CommandPattern,
     pub tokens: Vec<PatternToken>,
 }
 
@@ -60,7 +80,8 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
     }
 
     let command = match &lex_tokens[0] {
-        LexToken::Literal(s) => s.clone(),
+        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Wildcard => CommandPattern::Wildcard,
         other => {
             return Err(PatternParseError::InvalidSyntax(format!(
                 "expected command name, got {other:?}"
@@ -234,7 +255,10 @@ mod tests {
 
     fn assert_parse(input: &str, expected_command: &str, expected_tokens: Vec<PatternToken>) {
         let result = parse(input).unwrap();
-        assert_eq!(result.command, expected_command);
+        assert_eq!(
+            result.command,
+            CommandPattern::Literal(expected_command.to_string())
+        );
         assert_eq!(result.tokens, expected_tokens);
     }
 
@@ -450,6 +474,21 @@ mod tests {
         #[case] expected_tokens: Vec<PatternToken>,
     ) {
         assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::wildcard_with_flag("* --help", vec![
+        PatternToken::Literal("--help".into()),
+    ])]
+    #[case::wildcard_with_version("* --version", vec![
+        PatternToken::Literal("--version".into()),
+    ])]
+    #[case::wildcard_only("*", vec![])]
+    #[case::wildcard_with_wildcard_args("* *", vec![PatternToken::Wildcard])]
+    fn parse_wildcard_command(#[case] input: &str, #[case] expected_tokens: Vec<PatternToken>) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, CommandPattern::Wildcard);
+        assert_eq!(result.tokens, expected_tokens);
     }
 
     #[rstest]
