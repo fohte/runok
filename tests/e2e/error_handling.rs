@@ -6,33 +6,22 @@ use super::helpers::TestEnv;
 // --- Invalid config: syntax error ---
 
 #[rstest]
-fn invalid_config_check_exits_2() {
+#[case::check(&["check", "--command", "git status"], 2)]
+#[case::exec(&["exec", "--dry-run", "--", "echo", "hello"], 1)]
+fn invalid_config_exits_with_error(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new("rules: [invalid yaml\n  broken:");
-    let assert = env
-        .command()
-        .args(["check", "--command", "git status"])
-        .assert();
+    let assert = env.command().args(args).assert();
     assert
-        .code(2)
-        .stderr(predicates::str::contains("config error"));
-}
-
-#[rstest]
-fn invalid_config_exec_exits_1() {
-    let env = TestEnv::new("rules: [invalid yaml\n  broken:");
-    let assert = env
-        .command()
-        .args(["exec", "--dry-run", "--", "echo", "hello"])
-        .assert();
-    assert
-        .code(1)
+        .code(expected_exit)
         .stderr(predicates::str::contains("config error"));
 }
 
 // --- Invalid config: validation error (deny + sandbox) ---
 
 #[rstest]
-fn validation_error_deny_with_sandbox_check() {
+#[case::check(&["check", "--command", "rm -rf /"], 2)]
+#[case::exec(&["exec", "--dry-run", "--", "rm", "-rf", "/"], 1)]
+fn validation_error_deny_with_sandbox(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new(indoc! {"
         rules:
           - deny: 'rm -rf /'
@@ -43,33 +32,9 @@ fn validation_error_deny_with_sandbox_check() {
               fs:
                 writable: [./tmp]
     "});
-    let assert = env
-        .command()
-        .args(["check", "--command", "rm -rf /"])
-        .assert();
+    let assert = env.command().args(args).assert();
     assert
-        .code(2)
-        .stderr(predicates::str::contains("config error"));
-}
-
-#[rstest]
-fn validation_error_deny_with_sandbox_exec() {
-    let env = TestEnv::new(indoc! {"
-        rules:
-          - deny: 'rm -rf /'
-            sandbox: restricted
-        definitions:
-          sandbox:
-            restricted:
-              fs:
-                writable: [./tmp]
-    "});
-    let assert = env
-        .command()
-        .args(["exec", "--dry-run", "--", "rm", "-rf", "/"])
-        .assert();
-    assert
-        .code(1)
+        .code(expected_exit)
         .stderr(predicates::str::contains("config error"));
 }
 

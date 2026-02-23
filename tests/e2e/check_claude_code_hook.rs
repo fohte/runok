@@ -1,8 +1,9 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
 use super::helpers::TestEnv;
 
+#[fixture]
 fn hook_env() -> TestEnv {
     TestEnv::new(indoc! {"
         rules:
@@ -52,9 +53,8 @@ fn non_bash_hook_json(tool_name: &str) -> String {
 // --- Bash tool: deny ---
 
 #[rstest]
-fn hook_bash_deny() {
-    let env = hook_env();
-    let assert = env
+fn hook_bash_deny(hook_env: TestEnv) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin(bash_hook_json("rm -rf /"))
@@ -73,9 +73,8 @@ fn hook_bash_deny() {
 // --- Bash tool: allow ---
 
 #[rstest]
-fn hook_bash_allow() {
-    let env = hook_env();
-    let assert = env
+fn hook_bash_allow(hook_env: TestEnv) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))
@@ -94,9 +93,8 @@ fn hook_bash_allow() {
 #[case::read("Read")]
 #[case::write("Write")]
 #[case::edit("Edit")]
-fn hook_non_bash_tool_no_output(#[case] tool_name: &str) {
-    let env = hook_env();
-    let assert = env
+fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin(non_bash_hook_json(tool_name))
@@ -107,9 +105,8 @@ fn hook_non_bash_tool_no_output(#[case] tool_name: &str) {
 // --- Invalid JSON: exit 2 ---
 
 #[rstest]
-fn hook_invalid_json_exits_2() {
-    let env = hook_env();
-    let assert = env
+fn hook_invalid_json_exits_2(hook_env: TestEnv) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin("invalid json")
@@ -120,9 +117,8 @@ fn hook_invalid_json_exits_2() {
 // --- Sandbox allow: updatedInput rewrite ---
 
 #[rstest]
-fn hook_sandbox_allow_rewrites_command() {
-    let env = hook_env();
-    let assert = env
+fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin(bash_hook_json("echo hello"))
@@ -148,9 +144,8 @@ fn hook_sandbox_allow_rewrites_command() {
 // --- Hook event name ---
 
 #[rstest]
-fn hook_output_contains_event_name() {
-    let env = hook_env();
-    let assert = env
+fn hook_output_contains_event_name(hook_env: TestEnv) {
+    let assert = hook_env
         .command()
         .args(["check", "--format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))

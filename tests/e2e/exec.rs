@@ -1,8 +1,9 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
 use super::helpers::TestEnv;
 
+#[fixture]
 fn exec_env() -> TestEnv {
     TestEnv::new(indoc! {"
         rules:
@@ -42,16 +43,14 @@ fn exec_env() -> TestEnv {
     &["exec", "--dry-run", "--", "curl", "-X", "GET", "https://example.com"],
     0,
 )]
-fn exec_exit_code(#[case] args: &[&str], #[case] expected_exit: i32) {
-    let env = exec_env();
-    let assert = env.command().args(args).assert();
+fn exec_exit_code(exec_env: TestEnv, #[case] args: &[&str], #[case] expected_exit: i32) {
+    let assert = exec_env.command().args(args).assert();
     assert.code(expected_exit);
 }
 
 #[rstest]
-fn exec_deny_prints_reason() {
-    let env = exec_env();
-    let assert = env
+fn exec_deny_prints_reason(exec_env: TestEnv) {
+    let assert = exec_env
         .command()
         .args(["exec", "--", "curl", "-X", "POST", "https://example.com"])
         .assert();
@@ -72,9 +71,8 @@ fn exec_ask_treated_as_deny() {
 }
 
 #[rstest]
-fn exec_sandbox_allow_with_dry_run() {
-    let env = exec_env();
-    let assert = env
+fn exec_sandbox_allow_with_dry_run(exec_env: TestEnv) {
+    let assert = exec_env
         .command()
         .args([
             "exec",

@@ -1,8 +1,9 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
 use super::helpers::TestEnv;
 
+#[fixture]
 fn auto_detect_env() -> TestEnv {
     TestEnv::new(indoc! {"
         rules:
@@ -15,8 +16,7 @@ fn auto_detect_env() -> TestEnv {
 // --- Auto-detect Claude Code hook format (toolName field present) ---
 
 #[rstest]
-fn auto_detect_claude_code_hook_format() {
-    let env = auto_detect_env();
+fn auto_detect_claude_code_hook_format(auto_detect_env: TestEnv) {
     let hook_json = serde_json::json!({
         "sessionId": "test-session",
         "transcriptPath": "/tmp/transcript",
@@ -29,7 +29,11 @@ fn auto_detect_claude_code_hook_format() {
     })
     .to_string();
 
-    let assert = env.command().arg("check").write_stdin(hook_json).assert();
+    let assert = auto_detect_env
+        .command()
+        .arg("check")
+        .write_stdin(hook_json)
+        .assert();
     let output = assert.code(0).get_output().stdout.clone();
     let json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
@@ -45,9 +49,8 @@ fn auto_detect_claude_code_hook_format() {
 // --- Auto-detect generic format (command field present, no toolName) ---
 
 #[rstest]
-fn auto_detect_generic_format() {
-    let env = auto_detect_env();
-    let assert = env
+fn auto_detect_generic_format(auto_detect_env: TestEnv) {
+    let assert = auto_detect_env
         .command()
         .arg("check")
         .write_stdin(r#"{"command":"rm -rf /"}"#)
@@ -67,9 +70,8 @@ fn auto_detect_generic_format() {
 // --- Unknown JSON format (neither toolName nor command) ---
 
 #[rstest]
-fn auto_detect_unknown_json_exits_2() {
-    let env = auto_detect_env();
-    let assert = env
+fn auto_detect_unknown_json_exits_2(auto_detect_env: TestEnv) {
+    let assert = auto_detect_env
         .command()
         .arg("check")
         .write_stdin(r#"{"unknown":"value"}"#)
