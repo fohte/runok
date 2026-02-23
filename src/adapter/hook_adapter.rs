@@ -390,11 +390,16 @@ mod tests {
     }
 
     #[rstest]
-    fn build_no_match_output_ask_with_default_sandbox() {
+    #[case::ask(ActionKind::Ask, "ask")]
+    #[case::allow(ActionKind::Allow, "allow")]
+    fn build_no_match_output_with_default_sandbox(
+        #[case] action_kind: ActionKind,
+        #[case] expected_decision: &str,
+    ) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("npm install")));
         let defaults = Defaults {
-            action: Some(ActionKind::Ask),
+            action: Some(action_kind),
             sandbox: Some("restricted".to_string()),
         };
         let output = adapter
@@ -404,29 +409,7 @@ mod tests {
         assert_eq!(
             output,
             make_output(
-                "ask",
-                None,
-                Some("runok exec --sandbox restricted -- 'npm install'"),
-            ),
-        );
-    }
-
-    #[rstest]
-    fn build_no_match_output_allow_with_default_sandbox() {
-        let adapter =
-            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("npm install")));
-        let defaults = Defaults {
-            action: Some(ActionKind::Allow),
-            sandbox: Some("restricted".to_string()),
-        };
-        let output = adapter
-            .build_no_match_output(&defaults)
-            .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"))
-            .unwrap_or_else(|| panic!("expected Some(HookOutput)"));
-        assert_eq!(
-            output,
-            make_output(
-                "allow",
+                expected_decision,
                 None,
                 Some("runok exec --sandbox restricted -- 'npm install'"),
             ),
