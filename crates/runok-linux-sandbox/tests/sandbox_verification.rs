@@ -71,11 +71,18 @@ fn sandbox_denies_write_outside_writable_roots(_require_bwrap: ()) {
 
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+    // Create a subdirectory as the only writable root, so the parent tmpdir
+    // is visible inside the sandbox (bwrap bind-mounts it) but not writable.
+    let allowed_dir = canonical_dir.join("allowed");
+    std::fs::create_dir(&allowed_dir).unwrap();
+
     let test_file = canonical_dir.join("should_not_exist");
 
-    // Policy with no writable roots - all writes should be denied
-    let policy =
-        format!(r#"{{"writable_roots":[],"read_only_subpaths":[],"network_allowed":true}}"#);
+    let policy = format!(
+        r#"{{"writable_roots":["{}"],"read_only_subpaths":[],"network_allowed":true}}"#,
+        allowed_dir.display()
+    );
 
     let command = &["sh", "-c", &format!("touch {}", test_file.display())];
     let exit_code = run_sandboxed(&policy, command);
@@ -220,19 +227,13 @@ fn sandbox_allows_read_when_writes_denied(_require_bwrap: ()) {
         return;
     }
 
-    let tmpdir = tempfile::tempdir().unwrap();
-    let canonical_dir = tmpdir.path().canonicalize().unwrap();
+    // Read /etc/hostname which is bind-mounted read-only by bwrap (--ro-bind / /).
+    // Using a host-filesystem file avoids the --tmpfs /tmp issue where tmpdir
+    // contents are hidden inside the sandbox.
+    let policy = r#"{"writable_roots":[],"read_only_subpaths":[],"network_allowed":true}"#;
 
-    // Create a file to read
-    let test_file = canonical_dir.join("readable_file");
-    std::fs::write(&test_file, "hello sandbox").unwrap();
-
-    // No writable roots: all writes denied, reads should still work
-    let policy =
-        format!(r#"{{"writable_roots":[],"read_only_subpaths":[],"network_allowed":true}}"#);
-
-    let command = &["sh", "-c", &format!("cat {}", test_file.display())];
-    let exit_code = run_sandboxed(&policy, command);
+    let command = &["sh", "-c", "cat /etc/hostname"];
+    let exit_code = run_sandboxed(policy, command);
 
     assert_eq!(
         exit_code, 0,
