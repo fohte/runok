@@ -59,25 +59,46 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
 
             // Square bracket open
             '[' => {
-                if in_bracket {
-                    return Err(PatternParseError::NestedSquareBracket);
+                // Distinguish optional-group `[-f]` from literal `[` command.
+                // When `[` is followed by a space (or is at end of input), it is
+                // the POSIX `[` (test) command used as a literal token.
+                // When `[` is followed by a non-space character, it starts an
+                // optional group.
+                let is_literal = {
+                    let mut lookahead = chars.clone();
+                    lookahead.next(); // consume '['
+                    match lookahead.peek() {
+                        None => true,                   // `[` at end of input
+                        Some(&(_, ' ' | '\t')) => true, // `[ -f ...]`
+                        _ => false,                     // `[-f]` optional group
+                    }
+                };
+
+                if is_literal {
+                    tokens.push(LexToken::Literal("[".to_string()));
+                    chars.next();
+                } else {
+                    if in_bracket {
+                        return Err(PatternParseError::NestedSquareBracket);
+                    }
+                    in_bracket = true;
+                    bracket_start = Some(pos);
+                    tokens.push(LexToken::OpenBracket);
+                    chars.next();
                 }
-                in_bracket = true;
-                bracket_start = Some(pos);
-                tokens.push(LexToken::OpenBracket);
-                chars.next();
             }
 
             // Square bracket close
             ']' => {
-                if !in_bracket {
-                    return Err(PatternParseError::InvalidSyntax(format!(
-                        "unexpected closing bracket at position {pos}"
-                    )));
+                if in_bracket {
+                    in_bracket = false;
+                    bracket_start = None;
+                    tokens.push(LexToken::CloseBracket);
+                } else {
+                    // `]` outside a bracket group is a literal (e.g., the
+                    // closing `]` of the POSIX `[` test command)
+                    tokens.push(LexToken::Literal("]".to_string()));
                 }
-                in_bracket = false;
-                bracket_start = None;
-                tokens.push(LexToken::CloseBracket);
                 chars.next();
             }
 
@@ -281,6 +302,30 @@ mod tests {
         LexToken::Literal("status".into()),
     ])]
     fn tokenize_brackets(#[case] input: &str, #[case] expected: Vec<LexToken>) {
+        assert_eq!(tokenize(input).unwrap(), expected);
+    }
+
+    // === Literal bracket (POSIX `[` test command) ===
+
+    #[rstest]
+    #[case::bracket_command_wildcard("[ *", vec![
+        LexToken::Literal("[".into()),
+        LexToken::Wildcard,
+    ])]
+    #[case::bracket_command_with_args("[ -f file ]", vec![
+        LexToken::Literal("[".into()),
+        LexToken::Literal("-f".into()),
+        LexToken::Literal("file".into()),
+        LexToken::Literal("]".into()),
+    ])]
+    #[case::bracket_at_end("[", vec![
+        LexToken::Literal("[".into()),
+    ])]
+    #[case::close_bracket_outside_group("] foo", vec![
+        LexToken::Literal("]".into()),
+        LexToken::Literal("foo".into()),
+    ])]
+    fn tokenize_literal_brackets(#[case] input: &str, #[case] expected: Vec<LexToken>) {
         assert_eq!(tokenize(input).unwrap(), expected);
     }
 

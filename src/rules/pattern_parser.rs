@@ -462,6 +462,23 @@ mod tests {
     }
 
     #[rstest]
+    #[case::bracket_command_wildcard("[ *", "[", vec![
+        PatternToken::Wildcard,
+    ])]
+    #[case::bracket_command_with_args("[ -f file ]", "[", vec![
+        PatternToken::Literal("-f".into()),
+        PatternToken::Literal("file".into()),
+        PatternToken::Literal("]".into()),
+    ])]
+    fn parse_literal_bracket_command(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
     #[case::placeholder("sudo <cmd>", "sudo", vec![
         PatternToken::Placeholder("cmd".into()),
     ])]
