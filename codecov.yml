@@ -12,3 +12,9 @@ coverage:
     patch:
       default:
         informational: true
+
+flags:
+  Linux:
+    carryforward: true
+  macOS:
+    carryforward: true

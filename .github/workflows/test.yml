@@ -78,10 +78,21 @@ jobs:
         run: exit 1
 
   unit-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v6
+
+      # Allow unprivileged user namespaces for bubblewrap on Ubuntu 24.04+
+      # where AppArmor restricts them by default
+      - name: Allow unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - run: rustup show
 
@@ -96,12 +107,20 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
+      # On Linux, test the full workspace including the Linux sandbox helper.
+      # On macOS, exclude the Linux-only sandbox crate (depends on landlock/seccompiler).
       - name: Run tests with coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cargo llvm-cov --workspace --lcov --output-path lcov.info
+          else
+            cargo llvm-cov --workspace --exclude runok-linux-sandbox --lcov --output-path lcov.info
+          fi
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          flags: ${{ runner.os }}
           fail_ci_if_error: false
