@@ -357,7 +357,16 @@ fn try_unwrap_wrapper(
         let schema = build_flag_schema(&pattern);
         let parsed_command = parse_command(command, &schema)?;
 
-        if let Some(tokens) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+        let candidates = extract_placeholder(&pattern, &parsed_command, definitions)?;
+        if candidates.is_empty() {
+            continue;
+        }
+
+        // Try each candidate capture and pick the one with the highest
+        // action priority. This handles ambiguous patterns like `xargs * <cmd>`
+        // where the wildcard can consume varying numbers of tokens.
+        let mut best: Option<EvalResult> = None;
+        for tokens in candidates {
             // Single token: a shell script string (e.g., from `bash -c <cmd>`)
             // that should be passed as-is for tree-sitter to parse.
             // Multiple tokens: a structured command + args (e.g., from `sudo <cmd>`)
@@ -377,14 +386,28 @@ fn try_unwrap_wrapper(
             let mut result: Option<EvalResult> = None;
             for cmd in &sub_commands {
                 let mut sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
-                // Resolve Action::Default before merging, same as evaluate_compound
                 sub_result.action = resolve_default_action(sub_result.action, config);
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
                     None => sub_result,
                 });
             }
-            return Ok(result);
+
+            if let Some(candidate_result) = result {
+                best = Some(match best {
+                    Some(prev)
+                        if action_priority(&candidate_result.action)
+                            > action_priority(&prev.action) =>
+                    {
+                        candidate_result
+                    }
+                    Some(prev) => prev,
+                    None => candidate_result,
+                });
+            }
+        }
+        if best.is_some() {
+            return Ok(best);
         }
     }
 

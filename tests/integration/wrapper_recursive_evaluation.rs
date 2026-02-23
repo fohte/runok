@@ -209,3 +209,31 @@ fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
     let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
 }
+
+// ========================================
+// Wildcard-with-placeholder wrapper: greedy wildcard consumes flags
+// ========================================
+
+#[rstest]
+#[case::xargs_flags_echo_allowed("xargs -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::xargs_flags_rm_denied("xargs -I{} rm -rf /", assert_deny as ActionAssertion)]
+#[case::xargs_no_flags_echo_allowed("xargs echo hello", assert_allow as ActionAssertion)]
+#[case::xargs_multiple_flags_echo_allowed("xargs -0 -I{} echo hello", assert_allow as ActionAssertion)]
+fn wildcard_wrapper_greedy_consumes_flags(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'xargs * <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
