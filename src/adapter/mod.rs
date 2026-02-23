@@ -537,6 +537,34 @@ mod tests {
         assert_eq!(exit_code, 0);
     }
 
+    // --- compound command: unmatched sub-command resolved via defaults.action ---
+
+    #[rstest]
+    fn compound_allow_plus_unmatched_with_defaults_ask_calls_handle_action_with_ask() {
+        // "echo hello" matches allow rule, "unknown_cmd" is unmatched.
+        // With defaults.action = ask, the unmatched sub-command resolves to Ask,
+        // which wins over Allow. The overall result should be Ask dispatched
+        // via handle_action (not handle_no_match).
+        let endpoint = MockEndpoint::new(Ok(Some("echo hello; unknown_cmd".to_string())));
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let exit_code = run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Ask(_))
+        ));
+        assert_eq!(exit_code, 0);
+    }
+
     // --- exit code propagation ---
 
     #[rstest]

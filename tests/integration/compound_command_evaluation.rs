@@ -276,6 +276,64 @@ fn writable_contradiction_does_not_downgrade_deny(empty_context: EvalContext) {
 }
 
 // ========================================
+// Unmatched sub-commands resolved via defaults.action
+// ========================================
+
+#[rstest]
+#[case::allow_plus_unmatched_defaults_ask(
+    "echo hello; eval \"rm -rf /\"",
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::allow_plus_unmatched_defaults_deny(
+    "echo hello; eval \"rm -rf /\"",
+    indoc! {"
+        defaults:
+          action: deny
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::allow_plus_unmatched_defaults_allow(
+    "echo hello; unknown_cmd",
+    indoc! {"
+        defaults:
+          action: allow
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::deny_rule_still_wins_over_resolved_default(
+    "echo hello && rm -rf /",
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+fn unmatched_sub_command_uses_defaults_action(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Execution mode: compound commands are represented as Shell input (sh -c)
 // ========================================
 

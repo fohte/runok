@@ -124,10 +124,15 @@ pub fn evaluate_compound(
             preset_names.push(name);
         }
 
+        // Resolve Action::Default to the configured defaults.action so that
+        // unmatched sub-commands are compared at their effective restriction
+        // level (e.g. ask) rather than being silently swallowed by Allow.
+        let resolved_action = resolve_default_action(result.action, config);
+
         // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
-            Some(prev) => merge_actions(prev, result.action),
-            None => result.action,
+            Some(prev) => merge_actions(prev, resolved_action),
+            None => resolved_action,
         });
     }
 
@@ -425,6 +430,29 @@ fn action_priority(action: &Action) -> u8 {
     }
 }
 
+/// Resolve `Action::Default` to the configured `defaults.action`, so that
+/// unmatched sub-commands in compound evaluation participate in the
+/// Explicit Deny Wins comparison at their effective restriction level.
+///
+/// When `defaults.action` is not configured, `Action::Default` is preserved
+/// (the adapter layer will apply its own interpretation later).
+fn resolve_default_action(action: Action, config: &Config) -> Action {
+    use crate::config::ActionKind;
+    if !matches!(action, Action::Default) {
+        return action;
+    }
+    match config.defaults.as_ref().and_then(|d| d.action) {
+        Some(ActionKind::Allow) => Action::Allow,
+        Some(ActionKind::Deny) => Action::Deny(DenyResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
+        Some(ActionKind::Ask) => Action::Ask(None),
+        None => Action::Default,
+    }
+}
+
 struct MatchedRule<'a> {
     action_kind: ActionKind,
     rule: &'a RuleEntry,
@@ -482,7 +510,7 @@ fn build_expr_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, Definitions, RuleEntry};
+    use crate::config::{Config, Defaults, Definitions, RuleEntry};
     use rstest::{fixture, rstest};
     use std::collections::HashMap;
 
@@ -1094,6 +1122,114 @@ mod tests {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_compound(&config, "hg status | wc -l", &empty_context).unwrap();
         assert_eq!(result.action, Action::Default);
+    }
+
+    // ========================================
+    // Compound: Default resolved via defaults.action
+    // ========================================
+
+    #[rstest]
+    fn compound_default_resolved_to_ask_wins_over_allow(empty_context: EvalContext) {
+        // When one sub-command is allowed and another is unmatched,
+        // the unmatched sub-command should be resolved via defaults.action.
+        // With defaults.action = ask, the overall result should be Ask (not Allow).
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result =
+            evaluate_compound(&config, "echo hello; eval \"rm -rf /\"", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_default_resolved_to_deny_wins_over_allow(empty_context: EvalContext) {
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Deny),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Deny(_)),
+            "expected Deny, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_default_resolved_to_allow_stays_allow(empty_context: EvalContext) {
+        // When defaults.action = allow, unmatched commands resolve to Allow,
+        // and the overall result remains Allow.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Allow),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_no_defaults_preserves_default_action(empty_context: EvalContext) {
+        // Without defaults.action configured, Default is preserved as-is.
+        // When merged with Allow, Allow wins (backward-compatible behavior).
+        let config = make_config(vec![allow_rule("echo *")]);
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_all_unmatched_with_defaults_ask(empty_context: EvalContext) {
+        // All sub-commands unmatched with defaults.action = ask
+        // should result in Ask.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("git status")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "unknown_a && unknown_b", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_deny_rule_still_wins_over_resolved_default(empty_context: EvalContext) {
+        // Even when defaults.action = ask, an explicit deny rule should still win.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *"), deny_rule("rm -rf *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello && rm -rf /", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Deny(_)),
+            "expected Deny, got {:?}",
+            result.action
+        );
     }
 
     // ========================================
