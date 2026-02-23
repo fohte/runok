@@ -1,9 +1,12 @@
 use std::path::Path;
 use std::process::Command;
 
+mod glob_pattern;
+
+use glob_pattern::{DenyPathKind, classify_deny_path, glob_to_sbpl_regex};
+
 use super::ExecError;
 use super::command_executor::{SandboxExecutor, SandboxPolicy, exit_code_from_status};
-use super::glob_pattern::{DenyPathKind, classify_deny_path, glob_to_sbpl_regex};
 
 /// macOS sandbox executor using sandbox-exec (Seatbelt/SBPL).
 ///

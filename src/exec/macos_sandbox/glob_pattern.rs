@@ -1,6 +1,6 @@
 /// Classification of deny path patterns for SBPL filter selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DenyPathKind {
+pub(super) enum DenyPathKind {
     /// Absolute path without glob characters (e.g., `/etc/shadow`).
     /// Uses SBPL `(subpath ...)` filter.
     AbsoluteLiteral,
@@ -13,7 +13,7 @@ pub(crate) enum DenyPathKind {
 }
 
 /// Classify a deny path to determine the appropriate SBPL filter type.
-pub(crate) fn classify_deny_path(path: &str) -> DenyPathKind {
+pub(super) fn classify_deny_path(path: &str) -> DenyPathKind {
     if path.contains('*') || path.contains('?') || path.contains('[') || path.contains('{') {
         DenyPathKind::GlobPattern
     } else if path.starts_with('/') {
@@ -35,7 +35,7 @@ pub(crate) fn classify_deny_path(path: &str) -> DenyPathKind {
 /// - `[...]` is passed through as a POSIX character class
 /// - `{a,b,c}` is converted to alternation `(a|b|c)`
 /// - Regex metacharacters in literal context are escaped
-pub(crate) fn glob_to_sbpl_regex(pattern: &str) -> String {
+pub(super) fn glob_to_sbpl_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
     let chars: Vec<char> = pattern.chars().collect();
     let len = chars.len();
