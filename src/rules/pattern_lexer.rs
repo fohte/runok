@@ -69,8 +69,8 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                     lookahead.next(); // consume '['
                     match lookahead.peek() {
                         None => true,                   // `[` at end of input
-                        Some(&(_, ' ' | '\t')) => true, // `[ -f ...]`
-                        _ => false,                     // `[-f]` optional group
+                        Some(&(_, ' ' | '\t')) => true, // `[ -f ...]` (literal `[` command)
+                        _ => false,                     // `[-f]` (optional group)
                     }
                 };
 
