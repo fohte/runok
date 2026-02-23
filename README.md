@@ -1,6 +1,7 @@
 # runok
 
 [![CI](https://github.com/fohte/runok/actions/workflows/test.yml/badge.svg)](https://github.com/fohte/runok/actions/workflows/test.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/fohte/runok)](https://github.com/fohte/runok/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 Command execution permission framework for LLM agents, primarily designed for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
