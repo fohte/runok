@@ -163,6 +163,28 @@ mod tests {
     #[case::char_class("/tmp/log[0-9].txt", r"^/tmp/log[0-9]\.txt")]
     #[case::brace_expansion("*.{js,ts}", r"^[^/]*\.(js|ts)")]
     #[case::brace_with_path("/home/**/*.{conf,cfg}", r"^/home/.*/[^/]*\.(conf|cfg)")]
+    // brace edge cases
+    #[case::brace_empty_alternative("ts{x,}", "^ts(x|)")]
+    #[case::brace_nested("{a,{b,c}}", "^(a|(b|c))")]
+    #[case::brace_dot_in_alt("*.{tar.gz,zip}", r"^[^/]*\.(tar\.gz|zip)")]
+    #[case::brace_with_glob("{src,lib}/**/*.rs", r"^(src|lib)/.*/[^/]*\.rs")]
+    // double star edge cases
+    #[case::bare_double_star("**", "^.*")]
+    #[case::double_star_prefix("**/*.log", r"^.*/[^/]*\.log")]
+    #[case::double_star_trailing("a/**", "^a/.*")]
+    #[case::double_star_multiple("a/**/b/**/c", "^a/.*/b/.*/c")]
+    // character class edge cases
+    #[case::char_class_negation("[!a-z]", "^[!a-z]")]
+    #[case::char_class_multiple("[abc][0-9]", "^[abc][0-9]")]
+    // metacharacter escaping
+    #[case::dots_escaped("file.*.bak", r"^file\.[^/]*\.bak")]
+    #[case::plus_escaped("a+b", r"^a\+b")]
+    #[case::parens_escaped("(test)", r"^\(test\)")]
+    #[case::pipe_escaped("a|b", r"^a\|b")]
+    // misc
+    #[case::empty_pattern("", "^")]
+    #[case::multiple_question_marks("f??", "^f[^/][^/]")]
+    #[case::star_and_question("*.t?t", r"^[^/]*\.t[^/]t")]
     fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(glob_to_sbpl_regex(input), expected);
     }
