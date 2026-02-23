@@ -166,6 +166,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     use rstest::fixture;
     use rstest::rstest;
+    #[cfg(target_os = "macos")]
+    use tempfile;
 
     fn policy_with_writable(roots: Vec<&str>) -> SandboxPolicy {
         SandboxPolicy {
@@ -510,5 +512,138 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&test_file);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn exec_sandboxed_denies_write_to_read_only_subpath(macos_executor: MacOsSandboxExecutor) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+        // Create a .git directory inside the writable root
+        let git_dir = canonical_dir.join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+
+        let test_file = git_dir.join("should_not_write");
+
+        let policy = SandboxPolicy {
+            writable_roots: vec![canonical_dir.clone()],
+            read_only_subpaths: vec![PathBuf::from(".git")],
+            network_allowed: true,
+        };
+
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("touch {}", test_file.display()),
+        ];
+        let exit_code = macos_executor.exec_sandboxed(&command, &policy).unwrap();
+
+        assert_ne!(
+            exit_code, 0,
+            "write to read_only_subpath (.git) should be denied"
+        );
+        assert!(
+            !test_file.exists(),
+            "file should not be created in read_only_subpath"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn exec_sandboxed_allows_write_outside_read_only_subpath(macos_executor: MacOsSandboxExecutor) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+        // Create a .git directory (read-only) and a src directory (writable)
+        std::fs::create_dir(canonical_dir.join(".git")).unwrap();
+        std::fs::create_dir(canonical_dir.join("src")).unwrap();
+
+        let test_file = canonical_dir.join("src").join("allowed_write");
+
+        let policy = SandboxPolicy {
+            writable_roots: vec![canonical_dir.clone()],
+            read_only_subpaths: vec![PathBuf::from(".git")],
+            network_allowed: true,
+        };
+
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("touch {}", test_file.display()),
+        ];
+        let exit_code = macos_executor.exec_sandboxed(&command, &policy).unwrap();
+
+        assert_eq!(
+            exit_code, 0,
+            "write outside read_only_subpath should succeed"
+        );
+        assert!(test_file.exists(), "file should be created in src/");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn exec_sandboxed_denies_network_when_not_allowed(macos_executor: MacOsSandboxExecutor) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+        let policy = SandboxPolicy {
+            writable_roots: vec![],
+            read_only_subpaths: vec![],
+            network_allowed: false,
+        };
+
+        // Use /usr/bin/nc to attempt a TCP connection. The sandbox should
+        // block network access, causing nc to fail.
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "/usr/bin/nc -z -w 1 1.1.1.1 80".to_string(),
+        ];
+        let exit_code = macos_executor.exec_sandboxed(&command, &policy).unwrap();
+
+        assert_ne!(
+            exit_code, 0,
+            "network connection should fail when network_allowed=false"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn exec_sandboxed_allows_read_when_writes_denied(macos_executor: MacOsSandboxExecutor) {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+        // Create a file to read
+        let test_file = canonical_dir.join("readable_file");
+        std::fs::write(&test_file, "hello").unwrap();
+
+        // No writable roots - all writes denied, but reads should work
+        let policy = SandboxPolicy {
+            writable_roots: vec![],
+            read_only_subpaths: vec![],
+            network_allowed: true,
+        };
+
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("cat {}", test_file.display()),
+        ];
+        let exit_code = macos_executor.exec_sandboxed(&command, &policy).unwrap();
+
+        assert_eq!(
+            exit_code, 0,
+            "reading files should succeed even when writes are denied"
+        );
     }
 }
