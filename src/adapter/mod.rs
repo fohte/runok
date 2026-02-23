@@ -118,6 +118,24 @@ fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> Act
     action_result
 }
 
+/// Apply `defaults.sandbox` as a fallback when the rule evaluation produced
+/// no sandbox information. This ensures that `defaults.sandbox` acts as a
+/// true default: it is used whenever the matched rule does not specify its
+/// own sandbox, and also when no rule matched at all.
+fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
+    let fallback = match &defaults.sandbox {
+        Some(s) => s.clone(),
+        None => return action_result,
+    };
+
+    action_result.sandbox = match action_result.sandbox {
+        SandboxInfo::Preset(None) => SandboxInfo::Preset(Some(fallback)),
+        SandboxInfo::MergedPolicy(None) => SandboxInfo::Preset(Some(fallback)),
+        other => other,
+    };
+    action_result
+}
+
 /// Run the common evaluation flow for any endpoint.
 ///
 /// 1. Extract the command from protocol-specific input
@@ -197,6 +215,9 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             Err(e) => return endpoint.handle_error(e.into()),
         }
     };
+
+    // Apply defaults.sandbox fallback when the matched rule has no sandbox
+    let action_result = apply_sandbox_fallback(action_result, &defaults);
 
     // Determine dispatch target
     let dispatch = if matches!(action_result.action, Action::Default) {
@@ -378,6 +399,21 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+        }
+    }
+
+    fn make_config_with_defaults(
+        rules: Vec<RuleEntry>,
+        default_action: Option<ActionKind>,
+        default_sandbox: Option<String>,
+    ) -> Config {
+        Config {
+            rules: Some(rules),
+            defaults: Some(Defaults {
+                action: default_action,
+                sandbox: default_sandbox,
+            }),
+            ..Default::default()
         }
     }
 
@@ -744,5 +780,117 @@ mod tests {
         assert!(*endpoint.called_handle_action.borrow());
         assert!(!*endpoint.called_handle_dry_run.borrow());
         assert_eq!(exit_code, 0);
+    }
+
+    // --- defaults.sandbox fallback ---
+
+    #[rstest]
+    fn matched_rule_without_sandbox_falls_back_to_defaults_sandbox() {
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = make_config_with_defaults(
+            vec![allow_rule("git status")],
+            None,
+            Some("default-sandbox".to_string()),
+        );
+        run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        match &*endpoint.last_sandbox.borrow() {
+            Some(SandboxInfo::Preset(Some(preset))) => {
+                assert_eq!(preset, "default-sandbox");
+            }
+            other => {
+                panic!("expected SandboxInfo::Preset(Some(\"default-sandbox\")), got {other:?}")
+            }
+        }
+    }
+
+    #[rstest]
+    fn matched_rule_with_sandbox_overrides_defaults_sandbox() {
+        let endpoint = MockEndpoint::new(Ok(Some("python3 script.py".to_string())));
+        let config = make_config_with_defaults(
+            vec![RuleEntry {
+                allow: Some("python3 *".to_string()),
+                deny: None,
+                ask: None,
+                when: None,
+                message: None,
+                fix_suggestion: None,
+                sandbox: Some("restricted".to_string()),
+            }],
+            None,
+            Some("default-sandbox".to_string()),
+        );
+        run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        match &*endpoint.last_sandbox.borrow() {
+            Some(SandboxInfo::Preset(Some(preset))) => {
+                assert_eq!(preset, "restricted");
+            }
+            other => panic!("expected SandboxInfo::Preset(Some(\"restricted\")), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn no_match_with_defaults_sandbox_falls_back_in_dry_run() {
+        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
+        let config = make_config_with_defaults(
+            vec![allow_rule("git status")],
+            Some(ActionKind::Allow),
+            Some("default-sandbox".to_string()),
+        );
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_dry_run.borrow());
+        match &*endpoint.last_sandbox.borrow() {
+            Some(SandboxInfo::Preset(Some(preset))) => {
+                assert_eq!(preset, "default-sandbox");
+            }
+            other => {
+                panic!("expected SandboxInfo::Preset(Some(\"default-sandbox\")), got {other:?}")
+            }
+        }
+    }
+
+    // --- apply_sandbox_fallback unit tests ---
+
+    #[rstest]
+    #[case::preset_none_with_default(
+        SandboxInfo::Preset(None),
+        Some("fallback".to_string()),
+        "Preset(Some(\"fallback\"))"
+    )]
+    #[case::preset_some_with_default(
+        SandboxInfo::Preset(Some("explicit".to_string())),
+        Some("fallback".to_string()),
+        "Preset(Some(\"explicit\"))"
+    )]
+    #[case::preset_none_without_default(SandboxInfo::Preset(None), None, "Preset(None)")]
+    #[case::merged_none_with_default(
+        SandboxInfo::MergedPolicy(None),
+        Some("fallback".to_string()),
+        "Preset(Some(\"fallback\"))"
+    )]
+    fn apply_sandbox_fallback_works(
+        #[case] sandbox: SandboxInfo,
+        #[case] default_sandbox: Option<String>,
+        #[case] expected_debug: &str,
+    ) {
+        let action_result = ActionResult {
+            action: Action::Allow,
+            sandbox,
+        };
+        let defaults = Defaults {
+            action: None,
+            sandbox: default_sandbox,
+        };
+        let result = apply_sandbox_fallback(action_result, &defaults);
+        let debug = format!("{:?}", result.sandbox);
+        assert_eq!(debug, expected_debug);
     }
 }
