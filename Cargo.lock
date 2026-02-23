@@ -801,6 +801,7 @@ dependencies = [
  "clap",
  "indoc",
  "libc",
+ "regex",
  "rstest",
  "serde",
  "serde-saphyr",
