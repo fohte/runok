@@ -150,42 +150,173 @@ mod tests {
     }
 
     // === glob_to_sbpl_regex ===
+    //
+    // Each case verifies both the generated regex string AND actual match behavior.
+    // `should_match` / `should_not_match` are optional path lists tested against the
+    // generated regex using the `regex` crate, catching semantic bugs that string
+    // comparison alone cannot detect (e.g., `*` incorrectly matching across `/`).
+    //
+    // Note: SBPL `(regex ...)` uses partial matching (no implicit `$` anchor),
+    // so the generated regex intentionally omits `$`. This means `^a/[^/]*/b`
+    // will match `a/foo/bar/b` because SBPL treats any prefix match as a hit.
+    // Tests reflect this SBPL behavior.
 
     #[rstest]
-    #[case::single_star(".env*", r"^\.env[^/]*")]
-    #[case::double_star("/etc/**", "^/etc/.*")]
-    #[case::double_star_nested("/home/user/.ssh/**", r"^/home/user/\.ssh/.*")]
-    #[case::no_glob("/etc/passwd", "^/etc/passwd")]
-    #[case::dotfile(".envrc", r"^\.envrc")]
-    #[case::star_in_middle("/tmp/*.log", r"^/tmp/[^/]*\.log")]
-    #[case::double_star_with_suffix("/home/**/config", r"^/home/.*/config")]
-    #[case::question_mark("file?.txt", r"^file[^/]\.txt")]
-    #[case::char_class("/tmp/log[0-9].txt", r"^/tmp/log[0-9]\.txt")]
-    #[case::brace_expansion("*.{js,ts}", r"^[^/]*\.(js|ts)")]
-    #[case::brace_with_path("/home/**/*.{conf,cfg}", r"^/home/.*/[^/]*\.(conf|cfg)")]
-    // brace edge cases
-    #[case::brace_empty_alternative("ts{x,}", "^ts(x|)")]
-    #[case::brace_nested("{a,{b,c}}", "^(a|(b|c))")]
-    #[case::brace_dot_in_alt("*.{tar.gz,zip}", r"^[^/]*\.(tar\.gz|zip)")]
-    #[case::brace_with_glob("{src,lib}/**/*.rs", r"^(src|lib)/.*/[^/]*\.rs")]
-    // double star edge cases
-    #[case::bare_double_star("**", "^.*")]
-    #[case::double_star_prefix("**/*.log", r"^.*/[^/]*\.log")]
-    #[case::double_star_trailing("a/**", "^a/.*")]
-    #[case::double_star_multiple("a/**/b/**/c", "^a/.*/b/.*/c")]
-    // character class edge cases
-    #[case::char_class_negation("[!a-z]", "^[!a-z]")]
-    #[case::char_class_multiple("[abc][0-9]", "^[abc][0-9]")]
-    // metacharacter escaping
-    #[case::dots_escaped("file.*.bak", r"^file\.[^/]*\.bak")]
-    #[case::plus_escaped("a+b", r"^a\+b")]
-    #[case::parens_escaped("(test)", r"^\(test\)")]
-    #[case::pipe_escaped("a|b", r"^a\|b")]
-    // misc
-    #[case::empty_pattern("", "^")]
-    #[case::multiple_question_marks("f??", "^f[^/][^/]")]
-    #[case::star_and_question("*.t?t", r"^[^/]*\.t[^/]t")]
-    fn glob_to_sbpl_regex_cases(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(glob_to_sbpl_regex(input), expected);
+    // --- single star ---
+    #[case::single_star(
+        ".env*", r"^\.env[^/]*",
+        &[".env", ".env.local", ".env.production"],
+        &["not.env"],
+    )]
+    #[case::star_in_middle(
+        "/tmp/*.log", r"^/tmp/[^/]*\.log",
+        &["/tmp/app.log", "/tmp/my-app.log"],
+        &["/tmp/sub/app.log"],
+    )]
+    // --- double star ---
+    #[case::double_star(
+        "/etc/**", "^/etc/.*",
+        &["/etc/shadow", "/etc/ssl/certs/ca.pem"],
+        &["/etcx/shadow"],
+    )]
+    #[case::double_star_nested(
+        "/home/user/.ssh/**", r"^/home/user/\.ssh/.*",
+        &["/home/user/.ssh/id_rsa", "/home/user/.ssh/config"],
+        &["/home/user/.sshx/id_rsa"],
+    )]
+    #[case::double_star_with_suffix(
+        "/home/**/config", r"^/home/.*/config",
+        &["/home/user/config", "/home/user/.config/app/config"],
+        &["/homex/.config/config"],
+    )]
+    #[case::bare_double_star(
+        "**", "^.*",
+        &["anything", "a/b/c", "/absolute/path"],
+        &[],
+    )]
+    #[case::double_star_prefix(
+        "**/*.log", r"^.*/[^/]*\.log",
+        &["/var/log/app.log", "/a/b/c/d.log"],
+        &[],
+    )]
+    #[case::double_star_trailing(
+        "a/**", "^a/.*",
+        &["a/b", "a/b/c/d"],
+        &["ax/b"],
+    )]
+    #[case::double_star_multiple(
+        "a/**/b/**/c", "^a/.*/b/.*/c",
+        &["a/x/b/y/c", "a/x/y/b/z/w/c"],
+        &[],
+    )]
+    // --- no glob (literal) ---
+    #[case::no_glob(
+        "/etc/passwd", "^/etc/passwd",
+        &["/etc/passwd"],
+        &["/etc/shadow"],
+    )]
+    #[case::dotfile(
+        ".envrc", r"^\.envrc",
+        &[".envrc"],
+        &["envrc", "x.envrc"],
+    )]
+    // --- question mark ---
+    #[case::question_mark(
+        "file?.txt", r"^file[^/]\.txt",
+        &["fileA.txt", "file1.txt"],
+        &["file.txt", "fileAB.txt"],
+    )]
+    #[case::multiple_question_marks(
+        "f??", "^f[^/][^/]",
+        &["foo", "f12"],
+        &["f1"],
+    )]
+    // --- character class ---
+    #[case::char_class(
+        "/tmp/log[0-9].txt", r"^/tmp/log[0-9]\.txt",
+        &["/tmp/log3.txt", "/tmp/log0.txt"],
+        &["/tmp/loga.txt"],
+    )]
+    #[case::char_class_negation(
+        "[!a-z]", "^[!a-z]",
+        &[],
+        &[],
+    )]
+    #[case::char_class_multiple(
+        "[abc][0-9]", "^[abc][0-9]",
+        &["a1", "b9", "c0"],
+        &["d1", "a"],
+    )]
+    // --- brace expansion ---
+    #[case::brace_expansion(
+        "*.{js,ts}", r"^[^/]*\.(js|ts)",
+        &["app.js", "index.ts"],
+        &["app.rs"],
+    )]
+    #[case::brace_with_path(
+        "/home/**/*.{conf,cfg}", r"^/home/.*/[^/]*\.(conf|cfg)",
+        &["/home/user/.config/app.conf", "/home/user/my.cfg"],
+        &["/home/user/app.ini"],
+    )]
+    #[case::brace_empty_alternative(
+        "ts{x,}", "^ts(x|)",
+        &["tsx", "ts"],
+        &[],
+    )]
+    #[case::brace_nested(
+        "{a,{b,c}}", "^(a|(b|c))",
+        &["a", "b", "c"],
+        &["d"],
+    )]
+    #[case::brace_dot_in_alt(
+        "*.{tar.gz,zip}", r"^[^/]*\.(tar\.gz|zip)",
+        &["archive.tar.gz", "file.zip"],
+        &["file.rar"],
+    )]
+    #[case::brace_with_glob(
+        "{src,lib}/**/*.rs", r"^(src|lib)/.*/[^/]*\.rs",
+        &["src/foo/main.rs", "lib/util/helper.rs"],
+        &["test/foo/main.rs"],
+    )]
+    // --- metacharacter escaping ---
+    #[case::dots_escaped(
+        "file.*.bak", r"^file\.[^/]*\.bak",
+        &["file.old.bak"],
+        &[],
+    )]
+    #[case::plus_escaped("a+b", r"^a\+b", &["a+b"], &["aab"])]
+    #[case::parens_escaped("(test)", r"^\(test\)", &["(test)"], &["test"])]
+    #[case::pipe_escaped("a|b", r"^a\|b", &["a|b"], &[])]
+    // --- misc ---
+    #[case::empty_pattern("", "^", &[], &[])]
+    #[case::star_and_question(
+        "*.t?t", r"^[^/]*\.t[^/]t",
+        &["file.txt", "a.tAt"],
+        &["file.toot"],
+    )]
+    fn glob_to_sbpl_regex_cases(
+        #[case] input: &str,
+        #[case] expected: &str,
+        #[case] should_match: &[&str],
+        #[case] should_not_match: &[&str],
+    ) {
+        let actual = glob_to_sbpl_regex(input);
+        assert_eq!(actual, expected);
+
+        let re = regex::Regex::new(&actual)
+            .unwrap_or_else(|e| panic!("invalid regex {actual:?} from glob {input:?}: {e}"));
+
+        for path in should_match {
+            assert!(
+                re.is_match(path),
+                "glob {input:?} (regex {actual:?}) should match {path:?}"
+            );
+        }
+        for path in should_not_match {
+            assert!(
+                !re.is_match(path),
+                "glob {input:?} (regex {actual:?}) should NOT match {path:?}"
+            );
+        }
     }
 }
