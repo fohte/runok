@@ -186,7 +186,7 @@ Share configurations across projects:
 ```yaml
 extends:
   - './local-rules.yml'
-  - 'github:runok/preset-standard@v1'
+  - 'github:<owner>/<repo>@<ref>'
 ```
 
 Remote presets are cached in `~/.cache/runok/` via shallow clone.
