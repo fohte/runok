@@ -686,22 +686,18 @@ mod tests {
     // ========================================
 
     #[rstest]
-    #[case::help_matches("* --help", "git --help", true)]
-    #[case::version_matches("* --version", "node --version", true)]
-    #[case::no_match_without_flag("* --help", "git status", false)]
+    #[case::help_matches("* --help", "git --help", Action::Allow)]
+    #[case::version_matches("* --version", "node --version", Action::Allow)]
+    #[case::no_match_without_flag("* --help", "git status", Action::Default)]
     fn wildcard_command_matching(
         #[case] pattern: &str,
         #[case] command: &str,
-        #[case] expected_allow: bool,
+        #[case] expected: Action,
         empty_context: EvalContext,
     ) {
         let config = make_config(vec![allow_rule(pattern)]);
         let result = evaluate_command(&config, command, &empty_context).unwrap();
-        if expected_allow {
-            assert_eq!(result.action, Action::Allow);
-        } else {
-            assert_eq!(result.action, Action::Default);
-        }
+        assert_eq!(result.action, expected);
     }
 
     #[rstest]
