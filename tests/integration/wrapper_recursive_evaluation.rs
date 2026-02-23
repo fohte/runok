@@ -103,6 +103,34 @@ fn compound_commands_inside_wrapper(
 }
 
 // ========================================
+// Compound commands inside wrappers: unmatched resolved via defaults.action
+// ========================================
+
+#[rstest]
+fn compound_in_wrapper_unmatched_uses_defaults_action(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // "echo hello" matches allow, "unknown_cmd" is unmatched.
+    // With defaults.action = ask, the unmatched sub-command resolves to Ask.
+    let result =
+        evaluate_command(&config, "bash -c 'echo hello; unknown_cmd'", &empty_context).unwrap();
+    assert!(
+        matches!(result.action, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        result.action
+    );
+}
+
+// ========================================
 // Deny wins over direct rule allow (wrapper inner takes priority)
 // ========================================
 
