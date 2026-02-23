@@ -402,6 +402,21 @@ mod tests {
         }
     }
 
+    fn make_config_with_defaults(
+        rules: Vec<RuleEntry>,
+        default_action: Option<ActionKind>,
+        default_sandbox: Option<String>,
+    ) -> Config {
+        Config {
+            rules: Some(rules),
+            defaults: Some(Defaults {
+                action: default_action,
+                sandbox: default_sandbox,
+            }),
+            ..Default::default()
+        }
+    }
+
     fn ask_rule(pattern: &str) -> RuleEntry {
         RuleEntry {
             ask: Some(pattern.to_string()),
@@ -772,14 +787,11 @@ mod tests {
     #[rstest]
     fn matched_rule_without_sandbox_falls_back_to_defaults_sandbox() {
         let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
-        let config = Config {
-            rules: Some(vec![allow_rule("git status")]),
-            defaults: Some(Defaults {
-                action: None,
-                sandbox: Some("default-sandbox".to_string()),
-            }),
-            ..Default::default()
-        };
+        let config = make_config_with_defaults(
+            vec![allow_rule("git status")],
+            None,
+            Some("default-sandbox".to_string()),
+        );
         run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_action.borrow());
@@ -796,8 +808,8 @@ mod tests {
     #[rstest]
     fn matched_rule_with_sandbox_overrides_defaults_sandbox() {
         let endpoint = MockEndpoint::new(Ok(Some("python3 script.py".to_string())));
-        let config = Config {
-            rules: Some(vec![RuleEntry {
+        let config = make_config_with_defaults(
+            vec![RuleEntry {
                 allow: Some("python3 *".to_string()),
                 deny: None,
                 ask: None,
@@ -805,13 +817,10 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
-            }]),
-            defaults: Some(Defaults {
-                action: None,
-                sandbox: Some("default-sandbox".to_string()),
-            }),
-            ..Default::default()
-        };
+            }],
+            None,
+            Some("default-sandbox".to_string()),
+        );
         run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_action.borrow());
@@ -826,14 +835,11 @@ mod tests {
     #[rstest]
     fn no_match_with_defaults_sandbox_falls_back_in_dry_run() {
         let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
-        let config = Config {
-            rules: Some(vec![allow_rule("git status")]),
-            defaults: Some(Defaults {
-                action: Some(ActionKind::Allow),
-                sandbox: Some("default-sandbox".to_string()),
-            }),
-            ..Default::default()
-        };
+        let config = make_config_with_defaults(
+            vec![allow_rule("git status")],
+            Some(ActionKind::Allow),
+            Some("default-sandbox".to_string()),
+        );
         let options = RunOptions {
             dry_run: true,
             verbose: false,
