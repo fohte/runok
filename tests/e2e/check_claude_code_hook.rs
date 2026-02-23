@@ -1,0 +1,162 @@
+use indoc::indoc;
+use rstest::rstest;
+
+use super::helpers::TestEnv;
+
+fn hook_env() -> TestEnv {
+    TestEnv::new(indoc! {"
+        rules:
+          - deny: 'rm -rf /'
+            message: 'Dangerous command'
+          - allow: 'git status'
+          - allow: 'echo *'
+            sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+              network:
+                allow: true
+    "})
+}
+
+fn bash_hook_json(command: &str) -> String {
+    serde_json::json!({
+        "sessionId": "test-session",
+        "transcriptPath": "/tmp/transcript",
+        "cwd": "/tmp",
+        "permissionMode": "default",
+        "hookEventName": "PreToolUse",
+        "toolName": "Bash",
+        "toolInput": {"command": command},
+        "toolUseId": "test-123"
+    })
+    .to_string()
+}
+
+fn non_bash_hook_json(tool_name: &str) -> String {
+    serde_json::json!({
+        "sessionId": "test-session",
+        "transcriptPath": "/tmp/transcript",
+        "cwd": "/tmp",
+        "permissionMode": "default",
+        "hookEventName": "PreToolUse",
+        "toolName": tool_name,
+        "toolInput": {},
+        "toolUseId": "test-456"
+    })
+    .to_string()
+}
+
+// --- Bash tool: deny ---
+
+#[rstest]
+fn hook_bash_deny() {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("rm -rf /"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert!(
+        json["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty())
+    );
+}
+
+// --- Bash tool: allow ---
+
+#[rstest]
+fn hook_bash_allow() {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("git status"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
+    // No updatedInput for non-sandbox allow
+    assert!(json["hookSpecificOutput"]["updatedInput"].is_null());
+}
+
+// --- Non-Bash tool: exit 0, no output ---
+
+#[rstest]
+#[case::read("Read")]
+#[case::write("Write")]
+#[case::edit("Edit")]
+fn hook_non_bash_tool_no_output(#[case] tool_name: &str) {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin(non_bash_hook_json(tool_name))
+        .assert();
+    assert.code(0).stdout(predicates::str::is_empty());
+}
+
+// --- Invalid JSON: exit 2 ---
+
+#[rstest]
+fn hook_invalid_json_exits_2() {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin("invalid json")
+        .assert();
+    assert.code(2);
+}
+
+// --- Sandbox allow: updatedInput rewrite ---
+
+#[rstest]
+fn hook_sandbox_allow_rewrites_command() {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("echo hello"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
+    let updated_input = &json["hookSpecificOutput"]["updatedInput"];
+    assert!(
+        updated_input.is_object(),
+        "updatedInput should be present for sandbox allow"
+    );
+    let rewritten_command = updated_input["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
+    assert_eq!(
+        rewritten_command,
+        "runok exec --sandbox restricted -- 'echo hello'"
+    );
+}
+
+// --- Hook event name ---
+
+#[rstest]
+fn hook_output_contains_event_name() {
+    let env = hook_env();
+    let assert = env
+        .command()
+        .args(["check", "--format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("git status"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+}
