@@ -138,6 +138,10 @@ fn match_tokens_core<'a>(
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
                     if let Some(ref mut caps) = captures {
                         let saved_len = caps.len();
+                        // Capture the flag value when it matches a wildcard
+                        if matches!(value.as_ref(), PatternToken::Wildcard) {
+                            caps.push(cmd_tokens[i + 1]);
+                        }
                         if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps)) {
                             return true;
                         }
@@ -672,6 +676,11 @@ mod tests {
         "curl [-X|--request GET] *",
         "curl -X POST https://example.com",
         false
+    )]
+    #[case::optional_flag_with_value_after_arg(
+        "curl [-X|--request GET] *",
+        "curl https://example.com -X GET",
+        true
     )]
     #[case::optional_dir("git [-C *] status", "git -C /tmp status", true)]
     #[case::optional_dir_absent("git [-C *] status", "git status", true)]
