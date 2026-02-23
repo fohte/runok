@@ -94,7 +94,12 @@ impl ClaudeCodeHookAdapter {
                 let reason = build_deny_reason(deny_response);
                 ("deny", Some(reason), None)
             }
-            Action::Ask(message) => ("ask", message.clone(), None),
+            Action::Ask(message) => {
+                // When the user approves an ask, Claude Code executes the updatedInput
+                // command, so we need to wrap it with the sandbox just like allow.
+                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                ("ask", message.clone(), updated)
+            }
             Action::Default => {
                 // run() dispatches Default to handle_no_match, but handle safely.
                 ("allow", None, None)
@@ -120,7 +125,7 @@ impl ClaudeCodeHookAdapter {
             Some(ActionKind::Ask) | None => "ask",
         };
 
-        let updated_input = if decision == "allow" {
+        let updated_input = if decision == "allow" || decision == "ask" {
             if let Some(ref sandbox_name) = defaults.sandbox {
                 let bash_input = self.parse_bash_input()?;
                 Some(UpdatedInput {
@@ -332,6 +337,11 @@ mod tests {
         SandboxInfo::Preset(None),
         make_output("ask", None, None)
     )]
+    #[case::ask_with_sandbox(
+        Action::Ask(Some("please confirm".to_string())),
+        SandboxInfo::Preset(Some("restricted".to_string())),
+        make_output("ask", Some("please confirm"), Some("runok exec --sandbox restricted -- 'git status'")),
+    )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
@@ -380,11 +390,16 @@ mod tests {
     }
 
     #[rstest]
-    fn build_no_match_output_allow_with_default_sandbox() {
+    #[case::ask(ActionKind::Ask, "ask")]
+    #[case::allow(ActionKind::Allow, "allow")]
+    fn build_no_match_output_with_default_sandbox(
+        #[case] action_kind: ActionKind,
+        #[case] expected_decision: &str,
+    ) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("npm install")));
         let defaults = Defaults {
-            action: Some(ActionKind::Allow),
+            action: Some(action_kind),
             sandbox: Some("restricted".to_string()),
         };
         let output = adapter
@@ -394,7 +409,7 @@ mod tests {
         assert_eq!(
             output,
             make_output(
-                "allow",
+                expected_decision,
                 None,
                 Some("runok exec --sandbox restricted -- 'npm install'"),
             ),
