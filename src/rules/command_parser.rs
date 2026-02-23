@@ -282,6 +282,18 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // variable_assignment: transparent container — skip the assignment itself,
+        // only recurse into command_substitution children so that commands inside
+        // $(…) or `…` are evaluated while the bare assignment (e.g. X=1) is not
+        // treated as a command.
+        "variable_assignment" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "command_substitution" {
+                    collect_commands(child, source, commands);
+                }
+            }
+        }
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
@@ -632,6 +644,32 @@ mod tests {
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: variable assignments
+    // ========================================
+
+    #[rstest]
+    #[case::assignment_then_command("X=1 && echo hello", vec!["echo hello"])]
+    #[case::assignment_with_cmd_substitution("X=$(echo test)", vec!["echo test"])]
+    #[case::assignment_with_cmd_substitution_and_command(
+        "X=$(rm -rf /) && echo hello",
+        vec!["rm -rf /", "echo hello"]
+    )]
+    #[case::multiple_assignments("A=1 && B=2 && echo done", vec!["echo done"])]
+    #[case::assignment_with_backtick_substitution("X=`ls`", vec!["ls"])]
+    fn extract_variable_assignments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extract_bare_variable_assignment_returns_empty() {
+        // A bare variable assignment (no command substitution) produces no commands,
+        // which extract_commands treats as a syntax error since there's nothing to evaluate.
+        let result = extract_commands("X=1");
+        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
     }
 
     // ========================================
