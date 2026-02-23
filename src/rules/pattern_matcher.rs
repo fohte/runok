@@ -827,6 +827,27 @@ mod tests {
     }
 
     // ========================================
+    // Literal bracket command (`[`) matching
+    // ========================================
+
+    #[rstest]
+    #[case::bracket_wildcard("[ *", "[ -f file ]", true)]
+    #[case::bracket_exact_args("[ -f file ]", "[ -f file ]", true)]
+    #[case::bracket_wildcard_no_args("[ *", "[ ]", true)]
+    #[case::bracket_command_mismatch("[ *", "test -f file", false)]
+    #[case::bracket_wrong_args("[ -f file ]", "[ -d dir ]", false)]
+    fn bracket_command_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected
+        );
+    }
+
+    // ========================================
     // Path normalization
     // ========================================
 
