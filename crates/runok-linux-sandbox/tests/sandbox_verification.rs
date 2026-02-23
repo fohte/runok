@@ -203,15 +203,20 @@ fn sandbox_denies_network_when_not_allowed(_require_bwrap: ()) {
         canonical_dir.display()
     );
 
+    // First verify python3 is available inside the sandbox, otherwise the
+    // network test would pass vacuously (command-not-found != sandbox denial).
+    let check_python = run_sandboxed(&policy, &["python3", "--version"]);
+    if check_python != 0 {
+        eprintln!("skipping: python3 not available inside sandbox");
+        return;
+    }
+
     // Attempt a TCP connection. With seccomp blocking socket(AF_INET, ...),
     // this should fail with EPERM.
     let command = &[
-        "sh",
+        "python3",
         "-c",
-        // Use /dev/tcp which is a bash feature, or nc/curl.
-        // Prefer a simple Python one-liner that attempts a socket connection
-        // since it's more portable and gives clear error messages.
-        "python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect((\"1.1.1.1\", 80))' 2>/dev/null || exit 1",
+        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('1.1.1.1', 80))",
     ];
     let exit_code = run_sandboxed(&policy, command);
 
