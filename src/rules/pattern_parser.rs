@@ -520,8 +520,10 @@ mod tests {
         PatternToken::Wildcard,
     ])]
     #[case::bracket_command_with_args("[ -f file ]", "[", vec![
-        PatternToken::Literal("-f".into()),
-        PatternToken::Literal("file".into()),
+        PatternToken::FlagWithValue {
+            aliases: vec!["-f".into()],
+            value: Box::new(PatternToken::Literal("file".into())),
+        },
         PatternToken::Literal("]".into()),
     ])]
     fn parse_literal_bracket_command(
