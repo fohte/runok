@@ -1,5 +1,8 @@
 # runok
 
+[![CI](https://github.com/fohte/runok/actions/workflows/test.yml/badge.svg)](https://github.com/fohte/runok/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 Command execution permission framework for LLM agents, primarily designed for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 runok replaces Claude Code's built-in Bash tool permission system with a more powerful alternative. Define intuitive rules using the commands you already know, and runok handles allow/deny/ask decisions with structural matching that goes beyond simple prefix matching. While built with Claude Code as the primary target, runok also works with other LLM agents via its generic check interface.
