@@ -1,20 +1,19 @@
 # runok
 
-Command execution permission framework for LLM agents.
+Command execution permission framework for LLM agents, primarily designed for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-runok provides a unified permission layer for controlling which commands LLM agents (Claude Code, Cursor, Gemini CLI, etc.) can execute. Define intuitive rules using the commands you already know, and runok handles allow/deny/ask decisions with structural matching that goes beyond simple prefix matching.
+runok replaces Claude Code's built-in Bash tool permission system with a more powerful alternative. Define intuitive rules using the commands you already know, and runok handles allow/deny/ask decisions with structural matching that goes beyond simple prefix matching. While built with Claude Code as the primary target, runok also works with other LLM agents via its generic check interface.
 
 ## Why runok?
 
-Existing LLM agent permission systems have limitations:
+Claude Code's built-in permission system has limitations:
 
 - **Prefix-only matching** -- `git push -f` can be bypassed with `git push branch -f`
 - **No pipe awareness** -- permissions don't apply inside piped commands
 - **Wrapper command blind spots** -- `sudo`, `bash -c`, `xargs` bypass permission rules
 - **Shell parsing bugs** -- comments, `for` loops, and special characters cause misbehavior
-- **No cross-agent sharing** -- each agent requires its own permission configuration
 
-runok solves these by providing structural (order-independent) argument matching, wrapper command unwrapping, and a shared config format usable across multiple agents.
+runok solves these by providing structural (order-independent) argument matching, wrapper command unwrapping, and OS-level sandboxing -- all integrated via Claude Code's PreToolUse hook.
 
 ## Features
 
