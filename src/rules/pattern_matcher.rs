@@ -648,6 +648,10 @@ mod tests {
     #[case::wrong_value("curl -X|--request POST *", "curl -X GET https://example.com", false)]
     #[case::missing_flag("curl -X|--request POST *", "curl https://example.com", false)]
     #[case::wildcard_value("curl -X|--request * *", "curl -X DELETE https://example.com", true)]
+    #[case::bare_flag_before_arg("gh api -X GET *", "gh api -X GET repos/fohte/runok", true)]
+    #[case::bare_flag_after_arg("gh api -X GET *", "gh api repos/fohte/runok -X GET", true)]
+    #[case::bare_flag_wrong_value("gh api -X GET *", "gh api -X POST repos/fohte/runok", false)]
+    #[case::bare_flag_missing("gh api -X GET *", "gh api repos/fohte/runok", false)]
     fn flag_with_value_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
