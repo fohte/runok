@@ -91,8 +91,8 @@ fn route_json(
     }
 
     // --format omitted → auto-detect by JSON field presence
-    // HookInput uses #[serde(rename_all = "camelCase")], so the actual JSON key is "toolName"
-    if json_value.get("toolName").is_some() {
+    // HookInput uses #[serde(rename_all = "snake_case")], so the actual JSON key is "tool_name"
+    if json_value.get("tool_name").is_some() {
         let hook_input: HookInput = serde_json::from_value(json_value)?;
         Ok(CheckRoute::Single(Box::new(ClaudeCodeHookAdapter::new(
             hook_input,
@@ -104,7 +104,7 @@ fn route_json(
         ))))
     } else {
         Err(anyhow::anyhow!(
-            "Unknown input format: expected 'toolName' (Claude Code hook) or 'command' (generic) field"
+            "Unknown input format: expected 'tool_name' (Claude Code hook) or 'command' (generic) field"
         ))
     }
 }
@@ -164,14 +164,14 @@ mod tests {
     #[case::claude_code_hook(
         indoc! {r#"
             {
-                "toolName": "Bash",
-                "sessionId": "s",
-                "transcriptPath": "/tmp",
+                "tool_name": "Bash",
+                "session_id": "s",
+                "transcript_path": "/tmp",
                 "cwd": "/tmp",
-                "permissionMode": "default",
-                "hookEventName": "PreToolUse",
-                "toolInput": {"command": "git status"},
-                "toolUseId": "123"
+                "permission_mode": "default",
+                "hook_event_name": "PreToolUse",
+                "tool_input": {"command": "git status"},
+                "tool_use_id": "123"
             }
         "#},
         Some("git status"),
@@ -358,14 +358,14 @@ mod tests {
         let args = check_args(None, Some("claude-code-hook"));
         let stdin_json = indoc! {r#"
             {
-                "toolName": "Bash",
-                "sessionId": "s",
-                "transcriptPath": "/tmp",
+                "tool_name": "Bash",
+                "session_id": "s",
+                "transcript_path": "/tmp",
                 "cwd": "/tmp",
-                "permissionMode": "default",
-                "hookEventName": "PreToolUse",
-                "toolInput": {"command": "ls"},
-                "toolUseId": "456"
+                "permission_mode": "default",
+                "hook_event_name": "PreToolUse",
+                "tool_input": {"command": "ls"},
+                "tool_use_id": "456"
             }
         "#};
         let route = route_check(&args, stdin_json.as_bytes());

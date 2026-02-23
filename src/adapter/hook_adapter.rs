@@ -6,7 +6,7 @@ use crate::rules::rule_engine::{Action, DenyResponse};
 
 /// Claude Code PreToolUse Hook input (stdin JSON).
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct HookInput {
     pub session_id: String,
     pub transcript_path: String,
@@ -439,17 +439,17 @@ mod tests {
     // --- HookInput deserialization ---
 
     #[rstest]
-    fn hook_input_deserializes_from_camel_case_json() {
+    fn hook_input_deserializes_from_snake_case_json() {
         let json_str = indoc! {r#"
             {
-                "sessionId": "sess-123",
-                "transcriptPath": "/tmp/transcript.json",
+                "session_id": "sess-123",
+                "transcript_path": "/tmp/transcript.json",
                 "cwd": "/home/user",
-                "permissionMode": "default",
-                "hookEventName": "PreToolUse",
-                "toolName": "Bash",
-                "toolInput": {"command": "git status"},
-                "toolUseId": "use-456"
+                "permission_mode": "default",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "git status"},
+                "tool_use_id": "use-456"
             }
         "#};
 

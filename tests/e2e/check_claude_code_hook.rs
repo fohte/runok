@@ -24,28 +24,28 @@ fn hook_env() -> TestEnv {
 
 fn bash_hook_json(command: &str) -> String {
     serde_json::json!({
-        "sessionId": "test-session",
-        "transcriptPath": "/tmp/transcript",
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript",
         "cwd": "/tmp",
-        "permissionMode": "default",
-        "hookEventName": "PreToolUse",
-        "toolName": "Bash",
-        "toolInput": {"command": command},
-        "toolUseId": "test-123"
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": "test-123"
     })
     .to_string()
 }
 
 fn non_bash_hook_json(tool_name: &str) -> String {
     serde_json::json!({
-        "sessionId": "test-session",
-        "transcriptPath": "/tmp/transcript",
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript",
         "cwd": "/tmp",
-        "permissionMode": "default",
-        "hookEventName": "PreToolUse",
-        "toolName": tool_name,
-        "toolInput": {},
-        "toolUseId": "test-456"
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": {},
+        "tool_use_id": "test-456"
     })
     .to_string()
 }
