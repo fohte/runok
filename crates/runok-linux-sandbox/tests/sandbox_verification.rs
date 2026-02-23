@@ -14,7 +14,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use rstest::{fixture, rstest};
+use rstest::rstest;
+use runok_linux_sandbox::policy::SandboxPolicy;
 
 /// Path to the helper binary, provided by Cargo for integration tests.
 fn helper_binary() -> PathBuf {
@@ -30,15 +31,16 @@ fn bwrap_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Run a command inside the sandbox with the given policy JSON.
+/// Run a command inside the sandbox with the given policy.
 ///
 /// Returns the exit code of the helper binary.
-fn run_sandboxed(policy_json: &str, command: &[&str]) -> i32 {
+fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
+    let policy_json = serde_json::to_string(policy).expect("failed to serialize policy");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
 
     let mut args = vec![
         "--policy".to_string(),
-        policy_json.to_string(),
+        policy_json,
         "--cwd".to_string(),
         cwd.to_string_lossy().to_string(),
         "--".to_string(),
@@ -53,18 +55,10 @@ fn run_sandboxed(policy_json: &str, command: &[&str]) -> i32 {
     output.status.code().unwrap_or(1)
 }
 
-#[fixture]
-fn require_bwrap() {
-    if !bwrap_available() {
-        eprintln!("skipping: bwrap not available");
-        return;
-    }
-}
-
 // === Filesystem write restrictions ===
 
 #[rstest]
-fn sandbox_denies_write_outside_writable_roots(_require_bwrap: ()) {
+fn sandbox_denies_write_outside_writable_roots() {
     if !bwrap_available() {
         return;
     }
@@ -79,10 +73,11 @@ fn sandbox_denies_write_outside_writable_roots(_require_bwrap: ()) {
 
     let test_file = canonical_dir.join("should_not_exist");
 
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":[],"network_allowed":true}}"#,
-        allowed_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![allowed_dir],
+        read_only_subpaths: vec![],
+        network_allowed: true,
+    };
 
     let command = &["sh", "-c", &format!("touch {}", test_file.display())];
     let exit_code = run_sandboxed(&policy, command);
@@ -95,7 +90,7 @@ fn sandbox_denies_write_outside_writable_roots(_require_bwrap: ()) {
 }
 
 #[rstest]
-fn sandbox_allows_write_to_writable_root(_require_bwrap: ()) {
+fn sandbox_allows_write_to_writable_root() {
     if !bwrap_available() {
         return;
     }
@@ -104,10 +99,11 @@ fn sandbox_allows_write_to_writable_root(_require_bwrap: ()) {
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
     let test_file = canonical_dir.join("allowed_write_file");
 
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":[],"network_allowed":true}}"#,
-        canonical_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        network_allowed: true,
+    };
 
     let command = &["sh", "-c", &format!("touch {}", test_file.display())];
     let exit_code = run_sandboxed(&policy, command);
@@ -120,7 +116,7 @@ fn sandbox_allows_write_to_writable_root(_require_bwrap: ()) {
 }
 
 #[rstest]
-fn sandbox_denies_write_to_read_only_subpath(_require_bwrap: ()) {
+fn sandbox_denies_write_to_read_only_subpath() {
     if !bwrap_available() {
         return;
     }
@@ -134,12 +130,11 @@ fn sandbox_denies_write_to_read_only_subpath(_require_bwrap: ()) {
 
     let test_file = git_dir.join("should_not_write");
 
-    // .git is an absolute path that exists; bwrap will re-bind it as read-only
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":["{}"],"network_allowed":true}}"#,
-        canonical_dir.display(),
-        git_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![git_dir],
+        network_allowed: true,
+    };
 
     let command = &["sh", "-c", &format!("touch {}", test_file.display())];
     let exit_code = run_sandboxed(&policy, command);
@@ -155,7 +150,7 @@ fn sandbox_denies_write_to_read_only_subpath(_require_bwrap: ()) {
 }
 
 #[rstest]
-fn sandbox_allows_write_outside_read_only_subpath(_require_bwrap: ()) {
+fn sandbox_allows_write_outside_read_only_subpath() {
     if !bwrap_available() {
         return;
     }
@@ -171,11 +166,11 @@ fn sandbox_allows_write_outside_read_only_subpath(_require_bwrap: ()) {
 
     let test_file = src_dir.join("allowed_file");
 
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":["{}"],"network_allowed":true}}"#,
-        canonical_dir.display(),
-        git_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![git_dir],
+        network_allowed: true,
+    };
 
     let command = &["sh", "-c", &format!("touch {}", test_file.display())];
     let exit_code = run_sandboxed(&policy, command);
@@ -190,7 +185,7 @@ fn sandbox_allows_write_outside_read_only_subpath(_require_bwrap: ()) {
 // === Network restrictions ===
 
 #[rstest]
-fn sandbox_denies_network_when_not_allowed(_require_bwrap: ()) {
+fn sandbox_denies_network_when_not_allowed() {
     if !bwrap_available() {
         return;
     }
@@ -198,10 +193,11 @@ fn sandbox_denies_network_when_not_allowed(_require_bwrap: ()) {
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":[],"network_allowed":false}}"#,
-        canonical_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        network_allowed: false,
+    };
 
     // First verify python3 is available inside the sandbox, otherwise the
     // network test would pass vacuously (command-not-found != sandbox denial).
@@ -226,8 +222,10 @@ fn sandbox_denies_network_when_not_allowed(_require_bwrap: ()) {
     );
 }
 
+// === Read access ===
+
 #[rstest]
-fn sandbox_allows_read_when_writes_denied(_require_bwrap: ()) {
+fn sandbox_allows_read_when_writes_denied() {
     if !bwrap_available() {
         return;
     }
@@ -235,10 +233,14 @@ fn sandbox_allows_read_when_writes_denied(_require_bwrap: ()) {
     // Read /etc/hostname which is bind-mounted read-only by bwrap (--ro-bind / /).
     // Using a host-filesystem file avoids the --tmpfs /tmp issue where tmpdir
     // contents are hidden inside the sandbox.
-    let policy = r#"{"writable_roots":[],"read_only_subpaths":[],"network_allowed":true}"#;
+    let policy = SandboxPolicy {
+        writable_roots: vec![],
+        read_only_subpaths: vec![],
+        network_allowed: true,
+    };
 
     let command = &["sh", "-c", "cat /etc/hostname"];
-    let exit_code = run_sandboxed(policy, command);
+    let exit_code = run_sandboxed(&policy, command);
 
     assert_eq!(
         exit_code, 0,
@@ -249,7 +251,7 @@ fn sandbox_allows_read_when_writes_denied(_require_bwrap: ()) {
 // === Basic execution ===
 
 #[rstest]
-fn sandbox_runs_command_successfully(_require_bwrap: ()) {
+fn sandbox_runs_command_successfully() {
     if !bwrap_available() {
         return;
     }
@@ -257,24 +259,29 @@ fn sandbox_runs_command_successfully(_require_bwrap: ()) {
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
-    let policy = format!(
-        r#"{{"writable_roots":["{}"],"read_only_subpaths":[],"network_allowed":true}}"#,
-        canonical_dir.display()
-    );
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        network_allowed: true,
+    };
 
     let exit_code = run_sandboxed(&policy, &["true"]);
     assert_eq!(exit_code, 0, "simple command should succeed in sandbox");
 }
 
 #[rstest]
-fn sandbox_preserves_nonzero_exit_code(_require_bwrap: ()) {
+fn sandbox_preserves_nonzero_exit_code() {
     if !bwrap_available() {
         return;
     }
 
-    let policy = r#"{"writable_roots":[],"read_only_subpaths":[],"network_allowed":true}"#;
+    let policy = SandboxPolicy {
+        writable_roots: vec![],
+        read_only_subpaths: vec![],
+        network_allowed: true,
+    };
 
-    let exit_code = run_sandboxed(policy, &["false"]);
+    let exit_code = run_sandboxed(&policy, &["false"]);
     assert_eq!(
         exit_code, 1,
         "should preserve exit code 1 from false command"
