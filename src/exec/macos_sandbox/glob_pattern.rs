@@ -58,9 +58,14 @@ pub(super) fn glob_to_sbpl_regex(pattern: &str) -> String {
             regex.push_str("[^/]");
             i += 1;
         } else if chars[i] == '[' {
-            // Pass through character class `[...]` as-is
+            // Pass through character class `[...]`, converting glob negation
+            // `!` to regex negation `^`
             regex.push('[');
             i += 1;
+            if i < len && chars[i] == '!' {
+                regex.push('^');
+                i += 1;
+            }
             while i < len && chars[i] != ']' {
                 regex.push(chars[i]);
                 i += 1;
@@ -238,9 +243,9 @@ mod tests {
         &["/tmp/loga.txt"],
     )]
     #[case::char_class_negation(
-        "[!a-z]", "^[!a-z]",
-        &[],
-        &[],
+        "[!a-z]", "^[^a-z]",
+        &["1", "A", "!"],
+        &["a", "m", "z"],
     )]
     #[case::char_class_multiple(
         "[abc][0-9]", "^[abc][0-9]",
