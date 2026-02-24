@@ -199,6 +199,14 @@ extends:
 
 Remote presets are cached in `~/.cache/runok/` via shallow clone.
 
+### Editor integration (JSON Schema)
+
+A JSON Schema for `runok.yml` is available at [`schema/runok.schema.json`](schema/runok.schema.json). Add the following modeline to your `runok.yml` to enable autocompletion and validation in editors that support [yaml-language-server](https://github.com/redhat-developer/yaml-language-server):
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+```
+
 ## License
 
 MIT

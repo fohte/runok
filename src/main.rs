@@ -45,6 +45,16 @@ fn create_executor() -> Box<dyn CommandExecutor> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    #[cfg(feature = "config-schema")]
+    if matches!(cli.command, Commands::ConfigSchema) {
+        if let Err(e) = runok::config::print_config_schema() {
+            eprintln!("runok: failed to generate schema: {e}");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exit_code = run_command(cli.command, &cwd, std::io::stdin());
     ExitCode::from(exit_code as u8)
@@ -58,6 +68,8 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
     let config_error_exit_code = match &command {
         Commands::Exec(_) => 1,
         Commands::Check(_) => 2,
+        #[cfg(feature = "config-schema")]
+        Commands::ConfigSchema => unreachable!("handled in main()"),
     };
 
     let config = match loader.load(cwd) {
@@ -113,6 +125,8 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 }
             }
         }
+        #[cfg(feature = "config-schema")]
+        Commands::ConfigSchema => unreachable!("handled in main()"),
     }
 }
 
