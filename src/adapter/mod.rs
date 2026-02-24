@@ -181,6 +181,21 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         }
     }
 
+    // When extract_commands simplifies a compound shell construct (e.g. a for-loop)
+    // down to a single sub-command, evaluate that sub-command instead of the
+    // original input string.
+    let effective_command = if commands.len() == 1 && commands[0] != command {
+        if options.verbose {
+            eprintln!(
+                "[verbose] Single sub-command extracted: {:?} (from {:?})",
+                commands[0], command
+            );
+        }
+        &commands[0]
+    } else {
+        &command
+    };
+
     let action_result = if commands.len() > 1 {
         match evaluate_compound(config, &command, &context) {
             Ok(compound_result) => {
@@ -198,7 +213,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             Err(e) => return endpoint.handle_error(e.into()),
         }
     } else {
-        match evaluate_command(config, &command, &context) {
+        match evaluate_command(config, effective_command, &context) {
             Ok(result) => {
                 if options.verbose {
                     log_matched_rules(&result.matched_rules);
@@ -883,6 +898,56 @@ mod tests {
                 panic!("expected SandboxInfo::Preset(Some(\"default-sandbox\")), got {other:?}")
             }
         }
+    }
+
+    // --- single extracted sub-command uses simplified form ---
+
+    #[rstest]
+    #[case::for_loop_with_echo(
+        "for f in *.yaml; do echo $f; done",
+        allow_rule("echo *"),
+        true,  // expect handle_action
+        false, // expect handle_no_match
+    )]
+    #[case::while_loop_with_cat(
+        "while read line; do cat $line; done",
+        allow_rule("cat *"),
+        true,
+        false,
+    )]
+    #[case::for_loop_no_matching_rule(
+        "for f in *.yaml; do echo $f; done",
+        allow_rule("git status"),
+        false,
+        true,
+    )]
+    fn single_extracted_subcommand_evaluates_simplified_form(
+        #[case] command: &str,
+        #[case] rule: RuleEntry,
+        #[case] expect_action: bool,
+        #[case] expect_no_match: bool,
+    ) {
+        let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
+        let config = make_config(vec![rule]);
+        run(&endpoint, &config);
+
+        assert_eq!(*endpoint.called_handle_action.borrow(), expect_action);
+        assert_eq!(*endpoint.called_handle_no_match.borrow(), expect_no_match);
+    }
+
+    #[rstest]
+    fn for_loop_with_deny_rule_on_subcommand() {
+        let endpoint = MockEndpoint::new(Ok(Some(
+            "for f in *.yaml; do rm -rf $f; done".to_string(),
+        )));
+        let config = make_config(vec![deny_rule("rm *")]);
+        run(&endpoint, &config);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Deny(_))
+        ));
     }
 
     // --- apply_sandbox_fallback unit tests ---
