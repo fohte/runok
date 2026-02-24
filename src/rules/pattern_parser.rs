@@ -259,6 +259,10 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: bool) -> bool {
     match next {
         LexToken::OpenBracket | LexToken::CloseBracket => false,
+        // When `[` is used as a literal command name, the lexer emits `]` as
+        // `Literal("]")` rather than `CloseBracket`.  Prevent flags from
+        // consuming this closing delimiter as a value.
+        LexToken::Literal(s) if s == "]" => false,
         LexToken::Literal(s) if is_flag(s) => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         LexToken::Wildcard => inside_group || has_more_after,
@@ -518,6 +522,10 @@ mod tests {
     #[rstest]
     #[case::bracket_command_wildcard("[ *", "[", vec![
         PatternToken::Wildcard,
+    ])]
+    #[case::bracket_command_boolean_flag("[ -f ]", "[", vec![
+        PatternToken::Alternation(vec!["-f".into()]),
+        PatternToken::Literal("]".into()),
     ])]
     #[case::bracket_command_with_args("[ -f file ]", "[", vec![
         PatternToken::FlagWithValue {
