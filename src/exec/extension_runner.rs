@@ -199,14 +199,19 @@ impl ProcessExtensionRunner {
     }
 
     /// Split executor_cmd into program and arguments for spawning.
-    /// Uses simple whitespace splitting because executor_cmd comes from the
-    /// user's config file, not from external input. Quoted argument support
-    /// (e.g. via shlex) can be added later if needed.
-    fn parse_command(executor_cmd: &str) -> (String, Vec<String>) {
-        let mut parts = executor_cmd.split_whitespace();
-        let program = parts.next().unwrap_or("").to_string();
-        let args: Vec<String> = parts.map(String::from).collect();
-        (program, args)
+    /// Uses `shlex::split` for proper shell-style tokenisation (handles
+    /// quoted arguments, backslash escapes, etc.).
+    fn parse_command(executor_cmd: &str) -> Result<(String, Vec<String>), ExtensionError> {
+        let mut parts = shlex::split(executor_cmd).ok_or_else(|| {
+            ExtensionError::InvalidResponse(format!(
+                "invalid shell syntax in executor command: {executor_cmd}"
+            ))
+        })?;
+        if parts.is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        let program = parts.remove(0);
+        Ok((program, parts))
     }
 }
 
@@ -217,7 +222,7 @@ impl ExtensionRunner for ProcessExtensionRunner {
         request: &ExtensionRequest,
         timeout: Duration,
     ) -> Result<ExtensionResponse, ExtensionError> {
-        let (program, args) = Self::parse_command(executor_cmd);
+        let (program, args) = Self::parse_command(executor_cmd)?;
 
         let mut child = Self::spawn_with_etxtbsy_retry(&program, &args)?;
 
@@ -499,7 +504,7 @@ mod tests {
         #[case] expected_prog: &str,
         #[case] expected_args: &[&str],
     ) {
-        let (prog, args) = ProcessExtensionRunner::parse_command(input);
+        let (prog, args) = ProcessExtensionRunner::parse_command(input).unwrap();
         assert_eq!(prog, expected_prog);
         let args_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         assert_eq!(args_strs, expected_args);

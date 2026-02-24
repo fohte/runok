@@ -369,41 +369,11 @@ fn collect_substitutions_recursive(
 /// Join tokens into a shell-safe string by quoting tokens that contain
 /// spaces or shell metacharacters. Tokens without special characters are
 /// emitted verbatim.
-pub fn shell_quote_join(tokens: &[String]) -> String {
-    tokens
-        .iter()
-        .map(|t| shell_quote(t))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Quote a single token for safe shell usage. If the token contains no
-/// shell-significant characters it is returned as-is. Otherwise it is
-/// wrapped in single quotes, with internal single quotes escaped as `'\''`.
-fn shell_quote(token: &str) -> String {
-    if token.is_empty() {
-        return "''".to_string();
-    }
-    // Characters that require quoting in POSIX shells
-    if token.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '%' | '+' | ',')
-    }) {
-        return token.to_string();
-    }
-    // Wrap in single quotes, escaping internal single quotes
-    let mut quoted = String::with_capacity(token.len() + 2);
-    quoted.push('\'');
-    for ch in token.chars() {
-        if ch == '\'' {
-            // End current quote, insert escaped quote, restart quote
-            quoted.push_str("'\\''");
-        } else {
-            quoted.push(ch);
-        }
-    }
-    quoted.push('\'');
-    quoted
+///
+/// Returns an error if any token contains a NUL byte (which cannot be
+/// represented in shell syntax).
+pub fn shell_quote_join(tokens: &[String]) -> Result<String, shlex::QuoteError> {
+    shlex::try_join(tokens.iter().map(|s| s.as_str()))
 }
 
 #[cfg(test)]
@@ -951,11 +921,11 @@ mod tests {
     #[case::simple(&["echo", "hello"], "echo hello")]
     #[case::space_in_token(&["echo", "hello world"], "echo 'hello world'")]
     #[case::empty_token(&["echo", ""], "echo ''")]
-    #[case::single_quote_in_token(&["echo", "it's"], "echo 'it'\\''s'")]
+    #[case::single_quote_in_token(&["echo", "it's"], "echo \"it's\"")]
     #[case::flags_and_paths(&["rm", "-rf", "/tmp/dir"], "rm -rf /tmp/dir")]
     #[case::single_token(&["ls"], "ls")]
     fn shell_quote_join_cases(#[case] tokens: &[&str], #[case] expected: &str) {
         let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
-        assert_eq!(shell_quote_join(&owned), expected);
+        assert_eq!(shell_quote_join(&owned).unwrap(), expected);
     }
 }

@@ -394,7 +394,7 @@ fn try_unwrap_wrapper(
                 };
                 single
             } else {
-                shell_quote_join(&tokens)
+                shell_quote_join(&tokens)?
             };
             // Split compound commands (e.g., "ls; rm -rf /") into individual ones
             let sub_commands =
