@@ -212,6 +212,12 @@ fn match_tokens_core<'a>(
             }
             match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
         }
+
+        PatternToken::Opts => {
+            // <opts> in non-wrapper context: consume flag-like tokens
+            let skip = consume_opts(cmd_tokens);
+            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
+        }
     }
 }
 
@@ -394,6 +400,21 @@ fn extract_placeholder_all<'a>(
             Ok(())
         }
 
+        PatternToken::Opts => {
+            // Consume zero or more flag-like tokens (hyphen-prefixed).
+            // When a flag is consumed and the next token is not hyphen-prefixed,
+            // consume it as the flag's argument.
+            let skip = consume_opts(cmd_tokens);
+            extract_placeholder_all(
+                rest,
+                &cmd_tokens[skip..],
+                definitions,
+                steps,
+                captured,
+                all_candidates,
+            )
+        }
+
         PatternToken::Optional(_) => Err(RuleError::UnsupportedWrapperToken(
             "Optional ([...])".into(),
         )),
@@ -402,6 +423,33 @@ fn extract_placeholder_all<'a>(
             "PathRef (<path:{name}>)"
         ))),
     }
+}
+
+/// Count how many tokens `<opts>` should consume from the front of `tokens`.
+///
+/// Consumes hyphen-prefixed tokens as flags. A short flag consisting of only
+/// one character after the hyphen (e.g., `-n`) may take the next token as its
+/// argument if that token is not hyphen-prefixed. Flags with more characters
+/// (e.g., `-I{}`, `-0`, `--verbose`) are treated as self-contained.
+fn consume_opts(tokens: &[&str]) -> usize {
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = tokens[i];
+        if !token.starts_with('-') {
+            break;
+        }
+        i += 1;
+
+        // A short flag like `-n` (single hyphen + single letter) may have a
+        // separate argument. Long flags (`--foo`) and short flags with a value
+        // already attached (`-I{}`, `-0`) do not consume the next token.
+        let is_short_single_char =
+            token.starts_with('-') && !token.starts_with("--") && token.len() == 2;
+        if is_short_single_char && i < tokens.len() && !tokens[i].starts_with('-') {
+            i += 1;
+        }
+    }
+    i
 }
 
 /// Check that flags referenced by the optional group are not present in
@@ -450,8 +498,10 @@ fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Defin
             paths.iter().any(|p| normalize_path(p) == normalized_cmd)
         }
         PatternToken::Placeholder(_) => true,
-        // FlagWithValue and Optional don't make sense as single-token matches
-        PatternToken::FlagWithValue { .. } | PatternToken::Optional(_) => false,
+        // FlagWithValue, Optional, and Opts don't make sense as single-token matches
+        PatternToken::FlagWithValue { .. } | PatternToken::Optional(_) | PatternToken::Opts => {
+            false
+        }
     }
 }
 
