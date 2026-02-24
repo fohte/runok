@@ -1720,22 +1720,22 @@ mod tests {
 
     const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/runok.schema.json");
 
-    fn generate_schema_string() -> String {
+    fn generate_schema_value() -> serde_json::Value {
         let schema = schemars::schema_for!(Config);
-        let mut json = serde_json::to_string_pretty(&schema).unwrap();
-        json.push('\n');
-        json
+        serde_json::to_value(schema).unwrap()
     }
 
     #[test]
     fn schema_is_up_to_date() {
-        let expected = generate_schema_string();
-        let actual = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_else(|e| {
+        let expected = generate_schema_value();
+        let actual_str = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_else(|e| {
             panic!(
                 "Failed to read schema file at {SCHEMA_PATH}: {e}. \
                  Run `cargo run --features config-schema -- config-schema > schema/runok.schema.json` to generate it."
             )
         });
+        let actual: serde_json::Value = serde_json::from_str(&actual_str)
+            .unwrap_or_else(|e| panic!("Schema file is not valid JSON: {e}"));
         assert_eq!(
             actual, expected,
             "Schema file is out of date. \

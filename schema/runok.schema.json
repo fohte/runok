@@ -6,7 +6,10 @@
   "properties": {
     "extends": {
       "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>@<ref>`).",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
         "type": "string"
       }
@@ -24,7 +27,10 @@
     },
     "rules": {
       "description": "Ordered list of permission rules evaluated against each command.",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
         "$ref": "#/$defs/RuleEntry"
       }
@@ -59,14 +65,21 @@
         },
         "sandbox": {
           "description": "Default sandbox preset name to apply.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
     "ActionKind": {
       "description": "Permission action kind.",
       "type": "string",
-      "enum": ["allow", "ask", "deny"]
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ]
     },
     "RuleEntry": {
       "description": "A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.",
@@ -80,18 +93,29 @@
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "message": {
               "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "fix_suggestion": {
               "description": "Suggested fix command shown when a deny rule matches.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
-          "required": ["deny"],
+          "required": [
+            "deny"
+          ],
           "additionalProperties": false
         },
         {
@@ -103,22 +127,36 @@
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "message": {
               "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "fix_suggestion": {
               "description": "Suggested fix command shown when a deny rule matches.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "sandbox": {
               "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
-          "required": ["allow"],
+          "required": [
+            "allow"
+          ],
           "additionalProperties": false
         },
         {
@@ -130,22 +168,36 @@
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "message": {
               "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "fix_suggestion": {
               "description": "Suggested fix command shown when a deny rule matches.",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "sandbox": {
               "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
-              "type": ["string", "null"]
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
-          "required": ["ask"],
+          "required": [
+            "ask"
+          ],
           "additionalProperties": false
         }
       ]
@@ -156,7 +208,10 @@
       "properties": {
         "paths": {
           "description": "Named path lists referenced by `<path:name>` in sandbox deny rules.",
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -166,21 +221,30 @@
         },
         "sandbox": {
           "description": "Named sandbox presets that can be referenced by rules.",
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": {
             "$ref": "#/$defs/SandboxPreset"
           }
         },
         "wrappers": {
           "description": "Wrapper command patterns for recursive evaluation (e.g., `sudo <cmd>`).",
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
         },
         "commands": {
           "description": "Additional command patterns to recognize.",
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
@@ -221,14 +285,20 @@
       "properties": {
         "writable": {
           "description": "Directories the sandboxed process is allowed to write to.",
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
         },
         "deny": {
           "description": "Paths the sandboxed process is denied access to. Supports `<path:name>` references.",
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
@@ -241,7 +311,10 @@
       "properties": {
         "allow": {
           "description": "Whether network access is allowed.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     }
