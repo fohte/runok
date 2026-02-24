@@ -48,7 +48,10 @@ fn main() -> ExitCode {
 
     #[cfg(feature = "config-schema")]
     if matches!(cli.command, Commands::ConfigSchema) {
-        runok::config::print_config_schema();
+        if let Err(e) = runok::config::print_config_schema() {
+            eprintln!("runok: failed to generate schema: {e}");
+            return ExitCode::FAILURE;
+        }
         return ExitCode::SUCCESS;
     }
 

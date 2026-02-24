@@ -448,8 +448,6 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
             }
         }
 
-        let _ = &required; // suppress unused warning in some paths
-
         serde_json::json!({
             "type": "object",
             "properties": serde_json::Value::Object(properties),
@@ -483,12 +481,11 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
 
 /// Print the JSON Schema for the runok configuration to stdout.
 #[cfg(feature = "config-schema")]
-pub fn print_config_schema() {
+pub fn print_config_schema() -> Result<(), serde_json::Error> {
     let schema = schemars::schema_for!(Config);
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&schema).unwrap_or_default()
-    );
+    let json = serde_json::to_string_pretty(&schema)?;
+    println!("{json}");
+    Ok(())
 }
 
 /// Parse a YAML string into a `Config`.
