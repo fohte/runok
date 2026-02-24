@@ -31,8 +31,8 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
         // the command name) and try consuming 1..=N tokens as the command name
         // part before matching the remaining pattern tokens.
         let cmd_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
-        let steps = Cell::new(0usize);
         for skip in 1..=cmd_tokens.len() {
+            let steps = Cell::new(0usize);
             if match_tokens_core(
                 &pattern.tokens,
                 &cmd_tokens[skip..],
@@ -68,8 +68,8 @@ pub fn matches_with_captures(
         // Try consuming 1..=N tokens as the command name part (not captured),
         // then match the remaining pattern tokens with capture support.
         let cmd_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
-        let steps = Cell::new(0usize);
         for skip in 1..=cmd_tokens.len() {
+            let steps = Cell::new(0usize);
             let mut captures = Vec::new();
             if match_tokens_core(
                 &pattern.tokens,
