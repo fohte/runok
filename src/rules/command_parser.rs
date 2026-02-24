@@ -294,6 +294,38 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 collect_commands(body, source, commands);
             }
         }
+        // command node: strip leading variable_assignment children
+        // (environment variable prefixes like `FOO=bar echo hello`), extract
+        // nested command_substitution nodes, and emit the remaining text.
+        "command" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "command_substitution" => {
+                        collect_commands(child, source, commands);
+                    }
+                    "variable_assignment" => {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
+                    _ => {}
+                }
+            }
+            // Build command text excluding variable_assignment children
+            let mut cursor = node.walk();
+            let parts: Vec<&str> = node
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() != "variable_assignment")
+                .filter_map(|child| {
+                    let text = &source[child.start_byte()..child.end_byte()];
+                    std::str::from_utf8(text).ok()
+                })
+                .collect();
+            let text = parts.join(" ");
+            let text = text.trim();
+            if !text.is_empty() {
+                commands.push(text.to_string());
+            }
+        }
         // Leaf command nodes — extract the source text, and also recurse
         // into any command_substitution children to extract nested commands.
         _ => {
@@ -711,6 +743,24 @@ mod tests {
         // A bare variable assignment (no command substitution) produces no commands.
         let result = extract_commands("X=1").unwrap();
         assert!(result.is_empty());
+    }
+
+    // ========================================
+    // extract_commands: env-prefix commands (VAR=value cmd args)
+    // ========================================
+
+    #[rstest]
+    #[case::single_env_prefix("FOO=bar echo hello", vec!["echo hello"])]
+    #[case::multiple_env_prefixes("FOO=bar BAZ=qux echo hello", vec!["echo hello"])]
+    #[case::env_prefix_with_flags("FOO=bar curl -X POST https://example.com", vec!["curl -X POST https://example.com"])]
+    #[case::env_prefix_with_pipeline("FOO=bar echo hello | grep hello", vec!["echo hello", "grep hello"])]
+    #[case::env_prefix_with_cmd_substitution(
+        "FOO=$(echo bar) echo hello",
+        vec!["echo bar", "echo hello"]
+    )]
+    fn extract_env_prefix_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================
