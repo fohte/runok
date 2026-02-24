@@ -18,6 +18,8 @@ fn check_env() -> TestEnv {
 #[rstest]
 #[case::deny_rm("rm -rf /", 0, "deny")]
 #[case::allow_git_status("git status", 0, "allow")]
+#[case::comment_before_command("# description\ngit status", 0, "allow")]
+#[case::comment_only("# just a comment", 0, "ask")]
 fn check_command_arg(
     check_env: TestEnv,
     #[case] command: &str,
