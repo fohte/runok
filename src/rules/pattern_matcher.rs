@@ -138,6 +138,10 @@ fn match_tokens_core<'a>(
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
                     if let Some(ref mut caps) = captures {
                         let saved_len = caps.len();
+                        // Capture the flag value when it matches a wildcard
+                        if matches!(value.as_ref(), PatternToken::Wildcard) {
+                            caps.push(cmd_tokens[i + 1]);
+                        }
                         if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps)) {
                             return true;
                         }
@@ -655,6 +659,10 @@ mod tests {
     #[case::wrong_value("curl -X|--request POST *", "curl -X GET https://example.com", false)]
     #[case::missing_flag("curl -X|--request POST *", "curl https://example.com", false)]
     #[case::wildcard_value("curl -X|--request * *", "curl -X DELETE https://example.com", true)]
+    #[case::bare_flag_before_arg("gh api -X GET *", "gh api -X GET repos/fohte/runok", true)]
+    #[case::bare_flag_after_arg("gh api -X GET *", "gh api repos/fohte/runok -X GET", true)]
+    #[case::bare_flag_wrong_value("gh api -X GET *", "gh api -X POST repos/fohte/runok", false)]
+    #[case::bare_flag_missing("gh api -X GET *", "gh api repos/fohte/runok", false)]
     fn flag_with_value_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
@@ -683,6 +691,11 @@ mod tests {
         "curl [-X|--request GET] *",
         "curl -X POST https://example.com",
         false
+    )]
+    #[case::optional_flag_with_value_after_arg(
+        "curl [-X|--request GET] *",
+        "curl https://example.com -X GET",
+        true
     )]
     #[case::optional_dir("git [-C *] status", "git -C /tmp status", true)]
     #[case::optional_dir_absent("git [-C *] status", "git status", true)]
@@ -835,6 +848,27 @@ mod tests {
             "java -Denv=staging",
             &empty_defs()
         ));
+    }
+
+    // ========================================
+    // Literal bracket command (`[`) matching
+    // ========================================
+
+    #[rstest]
+    #[case::bracket_wildcard("[ *", "[ -f file ]", true)]
+    #[case::bracket_exact_args("[ -f file ]", "[ -f file ]", true)]
+    #[case::bracket_wildcard_no_args("[ *", "[ ]", true)]
+    #[case::bracket_command_mismatch("[ *", "test -f file", false)]
+    #[case::bracket_wrong_args("[ -f file ]", "[ -d dir ]", false)]
+    fn bracket_command_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected
+        );
     }
 
     // ========================================

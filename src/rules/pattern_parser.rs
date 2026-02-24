@@ -112,6 +112,29 @@ fn build_pattern_tokens(
                 result.push(PatternToken::Wildcard);
             }
 
+            LexToken::Literal(s) if is_flag(s) => {
+                // A bare flag (e.g. `-X`) is treated like a single-element
+                // alternation so that flag-with-value and order-independent
+                // matching work the same as for `-X|--request` style patterns.
+                if let Some(&(j, next)) = iter.peek() {
+                    if should_consume_as_value_strict(next, j + 1 < lex_tokens.len(), inside_group)
+                    {
+                        let (_, next_token) = iter.next().ok_or(
+                            PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
+                        )?;
+                        let value = lex_to_pattern_value(next_token)?;
+                        result.push(PatternToken::FlagWithValue {
+                            aliases: vec![s.clone()],
+                            value: Box::new(value),
+                        });
+                    } else {
+                        result.push(PatternToken::Alternation(vec![s.clone()]));
+                    }
+                } else {
+                    result.push(PatternToken::Alternation(vec![s.clone()]));
+                }
+            }
+
             LexToken::Literal(s) => {
                 result.push(PatternToken::Literal(s.clone()));
             }
@@ -236,10 +259,29 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: bool) -> bool {
     match next {
         LexToken::OpenBracket | LexToken::CloseBracket => false,
+        // When `[` is used as a literal command name, the lexer emits `]` as
+        // `Literal("]")` rather than `CloseBracket`.  Prevent flags from
+        // consuming this closing delimiter as a value.
+        LexToken::Literal(s) if s == "]" => false,
         LexToken::Literal(s) if is_flag(s) => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         LexToken::Wildcard => inside_group || has_more_after,
         _ => true,
+    }
+}
+
+/// Like [`should_consume_as_value`], but stricter: also refuses to consume
+/// placeholder tokens as flag values. Used for bare flags (e.g. `-c`) where
+/// the flag is written without alternation syntax and the next token may be a
+/// wrapper placeholder (e.g. `<cmd>`) rather than a flag value.
+fn should_consume_as_value_strict(
+    next: &LexToken,
+    has_more_after: bool,
+    inside_group: bool,
+) -> bool {
+    match next {
+        LexToken::Placeholder(_) => false,
+        _ => should_consume_as_value(next, has_more_after, inside_group),
     }
 }
 
@@ -273,17 +315,21 @@ mod tests {
         PatternToken::Literal("origin".into()),
     ])]
     #[case::joined_equals("java -Denv=prod", "java", vec![
-        PatternToken::Literal("-Denv=prod".into()),
+        PatternToken::Alternation(vec!["-Denv=prod".into()]),
     ])]
     #[case::single_quoted("git commit -m 'WIP*'", "git", vec![
         PatternToken::Literal("commit".into()),
-        PatternToken::Literal("-m".into()),
-        PatternToken::Literal("WIP*".into()),
+        PatternToken::FlagWithValue {
+            aliases: vec!["-m".into()],
+            value: Box::new(PatternToken::Literal("WIP*".into())),
+        },
     ])]
     #[case::double_quoted(r#"git commit -m "WIP*""#, "git", vec![
         PatternToken::Literal("commit".into()),
-        PatternToken::Literal("-m".into()),
-        PatternToken::Literal("WIP*".into()),
+        PatternToken::FlagWithValue {
+            aliases: vec!["-m".into()],
+            value: Box::new(PatternToken::Literal("WIP*".into())),
+        },
     ])]
     fn parse_literals(
         #[case] input: &str,
@@ -298,7 +344,7 @@ mod tests {
     #[case::between_literals("git push * --force", "git", vec![
         PatternToken::Literal("push".into()),
         PatternToken::Wildcard,
-        PatternToken::Literal("--force".into()),
+        PatternToken::Alternation(vec!["--force".into()]),
     ])]
     fn parse_wildcard(
         #[case] input: &str,
@@ -379,34 +425,42 @@ mod tests {
     }
 
     #[rstest]
-    #[case::long_flag("aws --profile prod *", "aws", vec![
-        PatternToken::Literal("--profile".into()),
-        PatternToken::Literal("prod".into()),
+    #[case::flag_with_value("aws --profile prod *", "aws", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["--profile".into()],
+            value: Box::new(PatternToken::Literal("prod".into())),
+        },
         PatternToken::Wildcard,
     ])]
-    #[case::short_flag("git -C /tmp status", "git", vec![
-        PatternToken::Literal("-C".into()),
-        PatternToken::Literal("/tmp".into()),
+    #[case::short_flag_with_value("git -C /tmp status", "git", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-C".into()],
+            value: Box::new(PatternToken::Literal("/tmp".into())),
+        },
         PatternToken::Literal("status".into()),
     ])]
-    #[case::not_consuming_positional("git push --force origin", "git", vec![
+    #[case::flag_consumes_next_non_flag("git push --force origin", "git", vec![
         PatternToken::Literal("push".into()),
-        PatternToken::Literal("--force".into()),
-        PatternToken::Literal("origin".into()),
+        PatternToken::FlagWithValue {
+            aliases: vec!["--force".into()],
+            value: Box::new(PatternToken::Literal("origin".into())),
+        },
     ])]
-    #[case::not_consuming_wildcard("git --verbose *", "git", vec![
-        PatternToken::Literal("--verbose".into()),
+    #[case::flag_not_consuming_trailing_wildcard("git --verbose *", "git", vec![
+        PatternToken::Alternation(vec!["--verbose".into()]),
         PatternToken::Wildcard,
     ])]
-    #[case::at_end("git push --force", "git", vec![
+    #[case::flag_at_end("git push --force", "git", vec![
         PatternToken::Literal("push".into()),
-        PatternToken::Literal("--force".into()),
+        PatternToken::Alternation(vec!["--force".into()]),
     ])]
-    #[case::multi_char_short("rm -rf /", "rm", vec![
-        PatternToken::Literal("-rf".into()),
-        PatternToken::Literal("/".into()),
+    #[case::combined_short_flag_with_value("rm -rf /", "rm", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-rf".into()],
+            value: Box::new(PatternToken::Literal("/".into())),
+        },
     ])]
-    fn parse_single_flag_as_literal(
+    fn parse_bare_flag(
         #[case] input: &str,
         #[case] expected_command: &str,
         #[case] expected_tokens: Vec<PatternToken>,
@@ -416,8 +470,10 @@ mod tests {
 
     #[rstest]
     #[case::literal("aws --profile !prod *", "aws", vec![
-        PatternToken::Literal("--profile".into()),
-        PatternToken::Negation(Box::new(PatternToken::Literal("prod".into()))),
+        PatternToken::FlagWithValue {
+            aliases: vec!["--profile".into()],
+            value: Box::new(PatternToken::Negation(Box::new(PatternToken::Literal("prod".into())))),
+        },
         PatternToken::Wildcard,
     ])]
     #[case::alternation("kubectl !describe|get|list *", "kubectl", vec![
@@ -436,7 +492,7 @@ mod tests {
 
     #[rstest]
     #[case::single_flag("rm [-f] *", "rm", vec![
-        PatternToken::Optional(vec![PatternToken::Literal("-f".into())]),
+        PatternToken::Optional(vec![PatternToken::Alternation(vec!["-f".into()])]),
         PatternToken::Wildcard,
     ])]
     #[case::flag_with_value("curl [-X|--request GET] *", "curl", vec![
@@ -448,12 +504,37 @@ mod tests {
     ])]
     #[case::multiple_tokens("git [-C *] status", "git", vec![
         PatternToken::Optional(vec![
-            PatternToken::Literal("-C".into()),
-            PatternToken::Wildcard,
+            PatternToken::FlagWithValue {
+                aliases: vec!["-C".into()],
+                value: Box::new(PatternToken::Wildcard),
+            },
         ]),
         PatternToken::Literal("status".into()),
     ])]
     fn parse_optional(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::bracket_command_wildcard("[ *", "[", vec![
+        PatternToken::Wildcard,
+    ])]
+    #[case::bracket_command_boolean_flag("[ -f ]", "[", vec![
+        PatternToken::Alternation(vec!["-f".into()]),
+        PatternToken::Literal("]".into()),
+    ])]
+    #[case::bracket_command_with_args("[ -f file ]", "[", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-f".into()],
+            value: Box::new(PatternToken::Literal("file".into())),
+        },
+        PatternToken::Literal("]".into()),
+    ])]
+    fn parse_literal_bracket_command(
         #[case] input: &str,
         #[case] expected_command: &str,
         #[case] expected_tokens: Vec<PatternToken>,
@@ -478,10 +559,10 @@ mod tests {
 
     #[rstest]
     #[case::wildcard_with_flag("* --help", vec![
-        PatternToken::Literal("--help".into()),
+        PatternToken::Alternation(vec!["--help".into()]),
     ])]
     #[case::wildcard_with_version("* --version", vec![
-        PatternToken::Literal("--version".into()),
+        PatternToken::Alternation(vec!["--version".into()]),
     ])]
     #[case::wildcard_only("*", vec![])]
     #[case::wildcard_with_wildcard_args("* *", vec![PatternToken::Wildcard])]
