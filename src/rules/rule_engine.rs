@@ -10,7 +10,7 @@ use crate::rules::command_parser::{
 };
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
 use crate::rules::pattern_matcher::{extract_placeholder, matches_with_captures};
-use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
+use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
 
 /// Context for rule evaluation, providing environment variables and
 /// working directory for `when` clause evaluation.
@@ -252,36 +252,43 @@ fn evaluate_command_inner(
             None => continue,
         };
 
-        let pattern = parse_pattern(pattern_str)?;
-        let schema = build_flag_schema(&pattern);
-        let parsed_command = parse_command(command, &schema)?;
+        let patterns = parse_multi(pattern_str)?;
 
-        let captures = matches_with_captures(&pattern, &parsed_command, definitions);
-        if captures.is_none() {
-            continue;
-        }
+        // Try each expanded pattern (multi-word alternation produces multiple patterns);
+        // use the first matching pattern for this rule.
+        for pattern in &patterns {
+            let schema = build_flag_schema(pattern);
+            let parsed_command = parse_command(command, &schema)?;
 
-        // Evaluate when clause if present
-        if let Some(when_expr) = &rule.when {
-            let expr_context = build_expr_context(&parsed_command, context, definitions);
-            match evaluate(when_expr, &expr_context) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(e) => return Err(e.into()),
+            let captures = matches_with_captures(pattern, &parsed_command, definitions);
+            if captures.is_none() {
+                continue;
             }
+
+            // Evaluate when clause if present
+            if let Some(when_expr) = &rule.when {
+                let expr_context = build_expr_context(&parsed_command, context, definitions);
+                match evaluate(when_expr, &expr_context) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            match_infos.push(RuleMatchInfo {
+                action_kind,
+                pattern: pattern_str.to_string(),
+                matched_tokens: captures.unwrap_or_default(),
+            });
+
+            matched.push(MatchedRule {
+                action_kind,
+                rule,
+                pattern_str: pattern_str.to_string(),
+            });
+
+            break;
         }
-
-        match_infos.push(RuleMatchInfo {
-            action_kind,
-            pattern: pattern_str.to_string(),
-            matched_tokens: captures.unwrap_or_default(),
-        });
-
-        matched.push(MatchedRule {
-            action_kind,
-            rule,
-            pattern_str: pattern_str.to_string(),
-        });
     }
 
     // Try wrapper pattern matching for recursive evaluation
@@ -353,11 +360,21 @@ fn try_unwrap_wrapper(
     };
 
     for wrapper_pattern_str in wrappers {
-        let pattern = parse_pattern(wrapper_pattern_str)?;
-        let schema = build_flag_schema(&pattern);
-        let parsed_command = parse_command(command, &schema)?;
+        let patterns = parse_multi(wrapper_pattern_str)?;
 
-        if let Some(tokens) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+        // Try each expanded pattern for this wrapper definition
+        let mut extracted_tokens = None;
+        for pattern in &patterns {
+            let schema = build_flag_schema(pattern);
+            let parsed_command = parse_command(command, &schema)?;
+
+            if let Some(tokens) = extract_placeholder(pattern, &parsed_command, definitions)? {
+                extracted_tokens = Some(tokens);
+                break;
+            }
+        }
+
+        if let Some(tokens) = extracted_tokens {
             // Single token: a shell script string (e.g., from `bash -c <cmd>`)
             // that should be passed as-is for tree-sitter to parse.
             // Multiple tokens: a structured command + args (e.g., from `sudo <cmd>`)

@@ -21,6 +21,9 @@ pub enum LexToken {
     CloseBracket,
     /// Angle-bracket placeholder (e.g. "<cmd>", "<path:name>")
     Placeholder(String),
+    /// A multi-word alternation where at least one alternative contains spaces.
+    /// e.g., `"npx prettier"|prettier` -> [["npx", "prettier"], ["prettier"]]
+    MultiWordAlternation(Vec<Vec<String>>),
 }
 
 /// Tokenize a pattern string into a sequence of `LexToken`s.
@@ -37,7 +40,8 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                 chars.next();
             }
 
-            // Quoted string -> Literal (content without quotes)
+            // Quoted string -> Literal (content without quotes), or
+            // multi-word alternation if followed by `|`
             '"' | '\'' => {
                 let quote = ch;
                 chars.next(); // consume opening quote
@@ -46,7 +50,15 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                         "unclosed quote starting at position {pos}"
                     ))
                 })?;
-                tokens.push(LexToken::Literal(value));
+                // Check if this starts a multi-word alternation: "quoted"|...
+                if let Some(&(_, '|')) = chars.peek() {
+                    let first_words: Vec<String> =
+                        value.split_whitespace().map(|s| s.to_string()).collect();
+                    let token = consume_alternation_continuation(&mut chars, first_words)?;
+                    tokens.push(token);
+                } else {
+                    tokens.push(LexToken::Literal(value));
+                }
             }
 
             // Angle bracket placeholder: <cmd>, <path:name>
@@ -105,7 +117,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
             // Negation: !value or !a|b|c
             '!' => {
                 chars.next(); // consume '!'
-                let word = consume_word(&mut chars, None);
+                let word = consume_word(&mut chars, None, None);
                 if word.is_empty() {
                     return Err(PatternParseError::InvalidSyntax(
                         "empty negation".to_string(),
@@ -114,10 +126,61 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                 tokens.push(classify_negation(&word)?);
             }
 
-            // Any other character: consume a word (until whitespace, bracket, or angle bracket)
+            // Any other character: consume a word (until whitespace, bracket, angle bracket, or quote)
             _ => {
-                let word = consume_word(&mut chars, Some(ch));
-                tokens.push(classify_word(&word)?);
+                let word = consume_word(&mut chars, Some(ch), None);
+                // Check if the word ends with `|` and next char is a quote,
+                // indicating a multi-word alternation like `prettier|"npx prettier"`
+                if word.ends_with('|') {
+                    if let Some(&(qpos, q @ ('"' | '\''))) = chars.peek() {
+                        let prefix = &word[..word.len() - 1];
+                        // Split existing pipe-separated parts into individual alternatives
+                        let mut alternatives: Vec<Vec<String>> = prefix
+                            .split('|')
+                            .map(|part| {
+                                if part.is_empty() {
+                                    Err(PatternParseError::EmptyAlternation)
+                                } else {
+                                    Ok(vec![part.to_string()])
+                                }
+                            })
+                            .collect::<Result<_, _>>()?;
+                        // Now consume the quoted part and any further alternatives
+                        chars.next(); // consume opening quote
+                        let quoted = consume_until(&mut chars, q).ok_or_else(|| {
+                            PatternParseError::InvalidSyntax(format!(
+                                "unclosed quote starting at position {qpos}"
+                            ))
+                        })?;
+                        let quoted_words: Vec<String> =
+                            quoted.split_whitespace().map(|s| s.to_string()).collect();
+                        if quoted_words.is_empty() {
+                            return Err(PatternParseError::EmptyAlternation);
+                        }
+                        // Continue consuming further alternatives if more `|` follow
+                        let token = consume_alternation_continuation(&mut chars, quoted_words)?;
+                        // Merge: prepend the bare-word alternatives to the continuation result
+                        match token {
+                            LexToken::MultiWordAlternation(mut rest) => {
+                                alternatives.append(&mut rest);
+                                tokens.push(classify_multi_word_alternation(alternatives)?);
+                            }
+                            LexToken::Alternation(rest_alts) => {
+                                alternatives.extend(rest_alts.into_iter().map(|alt| vec![alt]));
+                                tokens.push(classify_multi_word_alternation(alternatives)?);
+                            }
+                            _ => unreachable!(
+                                "consume_alternation_continuation returned unexpected: {token:?}"
+                            ),
+                        }
+                    } else {
+                        // Trailing `|` without a following quote: delegate to classify_word
+                        // which will report EmptyAlternation
+                        tokens.push(classify_word(&word)?);
+                    }
+                } else {
+                    tokens.push(classify_word(&word)?);
+                }
             }
         }
     }
@@ -133,9 +196,11 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
 
 /// Consume characters forming a "word" (non-whitespace, non-bracket, non-angle-bracket).
 /// If `prefix` is provided, it is prepended to the result.
+/// If `extra_stop` is provided, the function also stops at that character.
 fn consume_word(
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     prefix: Option<char>,
+    extra_stop: Option<char>,
 ) -> String {
     let mut word = match prefix {
         Some(c) => {
@@ -145,7 +210,7 @@ fn consume_word(
         None => String::new(),
     };
     while let Some(&(_, c)) = chars.peek() {
-        if is_word_boundary(c) {
+        if is_word_boundary(c) || extra_stop == Some(c) {
             break;
         }
         word.push(c);
@@ -170,7 +235,7 @@ fn consume_until(
 }
 
 fn is_word_boundary(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '[' | ']' | '<')
+    matches!(c, ' ' | '\t' | '[' | ']' | '<' | '"' | '\'')
 }
 
 /// Classify a raw word into the appropriate LexToken.
@@ -193,6 +258,85 @@ fn classify_negation(word: &str) -> Result<LexToken, PatternParseError> {
     } else {
         Ok(LexToken::Negation(word.to_string()))
     }
+}
+
+/// Consume remaining alternatives in a multi-word alternation.
+///
+/// Called after the first alternative has already been parsed (either quoted or bare word).
+/// `first_words` is the word list of the first alternative.
+/// Expects the iterator to be positioned at a `|` character (or past the first alternative).
+/// Returns a `MultiWordAlternation` token (which may be downgraded to `Alternation` if all
+/// alternatives are single-word).
+fn consume_alternation_continuation(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    first_words: Vec<String>,
+) -> Result<LexToken, PatternParseError> {
+    let mut alternatives = vec![first_words];
+
+    while let Some(&(_, '|')) = chars.peek() {
+        chars.next(); // consume '|'
+
+        match chars.peek() {
+            Some(&(pos, q @ ('"' | '\''))) => {
+                chars.next(); // consume opening quote
+                let quoted = consume_until(chars, q).ok_or_else(|| {
+                    PatternParseError::InvalidSyntax(format!(
+                        "unclosed quote starting at position {pos}"
+                    ))
+                })?;
+                let words: Vec<String> = quoted.split_whitespace().map(|s| s.to_string()).collect();
+                if words.is_empty() {
+                    return Err(PatternParseError::EmptyAlternation);
+                }
+                alternatives.push(words);
+            }
+            Some(&(_, c)) if !is_word_boundary(c) => {
+                let word = consume_word(chars, Some(c), Some('|'));
+                if word.is_empty() {
+                    return Err(PatternParseError::EmptyAlternation);
+                }
+                alternatives.push(vec![word]);
+            }
+            _ => {
+                return Err(PatternParseError::EmptyAlternation);
+            }
+        }
+    }
+
+    classify_multi_word_alternation(alternatives)
+}
+
+/// Classify a list of word-list alternatives into the appropriate LexToken.
+///
+/// If all alternatives are single-word, returns `Alternation`.
+/// Otherwise returns `MultiWordAlternation`.
+fn classify_multi_word_alternation(
+    alternatives: Vec<Vec<String>>,
+) -> Result<LexToken, PatternParseError> {
+    if alternatives.iter().all(|alt| alt.len() == 1) {
+        // All single-word: use regular Alternation
+        let parts: Vec<String> = alternatives.into_iter().map(|mut v| v.remove(0)).collect();
+        validate_alternation_parts_vec(&parts)?;
+        Ok(LexToken::Alternation(parts))
+    } else {
+        // At least one multi-word alternative
+        for alt in &alternatives {
+            if alt.is_empty() {
+                return Err(PatternParseError::EmptyAlternation);
+            }
+        }
+        Ok(LexToken::MultiWordAlternation(alternatives))
+    }
+}
+
+/// Validate that no part in a pre-split alternation is empty.
+fn validate_alternation_parts_vec(parts: &[String]) -> Result<(), PatternParseError> {
+    for part in parts {
+        if part.is_empty() {
+            return Err(PatternParseError::EmptyAlternation);
+        }
+    }
+    Ok(())
 }
 
 /// Split on '|' and validate that no part is empty.
@@ -553,6 +697,130 @@ mod tests {
                 LexToken::CloseBracket,
                 LexToken::Placeholder("cmd".into()),
             ]
+        );
+    }
+
+    // === Multi-word alternation ===
+
+    #[rstest]
+    #[case::quoted_then_bare(
+        r#""npx prettier"|prettier"#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["npx".into(), "prettier".into()],
+            vec!["prettier".into()],
+        ])]
+    )]
+    #[case::bare_then_quoted(
+        r#"prettier|"npx prettier""#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["prettier".into()],
+            vec!["npx".into(), "prettier".into()],
+        ])]
+    )]
+    #[case::three_alternatives(
+        r#""npx prettier"|"bunx prettier"|prettier"#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["npx".into(), "prettier".into()],
+            vec!["bunx".into(), "prettier".into()],
+            vec!["prettier".into()],
+        ])]
+    )]
+    #[case::multi_word_with_trailing_tokens(
+        r#""npx prettier"|prettier *"#,
+        vec![
+            LexToken::MultiWordAlternation(vec![
+                vec!["npx".into(), "prettier".into()],
+                vec!["prettier".into()],
+            ]),
+            LexToken::Wildcard,
+        ]
+    )]
+    #[case::all_single_word_quoted_becomes_alternation(
+        r#""ast-grep"|sg"#,
+        vec![LexToken::Alternation(vec!["ast-grep".into(), "sg".into()])]
+    )]
+    #[case::mixed_single_and_multi_word(
+        r#"prettier|"npx prettier"|"bunx prettier""#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["prettier".into()],
+            vec!["npx".into(), "prettier".into()],
+            vec!["bunx".into(), "prettier".into()],
+        ])]
+    )]
+    #[case::single_quoted_multi_word(
+        "prettier|'npx prettier'",
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["prettier".into()],
+            vec!["npx".into(), "prettier".into()],
+        ])]
+    )]
+    #[case::all_single_word_via_bare_and_quoted(
+        r#"foo|"bar""#,
+        vec![LexToken::Alternation(vec!["foo".into(), "bar".into()])]
+    )]
+    #[case::three_bare_and_quoted_single_word(
+        r#"foo|"bar"|baz"#,
+        vec![LexToken::Alternation(vec!["foo".into(), "bar".into(), "baz".into()])]
+    )]
+    #[case::quoted_multi_then_two_bare(
+        r#""npx prettier"|foo|bar"#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["npx".into(), "prettier".into()],
+            vec!["foo".into()],
+            vec!["bar".into()],
+        ])]
+    )]
+    #[case::bare_pipe_bare_pipe_quoted(
+        r#"foo|bar|"npx prettier""#,
+        vec![LexToken::MultiWordAlternation(vec![
+            vec!["foo".into()],
+            vec!["bar".into()],
+            vec!["npx".into(), "prettier".into()],
+        ])]
+    )]
+    fn tokenize_multi_word_alternation(#[case] input: &str, #[case] expected: Vec<LexToken>) {
+        assert_eq!(tokenize(input).unwrap(), expected);
+    }
+
+    // === Multi-word alternation error cases ===
+
+    #[rstest]
+    #[case::empty_quoted_alternative(r#"""|prettier"#)]
+    #[case::trailing_pipe_after_quoted(r#""npx prettier"|"#)]
+    fn tokenize_multi_word_alternation_errors(#[case] input: &str) {
+        let result = tokenize(input);
+        assert!(
+            matches!(result, Err(PatternParseError::EmptyAlternation)),
+            "expected EmptyAlternation for {input:?}, got {result:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::bare_then_unclosed_quote(
+        r#"prettier|"npx prettier"#,
+        "invalid syntax: unclosed quote starting at position 9"
+    )]
+    #[case::quoted_then_unclosed_quote(
+        r#""npx prettier"|"bunx prettier"#,
+        "invalid syntax: unclosed quote starting at position 15"
+    )]
+    fn tokenize_multi_word_unclosed_quote_reports_quote_position(
+        #[case] input: &str,
+        #[case] expected_msg: &str,
+    ) {
+        let err = tokenize(input).expect_err(&format!("expected error for: {input:?}"));
+        assert_eq!(err.to_string(), expected_msg);
+    }
+
+    // === Backward compatibility: single-word alternation unchanged ===
+
+    #[test]
+    fn tokenize_single_word_alternation_unchanged() {
+        // Existing single-word alternation should still produce Alternation, not MultiWordAlternation
+        let result = tokenize("ast-grep|sg").unwrap();
+        assert_eq!(
+            result,
+            vec![LexToken::Alternation(vec!["ast-grep".into(), "sg".into()])]
         );
     }
 
