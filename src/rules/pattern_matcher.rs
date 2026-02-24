@@ -218,6 +218,12 @@ fn match_tokens_core<'a>(
             let skip = consume_opts(cmd_tokens);
             match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
         }
+
+        PatternToken::Vars => {
+            // <vars> in non-wrapper context: consume KEY=VALUE tokens
+            let skip = consume_vars(cmd_tokens);
+            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
+        }
     }
 }
 
@@ -426,6 +432,19 @@ fn extract_placeholder_all<'a>(
             )
         }
 
+        PatternToken::Vars => {
+            // Consume zero or more KEY=VALUE tokens.
+            let skip = consume_vars(cmd_tokens);
+            extract_placeholder_all(
+                rest,
+                &cmd_tokens[skip..],
+                definitions,
+                steps,
+                captured,
+                all_candidates,
+            )
+        }
+
         PatternToken::Optional(_) => Err(RuleError::UnsupportedWrapperToken(
             "Optional ([...])".into(),
         )),
@@ -442,6 +461,14 @@ fn extract_placeholder_all<'a>(
 /// one character after the hyphen (e.g., `-n`) may take the next token as its
 /// argument if that token is not hyphen-prefixed. Flags with more characters
 /// (e.g., `-I{}`, `-0`, `--verbose`) are treated as self-contained.
+/// Count how many tokens `<vars>` should consume from the front of `tokens`.
+///
+/// Consumes consecutive tokens that contain `=` (i.e., `KEY=VALUE` style
+/// environment variable assignments). Stops at the first token without `=`.
+fn consume_vars(tokens: &[&str]) -> usize {
+    tokens.iter().take_while(|t| t.contains('=')).count()
+}
+
 fn consume_opts(tokens: &[&str]) -> usize {
     let mut i = 0;
     while i < tokens.len() {
@@ -509,10 +536,11 @@ fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Defin
             paths.iter().any(|p| normalize_path(p) == normalized_cmd)
         }
         PatternToken::Placeholder(_) => true,
-        // FlagWithValue, Optional, and Opts don't make sense as single-token matches
-        PatternToken::FlagWithValue { .. } | PatternToken::Optional(_) | PatternToken::Opts => {
-            false
-        }
+        // FlagWithValue, Optional, Opts, and Vars don't make sense as single-token matches
+        PatternToken::FlagWithValue { .. }
+        | PatternToken::Optional(_)
+        | PatternToken::Opts
+        | PatternToken::Vars => false,
     }
 }
 

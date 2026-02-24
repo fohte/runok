@@ -216,7 +216,7 @@ fn env_wrapper_evaluates_inner(
           - allow: 'echo *'
         definitions:
           wrappers:
-            - 'env * <cmd>'
+            - 'env <opts> <vars> <cmd>'
     "};
     let config = parse_config(yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
@@ -347,4 +347,33 @@ fn opts_wrapper_with_defaults_action_deny(empty_context: EvalContext) {
         "expected Allow, got {:?}",
         result.action
     );
+}
+
+// ========================================
+// <vars> wrapper: consumes KEY=VALUE tokens
+// ========================================
+
+#[rstest]
+#[case::vars_single("env FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::vars_multiple("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
+#[case::vars_none("env echo hello", assert_allow as ActionAssertion)]
+#[case::vars_with_opts("env -i FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::vars_with_opts_rm_denied("env -i FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+fn vars_wrapper_consumes_assignments(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'env <opts> <vars> <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
 }
