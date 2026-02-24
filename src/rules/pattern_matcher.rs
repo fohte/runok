@@ -738,6 +738,22 @@ mod tests {
         "curl -X GET https://example.com",
         true
     )]
+    // Wrong flag values must still be rejected
+    #[case::optional_bare_flags_wrong_value_reversed(
+        "curl [-s] [-X GET] *",
+        "curl -X POST -s https://example.com",
+        false
+    )]
+    #[case::optional_bare_flags_wrong_value_after_arg(
+        "curl [-s] [-X GET] *",
+        "curl https://example.com -X POST -s",
+        false
+    )]
+    #[case::optional_bare_flags_wrong_value_interleaved(
+        "curl [-s] [-X GET] *",
+        "curl -X POST https://example.com -s",
+        false
+    )]
     fn optional_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
