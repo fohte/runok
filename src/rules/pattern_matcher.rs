@@ -261,11 +261,12 @@ pub fn extract_placeholder(
 /// Collects all possible `<cmd>` captures from a wrapper pattern match.
 ///
 /// Explores all valid alignments of pattern tokens against command tokens and
-/// pushes each successful capture into `all_candidates`. Only `<cmd>`
-/// placeholders contribute to the captured tokens; other placeholder names
-/// consume tokens without capturing. Empty captures (when the pattern has no
-/// `<cmd>` or `<cmd>` would capture nothing) are excluded by requiring at
-/// least one token for `<cmd>`.
+/// pushes each successful capture into `all_candidates`, ordered from shortest
+/// to longest capture (since wildcards iterate from skip=0 upward). Only
+/// `<cmd>` placeholders contribute to the captured tokens; other placeholder
+/// names consume tokens without capturing. Empty captures (when the pattern
+/// has no `<cmd>` or `<cmd>` would capture nothing) are excluded by requiring
+/// at least one token for `<cmd>`.
 fn extract_placeholder_all<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
