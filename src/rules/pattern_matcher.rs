@@ -127,10 +127,12 @@ fn match_tokens_core<'a>(
                     if alts.iter().any(|a| a.as_str() == cmd_tokens[i]) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
                         if let Some(ref mut caps) = captures {
+                            let saved_len = caps.len();
                             if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
                             {
                                 return true;
                             }
+                            caps.truncate(saved_len);
                         } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
                             return true;
                         }
