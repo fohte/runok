@@ -10,7 +10,7 @@ use std::path::{Component, Path};
 use crate::config::Definitions;
 use crate::rules::RuleError;
 use crate::rules::command_parser::ParsedCommand;
-use crate::rules::pattern_parser::{Pattern, PatternToken};
+use crate::rules::pattern_parser::{CommandPattern, Pattern, PatternToken};
 
 /// Maximum number of recursive steps allowed during pattern matching.
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
@@ -26,10 +26,30 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
         return false;
     }
 
-    // Match pattern tokens against raw_tokens (excluding the command name at index 0)
-    let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
-    let steps = Cell::new(0usize);
-    match_tokens_core(&pattern.tokens, &cmd_tokens, definitions, &steps, None)
+    if matches!(pattern.command, CommandPattern::Wildcard) {
+        // When the command pattern is a wildcard, include all tokens (including
+        // the command name) and try consuming 1..=N tokens as the command name
+        // part before matching the remaining pattern tokens.
+        let cmd_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
+        let steps = Cell::new(0usize);
+        for skip in 1..=cmd_tokens.len() {
+            if match_tokens_core(
+                &pattern.tokens,
+                &cmd_tokens[skip..],
+                definitions,
+                &steps,
+                None,
+            ) {
+                return true;
+            }
+        }
+        false
+    } else {
+        // For literal/alternation commands, skip the already-matched command name.
+        let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
+        let steps = Cell::new(0usize);
+        match_tokens_core(&pattern.tokens, &cmd_tokens, definitions, &steps, None)
+    }
 }
 
 /// Like `matches`, but also returns the tokens captured by wildcards (`*`).
@@ -44,19 +64,39 @@ pub fn matches_with_captures(
         return None;
     }
 
-    let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
-    let steps = Cell::new(0usize);
-    let mut captures = Vec::new();
-    if match_tokens_core(
-        &pattern.tokens,
-        &cmd_tokens,
-        definitions,
-        &steps,
-        Some(&mut captures),
-    ) {
-        Some(captures.into_iter().map(|s| s.to_string()).collect())
-    } else {
+    if matches!(pattern.command, CommandPattern::Wildcard) {
+        // Try consuming 1..=N tokens as the command name part (not captured),
+        // then match the remaining pattern tokens with capture support.
+        let cmd_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
+        let steps = Cell::new(0usize);
+        for skip in 1..=cmd_tokens.len() {
+            let mut captures = Vec::new();
+            if match_tokens_core(
+                &pattern.tokens,
+                &cmd_tokens[skip..],
+                definitions,
+                &steps,
+                Some(&mut captures),
+            ) {
+                return Some(captures.into_iter().map(|s| s.to_string()).collect());
+            }
+        }
         None
+    } else {
+        let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
+        let steps = Cell::new(0usize);
+        let mut captures = Vec::new();
+        if match_tokens_core(
+            &pattern.tokens,
+            &cmd_tokens,
+            definitions,
+            &steps,
+            Some(&mut captures),
+        ) {
+            Some(captures.into_iter().map(|s| s.to_string()).collect())
+        } else {
+            None
+        }
     }
 }
 
@@ -244,22 +284,45 @@ pub fn extract_placeholder(
         return Ok(Vec::new());
     }
 
-    let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
-    let steps = Cell::new(0usize);
-    let mut captured = Vec::new();
-    let mut all_candidates: Vec<Vec<&str>> = Vec::new();
-    extract_placeholder_all(
-        &pattern.tokens,
-        &cmd_tokens,
-        definitions,
-        &steps,
-        &mut captured,
-        &mut all_candidates,
-    )?;
-    Ok(all_candidates
-        .into_iter()
-        .map(|c| c.into_iter().map(|s| s.to_string()).collect())
-        .collect())
+    if matches!(pattern.command, CommandPattern::Wildcard) {
+        // Try consuming 1..=N tokens as the command name part, then extract
+        // placeholder candidates from the remaining tokens.
+        let cmd_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
+        let mut all_candidates: Vec<Vec<&str>> = Vec::new();
+        for skip in 1..=cmd_tokens.len() {
+            let steps = Cell::new(0usize);
+            let mut captured = Vec::new();
+            extract_placeholder_all(
+                &pattern.tokens,
+                &cmd_tokens[skip..],
+                definitions,
+                &steps,
+                &mut captured,
+                &mut all_candidates,
+            )?;
+        }
+        Ok(all_candidates
+            .into_iter()
+            .map(|c| c.into_iter().map(|s| s.to_string()).collect())
+            .collect())
+    } else {
+        let cmd_tokens: Vec<&str> = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
+        let steps = Cell::new(0usize);
+        let mut captured = Vec::new();
+        let mut all_candidates: Vec<Vec<&str>> = Vec::new();
+        extract_placeholder_all(
+            &pattern.tokens,
+            &cmd_tokens,
+            definitions,
+            &steps,
+            &mut captured,
+            &mut all_candidates,
+        )?;
+        Ok(all_candidates
+            .into_iter()
+            .map(|c| c.into_iter().map(|s| s.to_string()).collect())
+            .collect())
+    }
 }
 
 /// Collects all possible `<cmd>` captures from a wrapper pattern match.
@@ -867,9 +930,13 @@ mod tests {
     #[case::version_flag("* --version", "node --version", true)]
     #[case::any_command_any_args("* *", "ls -la", true)]
     #[case::wildcard_only("*", "git", true)]
-    #[case::wildcard_command_no_match_extra_args("*", "git status", false)]
+    #[case::wildcard_command_multi_word("*", "git status", true)]
     #[case::wildcard_command_flag_mismatch("* --help", "git --version", false)]
     #[case::wildcard_command_missing_flag("* --help", "git", false)]
+    #[case::wildcard_help_multi_word("* --help", "git branch --help", true)]
+    #[case::wildcard_help_three_words("* --help", "cargo test --help", true)]
+    #[case::wildcard_help_deep_subcommand("* --help", "docker compose up --help", true)]
+    #[case::wildcard_with_args_multi_word("* *", "git branch -a", true)]
     fn wildcard_command_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
