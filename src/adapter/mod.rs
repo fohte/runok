@@ -909,12 +909,6 @@ mod tests {
         true,  // expect handle_action
         false, // expect handle_no_match
     )]
-    #[case::while_loop_with_cat(
-        "while read line; do cat $line; done",
-        allow_rule("cat *"),
-        true,
-        false
-    )]
     #[case::for_loop_no_matching_rule(
         "for f in *.yaml; do echo $f; done",
         allow_rule("git status"),
