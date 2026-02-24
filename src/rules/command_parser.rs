@@ -214,10 +214,6 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     let mut commands = Vec::new();
     collect_commands(root, trimmed.as_bytes(), &mut commands);
 
-    if commands.is_empty() {
-        return Err(CommandParseError::SyntaxError);
-    }
-
     Ok(commands)
 }
 
@@ -283,6 +279,8 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // comment: skip shell comments (e.g. `# description`)
+        "comment" => {}
         // variable_assignment: transparent container — skip the assignment itself
         // and recursively find command_substitution / process_substitution nodes
         // anywhere in the subtree (they may be nested inside string nodes when
@@ -605,6 +603,29 @@ mod tests {
     }
 
     // ========================================
+    // extract_commands: comments
+    // ========================================
+
+    #[rstest]
+    #[case::comment_before_command(
+        "# description\ngh api -X GET /repos",
+        vec!["gh api -X GET /repos"],
+    )]
+    #[case::comment_before_pipeline(
+        "# list agents\ngh api -X GET /repos | jq '.name'",
+        vec!["gh api -X GET /repos", "jq '.name'"],
+    )]
+    #[case::comment_only("# just a comment", vec![])]
+    #[case::inline_comment_after_semicolon(
+        "echo hello; # trailing comment",
+        vec!["echo hello"],
+    )]
+    fn extract_comments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
     // extract_commands: whitespace handling
     // ========================================
 
@@ -687,10 +708,9 @@ mod tests {
 
     #[test]
     fn extract_bare_variable_assignment_returns_empty() {
-        // A bare variable assignment (no command substitution) produces no commands,
-        // which extract_commands treats as a syntax error since there's nothing to evaluate.
-        let result = extract_commands("X=1");
-        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
+        // A bare variable assignment (no command substitution) produces no commands.
+        let result = extract_commands("X=1").unwrap();
+        assert!(result.is_empty());
     }
 
     // ========================================
