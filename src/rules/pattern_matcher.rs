@@ -455,12 +455,6 @@ fn extract_placeholder_all<'a>(
     }
 }
 
-/// Count how many tokens `<opts>` should consume from the front of `tokens`.
-///
-/// Consumes hyphen-prefixed tokens as flags. A short flag consisting of only
-/// one character after the hyphen (e.g., `-n`) may take the next token as its
-/// argument if that token is not hyphen-prefixed. Flags with more characters
-/// (e.g., `-I{}`, `-0`, `--verbose`) are treated as self-contained.
 /// Count how many tokens `<vars>` should consume from the front of `tokens`.
 ///
 /// Consumes consecutive tokens that contain `=` (i.e., `KEY=VALUE` style
@@ -469,6 +463,13 @@ fn consume_vars(tokens: &[&str]) -> usize {
     tokens.iter().take_while(|t| t.contains('=')).count()
 }
 
+/// Count how many tokens `<opts>` should consume from the front of `tokens`.
+///
+/// Consumes hyphen-prefixed tokens as flags. A short flag consisting of only
+/// one ASCII letter after the hyphen (e.g., `-n`) may take the next token as
+/// its argument if that token is not hyphen-prefixed. Flags with more
+/// characters (e.g., `-I{}`, `-0`, `--verbose`) are treated as self-contained.
+/// The POSIX `--` end-of-options marker terminates scanning.
 fn consume_opts(tokens: &[&str]) -> usize {
     let mut i = 0;
     while i < tokens.len() {
