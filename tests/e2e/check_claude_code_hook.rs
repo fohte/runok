@@ -56,7 +56,7 @@ fn non_bash_hook_json(tool_name: &str) -> String {
 fn hook_bash_deny(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("rm -rf /"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -76,7 +76,7 @@ fn hook_bash_deny(hook_env: TestEnv) {
 fn hook_bash_allow(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -96,7 +96,7 @@ fn hook_bash_allow(hook_env: TestEnv) {
 fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(non_bash_hook_json(tool_name))
         .assert();
     assert.code(0).stdout(predicates::str::is_empty());
@@ -108,7 +108,7 @@ fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
 fn hook_invalid_json_exits_2(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("invalid json")
         .assert();
     assert.code(2);
@@ -120,7 +120,7 @@ fn hook_invalid_json_exits_2(hook_env: TestEnv) {
 fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("echo hello"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -147,7 +147,7 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
 fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("unknown-command --flag"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -162,7 +162,7 @@ fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
 fn hook_output_contains_event_name(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();

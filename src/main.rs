@@ -141,7 +141,8 @@ mod tests {
     fn run_command_check_with_command_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
             command: Some("echo hello".into()),
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -153,7 +154,8 @@ mod tests {
     fn run_command_check_with_empty_stdin_returns_two() {
         let cmd = Commands::Check(CheckArgs {
             command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -165,7 +167,8 @@ mod tests {
     fn run_command_check_with_stdin_json_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
             command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -177,7 +180,8 @@ mod tests {
     fn run_command_check_with_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
             command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -209,7 +213,8 @@ mod tests {
     fn run_command_check_with_multiline_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
             command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

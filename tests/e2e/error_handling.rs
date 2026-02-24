@@ -86,7 +86,13 @@ fn no_config_check_returns_default() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--command", "git status"])
+        .args([
+            "check",
+            "--output-format",
+            "json",
+            "--command",
+            "git status",
+        ])
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
     let json: serde_json::Value =
@@ -102,7 +108,7 @@ fn unknown_format_flag_exits_2() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--format", "unknown-format"])
+        .args(["check", "--input-format", "unknown-format"])
         .write_stdin(r#"{"command":"ls"}"#)
         .assert();
     assert.code(2);
@@ -115,7 +121,7 @@ fn format_with_non_json_stdin_exits_2() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("not valid json")
         .assert();
     assert.code(2);
