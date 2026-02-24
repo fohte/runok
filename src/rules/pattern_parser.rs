@@ -71,33 +71,8 @@ pub enum PatternToken {
 /// - `word|word` -> Alternation
 /// - everything else -> Literal
 pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
-    use super::PatternParseError;
-
-    let trimmed = pattern.trim();
-    if trimmed.is_empty() {
-        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
-    }
-
-    let lex_tokens = super::pattern_lexer::tokenize(trimmed)?;
-    if lex_tokens.is_empty() {
-        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
-    }
-
-    let command = match &lex_tokens[0] {
-        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
-        LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
-        LexToken::Wildcard => CommandPattern::Wildcard,
-        other => {
-            return Err(PatternParseError::InvalidSyntax(format!(
-                "expected command name, got {other:?}"
-            )));
-        }
-    };
-
-    let rest = &lex_tokens[1..];
-    let tokens = build_pattern_tokens(rest, false)?;
-
-    Ok(Pattern { command, tokens })
+    let lex_tokens = tokenize_pattern(pattern)?;
+    build_pattern_from_tokens(&lex_tokens)
 }
 
 /// Parse a pattern string that may contain multi-word alternation.
@@ -110,17 +85,7 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
 /// For regular patterns (no multi-word alternation), returns a single `Pattern`
 /// in the vector, equivalent to calling `parse`.
 pub fn parse_multi(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseError> {
-    use super::PatternParseError;
-
-    let trimmed = pattern.trim();
-    if trimmed.is_empty() {
-        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
-    }
-
-    let lex_tokens = super::pattern_lexer::tokenize(trimmed)?;
-    if lex_tokens.is_empty() {
-        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
-    }
+    let lex_tokens = tokenize_pattern(pattern)?;
 
     match &lex_tokens[0] {
         LexToken::MultiWordAlternation(alternatives) => {
@@ -146,24 +111,49 @@ pub fn parse_multi(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseErr
             Ok(patterns)
         }
         _ => {
-            // No multi-word alternation: reuse already-tokenized result
-            let command = match &lex_tokens[0] {
-                LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
-                LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
-                LexToken::Wildcard => CommandPattern::Wildcard,
-                other => {
-                    return Err(PatternParseError::InvalidSyntax(format!(
-                        "expected command name, got {other:?}"
-                    )));
-                }
-            };
-
-            let rest = &lex_tokens[1..];
-            let tokens = build_pattern_tokens(rest, false)?;
-
-            Ok(vec![Pattern { command, tokens }])
+            let pattern = build_pattern_from_tokens(&lex_tokens)?;
+            Ok(vec![pattern])
         }
     }
+}
+
+/// Tokenize a pattern string, returning an error if empty.
+fn tokenize_pattern(pattern: &str) -> Result<Vec<LexToken>, super::PatternParseError> {
+    use super::PatternParseError;
+
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
+    }
+
+    let lex_tokens = super::pattern_lexer::tokenize(trimmed)?;
+    if lex_tokens.is_empty() {
+        return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
+    }
+
+    Ok(lex_tokens)
+}
+
+/// Build a single Pattern from already-tokenized lex tokens.
+/// The first token becomes the command name, the rest become pattern tokens.
+fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::PatternParseError> {
+    use super::PatternParseError;
+
+    let command = match &lex_tokens[0] {
+        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
+        LexToken::Wildcard => CommandPattern::Wildcard,
+        other => {
+            return Err(PatternParseError::InvalidSyntax(format!(
+                "expected command name, got {other:?}"
+            )));
+        }
+    };
+
+    let rest = &lex_tokens[1..];
+    let tokens = build_pattern_tokens(rest, false)?;
+
+    Ok(Pattern { command, tokens })
 }
 
 /// Convert LexTokens into PatternToken values, handling
