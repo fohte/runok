@@ -795,6 +795,23 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::bare_then_unclosed_quote(
+        r#"prettier|"npx prettier"#,
+        "invalid syntax: unclosed quote starting at position 9"
+    )]
+    #[case::quoted_then_unclosed_quote(
+        r#""npx prettier"|"bunx prettier"#,
+        "invalid syntax: unclosed quote starting at position 15"
+    )]
+    fn tokenize_multi_word_unclosed_quote_reports_quote_position(
+        #[case] input: &str,
+        #[case] expected_msg: &str,
+    ) {
+        let err = tokenize(input).expect_err(&format!("expected error for: {input:?}"));
+        assert_eq!(err.to_string(), expected_msg);
+    }
+
     // === Backward compatibility: single-word alternation unchanged ===
 
     #[test]
