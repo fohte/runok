@@ -132,7 +132,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                 // Check if the word ends with `|` and next char is a quote,
                 // indicating a multi-word alternation like `prettier|"npx prettier"`
                 if word.ends_with('|') {
-                    if let Some(&(_, q @ ('"' | '\''))) = chars.peek() {
+                    if let Some(&(qpos, q @ ('"' | '\''))) = chars.peek() {
                         let prefix = &word[..word.len() - 1];
                         // Split existing pipe-separated parts into individual alternatives
                         let mut alternatives: Vec<Vec<String>> = prefix
@@ -149,7 +149,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                         chars.next(); // consume opening quote
                         let quoted = consume_until(&mut chars, q).ok_or_else(|| {
                             PatternParseError::InvalidSyntax(format!(
-                                "unclosed quote starting at position {pos}"
+                                "unclosed quote starting at position {qpos}"
                             ))
                         })?;
                         let quoted_words: Vec<String> =
