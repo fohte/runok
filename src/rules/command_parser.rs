@@ -758,6 +758,13 @@ mod tests {
         "FOO=$(echo bar) echo hello",
         vec!["echo bar", "echo hello"]
     )]
+    // `env FOO=bar echo hello`: tree-sitter treats `env` as the command name
+    // and `FOO=bar` as a regular argument (word node), not a variable_assignment.
+    // The entire text is preserved as a single command for wrapper evaluation.
+    #[case::env_cmd_with_var_arg(
+        "env FOO=bar echo hello",
+        vec!["env FOO=bar echo hello"]
+    )]
     fn extract_env_prefix_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);

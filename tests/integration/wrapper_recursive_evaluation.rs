@@ -4,7 +4,7 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{Config, parse_config};
 use runok::rules::RuleError;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
 
 fn config_with_standard_wrappers() -> &'static str {
     indoc! {"
@@ -189,6 +189,62 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
     // Without wrappers, "sudo rm -rf /" is just "sudo" command, not unwrapped
     let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
     assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// Wrapper preserves quoting
+// ========================================
+
+// ========================================
+// env wrapper: env-prefix variables are consumed by wildcard,
+// inner command is correctly evaluated
+// ========================================
+
+#[rstest]
+#[case::env_var_echo_allowed("env FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::env_var_rm_denied("env FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+#[case::env_multiple_vars("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
+#[case::env_var_unmatched_default("env FOO=bar hg status", assert_default as ActionAssertion)]
+fn env_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'env * <cmd>'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Bare env-prefix command (no `env` wrapper):
+// FOO=bar echo hello is evaluated as echo hello via evaluate_compound,
+// which calls extract_commands to strip variable assignments.
+// ========================================
+
+#[rstest]
+#[case::bare_env_prefix_allowed("FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::bare_env_prefix_denied("FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+fn bare_env_prefix_evaluates_stripped_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
 }
 
 // ========================================
