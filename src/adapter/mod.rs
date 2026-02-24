@@ -943,6 +943,25 @@ mod tests {
         ));
     }
 
+    #[rstest]
+    fn single_extracted_subcommand_verbose_logs_extraction() {
+        let endpoint =
+            MockEndpoint::new(Ok(Some("for f in *.yaml; do echo $f; done".to_string())));
+        let config = make_config(vec![allow_rule("echo *")]);
+        let options = RunOptions {
+            dry_run: false,
+            verbose: true,
+        };
+        let exit_code = run_with_options(&endpoint, &config, &options);
+
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Allow)
+        ));
+        assert_eq!(exit_code, 0);
+    }
+
     // --- apply_sandbox_fallback unit tests ---
 
     #[rstest]
