@@ -90,7 +90,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         }
         Commands::Check(args) => {
             let options = RunOptions {
-                dry_run: false,
+                dry_run: true,
                 verbose: args.verbose,
             };
             match route_check(&args, stdin) {
