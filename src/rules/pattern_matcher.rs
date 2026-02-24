@@ -476,14 +476,21 @@ fn consume_opts(tokens: &[&str]) -> usize {
         if !token.starts_with('-') {
             break;
         }
+        // `--` is the POSIX end-of-options marker; consume it and stop.
+        if token == "--" {
+            i += 1;
+            break;
+        }
         i += 1;
 
         // A short flag like `-n` (single hyphen + single letter) may have a
-        // separate argument. Long flags (`--foo`) and short flags with a value
-        // already attached (`-I{}`, `-0`) do not consume the next token.
-        let is_short_single_char =
-            token.starts_with('-') && !token.starts_with("--") && token.len() == 2;
-        if is_short_single_char && i < tokens.len() && !tokens[i].starts_with('-') {
+        // separate argument. Only flags whose second character is an ASCII
+        // letter qualify; flags like `-0` are self-contained and do not
+        // consume the next token.
+        let is_short_alpha = token.len() == 2
+            && !token.starts_with("--")
+            && token.as_bytes()[1].is_ascii_alphabetic();
+        if is_short_alpha && i < tokens.len() && !tokens[i].starts_with('-') {
             i += 1;
         }
     }
@@ -1080,6 +1087,9 @@ mod tests {
     #[case::opts_no_flags("cmd <opts> arg", "cmd arg", true)]
     #[case::opts_with_short_flag_value("cmd <opts> arg", "cmd -n 5 arg", true)]
     #[case::opts_mismatch_trailing("cmd <opts> arg", "cmd -v other", false)]
+    #[case::opts_digit_flag_not_consuming("cmd <opts> arg", "cmd -0 arg", true)]
+    #[case::opts_end_of_options_marker("cmd <opts> arg", "cmd -- arg", true)]
+    #[case::opts_end_of_options_with_flags("cmd <opts> arg", "cmd -v -- arg", true)]
     fn opts_non_wrapper_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

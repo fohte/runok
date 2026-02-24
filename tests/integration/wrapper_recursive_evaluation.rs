@@ -305,6 +305,9 @@ fn wildcard_wrapper_greedy_consumes_flags(
 #[case::opts_multiple_flags("xargs -0 -I{} echo hello", assert_allow as ActionAssertion)]
 #[case::opts_flag_with_separate_arg("xargs -n 5 echo hello", assert_allow as ActionAssertion)]
 #[case::opts_mixed_flags_and_args("xargs -0 -n 5 -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::opts_digit_flag_self_contained("xargs -0 echo hello", assert_allow as ActionAssertion)]
+#[case::opts_end_of_options("xargs -- echo hello", assert_allow as ActionAssertion)]
+#[case::opts_flags_then_end_of_options("xargs -0 -- echo hello", assert_allow as ActionAssertion)]
 fn opts_wrapper_consumes_flags(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
