@@ -53,6 +53,20 @@ impl DefaultConfigLoader {
         None
     }
 
+    /// Determine which local override config file to use.
+    /// `runok.local.yml` is preferred; `runok.local.yaml` is a fallback.
+    fn local_override_config_path(cwd: &Path) -> Option<PathBuf> {
+        let yml = cwd.join("runok.local.yml");
+        if yml.exists() {
+            return Some(yml);
+        }
+        let yaml = cwd.join("runok.local.yaml");
+        if yaml.exists() {
+            return Some(yaml);
+        }
+        None
+    }
+
     fn read_and_parse(path: &Path) -> Result<Config, ConfigError> {
         let yaml = std::fs::read_to_string(path)?;
         parse_config(&yaml)
@@ -72,7 +86,14 @@ impl ConfigLoader for DefaultConfigLoader {
             .map(|p| Self::read_and_parse(&p))
             .transpose()?;
 
-        let mut config = global.unwrap_or_default().merge(local.unwrap_or_default());
+        let local_override = Self::local_override_config_path(cwd)
+            .map(|p| Self::read_and_parse(&p))
+            .transpose()?;
+
+        let mut config = global
+            .unwrap_or_default()
+            .merge(local.unwrap_or_default())
+            .merge(local_override.unwrap_or_default());
 
         config.validate()?;
         Ok(config)
@@ -321,5 +342,130 @@ mod tests {
                 .join("runok.yml");
             assert_eq!(loader.global_config_path, Some(expected));
         }
+    }
+
+    #[rstest]
+    #[case::local_yml("runok.local.yml")]
+    #[case::local_yaml_fallback("runok.local.yaml")]
+    fn load_local_override(#[case] filename: &str) {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        env.write_local(
+            filename,
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        // local override takes priority over project config
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Allow)
+        );
+    }
+
+    #[test]
+    fn load_local_override_yml_takes_priority_over_yaml() {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        env.write_local(
+            "runok.local.yaml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Deny)
+        );
+    }
+
+    #[test]
+    fn load_merges_all_three_layers() {
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            defaults:
+              action: deny
+              sandbox: global-sandbox
+            rules:
+              - deny: 'rm -rf /'
+        "});
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: ask
+                rules:
+                  - allow: 'git status'
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+                rules:
+                  - allow: 'cargo test'
+            "},
+        );
+
+        let config = env.load().unwrap();
+
+        let defaults = config.defaults.unwrap();
+        // local override wins over project and global
+        assert_eq!(defaults.action, Some(crate::config::ActionKind::Allow));
+        // sandbox from global is preserved (not overridden by layers without it)
+        assert_eq!(defaults.sandbox.as_deref(), Some("global-sandbox"));
+
+        // rules are appended: global + project + local override
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status"));
+        assert_eq!(rules[2].allow.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn load_local_override_parse_error() {
+        let env = TestEnv::new();
+        env.write_local("runok.local.yml", "rules: [invalid yaml\n  broken:");
+
+        let result = env.load_without_global();
+        assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
+    }
+
+    #[test]
+    fn load_local_override_only_without_project_config() {
+        let env = TestEnv::new();
+        // no runok.yml, only runok.local.yml
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                rules:
+                  - allow: 'echo hello'
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
     }
 }
