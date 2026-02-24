@@ -1,9 +1,19 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ActionKind, Defaults, MergedSandboxPolicy};
 use crate::rules::rule_engine::Action;
 
 use super::{ActionResult, Endpoint, SandboxInfo};
+
+/// Output format for `runok check` (generic mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormat {
+    Json,
+    #[default]
+    Text,
+}
 
 /// stdin JSON input for `runok check`.
 #[derive(Debug, Deserialize)]
@@ -36,19 +46,30 @@ pub struct CheckSandboxInfo {
 /// Generic check endpoint implementing `Endpoint`.
 pub struct CheckAdapter {
     command: String,
+    output_format: OutputFormat,
 }
 
 impl CheckAdapter {
     /// Build from positional command arguments.
     pub fn from_command(command: String) -> Self {
-        Self { command }
+        Self {
+            command,
+            output_format: OutputFormat::default(),
+        }
     }
 
     /// Build from stdin JSON input.
     pub fn from_stdin(input: CheckInput) -> Self {
         Self {
             command: input.command,
+            output_format: OutputFormat::default(),
         }
+    }
+
+    /// Set the output format.
+    pub fn with_output_format(mut self, output_format: OutputFormat) -> Self {
+        self.output_format = output_format;
+        self
     }
 }
 
@@ -91,6 +112,23 @@ fn build_no_match_output(defaults: &Defaults) -> CheckOutput {
     }
 }
 
+/// Format a `CheckOutput` as human-readable text.
+impl fmt::Display for CheckOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.decision)?;
+        if let Some(ref reason) = self.reason {
+            write!(f, ": {reason}")?;
+        }
+        if let Some(ref suggestion) = self.fix_suggestion {
+            write!(f, " (suggestion: {suggestion})")?;
+        }
+        if let Some(ref sandbox) = self.sandbox {
+            write!(f, " [sandbox: {}]", sandbox.preset)?;
+        }
+        Ok(())
+    }
+}
+
 impl Endpoint for CheckAdapter {
     fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
         Ok(Some(self.command.clone()))
@@ -98,21 +136,34 @@ impl Endpoint for CheckAdapter {
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
         let output = build_check_output(&result);
-        let json = serde_json::to_string(&output)?;
-        println!("{json}");
+        self.print_output(&output)?;
         Ok(0)
     }
 
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
         let output = build_no_match_output(defaults);
-        let json = serde_json::to_string(&output)?;
-        println!("{json}");
+        self.print_output(&output)?;
         Ok(0)
     }
 
     fn handle_error(&self, error: anyhow::Error) -> i32 {
         eprintln!("{error}");
         2
+    }
+}
+
+impl CheckAdapter {
+    fn print_output(&self, output: &CheckOutput) -> Result<(), anyhow::Error> {
+        match self.output_format {
+            OutputFormat::Json => {
+                let json = serde_json::to_string(output)?;
+                println!("{json}");
+            }
+            OutputFormat::Text => {
+                println!("{output}");
+            }
+        }
+        Ok(())
     }
 }
 

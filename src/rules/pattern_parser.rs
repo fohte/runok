@@ -56,6 +56,13 @@ pub enum PatternToken {
     PathRef(String),
     /// Wrapper placeholder (e.g., <cmd>)
     Placeholder(String),
+    /// Options placeholder for wrapper patterns (e.g., <opts>).
+    /// Consumes zero or more flag-like tokens (hyphen-prefixed) and their
+    /// arguments in the command.
+    Opts,
+    /// Variable-assignment placeholder for wrapper patterns (e.g., <vars>).
+    /// Consumes zero or more `KEY=VALUE` tokens from the command.
+    Vars,
 }
 
 /// Parse a pattern string into a Pattern struct.
@@ -313,6 +320,14 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 
     if let Some(name) = content.strip_prefix("path:") {
         return Ok(PatternToken::PathRef(name.to_string()));
+    }
+
+    if content == "opts" {
+        return Ok(PatternToken::Opts);
+    }
+
+    if content == "vars" {
+        return Ok(PatternToken::Vars);
     }
 
     Ok(PatternToken::Placeholder(content.to_string()))

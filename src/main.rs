@@ -140,7 +140,8 @@ mod tests {
     #[rstest]
     fn run_command_check_with_command_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
             command: vec!["echo".into(), "hello".into()],
         });
@@ -152,7 +153,8 @@ mod tests {
     #[rstest]
     fn run_command_check_with_empty_stdin_returns_two() {
         let cmd = Commands::Check(CheckArgs {
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
             command: vec![],
         });
@@ -164,7 +166,8 @@ mod tests {
     #[rstest]
     fn run_command_check_with_stdin_json_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
             command: vec![],
         });
@@ -176,7 +179,8 @@ mod tests {
     #[rstest]
     fn run_command_check_with_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
             command: vec![],
         });
@@ -208,7 +212,8 @@ mod tests {
     #[rstest]
     fn run_command_check_with_multiline_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
             command: vec![],
         });

@@ -1,9 +1,17 @@
 use crate::adapter::Endpoint;
-use crate::adapter::check_adapter::{CheckAdapter, CheckInput};
+use crate::adapter::check_adapter::{CheckAdapter, CheckInput, OutputFormat};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookInput};
 use runok::rules::command_parser::shell_quote_join;
 
 use super::CheckArgs;
+
+/// Convert the CLI output format enum to the adapter output format enum.
+fn to_adapter_output_format(cli_format: &super::OutputFormat) -> OutputFormat {
+    match cli_format {
+        super::OutputFormat::Json => OutputFormat::Json,
+        super::OutputFormat::Text => OutputFormat::Text,
+    }
+}
 
 /// Result of routing `runok check`: either a single endpoint or multiple commands.
 pub enum CheckRoute {
@@ -18,6 +26,8 @@ pub fn route_check(
     args: &CheckArgs,
     mut stdin: impl std::io::Read,
 ) -> Result<CheckRoute, anyhow::Error> {
+    let output_format = to_adapter_output_format(&args.output_format);
+
     // 1. Positional command arguments → always generic mode (no stdin)
     if !args.command.is_empty() {
         // Return single arguments unquoted so the rule engine can detect
@@ -27,9 +37,9 @@ pub fn route_check(
         } else {
             shell_quote_join(&args.command)
         };
-        return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
-            command,
-        ))));
+        return Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_command(command).with_output_format(output_format),
+        )));
     }
 
     // 2. Read stdin once
@@ -45,14 +55,14 @@ pub fn route_check(
         return route_json(args, json_value);
     }
 
-    // 4. --format requires JSON; plaintext fallback is not allowed when --format is specified
-    if let Some(format) = &args.format {
+    // 4. --input-format requires JSON; plaintext fallback is not allowed when --input-format is specified
+    if let Some(format) = &args.input_format {
         return Err(anyhow::anyhow!(
-            "JSON parse error: input must be valid JSON when --format '{format}' is specified"
+            "JSON parse error: input must be valid JSON when --input-format '{format}' is specified"
         ));
     }
 
-    // 5. JSON parse failed, no --format → treat as plaintext (one command per line, skip empty lines)
+    // 5. JSON parse failed, no --input-format → treat as plaintext (one command per line, skip empty lines)
     let commands: Vec<String> = stdin_input
         .lines()
         .map(|line| line.trim())
@@ -65,15 +75,16 @@ pub fn route_check(
     }
 
     if commands.len() == 1 {
-        return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
-            commands.into_iter().next().unwrap_or_default(),
-        ))));
+        return Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_command(commands.into_iter().next().unwrap_or_default())
+                .with_output_format(output_format),
+        )));
     }
 
     Ok(CheckRoute::Multi(
         commands
             .into_iter()
-            .map(CheckAdapter::from_command)
+            .map(|cmd| CheckAdapter::from_command(cmd).with_output_format(output_format))
             .collect(),
     ))
 }
@@ -83,8 +94,8 @@ fn route_json(
     args: &CheckArgs,
     json_value: serde_json::Value,
 ) -> Result<CheckRoute, anyhow::Error> {
-    // --format is explicitly specified → use that format
-    if let Some(format) = &args.format {
+    // --input-format is explicitly specified → use that format
+    if let Some(format) = &args.input_format {
         return match format.as_str() {
             "claude-code-hook" => {
                 let hook_input: HookInput = serde_json::from_value(json_value)?;
@@ -93,12 +104,12 @@ fn route_json(
                 ))))
             }
             unknown => Err(anyhow::anyhow!(
-                "Unknown format: '{unknown}'. Valid formats: claude-code-hook"
+                "Unknown input format: '{unknown}'. Valid formats: claude-code-hook"
             )),
         };
     }
 
-    // --format omitted → auto-detect by JSON field presence
+    // --input-format omitted → auto-detect by JSON field presence
     // HookInput uses #[serde(rename_all = "snake_case")], so the actual JSON key is "tool_name"
     if json_value.get("tool_name").is_some() {
         let hook_input: HookInput = serde_json::from_value(json_value)?;
@@ -106,10 +117,11 @@ fn route_json(
             hook_input,
         ))))
     } else if json_value.get("command").is_some() {
+        let output_format = to_adapter_output_format(&args.output_format);
         let check_input: CheckInput = serde_json::from_value(json_value)?;
-        Ok(CheckRoute::Single(Box::new(CheckAdapter::from_stdin(
-            check_input,
-        ))))
+        Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_stdin(check_input).with_output_format(output_format),
+        )))
     } else {
         Err(anyhow::anyhow!(
             "Unknown input format: expected 'tool_name' (Claude Code hook) or 'command' (generic) field"
@@ -124,9 +136,10 @@ mod tests {
     use rstest::rstest;
 
     /// Helper: build CheckArgs for testing
-    fn check_args(command: Vec<&str>, format: Option<&str>) -> CheckArgs {
+    fn check_args(command: Vec<&str>, input_format: Option<&str>) -> CheckArgs {
         CheckArgs {
-            format: format.map(String::from),
+            input_format: input_format.map(String::from),
+            output_format: crate::cli::OutputFormat::Text,
             verbose: false,
             command: command.into_iter().map(String::from).collect(),
         }
@@ -148,7 +161,7 @@ mod tests {
         }
     }
 
-    // === route_check: --command flag ===
+    // === route_check: positional command args ===
 
     #[rstest]
     #[case::simple_command(&["git", "status"], "git status")]
@@ -213,7 +226,7 @@ mod tests {
         }
     }
 
-    // === route_check: --format with non-JSON stdin ===
+    // === route_check: --input-format with non-JSON stdin ===
 
     #[rstest]
     fn route_check_format_with_non_json_stdin_returns_error() {
@@ -221,7 +234,8 @@ mod tests {
         let result = route_check(&args, "not valid json".as_bytes());
         match result {
             Err(e) => assert!(
-                e.to_string().contains("JSON parse error") && e.to_string().contains("--format"),
+                e.to_string().contains("JSON parse error")
+                    && e.to_string().contains("--input-format"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),
@@ -344,7 +358,7 @@ mod tests {
         }
     }
 
-    // === route_check: --command flag takes precedence ===
+    // === route_check: positional command takes precedence ===
 
     #[rstest]
     fn route_check_command_flag_takes_precedence_over_stdin() {
@@ -359,7 +373,7 @@ mod tests {
         );
     }
 
-    // === route_check: --format flag ===
+    // === route_check: --input-format flag ===
 
     #[rstest]
     fn route_check_explicit_format_claude_code_hook() {
@@ -392,7 +406,8 @@ mod tests {
         let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes());
         match result {
             Err(e) => assert!(
-                e.to_string().contains("Unknown format: 'invalid-format'"),
+                e.to_string()
+                    .contains("Unknown input format: 'invalid-format'"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),
