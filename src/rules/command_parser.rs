@@ -214,10 +214,6 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     let mut commands = Vec::new();
     collect_commands(root, trimmed.as_bytes(), &mut commands);
 
-    if commands.is_empty() {
-        return Err(CommandParseError::SyntaxError);
-    }
-
     Ok(commands)
 }
 
@@ -283,6 +279,8 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // comment: skip shell comments (e.g. `# description`)
+        "comment" => {}
         // variable_assignment: transparent container — skip the assignment itself
         // and recursively find command_substitution / process_substitution nodes
         // anywhere in the subtree (they may be nested inside string nodes when
@@ -294,6 +292,38 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
                 collect_commands(body, source, commands);
+            }
+        }
+        // command node: strip leading variable_assignment children
+        // (environment variable prefixes like `FOO=bar echo hello`), extract
+        // nested command_substitution nodes, and emit the remaining text.
+        "command" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "command_substitution" => {
+                        collect_commands(child, source, commands);
+                    }
+                    "variable_assignment" => {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
+                    _ => {}
+                }
+            }
+            // Build command text excluding variable_assignment children
+            let mut cursor = node.walk();
+            let parts: Vec<&str> = node
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() != "variable_assignment")
+                .filter_map(|child| {
+                    let text = &source[child.start_byte()..child.end_byte()];
+                    std::str::from_utf8(text).ok()
+                })
+                .collect();
+            let text = parts.join(" ");
+            let text = text.trim();
+            if !text.is_empty() {
+                commands.push(text.to_string());
             }
         }
         // Leaf command nodes — extract the source text, and also recurse
@@ -605,6 +635,29 @@ mod tests {
     }
 
     // ========================================
+    // extract_commands: comments
+    // ========================================
+
+    #[rstest]
+    #[case::comment_before_command(
+        "# description\ngh api -X GET /repos",
+        vec!["gh api -X GET /repos"],
+    )]
+    #[case::comment_before_pipeline(
+        "# list agents\ngh api -X GET /repos | jq '.name'",
+        vec!["gh api -X GET /repos", "jq '.name'"],
+    )]
+    #[case::comment_only("# just a comment", vec![])]
+    #[case::inline_comment_after_semicolon(
+        "echo hello; # trailing comment",
+        vec!["echo hello"],
+    )]
+    fn extract_comments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
     // extract_commands: whitespace handling
     // ========================================
 
@@ -687,10 +740,34 @@ mod tests {
 
     #[test]
     fn extract_bare_variable_assignment_returns_empty() {
-        // A bare variable assignment (no command substitution) produces no commands,
-        // which extract_commands treats as a syntax error since there's nothing to evaluate.
-        let result = extract_commands("X=1");
-        assert!(matches!(result, Err(CommandParseError::SyntaxError)));
+        // A bare variable assignment (no command substitution) produces no commands.
+        let result = extract_commands("X=1").unwrap();
+        assert!(result.is_empty());
+    }
+
+    // ========================================
+    // extract_commands: env-prefix commands (VAR=value cmd args)
+    // ========================================
+
+    #[rstest]
+    #[case::single_env_prefix("FOO=bar echo hello", vec!["echo hello"])]
+    #[case::multiple_env_prefixes("FOO=bar BAZ=qux echo hello", vec!["echo hello"])]
+    #[case::env_prefix_with_flags("FOO=bar curl -X POST https://example.com", vec!["curl -X POST https://example.com"])]
+    #[case::env_prefix_with_pipeline("FOO=bar echo hello | grep hello", vec!["echo hello", "grep hello"])]
+    #[case::env_prefix_with_cmd_substitution(
+        "FOO=$(echo bar) echo hello",
+        vec!["echo bar", "echo hello"]
+    )]
+    // `env FOO=bar echo hello`: tree-sitter treats `env` as the command name
+    // and `FOO=bar` as a regular argument (word node), not a variable_assignment.
+    // The entire text is preserved as a single command for wrapper evaluation.
+    #[case::env_cmd_with_var_arg(
+        "env FOO=bar echo hello",
+        vec!["env FOO=bar echo hello"]
+    )]
+    fn extract_env_prefix_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================

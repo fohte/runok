@@ -172,12 +172,20 @@ Add runok as a PreToolUse hook in your Claude Code settings (`.claude/settings.j
 
 ### File locations
 
-| Location                    | Scope                            |
-| --------------------------- | -------------------------------- |
-| `~/.config/runok/runok.yml` | Global (all projects)            |
-| `./runok.yml`               | Project-local (overrides global) |
+| Location                    | Scope                                              |
+| --------------------------- | -------------------------------------------------- |
+| `~/.config/runok/runok.yml` | Global (all projects)                              |
+| `./runok.yml`               | Project-local (overrides global)                   |
+| `./runok.local.yml`         | Personal override (overrides project, git-ignored) |
 
-Both `runok.yml` and `runok.yaml` are recognized (`.yml` takes precedence).
+All files recognize both `.yml` and `.yaml` extensions (`.yml` takes precedence).
+
+`runok.local.yml` is intended for personal, environment-specific settings that should not be committed to version control. Add it to your `.gitignore`:
+
+```gitignore
+runok.local.yml
+runok.local.yaml
+```
 
 ### Presets (`extends`)
 
