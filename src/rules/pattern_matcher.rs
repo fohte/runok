@@ -1199,4 +1199,77 @@ mod tests {
         let result = check_extract("wrap <cmd> done", "wrap echo hello done", &empty_defs);
         assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
     }
+
+    // ========================================
+    // Multi-word alternation matching
+    // ========================================
+
+    /// Helper: parse pattern with parse_multi, then check if any expanded pattern matches.
+    fn check_multi_match(pattern_str: &str, command_str: &str, definitions: &Definitions) -> bool {
+        use crate::rules::pattern_parser::parse_multi;
+
+        let patterns = parse_multi(pattern_str).unwrap();
+        for pattern in &patterns {
+            let schema = build_schema_from_pattern(pattern);
+            let command = parse_command(command_str, &schema).unwrap();
+            if matches(pattern, &command, definitions) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[rstest]
+    #[case::npx_variant(r#""npx prettier"|prettier *"#, "npx prettier --write .", true)]
+    #[case::bare_variant(r#""npx prettier"|prettier *"#, "prettier --write .", true)]
+    #[case::no_match_different_runner(
+        r#""npx prettier"|prettier *"#,
+        "yarn prettier --write .",
+        false
+    )]
+    #[case::no_match_different_tool(r#""npx prettier"|prettier *"#, "npx eslint --fix .", false)]
+    #[case::three_alternatives_first(
+        r#""npx prettier"|"bunx prettier"|prettier *"#,
+        "npx prettier --write .",
+        true
+    )]
+    #[case::three_alternatives_second(
+        r#""npx prettier"|"bunx prettier"|prettier *"#,
+        "bunx prettier --write .",
+        true
+    )]
+    #[case::three_alternatives_third(
+        r#""npx prettier"|"bunx prettier"|prettier *"#,
+        "prettier --write .",
+        true
+    )]
+    #[case::python_pytest_module(r#""python -m pytest"|pytest *"#, "python -m pytest tests/", true)]
+    #[case::python_pytest_bare(r#""python -m pytest"|pytest *"#, "pytest tests/", true)]
+    #[case::python_pytest_no_match(r#""python -m pytest"|pytest *"#, "python -m mypy", false)]
+    fn multi_word_alternation_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_multi_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    #[rstest]
+    #[case::backward_compat_first("ast-grep|sg scan *", "ast-grep scan foo", true)]
+    #[case::backward_compat_second("ast-grep|sg scan *", "sg scan foo", true)]
+    #[case::backward_compat_no_match("ast-grep|sg scan *", "rg scan foo", false)]
+    fn multi_word_alternation_backward_compat(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_multi_match(pattern_str, command_str, &empty_defs()),
+            expected,
+        );
+    }
 }

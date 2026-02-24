@@ -4,11 +4,14 @@
 use super::pattern_lexer::LexToken;
 
 /// Represents the command name part of a pattern, which can be
-/// either a literal string or a wildcard (`*`) that matches any command.
+/// either a literal string, an alternation of names, or a wildcard (`*`)
+/// that matches any command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandPattern {
     /// Matches a specific command name (e.g., "git", "curl").
     Literal(String),
+    /// Matches any of the given command names (e.g., "ast-grep|sg").
+    Alternation(Vec<String>),
     /// Matches any command name (`*`).
     Wildcard,
 }
@@ -18,6 +21,7 @@ impl CommandPattern {
     pub fn matches(&self, command: &str) -> bool {
         match self {
             CommandPattern::Literal(s) => s == command,
+            CommandPattern::Alternation(alts) => alts.iter().any(|s| s == command),
             CommandPattern::Wildcard => true,
         }
     }
@@ -74,6 +78,54 @@ pub enum PatternToken {
 /// - `word|word` -> Alternation
 /// - everything else -> Literal
 pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
+    let lex_tokens = tokenize_pattern(pattern)?;
+    build_pattern_from_tokens(&lex_tokens)
+}
+
+/// Parse a pattern string that may contain multi-word alternation.
+///
+/// For patterns with multi-word alternation (e.g., `"npx prettier"|prettier *`),
+/// returns multiple `Pattern` instances — one for each alternative:
+///   - `Pattern { command: "npx", tokens: [Literal("prettier"), Wildcard] }`
+///   - `Pattern { command: "prettier", tokens: [Wildcard] }`
+///
+/// For regular patterns (no multi-word alternation), returns a single `Pattern`
+/// in the vector, equivalent to calling `parse`.
+pub fn parse_multi(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseError> {
+    let lex_tokens = tokenize_pattern(pattern)?;
+
+    match &lex_tokens[0] {
+        LexToken::MultiWordAlternation(alternatives) => {
+            let rest = &lex_tokens[1..];
+            let rest_tokens = build_pattern_tokens(rest, false)?;
+            let mut patterns = Vec::with_capacity(alternatives.len());
+
+            for alt in alternatives {
+                // Each alternative is a list of words; the first word is the command name,
+                // the rest are prepended as Literal tokens before the shared remaining tokens.
+                let command = CommandPattern::Literal(alt[0].clone());
+                let prefix_tokens: Vec<PatternToken> = alt[1..]
+                    .iter()
+                    .map(|w| PatternToken::Literal(w.clone()))
+                    .collect();
+
+                let mut tokens = prefix_tokens;
+                tokens.extend(rest_tokens.clone());
+
+                patterns.push(Pattern { command, tokens });
+            }
+
+            Ok(patterns)
+        }
+        _ => {
+            let pattern = build_pattern_from_tokens(&lex_tokens)?;
+            Ok(vec![pattern])
+        }
+    }
+}
+
+/// Tokenize a pattern string, returning an error if empty.
+fn tokenize_pattern(pattern: &str) -> Result<Vec<LexToken>, super::PatternParseError> {
     use super::PatternParseError;
 
     let trimmed = pattern.trim();
@@ -86,8 +138,17 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
         return Err(PatternParseError::InvalidSyntax("empty pattern".into()));
     }
 
+    Ok(lex_tokens)
+}
+
+/// Build a single Pattern from already-tokenized lex tokens.
+/// The first token becomes the command name, the rest become pattern tokens.
+fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::PatternParseError> {
+    use super::PatternParseError;
+
     let command = match &lex_tokens[0] {
         LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
         other => {
             return Err(PatternParseError::InvalidSyntax(format!(
@@ -209,6 +270,12 @@ fn build_pattern_tokens(
                     "unexpected closing bracket".into(),
                 ));
             }
+
+            LexToken::MultiWordAlternation(_) => {
+                return Err(PatternParseError::InvalidSyntax(
+                    "multi-word alternation is only supported in command position".into(),
+                ));
+            }
         }
     }
 
@@ -231,6 +298,9 @@ fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::Pattern
         LexToken::OpenBracket | LexToken::CloseBracket => Err(
             super::PatternParseError::InvalidSyntax("bracket cannot be used as flag value".into()),
         ),
+        LexToken::MultiWordAlternation(_) => Err(super::PatternParseError::InvalidSyntax(
+            "multi-word alternation cannot be used as flag value".into(),
+        )),
     }
 }
 
@@ -588,6 +658,48 @@ mod tests {
     }
 
     #[rstest]
+    #[case::two_aliases(
+        "ast-grep|sg scan *",
+        vec!["ast-grep".into(), "sg".into()],
+        vec![
+            PatternToken::Literal("scan".into()),
+            PatternToken::Wildcard,
+        ],
+    )]
+    #[case::three_aliases(
+        "vim|nvim|vi *",
+        vec!["vim".into(), "nvim".into(), "vi".into()],
+        vec![PatternToken::Wildcard],
+    )]
+    #[case::aliases_no_args(
+        "python|python3",
+        vec!["python".into(), "python3".into()],
+        vec![],
+    )]
+    fn parse_command_alternation(
+        #[case] input: &str,
+        #[case] expected_alts: Vec<String>,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, CommandPattern::Alternation(expected_alts));
+        assert_eq!(result.tokens, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::matches_first("ast-grep|sg", "ast-grep", true)]
+    #[case::matches_second("ast-grep|sg", "sg", true)]
+    #[case::no_match("ast-grep|sg", "rg", false)]
+    fn command_alternation_matches(
+        #[case] pattern: &str,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let parsed = parse(pattern).unwrap();
+        assert_eq!(parsed.command.matches(command), expected);
+    }
+
+    #[rstest]
     #[case::empty_string("", "InvalidSyntax")]
     #[case::whitespace_only("   ", "InvalidSyntax")]
     #[case::unclosed_angle_bracket("curl <cmd", "UnclosedBracket")]
@@ -606,6 +718,75 @@ mod tests {
         assert!(
             debug.starts_with(expected_variant),
             "wrong error variant for {input:?}: expected {expected_variant}, got {debug}"
+        );
+    }
+
+    // === Multi-word alternation (parse_multi) ===
+
+    #[rstest]
+    #[case::two_alternatives(
+        r#""npx prettier"|prettier *"#,
+        vec![
+            Pattern {
+                command: CommandPattern::Literal("npx".into()),
+                tokens: vec![PatternToken::Literal("prettier".into()), PatternToken::Wildcard],
+            },
+            Pattern {
+                command: CommandPattern::Literal("prettier".into()),
+                tokens: vec![PatternToken::Wildcard],
+            },
+        ]
+    )]
+    #[case::three_alternatives(
+        r#""npx prettier"|"bunx prettier"|prettier *"#,
+        vec![
+            Pattern {
+                command: CommandPattern::Literal("npx".into()),
+                tokens: vec![PatternToken::Literal("prettier".into()), PatternToken::Wildcard],
+            },
+            Pattern {
+                command: CommandPattern::Literal("bunx".into()),
+                tokens: vec![PatternToken::Literal("prettier".into()), PatternToken::Wildcard],
+            },
+            Pattern {
+                command: CommandPattern::Literal("prettier".into()),
+                tokens: vec![PatternToken::Wildcard],
+            },
+        ]
+    )]
+    #[case::multi_word_with_subcommand(
+        r#""python -m pytest"|pytest *"#,
+        vec![
+            Pattern {
+                command: CommandPattern::Literal("python".into()),
+                tokens: vec![
+                    PatternToken::Literal("-m".into()),
+                    PatternToken::Literal("pytest".into()),
+                    PatternToken::Wildcard,
+                ],
+            },
+            Pattern {
+                command: CommandPattern::Literal("pytest".into()),
+                tokens: vec![PatternToken::Wildcard],
+            },
+        ]
+    )]
+    fn parse_multi_expands_alternatives(#[case] input: &str, #[case] expected: Vec<Pattern>) {
+        let result = parse_multi(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::single_word_alternation("ast-grep|sg scan *", 1)]
+    #[case::simple_literal("git status", 1)]
+    #[case::wildcard_command("* --help", 1)]
+    fn parse_multi_no_expansion(#[case] input: &str, #[case] expected_count: usize) {
+        let result = parse_multi(input).unwrap();
+        assert_eq!(
+            result.len(),
+            expected_count,
+            "expected {expected_count} patterns for {input:?}, got {}",
+            result.len()
         );
     }
 }

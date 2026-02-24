@@ -10,3 +10,6 @@ pre-commit:
     ast-grep:
       glob: '*.rs'
       run: ast-grep scan {staged_files}
+    generate-json-schema:
+      glob: '*.rs'
+      run: cargo run --features config-schema -- config-schema > schema/runok.schema.json && git add schema/runok.schema.json

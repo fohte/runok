@@ -1,22 +1,37 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(any(feature = "config-schema", test))]
+use schemars::JsonSchema;
 use serde::Deserialize;
 
+/// Top-level runok configuration.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Config {
+    /// List of configuration files to inherit from. Supports local paths and
+    /// remote Git repositories (`github:<owner>/<repo>@<ref>`).
     pub extends: Option<Vec<String>>,
+    /// Default settings applied when no rule matches.
     pub defaults: Option<Defaults>,
+    /// Ordered list of permission rules evaluated against each command.
     pub rules: Option<Vec<RuleEntry>>,
+    /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
     pub definitions: Option<Definitions>,
 }
 
+/// Default settings applied when no rule matches a command.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Defaults {
+    /// Default action when no rule matches: `allow`, `deny`, or `ask`.
     pub action: Option<ActionKind>,
+    /// Default sandbox preset name to apply.
     pub sandbox: Option<String>,
 }
 
+/// Permission action kind.
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
     Allow,
@@ -25,15 +40,24 @@ pub enum ActionKind {
     Deny,
 }
 
-/// Each entry in the `rules` list. Exactly one of `deny`, `allow`, or `ask` must be set.
+/// A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[cfg_attr(any(feature = "config-schema", test), schemars(transform = rule_entry_one_of_transform))]
 pub struct RuleEntry {
+    /// Command pattern to deny. Matched commands are rejected.
     pub deny: Option<String>,
+    /// Command pattern to allow. Matched commands are permitted.
     pub allow: Option<String>,
+    /// Command pattern to ask about. Matched commands prompt for confirmation.
     pub ask: Option<String>,
+    /// CEL expression that must evaluate to true for this rule to apply.
     pub when: Option<String>,
+    /// Message shown when the rule matches (primarily for deny rules).
     pub message: Option<String>,
+    /// Suggested fix command shown when a deny rule matches.
     pub fix_suggestion: Option<String>,
+    /// Sandbox preset name to apply when this rule matches (not allowed for deny rules).
     pub sandbox: Option<String>,
 }
 
@@ -50,17 +74,27 @@ impl RuleEntry {
     }
 }
 
+/// Reusable definitions for paths, sandbox presets, wrappers, and commands.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Definitions {
+    /// Named path lists referenced by `<path:name>` in sandbox deny rules.
     pub paths: Option<HashMap<String, Vec<String>>>,
+    /// Named sandbox presets that can be referenced by rules.
     pub sandbox: Option<HashMap<String, SandboxPreset>>,
+    /// Wrapper command patterns for recursive evaluation (e.g., `sudo <cmd>`).
     pub wrappers: Option<Vec<String>>,
+    /// Additional command patterns to recognize.
     pub commands: Option<Vec<String>>,
 }
 
+/// Sandbox preset defining filesystem and network restrictions.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct SandboxPreset {
+    /// Filesystem access policy.
     pub fs: Option<FsPolicy>,
+    /// Network access policy.
     pub network: Option<NetworkPolicy>,
 }
 
@@ -134,14 +168,21 @@ impl SandboxPreset {
     }
 }
 
+/// Filesystem access policy within a sandbox preset.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct FsPolicy {
+    /// Directories the sandboxed process is allowed to write to.
     pub writable: Option<Vec<String>>,
+    /// Paths the sandboxed process is denied access to. Supports `<path:name>` references.
     pub deny: Option<Vec<String>>,
 }
 
+/// Network access policy within a sandbox preset.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct NetworkPolicy {
+    /// Whether network access is allowed.
     pub allow: Option<bool>,
 }
 
@@ -365,6 +406,86 @@ impl Config {
             (b, o) => b.or(o),
         }
     }
+}
+
+/// Transform the generated `RuleEntry` schema into a `oneOf` with three variants:
+/// - `deny`: requires `deny`, forbids `allow`/`ask`/`sandbox`
+/// - `allow`: requires `allow`, forbids `deny`/`ask`
+/// - `ask`: requires `ask`, forbids `deny`/`allow`
+#[cfg(any(feature = "config-schema", test))]
+fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
+    let common_optional = ["when", "message", "fix_suggestion"];
+
+    let make_variant = |action: &str, extra_optional: &[&str]| -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        let required = vec![serde_json::Value::String(action.to_string())];
+
+        // Action field (required)
+        properties.insert(
+            action.to_string(),
+            serde_json::json!({ "type": "string", "description": schema.get("properties").and_then(|p| p.get(action)).and_then(|a| a.get("description")).cloned().unwrap_or(serde_json::Value::Null) }),
+        );
+
+        // Common optional fields
+        for field in &common_optional {
+            if let Some(prop) = schema
+                .get("properties")
+                .and_then(|p| p.get(*field))
+                .cloned()
+            {
+                properties.insert(field.to_string(), prop);
+            }
+        }
+
+        // Extra optional fields (e.g., sandbox)
+        for field in extra_optional {
+            if let Some(prop) = schema
+                .get("properties")
+                .and_then(|p| p.get(*field))
+                .cloned()
+            {
+                properties.insert(field.to_string(), prop);
+            }
+        }
+
+        serde_json::json!({
+            "type": "object",
+            "properties": serde_json::Value::Object(properties),
+            "required": serde_json::Value::Array(required),
+            "additionalProperties": false
+        })
+    };
+
+    let deny_variant = make_variant("deny", &[]);
+    let allow_variant = make_variant("allow", &["sandbox"]);
+    let ask_variant = make_variant("ask", &["sandbox"]);
+
+    // Replace the schema with oneOf
+    let description = schema.get("description").cloned();
+
+    // Remove all existing keys
+    if let Some(obj) = schema.as_object_mut() {
+        obj.clear();
+    }
+
+    // Set oneOf
+    schema.insert(
+        "oneOf".to_owned(),
+        serde_json::Value::Array(vec![deny_variant, allow_variant, ask_variant]),
+    );
+
+    if let Some(desc) = description {
+        schema.insert("description".to_owned(), desc);
+    }
+}
+
+/// Print the JSON Schema for the runok configuration to stdout.
+#[cfg(feature = "config-schema")]
+pub fn print_config_schema() -> Result<(), serde_json::Error> {
+    let schema = schemars::schema_for!(Config);
+    let json = serde_json::to_string_pretty(&schema)?;
+    println!("{json}");
+    Ok(())
 }
 
 /// Parse a YAML string into a `Config`.
@@ -1590,5 +1711,32 @@ mod tests {
         assert_eq!(result.writable, vec!["/tmp"]);
         assert_eq!(result.deny, vec!["/etc"]);
         assert!(result.network_allowed);
+    }
+
+    // === JSON Schema ===
+
+    const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/runok.schema.json");
+
+    fn generate_schema_value() -> serde_json::Value {
+        let schema = schemars::schema_for!(Config);
+        serde_json::to_value(schema).unwrap()
+    }
+
+    #[test]
+    fn schema_is_up_to_date() {
+        let expected = generate_schema_value();
+        let actual_str = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_else(|e| {
+            panic!(
+                "Failed to read schema file at {SCHEMA_PATH}: {e}. \
+                 Run `cargo run --features config-schema -- config-schema > schema/runok.schema.json` to generate it."
+            )
+        });
+        let actual: serde_json::Value = serde_json::from_str(&actual_str)
+            .unwrap_or_else(|e| panic!("Schema file is not valid JSON: {e}"));
+        assert_eq!(
+            actual, expected,
+            "Schema file is out of date. \
+             Run `cargo run --features config-schema -- config-schema > schema/runok.schema.json` to regenerate."
+        );
     }
 }
