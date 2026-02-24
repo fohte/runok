@@ -52,11 +52,21 @@ pub struct CheckArgs {
 
     /// Input format: "claude-code-hook" or omit for auto-detection
     #[arg(long)]
-    pub format: Option<String>,
+    pub input_format: Option<String>,
+
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub output_format: OutputFormat,
 
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
+pub enum OutputFormat {
+    Json,
+    Text,
 }
 
 #[cfg(test)]
@@ -87,19 +97,23 @@ mod tests {
     )]
     #[case::check_with_command(
         &["runok", "check", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: false }),
+        Commands::Check(CheckArgs { command: Some("git status".into()), input_format: None, output_format: OutputFormat::Text, verbose: false }),
     )]
-    #[case::check_with_format(
-        &["runok", "check", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()), verbose: false }),
+    #[case::check_with_input_format(
+        &["runok", "check", "--input-format", "claude-code-hook"],
+        Commands::Check(CheckArgs { command: None, input_format: Some("claude-code-hook".into()), output_format: OutputFormat::Text, verbose: false }),
+    )]
+    #[case::check_with_output_format_json(
+        &["runok", "check", "--output-format", "json", "--command", "ls"],
+        Commands::Check(CheckArgs { command: Some("ls".into()), input_format: None, output_format: OutputFormat::Json, verbose: false }),
     )]
     #[case::check_with_both(
-        &["runok", "check", "--command", "ls", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()), verbose: false }),
+        &["runok", "check", "--command", "ls", "--input-format", "claude-code-hook"],
+        Commands::Check(CheckArgs { command: Some("ls".into()), input_format: Some("claude-code-hook".into()), output_format: OutputFormat::Text, verbose: false }),
     )]
     #[case::check_with_verbose(
         &["runok", "check", "--verbose", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: true }),
+        Commands::Check(CheckArgs { command: Some("git status".into()), input_format: None, output_format: OutputFormat::Text, verbose: true }),
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);
