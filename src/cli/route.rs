@@ -6,7 +6,7 @@ use super::CheckArgs;
 
 /// Result of routing `runok check`: either a single endpoint or multiple commands.
 pub enum CheckRoute {
-    /// Single endpoint (--command, JSON stdin, or single-line plaintext).
+    /// Single endpoint (positional command, JSON stdin, or single-line plaintext).
     Single(Box<dyn Endpoint>),
     /// Multiple commands from multi-line plaintext stdin.
     Multi(Vec<CheckAdapter>),
@@ -17,10 +17,11 @@ pub fn route_check(
     args: &CheckArgs,
     mut stdin: impl std::io::Read,
 ) -> Result<CheckRoute, anyhow::Error> {
-    // 1. --command CLI argument → always generic mode (no stdin)
-    if let Some(command) = &args.command {
+    // 1. Positional command arguments → always generic mode (no stdin)
+    if !args.command.is_empty() {
+        let command = args.command.join(" ");
         return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
-            command.clone(),
+            command,
         ))));
     }
 
@@ -116,11 +117,11 @@ mod tests {
     use rstest::rstest;
 
     /// Helper: build CheckArgs for testing
-    fn check_args(command: Option<&str>, format: Option<&str>) -> CheckArgs {
+    fn check_args(command: Vec<&str>, format: Option<&str>) -> CheckArgs {
         CheckArgs {
-            command: command.map(String::from),
             format: format.map(String::from),
             verbose: false,
+            command: command.into_iter().map(String::from).collect(),
         }
     }
 
@@ -143,17 +144,17 @@ mod tests {
     // === route_check: --command flag ===
 
     #[rstest]
-    #[case::simple_command("git status")]
-    #[case::command_with_flags("ls -la /tmp")]
-    fn route_check_with_command_arg(#[case] cmd: &str) {
-        let args = check_args(Some(cmd), None);
+    #[case::simple_command(&["git", "status"], "git status")]
+    #[case::command_with_flags(&["ls", "-la", "/tmp"], "ls -la /tmp")]
+    fn route_check_with_command_arg(#[case] cmd: &[&str], #[case] expected: &str) {
+        let args = check_args(cmd.to_vec(), None);
         let route = route_check(&args, std::io::empty());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
                 .extract_command()
                 .unwrap_or_else(|e| panic!("unexpected error: {e}")),
-            Some(cmd.to_string())
+            Some(expected.to_string())
         );
     }
 
@@ -180,7 +181,7 @@ mod tests {
         #[case] stdin_json: &str,
         #[case] expected_command: Option<&str>,
     ) {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, stdin_json.as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -193,7 +194,7 @@ mod tests {
 
     #[rstest]
     fn route_check_stdin_unknown_json_format_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, r#"{"unknown_field": "value"}"#.as_bytes());
         match result {
             Err(e) => assert!(
@@ -208,7 +209,7 @@ mod tests {
 
     #[rstest]
     fn route_check_format_with_non_json_stdin_returns_error() {
-        let args = check_args(None, Some("claude-code-hook"));
+        let args = check_args(vec![], Some("claude-code-hook"));
         let result = route_check(&args, "not valid json".as_bytes());
         match result {
             Err(e) => assert!(
@@ -229,7 +230,7 @@ mod tests {
         #[case] input: &str,
         #[case] expected_command: &str,
     ) {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, input.as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -244,7 +245,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_single_line() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, "git status\n".as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -257,7 +258,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_multi_line() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let input = indoc! {"
             git status
             ls -la
@@ -277,7 +278,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_skips_empty_lines() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let input = indoc! {"
             git status
 
@@ -298,7 +299,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_trims_whitespace() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, "  git status  \n".as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -311,7 +312,7 @@ mod tests {
 
     #[rstest]
     fn route_check_empty_stdin_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, "".as_bytes());
         match result {
             Err(e) => assert!(
@@ -324,7 +325,7 @@ mod tests {
 
     #[rstest]
     fn route_check_only_empty_lines_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, "\n\n  \n".as_bytes());
         match result {
             Err(e) => assert!(
@@ -339,7 +340,7 @@ mod tests {
 
     #[rstest]
     fn route_check_command_flag_takes_precedence_over_stdin() {
-        let args = check_args(Some("echo hello"), Some("claude-code-hook"));
+        let args = check_args(vec!["echo", "hello"], Some("claude-code-hook"));
         let route = route_check(&args, std::io::empty());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -354,7 +355,7 @@ mod tests {
 
     #[rstest]
     fn route_check_explicit_format_claude_code_hook() {
-        let args = check_args(None, Some("claude-code-hook"));
+        let args = check_args(vec![], Some("claude-code-hook"));
         let stdin_json = indoc! {r#"
             {
                 "tool_name": "Bash",
@@ -379,7 +380,7 @@ mod tests {
 
     #[rstest]
     fn route_check_unknown_format_returns_error() {
-        let args = check_args(None, Some("invalid-format"));
+        let args = check_args(vec![], Some("invalid-format"));
         let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes());
         match result {
             Err(e) => assert!(

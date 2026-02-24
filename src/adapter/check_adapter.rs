@@ -39,7 +39,7 @@ pub struct CheckAdapter {
 }
 
 impl CheckAdapter {
-    /// Build from the `--command` CLI argument.
+    /// Build from positional command arguments.
     pub fn from_command(command: String) -> Self {
         Self { command }
     }

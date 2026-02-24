@@ -46,10 +46,6 @@ pub struct ExecArgs {
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct CheckArgs {
-    /// Command string to check (skips stdin)
-    #[arg(long)]
-    pub command: Option<String>,
-
     /// Input format: "claude-code-hook" or omit for auto-detection
     #[arg(long)]
     pub format: Option<String>,
@@ -57,6 +53,10 @@ pub struct CheckArgs {
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
+
+    /// Command and arguments to check (skips stdin)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub command: Vec<String>,
 }
 
 #[cfg(test)]
@@ -86,20 +86,20 @@ mod tests {
         Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: None, dry_run: true, verbose: true }),
     )]
     #[case::check_with_command(
-        &["runok", "check", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: false }),
+        &["runok", "check", "--", "git", "status"],
+        Commands::Check(CheckArgs { format: None, verbose: false, command: vec!["git".into(), "status".into()] }),
     )]
     #[case::check_with_format(
         &["runok", "check", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()), verbose: false }),
+        Commands::Check(CheckArgs { format: Some("claude-code-hook".into()), verbose: false, command: vec![] }),
     )]
     #[case::check_with_both(
-        &["runok", "check", "--command", "ls", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()), verbose: false }),
+        &["runok", "check", "--format", "claude-code-hook", "--", "ls"],
+        Commands::Check(CheckArgs { format: Some("claude-code-hook".into()), verbose: false, command: vec!["ls".into()] }),
     )]
     #[case::check_with_verbose(
-        &["runok", "check", "--verbose", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: true }),
+        &["runok", "check", "--verbose", "--", "git", "status"],
+        Commands::Check(CheckArgs { format: None, verbose: true, command: vec!["git".into(), "status".into()] }),
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);
