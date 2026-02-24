@@ -51,10 +51,6 @@ pub struct CheckArgs {
     #[arg(long)]
     pub format: Option<String>,
 
-    /// Show what would happen without side effects
-    #[arg(long)]
-    pub dry_run: bool,
-
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
@@ -88,23 +84,19 @@ mod tests {
     )]
     #[case::check_with_command(
         &["runok", "check", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: false, verbose: false }),
+        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: false }),
     )]
     #[case::check_with_format(
         &["runok", "check", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()), dry_run: false, verbose: false }),
+        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()), verbose: false }),
     )]
     #[case::check_with_both(
         &["runok", "check", "--command", "ls", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()), dry_run: false, verbose: false }),
-    )]
-    #[case::check_with_dry_run(
-        &["runok", "check", "--dry-run", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: true, verbose: false }),
+        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()), verbose: false }),
     )]
     #[case::check_with_verbose(
         &["runok", "check", "--verbose", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: false, verbose: true }),
+        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, verbose: true }),
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);

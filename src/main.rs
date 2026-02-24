@@ -90,7 +90,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         }
         Commands::Check(args) => {
             let options = RunOptions {
-                dry_run: args.dry_run,
+                dry_run: false,
                 verbose: args.verbose,
             };
             match route_check(&args, stdin) {
@@ -128,7 +128,6 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: Some("echo hello".into()),
             format: None,
-            dry_run: false,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -141,7 +140,6 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
-            dry_run: false,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -154,7 +152,6 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
-            dry_run: false,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -167,7 +164,6 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
-            dry_run: false,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -200,7 +196,6 @@ mod tests {
         let cmd = Commands::Check(CheckArgs {
             command: None,
             format: None,
-            dry_run: false,
             verbose: false,
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
