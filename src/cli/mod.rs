@@ -18,6 +18,9 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// Print the JSON Schema for runok.yml to stdout
+    #[cfg(feature = "config-schema")]
+    ConfigSchema,
 }
 
 #[derive(clap::Args)]
