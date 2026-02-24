@@ -18,8 +18,6 @@ fn check_env() -> TestEnv {
 #[rstest]
 #[case::deny_rm(&["rm", "-rf", "/"], 0, "deny")]
 #[case::allow_git_status(&["git", "status"], 0, "allow")]
-#[case::comment_before_command(&["# description\ngit status"], 0, "allow")]
-#[case::comment_only(&["# just a comment"], 0, "ask")]
 fn check_command_arg(
     check_env: TestEnv,
     #[case] command: &[&str],
@@ -36,6 +34,42 @@ fn check_command_arg(
     let json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
     assert_eq!(json["decision"], expected_decision);
+}
+
+// --- Plaintext stdin with comments ---
+
+#[rstest]
+fn check_stdin_comment_before_command(check_env: TestEnv) {
+    let assert = check_env
+        .command()
+        .arg("check")
+        .write_stdin(indoc! {"
+            # description
+            git status
+        "})
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let stdout = String::from_utf8(output).unwrap();
+    let jsons: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(jsons.len(), 2);
+    assert_eq!(jsons[0]["decision"], "ask");
+    assert_eq!(jsons[1]["decision"], "allow");
+}
+
+#[rstest]
+fn check_stdin_comment_only(check_env: TestEnv) {
+    let assert = check_env
+        .command()
+        .arg("check")
+        .write_stdin("# just a comment\n")
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["decision"], "ask");
 }
 
 // --- stdin JSON mode ---

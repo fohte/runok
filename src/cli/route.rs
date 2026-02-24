@@ -1,6 +1,7 @@
 use crate::adapter::Endpoint;
 use crate::adapter::check_adapter::{CheckAdapter, CheckInput};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookInput};
+use runok::rules::command_parser::shell_quote_join;
 
 use super::CheckArgs;
 
@@ -19,7 +20,7 @@ pub fn route_check(
 ) -> Result<CheckRoute, anyhow::Error> {
     // 1. Positional command arguments → always generic mode (no stdin)
     if !args.command.is_empty() {
-        let command = args.command.join(" ");
+        let command = shell_quote_join(&args.command);
         return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
             command,
         ))));
@@ -146,6 +147,7 @@ mod tests {
     #[rstest]
     #[case::simple_command(&["git", "status"], "git status")]
     #[case::command_with_flags(&["ls", "-la", "/tmp"], "ls -la /tmp")]
+    #[case::arg_with_spaces(&["echo", "hello world"], "echo 'hello world'")]
     fn route_check_with_command_arg(#[case] cmd: &[&str], #[case] expected: &str) {
         let args = check_args(cmd.to_vec(), None);
         let route = route_check(&args, std::io::empty());
