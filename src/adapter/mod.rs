@@ -913,13 +913,13 @@ mod tests {
         "while read line; do cat $line; done",
         allow_rule("cat *"),
         true,
-        false,
+        false
     )]
     #[case::for_loop_no_matching_rule(
         "for f in *.yaml; do echo $f; done",
         allow_rule("git status"),
         false,
-        true,
+        true
     )]
     fn single_extracted_subcommand_evaluates_simplified_form(
         #[case] command: &str,
@@ -937,9 +937,8 @@ mod tests {
 
     #[rstest]
     fn for_loop_with_deny_rule_on_subcommand() {
-        let endpoint = MockEndpoint::new(Ok(Some(
-            "for f in *.yaml; do rm -rf $f; done".to_string(),
-        )));
+        let endpoint =
+            MockEndpoint::new(Ok(Some("for f in *.yaml; do rm -rf $f; done".to_string())));
         let config = make_config(vec![deny_rule("rm *")]);
         run(&endpoint, &config);
 
