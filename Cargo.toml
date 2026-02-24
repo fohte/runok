@@ -29,7 +29,11 @@ which = "=8.0.0"
 config-schema = ["dep:schemars"]
 
 [dev-dependencies]
+# Required separately from the optional dep: tests use
+# `cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))`
+# so schemars must be available under `cfg(test)` without the feature flag.
 schemars = "=1.2.1"
+
 assert_cmd = "=2.1.2"
 indoc = "=2.0.7"
 predicates = "=3.1.4"
