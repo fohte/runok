@@ -250,10 +250,8 @@ pub fn extract_placeholder(
         &mut captured,
         &mut all_candidates,
     )?;
-    // Filter out empty captures (from patterns without a <cmd> placeholder).
     Ok(all_candidates
         .into_iter()
-        .filter(|c| !c.is_empty())
         .map(|c| c.into_iter().map(|s| s.to_string()).collect())
         .collect())
 }
@@ -282,7 +280,11 @@ fn extract_placeholder_all<'a>(
     }
 
     let Some((first, rest)) = pattern_tokens.split_first() else {
-        if cmd_tokens.is_empty() {
+        // Only record a candidate when all command tokens have been consumed
+        // AND at least one token was captured by a <cmd> placeholder. Patterns
+        // without <cmd> (or where <cmd> matched nothing) produce empty captures
+        // that are not useful to the caller.
+        if cmd_tokens.is_empty() && !captured.is_empty() {
             all_candidates.push(captured.clone());
         }
         return Ok(());
@@ -293,6 +295,9 @@ fn extract_placeholder_all<'a>(
             let is_cmd = name == "cmd";
             if rest.is_empty() {
                 if is_cmd {
+                    // Empty <cmd> (e.g., `sudo` with no inner command) is not a
+                    // valid command to evaluate, so skip it rather than adding an
+                    // empty candidate.
                     if cmd_tokens.is_empty() {
                         return Ok(());
                     }
@@ -301,9 +306,14 @@ fn extract_placeholder_all<'a>(
                     all_candidates.push(captured.clone());
                     captured.truncate(saved_len);
                 } else if cmd_tokens.len() == 1 {
-                    // Non-<cmd> placeholder consumes exactly one token without
-                    // adding it to captured (only <cmd> tokens are captured).
-                    all_candidates.push(captured.clone());
+                    // Non-<cmd> placeholder at end of pattern consumes exactly
+                    // one token without adding it to captured (only <cmd> tokens
+                    // are captured). Only push if a <cmd> was captured earlier;
+                    // otherwise this pattern has no <cmd> and the candidate is
+                    // meaningless.
+                    if !captured.is_empty() {
+                        all_candidates.push(captured.clone());
+                    }
                 }
             } else if !cmd_tokens.is_empty() {
                 for take in 1..=cmd_tokens.len() {
