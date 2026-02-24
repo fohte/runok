@@ -20,7 +20,13 @@ pub fn route_check(
 ) -> Result<CheckRoute, anyhow::Error> {
     // 1. Positional command arguments → always generic mode (no stdin)
     if !args.command.is_empty() {
-        let command = shell_quote_join(&args.command);
+        // Return single arguments unquoted so the rule engine can detect
+        // shell metacharacters (&&, ;, |) in compound commands.
+        let command = if args.command.len() == 1 {
+            args.command[0].clone()
+        } else {
+            shell_quote_join(&args.command)
+        };
         return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
             command,
         ))));
