@@ -945,8 +945,7 @@ mod tests {
 
     #[rstest]
     fn single_extracted_subcommand_verbose_logs_extraction() {
-        let endpoint =
-            MockEndpoint::new(Ok(Some("for f in *.yaml; do echo $f; done".to_string())));
+        let endpoint = MockEndpoint::new(Ok(Some("for f in *.yaml; do echo $f; done".to_string())));
         let config = make_config(vec![allow_rule("echo *")]);
         let options = RunOptions {
             dry_run: false,
