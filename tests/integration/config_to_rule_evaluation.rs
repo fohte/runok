@@ -374,3 +374,60 @@ fn full_config_evaluates_correctly(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Multi-word alternation (end-to-end via YAML config)
+// ========================================
+
+#[rstest]
+#[case::npx_prettier_allowed(
+    "npx prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::bunx_prettier_allowed(
+    "bunx prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::bare_prettier_allowed(
+    "prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::unrelated_command_default(
+    "yarn prettier --write .",
+    assert_default as ActionAssertion,
+)]
+fn multi_word_alternation_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: '"npx prettier"|"bunx prettier"|prettier *'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::npx_denied("npx prettier --write /etc/passwd", assert_deny as ActionAssertion)]
+#[case::bare_denied("prettier --write /etc/passwd", assert_deny as ActionAssertion)]
+#[case::npx_allowed("npx prettier --write .", assert_allow as ActionAssertion)]
+#[case::bare_allowed("prettier --write .", assert_allow as ActionAssertion)]
+fn multi_word_alternation_allow_and_deny(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: '"npx prettier"|prettier *'
+          - deny: '"npx prettier"|prettier --write /etc/passwd'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
