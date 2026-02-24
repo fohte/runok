@@ -202,16 +202,14 @@ impl ProcessExtensionRunner {
     /// Uses `shlex::split` for proper shell-style tokenisation (handles
     /// quoted arguments, backslash escapes, etc.).
     fn parse_command(executor_cmd: &str) -> Result<(String, Vec<String>), ExtensionError> {
-        let mut parts = shlex::split(executor_cmd).ok_or_else(|| {
+        let parts = shlex::split(executor_cmd).ok_or_else(|| {
             ExtensionError::InvalidResponse(format!(
                 "invalid shell syntax in executor command: {executor_cmd}"
             ))
         })?;
-        if parts.is_empty() {
-            return Ok((String::new(), Vec::new()));
-        }
-        let program = parts.remove(0);
-        Ok((program, parts))
+        let mut iter = parts.into_iter();
+        let program = iter.next().unwrap_or_default();
+        Ok((program, iter.collect()))
     }
 }
 
