@@ -4,11 +4,14 @@
 use super::pattern_lexer::LexToken;
 
 /// Represents the command name part of a pattern, which can be
-/// either a literal string or a wildcard (`*`) that matches any command.
+/// either a literal string, an alternation of names, or a wildcard (`*`)
+/// that matches any command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandPattern {
     /// Matches a specific command name (e.g., "git", "curl").
     Literal(String),
+    /// Matches any of the given command names (e.g., "ast-grep|sg").
+    Alternation(Vec<String>),
     /// Matches any command name (`*`).
     Wildcard,
 }
@@ -18,6 +21,7 @@ impl CommandPattern {
     pub fn matches(&self, command: &str) -> bool {
         match self {
             CommandPattern::Literal(s) => s == command,
+            CommandPattern::Alternation(alts) => alts.iter().any(|s| s == command),
             CommandPattern::Wildcard => true,
         }
     }
@@ -81,6 +85,7 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
 
     let command = match &lex_tokens[0] {
         LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
         other => {
             return Err(PatternParseError::InvalidSyntax(format!(
@@ -570,6 +575,48 @@ mod tests {
         let result = parse(input).unwrap();
         assert_eq!(result.command, CommandPattern::Wildcard);
         assert_eq!(result.tokens, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::two_aliases(
+        "ast-grep|sg scan *",
+        vec!["ast-grep".into(), "sg".into()],
+        vec![
+            PatternToken::Literal("scan".into()),
+            PatternToken::Wildcard,
+        ],
+    )]
+    #[case::three_aliases(
+        "vim|nvim|vi *",
+        vec!["vim".into(), "nvim".into(), "vi".into()],
+        vec![PatternToken::Wildcard],
+    )]
+    #[case::aliases_no_args(
+        "python|python3",
+        vec!["python".into(), "python3".into()],
+        vec![],
+    )]
+    fn parse_command_alternation(
+        #[case] input: &str,
+        #[case] expected_alts: Vec<String>,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, CommandPattern::Alternation(expected_alts));
+        assert_eq!(result.tokens, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::matches_first("ast-grep|sg", "ast-grep", true)]
+    #[case::matches_second("ast-grep|sg", "sg", true)]
+    #[case::no_match("ast-grep|sg", "rg", false)]
+    fn command_alternation_matches(
+        #[case] pattern: &str,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let parsed = parse(pattern).unwrap();
+        assert_eq!(parsed.command.matches(command), expected);
     }
 
     #[rstest]
