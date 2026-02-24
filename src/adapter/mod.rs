@@ -181,6 +181,15 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         }
     }
 
+    // Use the extracted command for single-command evaluation so that
+    // non-command nodes (e.g. comments) stripped by extract_commands are not
+    // passed to evaluate_command as part of the raw input string.
+    let effective_command = if commands.len() == 1 {
+        &commands[0]
+    } else {
+        &command
+    };
+
     let action_result = if commands.len() > 1 {
         match evaluate_compound(config, &command, &context) {
             Ok(compound_result) => {
@@ -197,8 +206,14 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             }
             Err(e) => return endpoint.handle_error(e.into()),
         }
+    } else if commands.is_empty() {
+        // No executable commands (e.g. comment-only input) — use default action
+        ActionResult {
+            action: Action::Default,
+            sandbox: SandboxInfo::Preset(None),
+        }
     } else {
-        match evaluate_command(config, &command, &context) {
+        match evaluate_command(config, effective_command, &context) {
             Ok(result) => {
                 if options.verbose {
                     log_matched_rules(&result.matched_rules);
