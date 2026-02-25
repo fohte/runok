@@ -334,6 +334,53 @@ fn unmatched_sub_command_uses_defaults_action(
 }
 
 // ========================================
+// Redirected statements: redirects are stripped before rule evaluation
+// ========================================
+
+#[rstest]
+#[case::stdout_redirect(
+    "echo hello > file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::stderr_redirect(
+    "git branch --help 2>&1",
+    assert_allow as ActionAssertion,
+)]
+#[case::devnull_redirect(
+    "echo hello > /dev/null 2>&1",
+    assert_allow as ActionAssertion,
+)]
+#[case::compound_with_redirect(
+    r#"X="test" && echo "$X" 2>&1"#,
+    assert_allow as ActionAssertion,
+)]
+#[case::deny_still_works_with_redirect(
+    "rm -rf /tmp/data > /dev/null 2>&1",
+    assert_deny as ActionAssertion,
+)]
+#[case::redirect_in_pipeline(
+    "echo hello 2>&1 | grep world",
+    assert_allow as ActionAssertion,
+)]
+fn redirected_statements_match_rules(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'git *'
+          - allow: 'grep *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Execution mode: compound commands are represented as Shell input (sh -c)
 // ========================================
 
