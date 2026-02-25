@@ -159,7 +159,7 @@ fn match_tokens_core<'a>(
             // for a matching flag, remove it, and continue with the rest.
             if alts.iter().all(|a| a.starts_with('-')) {
                 for i in 0..cmd_tokens.len() {
-                    if alts.iter().any(|a| a.as_str() == cmd_tokens[i]) {
+                    if alts.iter().any(|a| alt_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
                         if let Some(ref mut caps) = captures {
                             let saved_len = caps.len();
@@ -174,7 +174,7 @@ fn match_tokens_core<'a>(
                     }
                 }
                 false
-            } else if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
+            } else if alts.iter().any(|a| alt_matches(a, cmd_tokens[0])) {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -413,7 +413,7 @@ fn extract_placeholder_all<'a>(
         }
 
         PatternToken::Alternation(alts) => {
-            if !cmd_tokens.is_empty() && alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
+            if !cmd_tokens.is_empty() && alts.iter().any(|a| alt_matches(a, cmd_tokens[0])) {
                 extract_placeholder_all(
                     rest,
                     &cmd_tokens[1..],
@@ -577,7 +577,7 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
             PatternToken::Alternation(alts) if alts.iter().any(|a| a.starts_with('-')) => {
                 if cmd_tokens
                     .iter()
-                    .any(|t| alts.iter().any(|a| a.as_str() == *t))
+                    .any(|t| alts.iter().any(|a| alt_matches(a, t)))
                 {
                     return false;
                 }
@@ -588,11 +588,71 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
     true
 }
 
+/// Check if an alternation part matches a command token.
+///
+/// If the alternation part contains `*`, it is treated as a glob pattern
+/// where `*` matches zero or more arbitrary characters. Otherwise, an
+/// exact string comparison is performed.
+fn alt_matches(alt: &str, token: &str) -> bool {
+    if alt.contains('*') {
+        glob_match(alt, token)
+    } else {
+        alt == token
+    }
+}
+
+/// Simple glob matching where `*` matches zero or more arbitrary characters.
+///
+/// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
+/// is supported.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+
+    // Single `*` (or only `*`s): match anything
+    if parts.iter().all(|p| p.is_empty()) {
+        return true;
+    }
+
+    let mut pos = 0;
+
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            // First part must match the beginning of the text
+            if !text.starts_with(part) {
+                return false;
+            }
+            pos = part.len();
+        } else if i == parts.len() - 1 {
+            // Last part must match the end of the text
+            if !text[pos..].ends_with(part) {
+                return false;
+            }
+            pos = text.len();
+        } else {
+            // Middle parts: find the next occurrence
+            match text[pos..].find(part) {
+                Some(offset) => pos += offset + part.len(),
+                None => return false,
+            }
+        }
+    }
+
+    // If pattern doesn't end with `*`, we must have consumed the entire text
+    if !pattern.ends_with('*') {
+        return pos == text.len();
+    }
+
+    true
+}
+
 /// Check if a single pattern token matches a single command token.
 fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
     match token {
         PatternToken::Literal(s) => s.as_str() == cmd_token,
-        PatternToken::Alternation(alts) => alts.iter().any(|a| a.as_str() == cmd_token),
+        PatternToken::Alternation(alts) => alts.iter().any(|a| alt_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
         PatternToken::PathRef(name) => {
@@ -1379,6 +1439,103 @@ mod tests {
         assert_eq!(
             check_multi_match(pattern_str, command_str, &empty_defs()),
             expected,
+        );
+    }
+
+    // === glob_match unit tests ===
+
+    #[rstest]
+    #[case::prefix_glob("list-*", "list-buckets", true)]
+    #[case::prefix_glob_short("list-*", "list-", true)]
+    #[case::prefix_glob_no_match("list-*", "get-buckets", false)]
+    #[case::prefix_glob_no_match_partial("list-*", "lis", false)]
+    #[case::suffix_glob("*-buckets", "list-buckets", true)]
+    #[case::suffix_glob_no_match("*-buckets", "list-pods", false)]
+    #[case::middle_glob("pre*suf", "pre-middle-suf", true)]
+    #[case::middle_glob_exact("pre*suf", "presuf", true)]
+    #[case::middle_glob_no_match("pre*suf", "pre-middle-end", false)]
+    #[case::exact_no_glob("list", "list", true)]
+    #[case::exact_no_glob_no_match("list", "list-buckets", false)]
+    #[case::star_only("*", "anything", true)]
+    #[case::star_only_empty("*", "", true)]
+    #[case::multiple_stars("a*b*c", "axbxc", true)]
+    #[case::multiple_stars_no_match("a*b*c", "axdxe", false)]
+    fn test_glob_match(#[case] pattern: &str, #[case] text: &str, #[case] expected: bool) {
+        assert_eq!(
+            glob_match(pattern, text),
+            expected,
+            "glob_match({pattern:?}, {text:?})",
+        );
+    }
+
+    // === Alternation with glob wildcard matching ===
+
+    #[rstest]
+    #[case::glob_alt_match(
+        "kubectl describe|get|list-* *",
+        "kubectl list-buckets my-bucket",
+        true
+    )]
+    #[case::glob_alt_exact_still_works(
+        "kubectl describe|get|list-* *",
+        "kubectl describe my-pod",
+        true
+    )]
+    #[case::glob_alt_no_match("kubectl describe|get|list-* *", "kubectl delete my-pod", false)]
+    #[case::glob_alt_list_instances(
+        "aws * describe*|get*|list-* *",
+        "aws ec2 list-instances --region us-east-1",
+        true
+    )]
+    #[case::glob_alt_describe_prefix(
+        "aws * describe*|get*|list-* *",
+        "aws ec2 describe-instances --region us-east-1",
+        true
+    )]
+    fn alternation_glob_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === Negation alternation with glob wildcard ===
+
+    #[rstest]
+    #[case::negated_glob_blocks_match(
+        "kubectl !describe|get|list-* *",
+        "kubectl list-pods my-pod",
+        false
+    )]
+    #[case::negated_glob_allows_non_match(
+        "kubectl !describe|get|list-* *",
+        "kubectl delete my-pod",
+        true
+    )]
+    #[case::negated_glob_blocks_exact(
+        "kubectl !describe|get|list-* *",
+        "kubectl describe my-pod",
+        false
+    )]
+    #[case::negated_glob_blocks_exact_get(
+        "kubectl !describe|get|list-* *",
+        "kubectl get pods",
+        false
+    )]
+    fn negation_alternation_glob_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
         );
     }
 }

@@ -431,3 +431,72 @@ fn multi_word_alternation_allow_and_deny(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Alternation with glob wildcard in config
+// ========================================
+
+#[rstest]
+#[case::glob_alt_list_buckets(
+    "aws s3api list-buckets",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_get_object(
+    "aws s3api get-object my-bucket",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_describe_instances(
+    "aws ec2 describe-instances",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_delete_blocked(
+    "aws s3api delete-bucket my-bucket",
+    assert_default as ActionAssertion,
+)]
+fn alternation_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws * describe*|get*|list-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::negated_glob_allows_delete(
+    "kubectl delete my-pod",
+    assert_allow as ActionAssertion,
+)]
+#[case::negated_glob_denies_list_pods(
+    "kubectl list-pods",
+    assert_deny as ActionAssertion,
+)]
+#[case::negated_glob_denies_describe(
+    "kubectl describe my-pod",
+    assert_deny as ActionAssertion,
+)]
+#[case::negated_glob_denies_get(
+    "kubectl get pods",
+    assert_deny as ActionAssertion,
+)]
+fn negation_alternation_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'kubectl *'
+          - deny: 'kubectl describe|get|list-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
