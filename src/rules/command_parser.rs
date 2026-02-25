@@ -282,9 +282,18 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         // redirected_statement: recurse into the body (the actual command),
         // stripping redirect operators (>, >>, <, 2>&1, etc.).
         // Redirect target paths are left to the OS-level sandbox to enforce.
+        // Also recurse into redirect children to extract nested commands
+        // (e.g. process substitutions: `cmd > >(nested_cmd)`).
         "redirected_statement" => {
             if let Some(body) = node.child_by_field_name("body") {
                 collect_commands(body, source, commands);
+            }
+            for i in 0..node.child_count() {
+                if node.field_name_for_child(i as u32) == Some("redirect")
+                    && let Some(child) = node.child(i)
+                {
+                    collect_substitutions_recursive(child, source, commands);
+                }
             }
         }
         // comment: skip shell comments (e.g. `# description`)
@@ -308,16 +317,27 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         // attaches directly to a command node), extract nested
         // command_substitution nodes, and emit the remaining text.
         "command" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                match child.kind() {
-                    "command_substitution" => {
-                        collect_commands(child, source, commands);
+            for i in 0..node.child_count() {
+                let Some(child) = node.child(i) else {
+                    continue;
+                };
+                if !child.is_named() {
+                    continue;
+                }
+                if node.field_name_for_child(i as u32) == Some("redirect") {
+                    // Recurse into redirect children for nested substitutions
+                    // (e.g. `cat <<< $(secret_cmd)`)
+                    collect_substitutions_recursive(child, source, commands);
+                } else {
+                    match child.kind() {
+                        "command_substitution" => {
+                            collect_commands(child, source, commands);
+                        }
+                        "variable_assignment" => {
+                            collect_substitutions_recursive(child, source, commands);
+                        }
+                        _ => {}
                     }
-                    "variable_assignment" => {
-                        collect_substitutions_recursive(child, source, commands);
-                    }
-                    _ => {}
                 }
             }
             // Build command text excluding variable_assignment and redirect children.
@@ -648,6 +668,18 @@ mod tests {
     #[case::redirect_in_compound(
         r#"X="test" && echo "$X" 2>&1"#,
         vec![r#"echo "$X""#],
+    )]
+    #[case::process_substitution_in_redirect(
+        "cmd > >(nested_cmd)",
+        vec!["cmd", "nested_cmd"],
+    )]
+    #[case::command_substitution_in_redirect(
+        "cmd > $(echo /tmp/file)",
+        vec!["cmd", "echo /tmp/file"],
+    )]
+    #[case::command_substitution_in_herestring(
+        "cat <<< $(secret_cmd)",
+        vec!["secret_cmd", "cat"],
     )]
     fn extract_redirected_statements(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
