@@ -595,57 +595,10 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 /// exact string comparison is performed.
 fn alt_matches(alt: &str, token: &str) -> bool {
     if alt.contains('*') {
-        glob_match(alt, token)
+        wildmatch::WildMatch::new(alt).matches(token)
     } else {
         alt == token
     }
-}
-
-/// Simple glob matching where `*` matches zero or more arbitrary characters.
-///
-/// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
-/// is supported.
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-
-    // Single `*` (or only `*`s): match anything
-    if parts.iter().all(|p| p.is_empty()) {
-        return true;
-    }
-
-    let mut pos = 0;
-
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        if i == 0 {
-            // First part must match the beginning of the text
-            if !text.starts_with(part) {
-                return false;
-            }
-            pos = part.len();
-        } else if i == parts.len() - 1 {
-            // Last part must match the end of the text
-            if !text[pos..].ends_with(part) {
-                return false;
-            }
-            pos = text.len();
-        } else {
-            // Middle parts: find the next occurrence
-            match text[pos..].find(part) {
-                Some(offset) => pos += offset + part.len(),
-                None => return false,
-            }
-        }
-    }
-
-    // If pattern doesn't end with `*`, we must have consumed the entire text
-    if !pattern.ends_with('*') {
-        return pos == text.len();
-    }
-
-    true
 }
 
 /// Check if a single pattern token matches a single command token.
@@ -1439,32 +1392,6 @@ mod tests {
         assert_eq!(
             check_multi_match(pattern_str, command_str, &empty_defs()),
             expected,
-        );
-    }
-
-    // === glob_match unit tests ===
-
-    #[rstest]
-    #[case::prefix_glob("list-*", "list-buckets", true)]
-    #[case::prefix_glob_short("list-*", "list-", true)]
-    #[case::prefix_glob_no_match("list-*", "get-buckets", false)]
-    #[case::prefix_glob_no_match_partial("list-*", "lis", false)]
-    #[case::suffix_glob("*-buckets", "list-buckets", true)]
-    #[case::suffix_glob_no_match("*-buckets", "list-pods", false)]
-    #[case::middle_glob("pre*suf", "pre-middle-suf", true)]
-    #[case::middle_glob_exact("pre*suf", "presuf", true)]
-    #[case::middle_glob_no_match("pre*suf", "pre-middle-end", false)]
-    #[case::exact_no_glob("list", "list", true)]
-    #[case::exact_no_glob_no_match("list", "list-buckets", false)]
-    #[case::star_only("*", "anything", true)]
-    #[case::star_only_empty("*", "", true)]
-    #[case::multiple_stars("a*b*c", "axbxc", true)]
-    #[case::multiple_stars_no_match("a*b*c", "axdxe", false)]
-    fn test_glob_match(#[case] pattern: &str, #[case] text: &str, #[case] expected: bool) {
-        assert_eq!(
-            glob_match(pattern, text),
-            expected,
-            "glob_match({pattern:?}, {text:?})",
         );
     }
 
