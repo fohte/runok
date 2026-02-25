@@ -279,6 +279,14 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // redirected_statement: recurse into the body (the actual command),
+        // stripping redirect operators (>, >>, <, 2>&1, etc.).
+        // Redirect target paths are left to the OS-level sandbox to enforce.
+        "redirected_statement" => {
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_commands(body, source, commands);
+            }
+        }
         // comment: skip shell comments (e.g. `# description`)
         "comment" => {}
         // variable_assignment: transparent container — skip the assignment itself
@@ -295,8 +303,10 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             }
         }
         // command node: strip leading variable_assignment children
-        // (environment variable prefixes like `FOO=bar echo hello`), extract
-        // nested command_substitution nodes, and emit the remaining text.
+        // (environment variable prefixes like `FOO=bar echo hello`), strip
+        // redirect children (herestring_redirect, etc. that tree-sitter
+        // attaches directly to a command node), extract nested
+        // command_substitution nodes, and emit the remaining text.
         "command" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
@@ -310,12 +320,21 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                     _ => {}
                 }
             }
-            // Build command text excluding variable_assignment children
-            let mut cursor = node.walk();
-            let parts: Vec<&str> = node
-                .named_children(&mut cursor)
-                .filter(|child| child.kind() != "variable_assignment")
-                .filter_map(|child| {
+            // Build command text excluding variable_assignment and redirect children.
+            // Redirects (e.g. herestring_redirect) attached directly to a command
+            // node use the field name "redirect".
+            let parts: Vec<&str> = (0..node.child_count())
+                .filter_map(|i| {
+                    let child = node.child(i)?;
+                    if !child.is_named() {
+                        return None;
+                    }
+                    if child.kind() == "variable_assignment" {
+                        return None;
+                    }
+                    if node.field_name_for_child(i as u32) == Some("redirect") {
+                        return None;
+                    }
                     let text = &source[child.start_byte()..child.end_byte()];
                     std::str::from_utf8(text).ok()
                 })
@@ -601,7 +620,38 @@ mod tests {
         "}
         .trim_end();
         let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec![input]);
+        // heredoc is a redirected_statement; only the body command is extracted
+        assert_eq!(result, vec!["cat"]);
+    }
+
+    // ========================================
+    // extract_commands: redirected statements
+    // ========================================
+
+    #[rstest]
+    #[case::stdout_to_file("echo hello > file.txt", vec!["echo hello"])]
+    #[case::append_to_file("echo hello >> file.txt", vec!["echo hello"])]
+    #[case::stdin_from_file("cat < input.txt", vec!["cat"])]
+    #[case::stderr_to_devnull("cmd 2> /dev/null", vec!["cmd"])]
+    #[case::stdout_and_stderr("cmd > out.txt 2>&1", vec!["cmd"])]
+    #[case::fd_redirect_only("echo hello 2>&1", vec!["echo hello"])]
+    #[case::devnull_redirect("curl url > /dev/null", vec!["curl url"])]
+    #[case::herestring("cat <<< hello", vec!["cat"])]
+    #[case::redirect_with_pipeline(
+        "echo hello 2>&1 | grep world",
+        vec!["echo hello", "grep world"],
+    )]
+    #[case::redirect_with_list(
+        "echo hello > file.txt && cat file.txt",
+        vec!["echo hello", "cat file.txt"],
+    )]
+    #[case::redirect_in_compound(
+        r#"X="test" && echo "$X" 2>&1"#,
+        vec![r#"echo "$X""#],
+    )]
+    fn extract_redirected_statements(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================
