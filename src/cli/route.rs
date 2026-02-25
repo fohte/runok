@@ -35,7 +35,7 @@ pub fn route_check(
         let command = if args.command.len() == 1 {
             args.command[0].clone()
         } else {
-            shell_quote_join(&args.command)
+            shell_quote_join(&args.command)?
         };
         return Ok(CheckRoute::Single(Box::new(
             CheckAdapter::from_command(command).with_output_format(output_format),
