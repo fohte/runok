@@ -85,7 +85,7 @@ impl Endpoint for ExecAdapter {
         if self.args.len() == 1 {
             return Ok(Some(self.args[0].clone()));
         }
-        Ok(Some(shell_quote_join(&self.args)))
+        Ok(Some(shell_quote_join(&self.args)?))
     }
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {

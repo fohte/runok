@@ -55,3 +55,9 @@ If the same assertion chain appears in 3+ tests, extract it into a helper.
 ### Do not write tests that only verify test helpers
 
 Tests must verify production code. Tests that only assert on test helpers, fixtures, or mocks are unnecessary. Remove them.
+
+## Code rules
+
+### Use the `shlex` crate for shell quoting and splitting
+
+Use `shlex::try_join`, `shlex::try_quote`, and `shlex::split` for shell quoting and command splitting. Do not implement custom shell quoting or whitespace-based command splitting.
