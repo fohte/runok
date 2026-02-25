@@ -24,7 +24,6 @@ thiserror = "=2.0.18"
 tree-sitter = "=0.25.10"
 tree-sitter-bash = "=0.25.1"
 which = "=8.0.0"
-wildmatch = "=2.6.1"
 
 [features]
 config-schema = ["dep:schemars"]
