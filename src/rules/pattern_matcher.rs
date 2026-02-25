@@ -1483,12 +1483,12 @@ mod tests {
     )]
     #[case::glob_alt_no_match("kubectl describe|get|list-* *", "kubectl delete my-pod", false)]
     #[case::glob_alt_list_instances(
-        "aws * describe*|get*|list-* *",
+        "aws * describe-*|get-*|list-* *",
         "aws ec2 list-instances --region us-east-1",
         true
     )]
     #[case::glob_alt_describe_prefix(
-        "aws * describe*|get*|list-* *",
+        "aws * describe-*|get-*|list-* *",
         "aws ec2 describe-instances --region us-east-1",
         true
     )]

@@ -460,7 +460,7 @@ fn alternation_glob_wildcard_config(
 ) {
     let config = parse_config(indoc! {"
         rules:
-          - allow: 'aws * describe*|get*|list-* *'
+          - allow: 'aws * describe-*|get-*|list-* *'
     "})
     .unwrap();
 
