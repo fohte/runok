@@ -6,7 +6,7 @@ use super::helpers::TestEnv;
 // --- Invalid config: syntax error ---
 
 #[rstest]
-#[case::check(&["check", "--command", "git status"], 2)]
+#[case::check(&["check", "--", "git", "status"], 2)]
 #[case::exec(&["exec", "--dry-run", "--", "echo", "hello"], 1)]
 fn invalid_config_exits_with_error(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new("rules: [invalid yaml\n  broken:");
@@ -19,7 +19,7 @@ fn invalid_config_exits_with_error(#[case] args: &[&str], #[case] expected_exit:
 // --- Invalid config: validation error (deny + sandbox) ---
 
 #[rstest]
-#[case::check(&["check", "--command", "rm -rf /"], 2)]
+#[case::check(&["check", "--", "rm", "-rf", "/"], 2)]
 #[case::exec(&["exec", "--dry-run", "--", "rm", "-rf", "/"], 1)]
 fn validation_error_deny_with_sandbox(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new(indoc! {"
@@ -66,7 +66,7 @@ fn exec_nonexistent_command() {
     "},
 )]
 #[case::check_deny(
-    &["check", "--command", "rm -rf /"],
+    &["check", "--", "rm", "-rf", "/"],
     0,
     indoc! {"
         rules:
@@ -86,7 +86,7 @@ fn no_config_check_returns_default() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--command", "git status"])
+        .args(["check", "--output-format", "json", "--", "git", "status"])
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
     let json: serde_json::Value =
@@ -102,7 +102,7 @@ fn unknown_format_flag_exits_2() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--format", "unknown-format"])
+        .args(["check", "--input-format", "unknown-format"])
         .write_stdin(r#"{"command":"ls"}"#)
         .assert();
     assert.code(2);
@@ -115,7 +115,7 @@ fn format_with_non_json_stdin_exits_2() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("not valid json")
         .assert();
     assert.code(2);

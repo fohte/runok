@@ -159,7 +159,27 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
+            // Flag-only alternations (all elements start with `-`) use
+            // order-independent matching: scan the entire command token list
+            // for a matching flag, remove it, and continue with the rest.
+            if alts.iter().all(|a| a.starts_with('-')) {
+                for i in 0..cmd_tokens.len() {
+                    if alts.iter().any(|a| a.as_str() == cmd_tokens[i]) {
+                        let remaining = remove_indices(cmd_tokens, &[i]);
+                        if let Some(ref mut caps) = captures {
+                            let saved_len = caps.len();
+                            if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
+                            {
+                                return true;
+                            }
+                            caps.truncate(saved_len);
+                        } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            } else if alts.iter().any(|a| a.as_str() == cmd_tokens[0]) {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -859,6 +879,54 @@ mod tests {
     )]
     #[case::optional_dir("git [-C *] status", "git -C /tmp status", true)]
     #[case::optional_dir_absent("git [-C *] status", "git status", true)]
+    // Multiple optional bare flags in any order
+    #[case::optional_bare_flags_reversed(
+        "curl [-s] [-X GET] *",
+        "curl -X GET -s https://example.com",
+        true
+    )]
+    #[case::optional_bare_flags_after_arg(
+        "curl [-s] [-X GET] *",
+        "curl https://example.com -X GET -s",
+        true
+    )]
+    #[case::optional_bare_flags_interleaved(
+        "curl [-s] [-X GET] *",
+        "curl -X GET https://example.com -s",
+        true
+    )]
+    #[case::optional_bare_flags_in_order(
+        "curl [-s] [-X GET] *",
+        "curl -s -X GET https://example.com",
+        true
+    )]
+    #[case::optional_bare_flags_all_absent(
+        "curl [-s] [-X GET] *",
+        "curl https://example.com",
+        true
+    )]
+    #[case::optional_bare_flags_only_s("curl [-s] [-X GET] *", "curl -s https://example.com", true)]
+    #[case::optional_bare_flags_only_x(
+        "curl [-s] [-X GET] *",
+        "curl -X GET https://example.com",
+        true
+    )]
+    // Wrong flag values must still be rejected
+    #[case::optional_bare_flags_wrong_value_reversed(
+        "curl [-s] [-X GET] *",
+        "curl -X POST -s https://example.com",
+        false
+    )]
+    #[case::optional_bare_flags_wrong_value_after_arg(
+        "curl [-s] [-X GET] *",
+        "curl https://example.com -X POST -s",
+        false
+    )]
+    #[case::optional_bare_flags_wrong_value_interleaved(
+        "curl [-s] [-X GET] *",
+        "curl -X POST https://example.com -s",
+        false
+    )]
     fn optional_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

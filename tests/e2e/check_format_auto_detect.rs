@@ -52,7 +52,7 @@ fn auto_detect_claude_code_hook_format(auto_detect_env: TestEnv) {
 fn auto_detect_generic_format(auto_detect_env: TestEnv) {
     let assert = auto_detect_env
         .command()
-        .arg("check")
+        .args(["check", "--output-format", "json"])
         .write_stdin(r#"{"command":"rm -rf /"}"#)
         .assert();
     let output = assert.code(0).get_output().stdout.clone();

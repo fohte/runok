@@ -140,9 +140,10 @@ mod tests {
     #[rstest]
     fn run_command_check_with_command_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            command: Some("echo hello".into()),
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
+            command: vec!["echo".into(), "hello".into()],
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, std::io::empty());
@@ -152,9 +153,10 @@ mod tests {
     #[rstest]
     fn run_command_check_with_empty_stdin_returns_two() {
         let cmd = Commands::Check(CheckArgs {
-            command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
+            command: vec![],
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "".as_bytes());
@@ -164,9 +166,10 @@ mod tests {
     #[rstest]
     fn run_command_check_with_stdin_json_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
+            command: vec![],
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, r#"{"command": "ls"}"#.as_bytes());
@@ -176,9 +179,10 @@ mod tests {
     #[rstest]
     fn run_command_check_with_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
+            command: vec![],
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let exit_code = run_command(cmd, &cwd, "echo hello\n".as_bytes());
@@ -208,9 +212,10 @@ mod tests {
     #[rstest]
     fn run_command_check_with_multiline_plaintext_stdin_returns_zero() {
         let cmd = Commands::Check(CheckArgs {
-            command: None,
-            format: None,
+            input_format: None,
+            output_format: cli::OutputFormat::Text,
             verbose: false,
+            command: vec![],
         });
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let input = indoc! {"

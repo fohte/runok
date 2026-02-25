@@ -1,12 +1,21 @@
 use crate::adapter::Endpoint;
-use crate::adapter::check_adapter::{CheckAdapter, CheckInput};
+use crate::adapter::check_adapter::{CheckAdapter, CheckInput, OutputFormat};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookInput};
+use runok::rules::command_parser::shell_quote_join;
 
 use super::CheckArgs;
 
+/// Convert the CLI output format enum to the adapter output format enum.
+fn to_adapter_output_format(cli_format: &super::OutputFormat) -> OutputFormat {
+    match cli_format {
+        super::OutputFormat::Json => OutputFormat::Json,
+        super::OutputFormat::Text => OutputFormat::Text,
+    }
+}
+
 /// Result of routing `runok check`: either a single endpoint or multiple commands.
 pub enum CheckRoute {
-    /// Single endpoint (--command, JSON stdin, or single-line plaintext).
+    /// Single endpoint (positional command, JSON stdin, or single-line plaintext).
     Single(Box<dyn Endpoint>),
     /// Multiple commands from multi-line plaintext stdin.
     Multi(Vec<CheckAdapter>),
@@ -17,11 +26,20 @@ pub fn route_check(
     args: &CheckArgs,
     mut stdin: impl std::io::Read,
 ) -> Result<CheckRoute, anyhow::Error> {
-    // 1. --command CLI argument → always generic mode (no stdin)
-    if let Some(command) = &args.command {
-        return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
-            command.clone(),
-        ))));
+    let output_format = to_adapter_output_format(&args.output_format);
+
+    // 1. Positional command arguments → always generic mode (no stdin)
+    if !args.command.is_empty() {
+        // Return single arguments unquoted so the rule engine can detect
+        // shell metacharacters (&&, ;, |) in compound commands.
+        let command = if args.command.len() == 1 {
+            args.command[0].clone()
+        } else {
+            shell_quote_join(&args.command)?
+        };
+        return Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_command(command).with_output_format(output_format),
+        )));
     }
 
     // 2. Read stdin once
@@ -37,14 +55,14 @@ pub fn route_check(
         return route_json(args, json_value);
     }
 
-    // 4. --format requires JSON; plaintext fallback is not allowed when --format is specified
-    if let Some(format) = &args.format {
+    // 4. --input-format requires JSON; plaintext fallback is not allowed when --input-format is specified
+    if let Some(format) = &args.input_format {
         return Err(anyhow::anyhow!(
-            "JSON parse error: input must be valid JSON when --format '{format}' is specified"
+            "JSON parse error: input must be valid JSON when --input-format '{format}' is specified"
         ));
     }
 
-    // 5. JSON parse failed, no --format → treat as plaintext (one command per line, skip empty lines)
+    // 5. JSON parse failed, no --input-format → treat as plaintext (one command per line, skip empty lines)
     let commands: Vec<String> = stdin_input
         .lines()
         .map(|line| line.trim())
@@ -57,15 +75,16 @@ pub fn route_check(
     }
 
     if commands.len() == 1 {
-        return Ok(CheckRoute::Single(Box::new(CheckAdapter::from_command(
-            commands.into_iter().next().unwrap_or_default(),
-        ))));
+        return Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_command(commands.into_iter().next().unwrap_or_default())
+                .with_output_format(output_format),
+        )));
     }
 
     Ok(CheckRoute::Multi(
         commands
             .into_iter()
-            .map(CheckAdapter::from_command)
+            .map(|cmd| CheckAdapter::from_command(cmd).with_output_format(output_format))
             .collect(),
     ))
 }
@@ -75,8 +94,8 @@ fn route_json(
     args: &CheckArgs,
     json_value: serde_json::Value,
 ) -> Result<CheckRoute, anyhow::Error> {
-    // --format is explicitly specified → use that format
-    if let Some(format) = &args.format {
+    // --input-format is explicitly specified → use that format
+    if let Some(format) = &args.input_format {
         return match format.as_str() {
             "claude-code-hook" => {
                 let hook_input: HookInput = serde_json::from_value(json_value)?;
@@ -85,12 +104,12 @@ fn route_json(
                 ))))
             }
             unknown => Err(anyhow::anyhow!(
-                "Unknown format: '{unknown}'. Valid formats: claude-code-hook"
+                "Unknown input format: '{unknown}'. Valid formats: claude-code-hook"
             )),
         };
     }
 
-    // --format omitted → auto-detect by JSON field presence
+    // --input-format omitted → auto-detect by JSON field presence
     // HookInput uses #[serde(rename_all = "snake_case")], so the actual JSON key is "tool_name"
     if json_value.get("tool_name").is_some() {
         let hook_input: HookInput = serde_json::from_value(json_value)?;
@@ -98,10 +117,11 @@ fn route_json(
             hook_input,
         ))))
     } else if json_value.get("command").is_some() {
+        let output_format = to_adapter_output_format(&args.output_format);
         let check_input: CheckInput = serde_json::from_value(json_value)?;
-        Ok(CheckRoute::Single(Box::new(CheckAdapter::from_stdin(
-            check_input,
-        ))))
+        Ok(CheckRoute::Single(Box::new(
+            CheckAdapter::from_stdin(check_input).with_output_format(output_format),
+        )))
     } else {
         Err(anyhow::anyhow!(
             "Unknown input format: expected 'tool_name' (Claude Code hook) or 'command' (generic) field"
@@ -116,11 +136,12 @@ mod tests {
     use rstest::rstest;
 
     /// Helper: build CheckArgs for testing
-    fn check_args(command: Option<&str>, format: Option<&str>) -> CheckArgs {
+    fn check_args(command: Vec<&str>, input_format: Option<&str>) -> CheckArgs {
         CheckArgs {
-            command: command.map(String::from),
-            format: format.map(String::from),
+            input_format: input_format.map(String::from),
+            output_format: crate::cli::OutputFormat::Text,
             verbose: false,
+            command: command.into_iter().map(String::from).collect(),
         }
     }
 
@@ -140,20 +161,21 @@ mod tests {
         }
     }
 
-    // === route_check: --command flag ===
+    // === route_check: positional command args ===
 
     #[rstest]
-    #[case::simple_command("git status")]
-    #[case::command_with_flags("ls -la /tmp")]
-    fn route_check_with_command_arg(#[case] cmd: &str) {
-        let args = check_args(Some(cmd), None);
+    #[case::simple_command(&["git", "status"], "git status")]
+    #[case::command_with_flags(&["ls", "-la", "/tmp"], "ls -la /tmp")]
+    #[case::arg_with_spaces(&["echo", "hello world"], "echo 'hello world'")]
+    fn route_check_with_command_arg(#[case] cmd: &[&str], #[case] expected: &str) {
+        let args = check_args(cmd.to_vec(), None);
         let route = route_check(&args, std::io::empty());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
                 .extract_command()
                 .unwrap_or_else(|e| panic!("unexpected error: {e}")),
-            Some(cmd.to_string())
+            Some(expected.to_string())
         );
     }
 
@@ -180,7 +202,7 @@ mod tests {
         #[case] stdin_json: &str,
         #[case] expected_command: Option<&str>,
     ) {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, stdin_json.as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -193,7 +215,7 @@ mod tests {
 
     #[rstest]
     fn route_check_stdin_unknown_json_format_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, r#"{"unknown_field": "value"}"#.as_bytes());
         match result {
             Err(e) => assert!(
@@ -204,15 +226,16 @@ mod tests {
         }
     }
 
-    // === route_check: --format with non-JSON stdin ===
+    // === route_check: --input-format with non-JSON stdin ===
 
     #[rstest]
     fn route_check_format_with_non_json_stdin_returns_error() {
-        let args = check_args(None, Some("claude-code-hook"));
+        let args = check_args(vec![], Some("claude-code-hook"));
         let result = route_check(&args, "not valid json".as_bytes());
         match result {
             Err(e) => assert!(
-                e.to_string().contains("JSON parse error") && e.to_string().contains("--format"),
+                e.to_string().contains("JSON parse error")
+                    && e.to_string().contains("--input-format"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),
@@ -229,7 +252,7 @@ mod tests {
         #[case] input: &str,
         #[case] expected_command: &str,
     ) {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, input.as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -244,7 +267,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_single_line() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, "git status\n".as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -257,7 +280,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_multi_line() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let input = indoc! {"
             git status
             ls -la
@@ -277,7 +300,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_skips_empty_lines() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let input = indoc! {"
             git status
 
@@ -298,7 +321,7 @@ mod tests {
 
     #[rstest]
     fn route_check_plaintext_trims_whitespace() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let route = route_check(&args, "  git status  \n".as_bytes());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -311,7 +334,7 @@ mod tests {
 
     #[rstest]
     fn route_check_empty_stdin_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, "".as_bytes());
         match result {
             Err(e) => assert!(
@@ -324,7 +347,7 @@ mod tests {
 
     #[rstest]
     fn route_check_only_empty_lines_returns_error() {
-        let args = check_args(None, None);
+        let args = check_args(vec![], None);
         let result = route_check(&args, "\n\n  \n".as_bytes());
         match result {
             Err(e) => assert!(
@@ -335,11 +358,11 @@ mod tests {
         }
     }
 
-    // === route_check: --command flag takes precedence ===
+    // === route_check: positional command takes precedence ===
 
     #[rstest]
     fn route_check_command_flag_takes_precedence_over_stdin() {
-        let args = check_args(Some("echo hello"), Some("claude-code-hook"));
+        let args = check_args(vec!["echo", "hello"], Some("claude-code-hook"));
         let route = route_check(&args, std::io::empty());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
@@ -350,11 +373,11 @@ mod tests {
         );
     }
 
-    // === route_check: --format flag ===
+    // === route_check: --input-format flag ===
 
     #[rstest]
     fn route_check_explicit_format_claude_code_hook() {
-        let args = check_args(None, Some("claude-code-hook"));
+        let args = check_args(vec![], Some("claude-code-hook"));
         let stdin_json = indoc! {r#"
             {
                 "tool_name": "Bash",
@@ -379,11 +402,12 @@ mod tests {
 
     #[rstest]
     fn route_check_unknown_format_returns_error() {
-        let args = check_args(None, Some("invalid-format"));
+        let args = check_args(vec![], Some("invalid-format"));
         let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes());
         match result {
             Err(e) => assert!(
-                e.to_string().contains("Unknown format: 'invalid-format'"),
+                e.to_string()
+                    .contains("Unknown input format: 'invalid-format'"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),
