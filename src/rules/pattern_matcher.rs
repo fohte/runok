@@ -590,11 +590,15 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 
 /// Check if an alternation part matches a command token.
 ///
-/// `*` in the alternation part is treated as a glob wildcard matching
-/// zero or more arbitrary characters. Parts without `*` behave as
-/// exact string comparisons.
+/// If the alternation part contains `*`, it is treated as a glob pattern
+/// where `*` matches zero or more arbitrary characters. Otherwise, an
+/// exact string comparison is performed.
 fn alt_matches(alt: &str, token: &str) -> bool {
-    wildmatch::WildMatch::new(alt).matches(token)
+    if alt.contains('*') {
+        wildmatch::WildMatch::new(alt).matches(token)
+    } else {
+        alt == token
+    }
 }
 
 /// Check if a single pattern token matches a single command token.
