@@ -20,5 +20,8 @@
       "esbuild",
       "sharp"
     ]
+  },
+  "devDependencies": {
+    "wrangler": "4.69.0"
   }
 }
