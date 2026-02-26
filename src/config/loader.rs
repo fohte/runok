@@ -468,4 +468,55 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
     }
+
+    #[test]
+    fn load_merges_audit_across_layers() {
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            audit:
+              enabled: true
+              path: /global/audit/
+              rotation:
+                retention_days: 30
+        "});
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  path: /local/audit/
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                audit:
+                  rotation:
+                    retention_days: 7
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // enabled from global (not overridden)
+        assert_eq!(audit.enabled, Some(true));
+        // path from local project config (overrides global)
+        assert_eq!(audit.path.as_deref(), Some("/local/audit/"));
+        // retention_days from local override (overrides global)
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(7));
+    }
+
+    #[test]
+    fn load_audit_absent_returns_none() {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        assert_eq!(config.audit, None);
+    }
 }
