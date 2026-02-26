@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config'
 import starlight from '@astrojs/starlight'
+import starlightLlmsTxt from 'starlight-llms-txt'
 
 export default defineConfig({
   site: 'https://runok.fohte.net',
@@ -12,6 +13,14 @@ export default defineConfig({
           label: 'GitHub',
           href: 'https://github.com/fohte/runok',
         },
+      ],
+      plugins: [
+        starlightLlmsTxt({
+          projectName: 'runok',
+          description:
+            'A command allowlisting tool for AI coding agents and human developers.',
+          promote: ['index*', 'getting-started*'],
+        }),
       ],
       sidebar: [
         {
