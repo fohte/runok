@@ -4,7 +4,7 @@ use crate::config::ActionKind;
 use crate::rules::rule_engine::{Action, DenyResponse, RuleMatchInfo};
 
 /// A complete record of a single command evaluation.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct AuditEntry {
     /// ISO 8601 timestamp (UTC).
     pub timestamp: String,
@@ -25,7 +25,7 @@ pub struct AuditEntry {
 }
 
 /// Context information about the evaluation.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct AuditMetadata {
     /// Endpoint subcommand type (exec, check, hook).
     pub endpoint_type: String,
@@ -41,7 +41,7 @@ pub struct AuditMetadata {
 
 /// Serializable representation of an evaluation action.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", content = "detail")]
+#[serde(tag = "type", content = "detail", rename_all = "lowercase")]
 pub enum SerializableAction {
     Allow,
     Deny {
@@ -120,35 +120,35 @@ mod tests {
     #[rstest]
     #[case::allow_action(
         SerializableAction::Allow,
-        indoc! {r#"{"type":"Allow"}"#},
+        indoc! {r#"{"type":"allow"}"#},
     )]
     #[case::deny_action_with_details(
         SerializableAction::Deny {
             message: Some("force push is forbidden".to_owned()),
             fix_suggestion: Some("git push origin main".to_owned()),
         },
-        indoc! {r#"{"type":"Deny","detail":{"message":"force push is forbidden","fix_suggestion":"git push origin main"}}"#},
+        indoc! {r#"{"type":"deny","detail":{"message":"force push is forbidden","fix_suggestion":"git push origin main"}}"#},
     )]
     #[case::deny_action_without_details(
         SerializableAction::Deny {
             message: None,
             fix_suggestion: None,
         },
-        indoc! {r#"{"type":"Deny","detail":{"message":null,"fix_suggestion":null}}"#},
+        indoc! {r#"{"type":"deny","detail":{"message":null,"fix_suggestion":null}}"#},
     )]
     #[case::ask_action_with_message(
         SerializableAction::Ask {
             message: Some("are you sure?".to_owned()),
         },
-        indoc! {r#"{"type":"Ask","detail":{"message":"are you sure?"}}"#},
+        indoc! {r#"{"type":"ask","detail":{"message":"are you sure?"}}"#},
     )]
     #[case::ask_action_without_message(
         SerializableAction::Ask { message: None },
-        indoc! {r#"{"type":"Ask","detail":{"message":null}}"#},
+        indoc! {r#"{"type":"ask","detail":{"message":null}}"#},
     )]
     #[case::default_action(
         SerializableAction::Default,
-        indoc! {r#"{"type":"Default"}"#},
+        indoc! {r#"{"type":"default"}"#},
     )]
     fn serializable_action_roundtrip(
         #[case] action: SerializableAction,
@@ -195,103 +195,70 @@ mod tests {
         assert_eq!(deserialized, sub_eval);
     }
 
-    #[test]
-    fn audit_entry_roundtrip() {
-        let entry = AuditEntry {
-            timestamp: "2026-02-25T10:30:00Z".to_owned(),
-            command: "git push -f origin main".to_owned(),
-            action: SerializableAction::Deny {
-                message: Some("force push is forbidden".to_owned()),
-                fix_suggestion: Some("git push origin main".to_owned()),
+    #[rstest]
+    #[case::without_sub_evaluations(AuditEntry {
+        timestamp: "2026-02-25T10:30:00Z".to_owned(),
+        command: "git push -f origin main".to_owned(),
+        action: SerializableAction::Deny {
+            message: Some("force push is forbidden".to_owned()),
+            fix_suggestion: Some("git push origin main".to_owned()),
+        },
+        matched_rules: vec![SerializableRuleMatch {
+            action_kind: "deny".to_owned(),
+            pattern: "git push -f|--force *".to_owned(),
+            matched_tokens: vec!["origin".to_owned(), "main".to_owned()],
+        }],
+        sandbox_preset: None,
+        default_action: Some("ask".to_owned()),
+        metadata: AuditMetadata {
+            endpoint_type: "hook".to_owned(),
+            session_id: Some("abc-123".to_owned()),
+            cwd: Some("/home/user/project".to_owned()),
+            tool_name: Some("Bash".to_owned()),
+            hook_event_name: Some("PreToolUse".to_owned()),
+        },
+        sub_evaluations: None,
+    })]
+    #[case::with_sub_evaluations(AuditEntry {
+        timestamp: "2026-02-25T11:00:00Z".to_owned(),
+        command: "echo hello && rm -rf /".to_owned(),
+        action: SerializableAction::Deny {
+            message: None,
+            fix_suggestion: None,
+        },
+        matched_rules: vec![],
+        sandbox_preset: None,
+        default_action: None,
+        metadata: AuditMetadata {
+            endpoint_type: "exec".to_owned(),
+            ..AuditMetadata::default()
+        },
+        sub_evaluations: Some(vec![
+            SubEvaluation {
+                command: "echo hello".to_owned(),
+                action: SerializableAction::Allow,
+                matched_rules: vec![],
+                eval_type: "compound".to_owned(),
             },
-            matched_rules: vec![SerializableRuleMatch {
-                action_kind: "deny".to_owned(),
-                pattern: "git push -f|--force *".to_owned(),
-                matched_tokens: vec!["origin".to_owned(), "main".to_owned()],
-            }],
-            sandbox_preset: None,
-            default_action: Some("ask".to_owned()),
-            metadata: AuditMetadata {
-                endpoint_type: "hook".to_owned(),
-                session_id: Some("abc-123".to_owned()),
-                cwd: Some("/home/user/project".to_owned()),
-                tool_name: Some("Bash".to_owned()),
-                hook_event_name: Some("PreToolUse".to_owned()),
+            SubEvaluation {
+                command: "rm -rf /".to_owned(),
+                action: SerializableAction::Deny {
+                    message: None,
+                    fix_suggestion: None,
+                },
+                matched_rules: vec![SerializableRuleMatch {
+                    action_kind: "deny".to_owned(),
+                    pattern: "rm -rf *".to_owned(),
+                    matched_tokens: vec!["/".to_owned()],
+                }],
+                eval_type: "compound".to_owned(),
             },
-            sub_evaluations: None,
-        };
-
+        ]),
+    })]
+    fn audit_entry_roundtrip(#[case] entry: AuditEntry) {
         let serialized = serde_json::to_string(&entry).unwrap();
         let deserialized: AuditEntry = serde_json::from_str(&serialized).unwrap();
-
-        // Verify key fields survive the roundtrip
-        assert_eq!(deserialized.timestamp, entry.timestamp);
-        assert_eq!(deserialized.command, entry.command);
-        assert_eq!(deserialized.action, entry.action);
-        assert_eq!(deserialized.matched_rules, entry.matched_rules);
-        assert_eq!(deserialized.sandbox_preset, entry.sandbox_preset);
-        assert_eq!(deserialized.default_action, entry.default_action);
-        assert_eq!(
-            deserialized.metadata.endpoint_type,
-            entry.metadata.endpoint_type
-        );
-        assert_eq!(deserialized.metadata.session_id, entry.metadata.session_id);
-        assert_eq!(deserialized.metadata.cwd, entry.metadata.cwd);
-        assert_eq!(deserialized.metadata.tool_name, entry.metadata.tool_name);
-        assert_eq!(
-            deserialized.metadata.hook_event_name,
-            entry.metadata.hook_event_name
-        );
-        assert!(deserialized.sub_evaluations.is_none());
-    }
-
-    #[test]
-    fn audit_entry_with_sub_evaluations_roundtrip() {
-        let entry = AuditEntry {
-            timestamp: "2026-02-25T11:00:00Z".to_owned(),
-            command: "echo hello && rm -rf /".to_owned(),
-            action: SerializableAction::Deny {
-                message: None,
-                fix_suggestion: None,
-            },
-            matched_rules: vec![],
-            sandbox_preset: None,
-            default_action: None,
-            metadata: AuditMetadata {
-                endpoint_type: "exec".to_owned(),
-                ..AuditMetadata::default()
-            },
-            sub_evaluations: Some(vec![
-                SubEvaluation {
-                    command: "echo hello".to_owned(),
-                    action: SerializableAction::Allow,
-                    matched_rules: vec![],
-                    eval_type: "compound".to_owned(),
-                },
-                SubEvaluation {
-                    command: "rm -rf /".to_owned(),
-                    action: SerializableAction::Deny {
-                        message: None,
-                        fix_suggestion: None,
-                    },
-                    matched_rules: vec![SerializableRuleMatch {
-                        action_kind: "deny".to_owned(),
-                        pattern: "rm -rf *".to_owned(),
-                        matched_tokens: vec!["/".to_owned()],
-                    }],
-                    eval_type: "compound".to_owned(),
-                },
-            ]),
-        };
-
-        let serialized = serde_json::to_string(&entry).unwrap();
-        let deserialized: AuditEntry = serde_json::from_str(&serialized).unwrap();
-
-        let sub_evals = deserialized.sub_evaluations.unwrap();
-        assert_eq!(sub_evals.len(), 2);
-        assert_eq!(sub_evals[0].command, "echo hello");
-        assert_eq!(sub_evals[0].action, SerializableAction::Allow);
-        assert_eq!(sub_evals[1].command, "rm -rf /");
+        assert_eq!(deserialized, entry);
     }
 
     #[rstest]
