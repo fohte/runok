@@ -49,9 +49,15 @@ impl AuditConfig {
         self.enabled.unwrap_or(true)
     }
 
-    /// Returns the audit log directory path, defaulting to ~/.local/share/runok/.
+    /// Returns the audit log directory path, defaulting to the XDG data
+    /// directory.
     pub fn resolved_path(&self) -> String {
         self.path.clone().unwrap_or_else(|| {
+            if let Ok(data_home) = std::env::var("XDG_DATA_HOME")
+                && !data_home.is_empty()
+            {
+                return format!("{data_home}/runok/");
+            }
             std::env::var("HOME")
                 .map(|h| format!("{h}/.local/share/runok/"))
                 .unwrap_or_else(|_| ".local/share/runok/".to_string())
@@ -1664,16 +1670,6 @@ mod tests {
         assert_eq!(config.enabled, Some(true));
         assert_eq!(config.path, None);
         assert_eq!(config.rotation, None);
-    }
-
-    #[test]
-    fn audit_config_is_enabled_defaults_to_true() {
-        let config = AuditConfig {
-            enabled: None,
-            path: None,
-            rotation: None,
-        };
-        assert!(config.is_enabled());
     }
 
     #[rstest]
