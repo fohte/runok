@@ -1,4 +1,6 @@
-use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
+use super::{
+    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
+};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -379,4 +381,217 @@ fn vars_wrapper_consumes_assignments(
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
+}
+
+// ========================================
+// merge_results: direct rule + wrapper result merging
+// ========================================
+
+#[rstest]
+#[case::direct_allow_wrapper_ask(
+    indoc! {"
+        rules:
+          - allow: 'sudo *'
+          - ask: 'rm *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm file.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::direct_allow_wrapper_deny(
+    indoc! {"
+        rules:
+          - allow: 'sudo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+#[case::direct_ask_wrapper_deny(
+    indoc! {"
+        rules:
+          - ask: 'sudo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+#[case::direct_default_wrapper_allow(
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo echo hello",
+    assert_allow as ActionAssertion,
+)]
+#[case::direct_default_wrapper_deny(
+    indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+fn merge_results_all_branches(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// when clause + wrapper combination
+// ========================================
+
+#[rstest]
+fn when_clause_with_wrapper() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'aws *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "})
+    .unwrap();
+
+    // sudo aws s3 ls in prod -> deny (inner command matches when clause)
+    let prod_ctx = EvalContext {
+        env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
+        cwd: std::path::PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "sudo aws s3 ls", &prod_ctx).unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny in prod, got {:?}",
+        result.action
+    );
+
+    // sudo aws s3 ls in dev -> allow (when clause skipped, allow matches)
+    let dev_ctx = EvalContext {
+        env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
+        cwd: std::path::PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "sudo aws s3 ls", &dev_ctx).unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// MAX_WRAPPER_DEPTH boundary value: depth=10 succeeds, depth=11 fails
+// ========================================
+
+#[rstest]
+fn wrapper_depth_exactly_at_limit_succeeds(empty_context: EvalContext) {
+    let config = Config {
+        rules: Some(vec![]),
+        definitions: Some(runok::config::Definitions {
+            wrappers: Some(vec!["a <cmd>".to_string()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // 11 "a" tokens = depth 0 (outer) + 10 wrapper unwraps -> depth 10
+    // depth check is `depth > 10`, so depth=10 should succeed
+    let result = evaluate_command(&config, "a a a a a a a a a a a", &empty_context);
+    assert!(result.is_ok(), "depth=10 should succeed, got {:?}", result);
+}
+
+#[rstest]
+fn wrapper_depth_one_over_limit_fails(empty_context: EvalContext) {
+    let config = Config {
+        rules: Some(vec![]),
+        definitions: Some(runok::config::Definitions {
+            wrappers: Some(vec!["a <cmd>".to_string()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // 12 "a" tokens = 11 wrapper unwraps -> depth 11 > MAX_WRAPPER_DEPTH(10)
+    let result = evaluate_command(&config, "a a a a a a a a a a a a", &empty_context);
+    assert!(
+        matches!(result, Err(RuleError::RecursionDepthExceeded(10))),
+        "depth=11 should fail with RecursionDepthExceeded, got {:?}",
+        result
+    );
+}
+
+// ========================================
+// Wrapper inner compound with sub-wrappers
+// ========================================
+
+#[rstest]
+fn wrapper_inner_compound_with_sub_wrappers(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // bash -c 'sudo echo hello && sudo rm -rf /'
+    // -> compound: [sudo echo hello, sudo rm -rf /]
+    // -> sudo echo hello -> echo hello -> Allow
+    // -> sudo rm -rf / -> rm -rf / -> Deny
+    // -> overall: Deny
+    let result = evaluate_command(
+        &config,
+        "bash -c 'sudo echo hello && sudo rm -rf /'",
+        &empty_context,
+    )
+    .unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        result.action
+    );
+}
+
+#[rstest]
+fn wrapper_inner_compound_all_sub_wrappers_allowed(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // bash -c 'sudo echo hello && sudo ls -la'
+    // -> compound: [sudo echo hello, sudo ls -la]
+    // -> both inner commands -> Allow
+    let result = evaluate_command(
+        &config,
+        "bash -c 'sudo echo hello && sudo ls -la'",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
 }

@@ -263,3 +263,121 @@ fn when_clause_with_logical_and() {
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Default);
 }
+
+// ========================================
+// when clause + compound command: different when results per sub-command
+// ========================================
+
+#[rstest]
+fn when_clause_compound_different_results_per_subcommand() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'echo *'
+    "})
+    .unwrap();
+
+    let ctx = EvalContext {
+        env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    // echo hello && aws s3 ls
+    // -> echo hello -> Allow (when clause on deny rule doesn't apply to echo)
+    // -> aws s3 ls -> Deny (when clause matches for prod)
+    // -> overall: Deny (strictest wins)
+    let result =
+        runok::rules::rule_engine::evaluate_compound(&config, "echo hello && aws s3 ls", &ctx)
+            .unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        result.action
+    );
+}
+
+#[rstest]
+fn when_clause_compound_all_skipped_falls_back() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'echo *'
+          - allow: 'aws *'
+    "})
+    .unwrap();
+
+    let ctx = EvalContext {
+        env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    // echo hello && aws s3 ls in dev
+    // -> echo hello -> Allow
+    // -> aws s3 ls -> when skipped, falls back to allow
+    // -> overall: Allow
+    let result =
+        runok::rules::rule_engine::evaluate_compound(&config, "echo hello && aws s3 ls", &ctx)
+            .unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// when clause with logical OR
+// ========================================
+
+#[rstest]
+fn when_clause_with_logical_or() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'deploy *'
+            when: \"env.ENV == 'prod' || env.ENV == 'staging'\"
+          - allow: 'deploy *'
+    "})
+    .unwrap();
+
+    // prod -> deny
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "prod".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert!(matches!(result.action, Action::Deny(_)));
+
+    // staging -> deny
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "staging".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert!(matches!(result.action, Action::Deny(_)));
+
+    // dev -> allow (deny skipped, allow matches)
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "dev".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// All when conditions false -> Default
+// ========================================
+
+#[rstest]
+fn all_when_false_returns_default(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'deploy *'
+            when: \"has(env.ENV) && env.ENV == 'prod'\"
+          - ask: 'deploy *'
+            when: \"has(env.ENV) && env.ENV == 'staging'\"
+    "})
+    .unwrap();
+
+    // No matching env -> all when clauses false -> no rules match -> Default
+    let result = evaluate_command(&config, "deploy app", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Default);
+}

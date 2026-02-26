@@ -239,3 +239,88 @@ fn negation_matches_everything_except(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Path normalization: ../  and ./ are resolved before matching
+// ========================================
+
+#[rstest]
+#[case::dotdot_resolves_to_match(
+    "cat /etc/../etc/passwd",
+    assert_deny as ActionAssertion,
+)]
+#[case::dot_resolves_to_match(
+    "cat /etc/./passwd",
+    assert_deny as ActionAssertion,
+)]
+#[case::multiple_dotdot_resolves(
+    "cat /usr/local/../../../etc/passwd",
+    assert_deny as ActionAssertion,
+)]
+#[case::clean_path_still_matches(
+    "cat /etc/passwd",
+    assert_deny as ActionAssertion,
+)]
+#[case::unrelated_path_not_matched(
+    "cat /tmp/safe.txt",
+    assert_default as ActionAssertion,
+)]
+fn path_normalization_resolves_traversal(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cat <path:sensitive>'
+        definitions:
+          paths:
+            sensitive:
+              - /etc/passwd
+              - /etc/shadow
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// FlagWithValue position independence
+// ========================================
+
+#[rstest]
+#[case::flag_before_url(
+    "curl -X POST https://example.com",
+    assert_deny as ActionAssertion,
+)]
+#[case::flag_after_url(
+    "curl https://example.com -X POST",
+    assert_deny as ActionAssertion,
+)]
+#[case::long_flag_before_url(
+    "curl --request POST https://example.com",
+    assert_deny as ActionAssertion,
+)]
+#[case::long_flag_after_url(
+    "curl https://example.com --request POST",
+    assert_deny as ActionAssertion,
+)]
+#[case::flag_between_args(
+    "curl -H 'Content-Type: application/json' -X POST https://example.com",
+    assert_deny as ActionAssertion,
+)]
+fn flag_with_value_position_independence(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'curl -X|--request POST *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
