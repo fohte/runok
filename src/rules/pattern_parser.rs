@@ -37,8 +37,10 @@ pub struct Pattern {
 /// Individual tokens within a pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatternToken {
-    /// Fixed string (e.g., "git", "status")
+    /// Fixed string (e.g., "git", "status"). `*` is treated as a glob wildcard.
     Literal(String),
+    /// Quoted literal string where `*` is not a glob wildcard (e.g., `"WIP*"`).
+    QuotedLiteral(String),
     /// Alternation (e.g., -X|--request -> ["-X", "--request"])
     Alternation(Vec<String>),
     /// Flag with its value (e.g., -X|--request POST -> aliases + value)
@@ -147,7 +149,7 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
     use super::PatternParseError;
 
     let command = match &lex_tokens[0] {
-        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Literal(s) | LexToken::QuotedLiteral(s) => CommandPattern::Literal(s.clone()),
         LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
         other => {
@@ -205,6 +207,10 @@ fn build_pattern_tokens(
 
             LexToken::Literal(s) => {
                 result.push(PatternToken::Literal(s.clone()));
+            }
+
+            LexToken::QuotedLiteral(s) => {
+                result.push(PatternToken::QuotedLiteral(s.clone()));
             }
 
             LexToken::Alternation(alts) => {
@@ -287,6 +293,7 @@ fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::Pattern
     match token {
         LexToken::Wildcard => Ok(PatternToken::Wildcard),
         LexToken::Literal(s) => Ok(PatternToken::Literal(s.clone())),
+        LexToken::QuotedLiteral(s) => Ok(PatternToken::QuotedLiteral(s.clone())),
         LexToken::Negation(s) => Ok(PatternToken::Negation(Box::new(PatternToken::Literal(
             s.clone(),
         )))),
@@ -406,14 +413,14 @@ mod tests {
         PatternToken::Literal("commit".into()),
         PatternToken::FlagWithValue {
             aliases: vec!["-m".into()],
-            value: Box::new(PatternToken::Literal("WIP*".into())),
+            value: Box::new(PatternToken::QuotedLiteral("WIP*".into())),
         },
     ])]
     #[case::double_quoted(r#"git commit -m "WIP*""#, "git", vec![
         PatternToken::Literal("commit".into()),
         PatternToken::FlagWithValue {
             aliases: vec!["-m".into()],
-            value: Box::new(PatternToken::Literal("WIP*".into())),
+            value: Box::new(PatternToken::QuotedLiteral("WIP*".into())),
         },
     ])]
     fn parse_literals(
