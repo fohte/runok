@@ -228,6 +228,39 @@ fn evaluate_command_inner(
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
     }
 
+    // Guard: if the command is compound (contains &&, ||, ;, |), split it and
+    // evaluate each sub-command individually. This prevents wildcard patterns
+    // from greedily matching across shell operators (e.g. `cd *` matching
+    // `cd /path && rm -rf dist`).
+    if let Ok(sub_commands) = extract_commands(command)
+        && sub_commands.len() > 1
+    {
+        let mut merged: Option<EvalResult> = None;
+        for sub in &sub_commands {
+            let result = evaluate_command_inner(config, sub, context, depth)?;
+            // Resolve Action::Default to the configured defaults.action.
+            // When defaults.action is not configured, escalate to Ask so that
+            // unmatched sub-commands do not get silently swallowed by Allow.
+            let resolved_action = match resolve_default_action(result.action, config) {
+                Action::Default => Action::Ask(None),
+                other => other,
+            };
+            let result = EvalResult {
+                action: resolved_action,
+                ..result
+            };
+            merged = Some(match merged {
+                Some(prev) => merge_results(prev, result),
+                None => result,
+            });
+        }
+        return Ok(merged.unwrap_or(EvalResult {
+            action: Action::Default,
+            sandbox_preset: None,
+            matched_rules: Vec::new(),
+        }));
+    }
+
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -952,6 +985,81 @@ mod tests {
         let config = make_config(vec![invalid_rule, allow_rule("git status")]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
+    }
+
+    // ========================================
+    // Compound command guard in evaluate_command
+    // ========================================
+
+    #[rstest]
+    #[case::cd_and_rm(
+        "cd /path && rm -rf dist",
+        vec![allow_rule("cd *"), deny_rule("rm *")],
+        "Deny",
+    )]
+    #[case::cd_and_pnpm_build(
+        "cd /path && pnpm build",
+        vec![allow_rule("cd *"), allow_rule("pnpm *")],
+        "Allow",
+    )]
+    #[case::cd_and_unmatched_escalates_to_ask(
+        "cd /path && unknown-cmd",
+        vec![allow_rule("cd *")],
+        "Ask",
+    )]
+    #[case::triple_compound(
+        "cd /path/to/dir && rm -rf dist .astro && pnpm build",
+        vec![allow_rule("cd *"), deny_rule("rm *"), allow_rule("pnpm *")],
+        "Deny",
+    )]
+    #[case::semicolon_separated(
+        "cd /path ; rm -rf /",
+        vec![allow_rule("cd *"), deny_rule("rm *")],
+        "Deny",
+    )]
+    #[case::pipe_separated(
+        "echo hello | grep world",
+        vec![allow_rule("echo *"), allow_rule("grep *")],
+        "Allow",
+    )]
+    #[case::or_separated(
+        "false || rm -rf /",
+        vec![allow_rule("false"), deny_rule("rm *")],
+        "Deny",
+    )]
+    fn compound_command_guard_splits_and_evaluates_individually(
+        empty_context: EvalContext,
+        #[case] command: &str,
+        #[case] rules: Vec<RuleEntry>,
+        #[case] expected_variant: &str,
+    ) {
+        let config = make_config(rules);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        let variant = format!("{:?}", result.action);
+        assert!(
+            variant.starts_with(expected_variant),
+            "expected action starting with '{expected_variant}', got '{variant}'"
+        );
+    }
+
+    #[rstest]
+    fn compound_guard_cd_wildcard_does_not_match_entire_compound(empty_context: EvalContext) {
+        // This is the exact bug scenario: `cd *` must NOT match the entire
+        // compound command `cd /path && rm -rf dist && pnpm build`.
+        // Unmatched sub-commands escalate to Ask even without defaults.action,
+        // so the overall result must be Ask, not Allow.
+        let config = make_config(vec![allow_rule("cd *")]);
+        let result = evaluate_command(
+            &config,
+            "cd /path/to/dir && rm -rf dist .astro && pnpm build 2>&1",
+            &empty_context,
+        )
+        .unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask (from unmatched sub-commands), got {:?}",
+            result.action
+        );
     }
 
     // ========================================
