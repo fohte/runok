@@ -238,7 +238,13 @@ fn evaluate_command_inner(
         let mut merged: Option<EvalResult> = None;
         for sub in &sub_commands {
             let result = evaluate_command_inner(config, sub, context, depth)?;
-            let resolved_action = resolve_default_action(result.action, config);
+            // Resolve Action::Default to the configured defaults.action.
+            // When defaults.action is not configured, escalate to Ask so that
+            // unmatched sub-commands do not get silently swallowed by Allow.
+            let resolved_action = match resolve_default_action(result.action, config) {
+                Action::Default => Action::Ask(None),
+                other => other,
+            };
             let result = EvalResult {
                 action: resolved_action,
                 ..result
@@ -996,10 +1002,10 @@ mod tests {
         vec![allow_rule("cd *"), allow_rule("pnpm *")],
         "Allow",
     )]
-    #[case::cd_and_unmatched_allow_wins_over_default(
+    #[case::cd_and_unmatched_escalates_to_ask(
         "cd /path && unknown-cmd",
         vec![allow_rule("cd *")],
-        "Allow",
+        "Ask",
     )]
     #[case::triple_compound(
         "cd /path/to/dir && rm -rf dist .astro && pnpm build",
@@ -1040,25 +1046,15 @@ mod tests {
     fn compound_guard_cd_wildcard_does_not_match_entire_compound(empty_context: EvalContext) {
         // This is the exact bug scenario: `cd *` must NOT match the entire
         // compound command `cd /path && rm -rf dist && pnpm build`.
-        // With defaults.action = ask, unmatched sub-commands resolve to Ask,
-        // which is more restrictive than Allow.
-        let config = Config {
-            rules: Some(vec![allow_rule("cd *")]),
-            defaults: Some(Defaults {
-                action: Some(crate::config::ActionKind::Ask),
-                sandbox: None,
-            }),
-            ..Default::default()
-        };
+        // Unmatched sub-commands escalate to Ask even without defaults.action,
+        // so the overall result must be Ask, not Allow.
+        let config = make_config(vec![allow_rule("cd *")]);
         let result = evaluate_command(
             &config,
             "cd /path/to/dir && rm -rf dist .astro && pnpm build 2>&1",
             &empty_context,
         )
         .unwrap();
-        // `rm -rf dist .astro` and `pnpm build` are not matched by any rule,
-        // so they resolve to Ask via defaults.action. Ask > Allow, so the
-        // overall result must be Ask, not Allow.
         assert!(
             matches!(result.action, Action::Ask(_)),
             "expected Ask (from unmatched sub-commands), got {:?}",
