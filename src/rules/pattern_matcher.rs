@@ -143,7 +143,7 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            if cmd_tokens[0] == s.as_str() {
+            if literal_matches(s, cmd_tokens[0]) {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -399,7 +399,7 @@ fn extract_placeholder_all<'a>(
         }
 
         PatternToken::Literal(s) => {
-            if !cmd_tokens.is_empty() && cmd_tokens[0] == s.as_str() {
+            if !cmd_tokens.is_empty() && literal_matches(s, cmd_tokens[0]) {
                 extract_placeholder_all(
                     rest,
                     &cmd_tokens[1..],
@@ -588,17 +588,24 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
     true
 }
 
-/// Check if an alternation part matches a command token.
+/// Check if a pattern string matches a command token.
 ///
-/// If the alternation part contains `*`, it is treated as a glob pattern
+/// If the pattern contains `*`, it is treated as a glob pattern
 /// where `*` matches zero or more arbitrary characters. Otherwise, an
 /// exact string comparison is performed.
-fn alt_matches(alt: &str, token: &str) -> bool {
-    if alt.contains('*') {
-        glob_match(alt, token)
+fn literal_matches(pattern: &str, token: &str) -> bool {
+    if pattern.contains('*') {
+        glob_match(pattern, token)
     } else {
-        alt == token
+        pattern == token
     }
+}
+
+/// Check if an alternation part matches a command token.
+///
+/// Delegates to [`literal_matches`].
+fn alt_matches(alt: &str, token: &str) -> bool {
+    literal_matches(alt, token)
 }
 
 /// Simple glob matching where `*` matches zero or more arbitrary characters.
@@ -651,7 +658,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// Check if a single pattern token matches a single command token.
 fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
     match token {
-        PatternToken::Literal(s) => s.as_str() == cmd_token,
+        PatternToken::Literal(s) => literal_matches(s, cmd_token),
         PatternToken::Alternation(alts) => alts.iter().any(|a| alt_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
@@ -1528,6 +1535,57 @@ mod tests {
         false
     )]
     fn negation_alternation_glob_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === Literal token with glob wildcard ===
+
+    #[rstest]
+    #[case::literal_glob_prefix("aws ssm get-* *", "aws ssm get-parameter --name foo", true)]
+    #[case::literal_glob_no_match("aws ssm get-* *", "aws ssm put-parameter --name foo", false)]
+    #[case::literal_glob_exact_still_works(
+        "aws ssm get-parameter *",
+        "aws ssm get-parameter --name foo",
+        true
+    )]
+    #[case::literal_glob_suffix("cmd *.txt", "cmd readme.txt", true)]
+    #[case::literal_glob_suffix_no_match("cmd *.txt", "cmd readme.md", false)]
+    #[case::literal_glob_middle("cmd foo*bar", "cmd fooXbar", true)]
+    #[case::literal_glob_middle_no_match("cmd foo*bar", "cmd fooXbaz", false)]
+    fn literal_glob_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === Negation of literal with glob wildcard ===
+
+    #[rstest]
+    #[case::negated_literal_glob_blocks(
+        "aws ssm !get-* *",
+        "aws ssm get-parameter --name foo",
+        false
+    )]
+    #[case::negated_literal_glob_allows(
+        "aws ssm !get-* *",
+        "aws ssm put-parameter --name foo",
+        true
+    )]
+    fn negated_literal_glob_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
         #[case] expected: bool,

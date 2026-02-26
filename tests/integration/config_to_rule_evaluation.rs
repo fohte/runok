@@ -500,3 +500,61 @@ fn negation_alternation_glob_wildcard_config(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Literal token with glob wildcard in config
+// ========================================
+
+#[rstest]
+#[case::literal_glob_deny_matches(
+    "aws ssm get-parameter --name foo --with-decryption",
+    assert_deny as ActionAssertion,
+)]
+#[case::literal_glob_deny_matches_variant(
+    "aws ssm get-parameters-by-path --path /prod",
+    assert_deny as ActionAssertion,
+)]
+#[case::literal_glob_deny_no_match(
+    "aws ssm put-parameter --name foo --value bar",
+    assert_allow as ActionAssertion,
+)]
+fn literal_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws *'
+          - deny: 'aws ssm get-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::negated_literal_glob_allows(
+    "aws ssm put-parameter --name foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::negated_literal_glob_denies(
+    "aws ssm get-parameter --name foo",
+    assert_deny as ActionAssertion,
+)]
+fn negated_literal_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws ssm !get-* *'
+          - deny: 'aws ssm get-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
