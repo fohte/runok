@@ -1,0 +1,82 @@
+---
+title: runok
+description: A command allowlisting tool for AI coding agents and human developers.
+template: splash
+hero:
+  tagline: A command allowlisting tool for AI coding agents and human developers.
+  actions:
+    - text: Getting Started
+      link: /getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/fohte/runok
+      icon: external
+      variant: minimal
+---
+
+import { CardGrid, Card } from '@astrojs/starlight/components'
+
+## Explore the docs
+
+<CardGrid>
+  <Card title="Getting Started" icon="rocket">
+    Install runok and set up your first configuration.
+
+    [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code Integration](/getting-started/claude-code/)
+
+  </Card>
+  <Card title="Configuration" icon="setting">
+    Full reference for `runok.yml` configuration options.
+
+    [Configuration Reference](/configuration/schema/)
+
+  </Card>
+  <Card title="Pattern Syntax" icon="document">
+    Learn the pattern syntax for matching commands.
+
+    [Pattern Syntax Reference](/pattern-syntax/overview/)
+
+  </Card>
+  <Card title="Rule Evaluation" icon="approve-check-circle">
+    Understand how runok evaluates rules and resolves conflicts.
+
+    [Rule Evaluation](/rule-evaluation/overview/)
+
+  </Card>
+  <Card title="Sandbox" icon="random">
+    Run allowed commands in a restricted sandbox environment.
+
+    [Sandbox](/sandbox/overview/)
+
+  </Card>
+  <Card title="CLI Reference" icon="laptop">
+    Reference for `runok check`, `runok exec`, and other commands.
+
+    [CLI Reference](/cli/overview/)
+
+  </Card>
+  <Card title="Extensions" icon="puzzle">
+    Extend runok with custom plugins via JSON-RPC.
+
+    [Extensions](/extensions/overview/)
+
+  </Card>
+  <Card title="Architecture" icon="open-book">
+    Internal architecture and design decisions.
+
+    [Architecture](/architecture/overview/)
+
+  </Card>
+  <Card title="Recipes" icon="list-format">
+    Practical configuration examples for common use cases.
+
+    [Recipes](/recipes/overview/)
+
+  </Card>
+  <Card title="Troubleshooting" icon="warning">
+    Common issues and debugging tips.
+
+    [Troubleshooting](/troubleshooting/)
+
+  </Card>
+</CardGrid>
