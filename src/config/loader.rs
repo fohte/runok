@@ -41,47 +41,25 @@ impl DefaultConfigLoader {
         }
     }
 
-    /// Determine which global local override config file to use.
-    /// `runok.local.yml` is preferred; `runok.local.yaml` is a fallback.
+    /// Find the first existing file from `filenames` inside `dir`.
+    fn find_config(dir: &Path, filenames: &[&str]) -> Option<PathBuf> {
+        filenames
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|path| path.exists())
+    }
+
     fn global_local_override_config_path(&self) -> Option<PathBuf> {
         let dir = self.global_config_dir.as_ref()?;
-        let yml = dir.join("runok.local.yml");
-        if yml.exists() {
-            return Some(yml);
-        }
-        let yaml = dir.join("runok.local.yaml");
-        if yaml.exists() {
-            return Some(yaml);
-        }
-        None
+        Self::find_config(dir, &["runok.local.yml", "runok.local.yaml"])
     }
 
-    /// Determine which local config file to use.
-    /// `runok.yml` is preferred; `runok.yaml` is a fallback.
     fn local_config_path(cwd: &Path) -> Option<PathBuf> {
-        let yml = cwd.join("runok.yml");
-        if yml.exists() {
-            return Some(yml);
-        }
-        let yaml = cwd.join("runok.yaml");
-        if yaml.exists() {
-            return Some(yaml);
-        }
-        None
+        Self::find_config(cwd, &["runok.yml", "runok.yaml"])
     }
 
-    /// Determine which local override config file to use.
-    /// `runok.local.yml` is preferred; `runok.local.yaml` is a fallback.
     fn local_override_config_path(cwd: &Path) -> Option<PathBuf> {
-        let yml = cwd.join("runok.local.yml");
-        if yml.exists() {
-            return Some(yml);
-        }
-        let yaml = cwd.join("runok.local.yaml");
-        if yaml.exists() {
-            return Some(yaml);
-        }
-        None
+        Self::find_config(cwd, &["runok.local.yml", "runok.local.yaml"])
     }
 
     fn read_and_parse(path: &Path) -> Result<Config, ConfigError> {
