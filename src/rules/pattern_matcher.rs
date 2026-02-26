@@ -150,6 +150,17 @@ fn match_tokens_core<'a>(
             }
         }
 
+        PatternToken::QuotedLiteral(s) => {
+            if cmd_tokens.is_empty() {
+                return false;
+            }
+            if s == cmd_tokens[0] {
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+            } else {
+                false
+            }
+        }
+
         PatternToken::Alternation(alts) => {
             if cmd_tokens.is_empty() {
                 return false;
@@ -412,6 +423,20 @@ fn extract_placeholder_all<'a>(
             Ok(())
         }
 
+        PatternToken::QuotedLiteral(s) => {
+            if !cmd_tokens.is_empty() && s == cmd_tokens[0] {
+                extract_placeholder_all(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captured,
+                    all_candidates,
+                )?;
+            }
+            Ok(())
+        }
+
         PatternToken::Alternation(alts) => {
             if !cmd_tokens.is_empty() && alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
                 extract_placeholder_all(
@@ -569,7 +594,7 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
                     return false;
                 }
             }
-            PatternToken::Literal(s) if s.starts_with('-') => {
+            PatternToken::Literal(s) | PatternToken::QuotedLiteral(s) if s.starts_with('-') => {
                 if cmd_tokens.contains(&s.as_str()) {
                     return false;
                 }
@@ -652,6 +677,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
     match token {
         PatternToken::Literal(s) => literal_matches(s, cmd_token),
+        PatternToken::QuotedLiteral(s) => s == cmd_token,
         PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
@@ -1553,6 +1579,16 @@ mod tests {
     #[case::literal_glob_suffix_no_match("cmd *.txt", "cmd readme.md", false)]
     #[case::literal_glob_middle("cmd foo*bar", "cmd fooXbar", true)]
     #[case::literal_glob_middle_no_match("cmd foo*bar", "cmd fooXbaz", false)]
+    #[case::negated_literal_glob_blocks(
+        "aws ssm !get-* *",
+        "aws ssm get-parameter --name foo",
+        false
+    )]
+    #[case::negated_literal_glob_allows(
+        "aws ssm !get-* *",
+        "aws ssm put-parameter --name foo",
+        true
+    )]
     fn literal_glob_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
@@ -1565,20 +1601,14 @@ mod tests {
         );
     }
 
-    // === Negation of literal with glob wildcard ===
+    // === Quoted literal with `*` (no glob) ===
 
     #[rstest]
-    #[case::negated_literal_glob_blocks(
-        "aws ssm !get-* *",
-        "aws ssm get-parameter --name foo",
-        false
-    )]
-    #[case::negated_literal_glob_allows(
-        "aws ssm !get-* *",
-        "aws ssm put-parameter --name foo",
-        true
-    )]
-    fn negated_literal_glob_matching(
+    #[case::quoted_star_exact_match(r#"git commit -m "WIP*""#, "git commit -m WIP*", true)]
+    #[case::quoted_star_no_glob(r#"git commit -m "WIP*""#, "git commit -m WIPfoo", false)]
+    #[case::quoted_star_only(r#"cmd "*""#, "cmd *", true)]
+    #[case::quoted_star_only_no_glob(r#"cmd "*""#, "cmd hello", false)]
+    fn quoted_literal_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
         #[case] expected: bool,
