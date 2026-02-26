@@ -18,7 +18,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'runok',
           description:
-            'A command-line policy engine that evaluates shell commands against configurable rules to allow, deny, or sandbox execution.',
+            'A command allowlisting tool for AI coding agents and human developers.',
           promote: ['index*', 'getting-started*'],
         }),
       ],
