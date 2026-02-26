@@ -159,7 +159,7 @@ fn match_tokens_core<'a>(
             // for a matching flag, remove it, and continue with the rest.
             if alts.iter().all(|a| a.starts_with('-')) {
                 for i in 0..cmd_tokens.len() {
-                    if alts.iter().any(|a| alt_matches(a, cmd_tokens[i])) {
+                    if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
                         if let Some(ref mut caps) = captures {
                             let saved_len = caps.len();
@@ -174,7 +174,7 @@ fn match_tokens_core<'a>(
                     }
                 }
                 false
-            } else if alts.iter().any(|a| alt_matches(a, cmd_tokens[0])) {
+            } else if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -413,7 +413,7 @@ fn extract_placeholder_all<'a>(
         }
 
         PatternToken::Alternation(alts) => {
-            if !cmd_tokens.is_empty() && alts.iter().any(|a| alt_matches(a, cmd_tokens[0])) {
+            if !cmd_tokens.is_empty() && alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
                 extract_placeholder_all(
                     rest,
                     &cmd_tokens[1..],
@@ -577,7 +577,7 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
             PatternToken::Alternation(alts) if alts.iter().any(|a| a.starts_with('-')) => {
                 if cmd_tokens
                     .iter()
-                    .any(|t| alts.iter().any(|a| alt_matches(a, t)))
+                    .any(|t| alts.iter().any(|a| literal_matches(a, t)))
                 {
                     return false;
                 }
@@ -599,13 +599,6 @@ fn literal_matches(pattern: &str, token: &str) -> bool {
     } else {
         pattern == token
     }
-}
-
-/// Check if an alternation part matches a command token.
-///
-/// Delegates to [`literal_matches`].
-fn alt_matches(alt: &str, token: &str) -> bool {
-    literal_matches(alt, token)
 }
 
 /// Simple glob matching where `*` matches zero or more arbitrary characters.
@@ -659,7 +652,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
     match token {
         PatternToken::Literal(s) => literal_matches(s, cmd_token),
-        PatternToken::Alternation(alts) => alts.iter().any(|a| alt_matches(a, cmd_token)),
+        PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
         PatternToken::PathRef(name) => {
