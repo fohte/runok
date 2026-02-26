@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn load_merges_audit_across_layers() {
+    fn load_audit_global_only_ignores_local_overrides() {
         let env = TestEnv::new();
         env.write_global(indoc! {"
             audit:
@@ -483,6 +483,7 @@ mod tests {
             "runok.yml",
             indoc! {"
                 audit:
+                  enabled: false
                   path: /local/audit/
             "},
         );
@@ -497,12 +498,10 @@ mod tests {
 
         let config = env.load().unwrap();
         let audit = config.audit.unwrap();
-        // enabled from global (not overridden)
+        // global values are preserved; local overrides are ignored
         assert_eq!(audit.enabled, Some(true));
-        // path from local project config (overrides global)
-        assert_eq!(audit.path.as_deref(), Some("/local/audit/"));
-        // retention_days from local override (overrides global)
-        assert_eq!(audit.rotation.unwrap().retention_days, Some(7));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
     }
 
     #[test]
