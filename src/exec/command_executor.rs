@@ -217,26 +217,22 @@ impl SandboxExecutor for StubSandboxExecutor {
     }
 }
 
-/// Linux sandbox executor that delegates to the runok-linux-sandbox helper binary.
+/// Linux sandbox executor that uses the `__sandbox-exec` hidden subcommand.
 ///
-/// The helper binary applies bubblewrap (namespace isolation), landlock (filesystem
-/// access control), and seccomp (network control) before executing the command.
+/// Re-invokes the `runok` binary itself with bubblewrap (namespace isolation),
+/// landlock (filesystem access control), and seccomp (network control).
 #[cfg(target_os = "linux")]
 pub struct LinuxSandboxExecutor {
-    helper_path: PathBuf,
+    self_exe: PathBuf,
 }
 
 #[cfg(target_os = "linux")]
 impl LinuxSandboxExecutor {
-    /// Create a new LinuxSandboxExecutor by finding the helper binary.
-    ///
-    /// Search order:
-    /// 1. Same directory as the current executable
-    /// 2. PATH lookup via `which`
+    /// Create a new LinuxSandboxExecutor using the current executable path.
     pub fn new() -> Result<Self, super::error::SandboxError> {
-        let helper_path =
-            find_linux_sandbox_helper().ok_or(super::error::SandboxError::NotSupported)?;
-        Ok(Self { helper_path })
+        let self_exe =
+            std::env::current_exe().map_err(|_| super::error::SandboxError::NotSupported)?;
+        Ok(Self { self_exe })
     }
 }
 
@@ -252,7 +248,8 @@ impl SandboxExecutor for LinuxSandboxExecutor {
 
         let cwd = std::env::current_dir().map_err(ExecError::Io)?;
 
-        let status = Command::new(&self.helper_path)
+        let status = Command::new(&self.self_exe)
+            .arg("__sandbox-exec")
             .arg("--policy")
             .arg(&policy_json)
             .arg("--cwd")
@@ -262,7 +259,7 @@ impl SandboxExecutor for LinuxSandboxExecutor {
             .status()
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => {
-                    ExecError::NotFound(self.helper_path.display().to_string())
+                    ExecError::NotFound(self.self_exe.display().to_string())
                 }
                 _ => ExecError::Io(e),
             })?;
@@ -271,26 +268,8 @@ impl SandboxExecutor for LinuxSandboxExecutor {
     }
 
     fn is_supported(&self) -> bool {
-        self.helper_path.exists()
+        self.self_exe.exists()
     }
-}
-
-/// Find the runok-linux-sandbox helper binary.
-///
-/// This is a standalone function for use in non-Linux builds (e.g., testing path
-/// discovery logic). On Linux, prefer `LinuxSandboxExecutor::new()`.
-pub fn find_linux_sandbox_helper() -> Option<PathBuf> {
-    // 1. Same directory as the current executable
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let helper = dir.join("runok-linux-sandbox");
-        if helper.exists() {
-            return Some(helper);
-        }
-    }
-    // 2. PATH lookup
-    which::which("runok-linux-sandbox").ok()
 }
 
 impl SandboxPolicy {
@@ -1339,17 +1318,6 @@ mod tests {
         assert_eq!(policy.writable_roots, vec![PathBuf::from("/tmp")]);
         assert_eq!(policy.read_only_subpaths, vec![PathBuf::from(".git")]);
         assert!(policy.network_allowed);
-    }
-
-    // === Helper binary discovery ===
-
-    #[rstest]
-    fn find_linux_sandbox_helper_returns_none_when_not_installed() {
-        // The helper binary is not installed in the test environment,
-        // so the function exercises both the exe-dir check and PATH
-        // fallback, returning None.
-        let result = super::find_linux_sandbox_helper();
-        assert!(result.is_none());
     }
 
     // === DryRunError conversion and display ===

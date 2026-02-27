@@ -21,6 +21,33 @@ pub enum Commands {
     /// Print the JSON Schema for runok.yml to stdout
     #[cfg(feature = "config-schema")]
     ConfigSchema,
+
+    /// Internal: Linux sandbox execution (stage 1/stage 2)
+    #[cfg(target_os = "linux")]
+    #[command(name = "__sandbox-exec", hide = true)]
+    SandboxExec(SandboxExecArgs),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct SandboxExecArgs {
+    /// Sandbox policy as JSON string.
+    #[arg(long)]
+    pub policy: String,
+
+    /// Working directory for the sandboxed command.
+    #[arg(long)]
+    pub cwd: std::path::PathBuf,
+
+    /// Stage 2 mode: apply landlock + seccomp, then exec the command.
+    /// Used internally when re-invoked inside bubblewrap.
+    #[arg(long)]
+    pub apply_sandbox_then_exec: bool,
+
+    /// The command and its arguments to execute.
+    #[arg(last = true, required = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(clap::Args)]

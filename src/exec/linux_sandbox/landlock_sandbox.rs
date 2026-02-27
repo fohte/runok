@@ -3,8 +3,8 @@ use landlock::{
     RulesetCreatedAttr,
 };
 
-use crate::error::SandboxError;
-use crate::policy::SandboxPolicy;
+use super::error::SandboxError;
+use crate::exec::command_executor::SandboxPolicy;
 
 /// Apply landlock restrictions based on the sandbox policy.
 ///
