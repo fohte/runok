@@ -5,96 +5,62 @@ sidebar:
   order: 2
 ---
 
-`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command.
+`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command. Useful for previewing what runok would do, or for integrating with external tools like Claude Code hooks.
 
 ## Usage
 
 ```sh
-# Pass command as arguments
 runok check [options] -- <command> [arguments...]
-
-# Read from stdin (plaintext)
-echo "git push" | runok check
-
-# Read from stdin (JSON)
-echo '{"command":"git push"}' | runok check
-
-# Multiple commands (one per line)
-printf "git push\nnpm publish\n" | runok check
 ```
+
+When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for Claude Code hooks, `command` for generic checks), and anything else is treated as plaintext with one command per line.
+
+Use `--input-format claude-code-hook` to force Claude Code hook parsing.
 
 ## Flags
 
-| Flag                       | Description                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `--input-format <format>`  | Input format. Currently supports `claude-code-hook`. Omit for auto-detection. |
-| `--output-format <format>` | Output format: `text` (default) or `json`.                                    |
-| `--verbose`                | Output detailed rule matching information to stderr.                          |
+### `--input-format <format>`
 
-## Input formats
+Input format for stdin. Currently supports `claude-code-hook`. When omitted, the format is auto-detected from the stdin content. Has no effect when command arguments are provided.
 
-### Command-line arguments
+### `--output-format <format>` [default: `text`]
 
-When arguments are provided after `runok check`, they are used directly as the command to evaluate. Stdin is not read.
+Output format. Available values:
+
+- `text` — Human-readable single line (e.g., `deny: reason (suggestion: fix)`)
+- `json` — Machine-readable JSON object with `decision`, `reason`, `fix_suggestion`, and `sandbox` fields. Fields with no value are omitted.
+
+### `--verbose`
+
+Output detailed rule matching information to stderr.
+
+## Examples
 
 ```sh
-runok check -- git push --force
-```
+# Check a single command
+$ runok check -- git push --force
+deny: Blocked to prevent rewriting remote history (suggestion: git push)
 
-### Stdin auto-detection
-
-When no command arguments are given, runok reads from stdin and auto-detects the format:
-
-1. **JSON object with `tool_name` field** — Treated as a Claude Code hook input (`claude-code-hook` format). Only `Bash` tool events are evaluated; other tools are skipped.
-2. **JSON object with `command` field** — Treated as a generic check input.
-3. **Non-JSON or non-object JSON** — Treated as plaintext. Each line is evaluated as a separate command (empty lines and whitespace are trimmed/skipped).
-
-Use `--input-format claude-code-hook` to force Claude Code hook parsing. If `--input-format` is specified but stdin is not valid JSON, a parse error is returned.
-
-### Plaintext mode
-
-In plaintext mode, each non-empty line is evaluated as a separate command:
-
-- A single line produces a single check result.
-- Multiple lines produce multiple check results, and the exit code is the highest (worst) among them.
-
-## Output formats
-
-### Text (default)
-
-```
-allow
-```
-
-```
-deny: Do not delete root (suggestion: rm -rf ./build)
-```
-
-The text format includes the decision, optional reason, and optional fix suggestion.
-
-### JSON
-
-```json
+# Check with JSON output
+$ runok check --output-format json -- rm -rf /
 {
   "decision": "deny",
   "reason": "Do not delete root",
   "fix_suggestion": "rm -rf ./build"
 }
-```
 
-Fields with no value (`reason`, `fix_suggestion`, `sandbox`) are omitted from the JSON output.
+# Read commands from stdin (one per line)
+$ printf "git push\nnpm publish\n" | runok check
+allow
+deny: Publishing is not allowed
 
-When a sandbox is configured for the matched rule:
+# Read from stdin as JSON
+$ echo '{"command":"git push"}' | runok check
+allow
 
-```json
-{
-  "decision": "allow",
-  "sandbox": {
-    "preset": "strict",
-    "writable_roots": ["/tmp"],
-    "network_allowed": false
-  }
-}
+# Force Claude Code hook format
+$ cat hook-input.json | runok check --input-format claude-code-hook
+allow [sandbox: default]
 ```
 
 ## Exit codes
@@ -106,4 +72,4 @@ When a sandbox is configured for the matched rule:
 
 The exit code reflects whether the check itself succeeded, not the permission decision. A `deny` result still returns exit code `0`. Use `--output-format json` to programmatically inspect the decision.
 
-When checking multiple commands (multi-line plaintext), the exit code is the highest value across all evaluations.
+When checking multiple commands (multi-line stdin), the exit code is the highest value across all evaluations.

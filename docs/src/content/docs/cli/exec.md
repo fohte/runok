@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`runok exec` evaluates a command against your runok rules and, if allowed, executes it — optionally within a sandbox.
+`runok exec` evaluates a command against your runok rules and, if allowed, executes it — optionally within a sandbox. If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
 
 ## Usage
 
@@ -13,54 +13,42 @@ sidebar:
 runok exec [options] -- <command> [arguments...]
 ```
 
-The `--` separator is recommended to distinguish runok flags from the command's own flags.
+The `--` separator distinguishes runok flags from the command's own flags.
+
+A single argument after `--` is interpreted as a shell command (passed to the shell). Multiple arguments are interpreted as an argv array (executed directly).
 
 ## Flags
 
-| Flag                 | Description                                                                       |
-| -------------------- | --------------------------------------------------------------------------------- |
-| `--sandbox <preset>` | Apply a named sandbox preset from your runok configuration.                       |
-| `--dry-run`          | Show what would happen without executing the command. Always exits with code `0`. |
-| `--verbose`          | Output detailed rule matching information to stderr.                              |
+### `--sandbox <preset>`
 
-## Command input
+Apply a named sandbox preset from your runok configuration. Overrides any sandbox defined in the matching rule.
 
-- **Single argument** — Interpreted as a shell command (passed to the shell for execution).
-- **Multiple arguments** — Interpreted as an argv array (executed directly without shell interpretation).
+### `--dry-run`
+
+Show what would happen without executing the command. Prints diagnostic information to stderr and always exits with code `0`.
+
+### `--verbose`
+
+Output detailed rule matching information to stderr.
+
+## Examples
 
 ```sh
-# Shell command (single argument)
-runok exec -- 'echo hello && echo world'
+# Execute a command with permission checks
+$ runok exec -- npm test
 
-# Argv (multiple arguments)
-runok exec -- echo hello
+# Execute with a sandbox preset
+$ runok exec --sandbox strict -- npm install
+
+# Preview what would happen without executing
+$ runok exec --dry-run -- git push --force
+
+# Shell command (single argument, passed to shell)
+$ runok exec -- 'echo hello && echo world'
+
+# Argv (multiple arguments, executed directly)
+$ runok exec -- echo hello
 ```
-
-## Behavior by decision
-
-### Allow
-
-The command is executed. If a sandbox is configured (via rule or `--sandbox`), the command runs within the sandbox. The exit code is the command's own exit code.
-
-### Deny
-
-The command is not executed. A message is printed to stderr:
-
-```
-runok: denied: <matched_rule>
-  reason: <message>
-  suggestion: <fix_suggestion>
-```
-
-The `reason` and `suggestion` lines are only shown when `message` or `fix_suggestion` are configured in the matching rule. See [Denial feedback](/cli/denial-feedback/) for details.
-
-### Ask
-
-Treated as deny in exec mode — the command is not executed.
-
-## Dry-run mode
-
-With `--dry-run`, runok evaluates the command against rules and prints diagnostic information to stderr, but does not execute anything. The exit code is always `0`.
 
 ## Exit codes
 

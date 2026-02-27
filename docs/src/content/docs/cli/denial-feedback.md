@@ -28,15 +28,14 @@ A human-readable explanation of why the command was denied. Shown to the user (o
 
 A suggested alternative command. This helps users (and AI agents) quickly correct a denied command without having to figure out the right alternative themselves.
 
-## Output by adapter
+## Examples
 
-How denial feedback is presented depends on which adapter processes the command.
+Given the configuration above, here is how denial feedback appears in each context.
 
 ### runok exec
 
-Messages are printed to stderr:
-
-```
+```sh
+$ runok exec -- rm -rf /
 runok: denied: rm -rf /
   reason: Deleting the root filesystem is not allowed.
   suggestion: rm -rf ./build
@@ -44,19 +43,15 @@ runok: denied: rm -rf /
 
 The `reason` and `suggestion` lines only appear when the corresponding field is set.
 
-### runok check (text output)
+### runok check
 
-Denial information is included in a single line:
-
-```
+```sh
+# Text output (default)
+$ runok check -- rm -rf /
 deny: Deleting the root filesystem is not allowed. (suggestion: rm -rf ./build)
-```
 
-### runok check (JSON output)
-
-Both fields appear in the JSON response:
-
-```json
+# JSON output
+$ runok check --output-format json -- rm -rf /
 {
   "decision": "deny",
   "reason": "Deleting the root filesystem is not allowed.",
@@ -66,19 +61,17 @@ Both fields appear in the JSON response:
 
 ### Claude Code hook
 
-When runok is used as a Claude Code `PreToolUse` hook, the denial reason is formatted as:
+When runok is used as a Claude Code `PreToolUse` hook, the denial reason is returned in the `permissionDecisionReason` field:
 
 ```
 denied: rm -rf / (Deleting the root filesystem is not allowed.) [suggestion: rm -rf ./build]
 ```
 
-This string is returned in the `permissionDecisionReason` field of the hook response, which Claude Code displays to the user.
-
 ## Use cases
 
 ### Guiding AI agents
 
-When runok is integrated with AI coding agents (e.g., via the Claude Code hook), `fix_suggestion` allows the agent to automatically retry with the suggested command:
+When integrated with AI coding agents (e.g., via the Claude Code hook), `fix_suggestion` allows the agent to automatically retry with the suggested command:
 
 ```yaml title="runok.yml"
 rules:
