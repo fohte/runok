@@ -2,22 +2,24 @@
 title: Environment Variables
 description: Environment variables that affect runok behavior.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 runok reads several environment variables to configure cache behavior and file paths.
 
 ## Reference
 
-### `HOME`
+### `XDG_CONFIG_HOME`
 
-Used to resolve the global configuration directory and the default cache directory.
+Base directory for the global configuration. Follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/).
 
-**Default:** Set by the operating system.\
-**Used for:**
+**Default:** `$HOME/.config`\
+**Used for:** `$XDG_CONFIG_HOME/runok/runok.yml`
 
-- Global config path: `$HOME/.config/runok/runok.yml`
-- Default cache path: `$HOME/.cache/runok/presets` (when `XDG_CACHE_HOME` is not set)
+```bash
+export XDG_CONFIG_HOME=~/.local/config
+# Config location becomes: ~/.local/config/runok/runok.yml
+```
 
 ### `XDG_CACHE_HOME`
 
@@ -53,6 +55,6 @@ export RUNOK_CACHE_TTL=0
 
 | Variable          | Purpose                        | Default            |
 | ----------------- | ------------------------------ | ------------------ |
-| `HOME`            | Global config and cache base   | OS-provided        |
+| `XDG_CONFIG_HOME` | Config base directory          | `$HOME/.config`    |
 | `XDG_CACHE_HOME`  | Cache base directory           | `$HOME/.cache`     |
 | `RUNOK_CACHE_TTL` | Mutable preset cache TTL (sec) | `86400` (24 hours) |

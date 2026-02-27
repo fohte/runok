@@ -11,17 +11,19 @@ runok loads configuration from up to four layers, merging them in a defined orde
 
 runok searches for configuration files in two scopes:
 
-| Scope   | Path                              | Purpose                |
-| ------- | --------------------------------- | ---------------------- |
-| Global  | `~/.config/runok/runok.yml`       | User-wide defaults     |
-| Project | `./runok.yml` (working directory) | Project-specific rules |
+| Scope   | Path                               | Purpose                |
+| ------- | ---------------------------------- | ---------------------- |
+| Global  | `$XDG_CONFIG_HOME/runok/runok.yml` | User-wide defaults     |
+| Project | `./runok.yml` (working directory)  | Project-specific rules |
+
+When `XDG_CONFIG_HOME` is not set, the global config directory defaults to `~/.config/runok/`. See [Environment Variables](/configuration/environment-variables/) for details.
 
 In each scope, an optional **local override** file is also loaded:
 
-| Scope   | Override Path                           | Purpose                      |
-| ------- | --------------------------------------- | ---------------------------- |
-| Global  | `~/.config/runok/runok.local.yml`       | Personal tweaks (gitignored) |
-| Project | `./runok.local.yml` (working directory) | Personal project overrides   |
+| Scope   | Override Path                            | Purpose                      |
+| ------- | ---------------------------------------- | ---------------------------- |
+| Global  | `$XDG_CONFIG_HOME/runok/runok.local.yml` | Personal tweaks (gitignored) |
+| Project | `./runok.local.yml` (working directory)  | Personal project overrides   |
 
 :::tip
 Use `.local.yml` files for personal preferences that should not be committed to version control.
@@ -41,10 +43,10 @@ This applies to both the main configuration file and the local override file in 
 Configuration layers are merged bottom-to-top, with later layers taking higher priority:
 
 ```
-1. Global config         (~/.config/runok/runok.yml)         ← lowest priority
-2. Global local override (~/.config/runok/runok.local.yml)
+1. Global config         ($XDG_CONFIG_HOME/runok/runok.yml)         ← lowest priority
+2. Global local override ($XDG_CONFIG_HOME/runok/runok.local.yml)
 3. Project config        (./runok.yml)
-4. Project local override (./runok.local.yml)                ← highest priority
+4. Project local override (./runok.local.yml)                       ← highest priority
 ```
 
 After merging all four layers, the resulting configuration is validated.
@@ -68,11 +70,7 @@ Different fields use different merge strategies:
 
 Given a global config:
 
-```yaml
-# ~/.config/runok/runok.yml
-defaults:
-  action: ask
-
+```yaml title="~/.config/runok/runok.yml"
 rules:
   - allow: 'git *'
 
@@ -84,12 +82,9 @@ definitions:
 
 And a project config:
 
-```yaml
-# ./runok.yml
-defaults:
-  action: allow
-
+```yaml title="./runok.yml"
 rules:
+  - allow: 'cargo build *'
   - deny: 'rm -rf /'
 
 definitions:
@@ -100,13 +95,11 @@ definitions:
 
 The merged result is:
 
-```yaml
-defaults:
-  action: allow # project overrides global
-
+```yaml title="Merged result"
 rules:
   # global rules come first, then project rules
   - allow: 'git *'
+  - allow: 'cargo build *'
   - deny: 'rm -rf /'
 
 definitions:

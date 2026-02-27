@@ -15,7 +15,7 @@ runok supports three ways to specify an extends source:
 
 Reference a configuration file on the local filesystem.
 
-```yaml
+```yaml title="runok.yml"
 extends:
   - ./shared/base.yml
   - ~/company/runok-base.yml
@@ -32,11 +32,11 @@ Path resolution rules:
 
 Reference a configuration file in a GitHub repository using the `github:` prefix.
 
-```yaml
+```yaml title="runok.yml"
 extends:
-  - github:fohte/runok-presets@v1.0.0
-  - github:my-org/security-rules@main
-  - github:my-org/security-rules # uses default branch
+  - github:example-org/example-presets@v1.0.0
+  - github:example-org/security-rules@main
+  - github:example-org/security-rules # uses default branch
 ```
 
 Format: `github:<owner>/<repo>@<ref>`
@@ -54,11 +54,11 @@ The referenced repository must contain a `runok.yml` (or `runok.yaml`) at the ro
 
 Reference any Git repository by URL.
 
-```yaml
+```yaml title="runok.yml"
 extends:
-  - https://github.com/my-org/runok-config.git
-  - https://github.com/my-org/runok-config.git@v2.0.0
-  - git@github.com:my-org/runok-config.git@main
+  - https://github.com/example-org/runok-config.git
+  - https://github.com/example-org/runok-config.git@v2.0.0
+  - git@github.com:example-org/runok-config.git@main
 ```
 
 Supports `https://`, `http://`, and `git@` URLs. An optional `@<ref>` suffix specifies the version.
@@ -93,7 +93,7 @@ This means the current file always takes the highest priority, and earlier `exte
 
 Diamond-shaped extends (where two presets share a common ancestor) are allowed. The shared ancestor is loaded once for each path, and both copies are merged.
 
-```yaml
+```yaml title="a.yml"
 # a.yml
 extends:
   - ./b.yml
