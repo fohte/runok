@@ -34,7 +34,7 @@ Given the configuration above, here is how denial feedback appears in each conte
 
 ### runok exec
 
-```sh
+```console
 $ runok exec -- rm -rf /
 runok: denied: rm -rf /
   reason: Deleting the root filesystem is not allowed.
@@ -45,7 +45,7 @@ The `reason` and `suggestion` lines only appear when the corresponding field is 
 
 ### runok check
 
-```sh
+```console
 # Text output (default)
 $ runok check -- rm -rf /
 deny: Deleting the root filesystem is not allowed. (suggestion: rm -rf ./build)

@@ -36,7 +36,7 @@ Output detailed rule matching information to stderr.
 
 ## Examples
 
-```sh
+```console
 # Check a single command
 $ runok check -- git push --force
 deny: Blocked to prevent rewriting remote history (suggestion: git push)

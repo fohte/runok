@@ -33,7 +33,7 @@ Output detailed rule matching information to stderr.
 
 ## Examples
 
-```sh
+```console
 # Execute a command with permission checks
 $ runok exec -- npm test
 
