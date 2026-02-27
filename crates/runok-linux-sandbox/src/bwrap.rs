@@ -112,19 +112,97 @@ fn is_glob_pattern(path: &str) -> bool {
 
 /// Expand a glob pattern and append `--ro-bind` arguments for each match.
 ///
+/// The `glob` crate does not support brace expansion (`{a,b}`), so braces
+/// are expanded into multiple patterns before passing to `glob::glob()`.
+///
 /// Invalid patterns and individual match errors are silently ignored,
 /// consistent with the existing behavior of skipping non-existent literal paths.
 fn expand_and_ro_bind(pattern: &str, args: &mut Vec<String>) {
-    let Ok(paths) = glob::glob(pattern) else {
-        return;
-    };
-    for entry in paths {
-        let Ok(path) = entry else {
+    for expanded in expand_braces(pattern) {
+        let Ok(paths) = glob::glob(&expanded) else {
             continue;
         };
-        let path_str = path.to_string_lossy().to_string();
-        args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+        for entry in paths {
+            let Ok(path) = entry else {
+                continue;
+            };
+            let path_str = path.to_string_lossy().to_string();
+            args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+        }
     }
+}
+
+/// Expand brace patterns (`{a,b,c}`) into multiple strings.
+///
+/// For example, `*.{js,ts}` becomes `["*.js", "*.ts"]`.
+/// Nested braces are supported: `{a,{b,c}}` becomes `["a", "b", "c"]`.
+/// Patterns without braces return a single-element vector unchanged.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let len = chars.len();
+
+    // Find the first top-level `{`
+    let Some(open) = chars.iter().position(|&c| c == '{') else {
+        return vec![pattern.to_string()];
+    };
+
+    // Find the matching `}`
+    let mut depth = 0;
+    let mut close = None;
+    for (i, &c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(close) = close else {
+        // Unmatched `{` — treat as literal
+        return vec![pattern.to_string()];
+    };
+
+    let prefix: String = chars[..open].iter().collect();
+    let suffix: String = chars[close + 1..].iter().collect();
+    let inner: String = chars[open + 1..close].iter().collect();
+
+    // Split on top-level commas only
+    let mut alternatives = Vec::new();
+    let mut current = String::new();
+    let mut brace_depth = 0;
+    for c in inner.chars() {
+        match c {
+            '{' => {
+                brace_depth += 1;
+                current.push(c);
+            }
+            '}' => {
+                brace_depth -= 1;
+                current.push(c);
+            }
+            ',' if brace_depth == 0 => {
+                alternatives.push(current);
+                current = String::new();
+            }
+            _ => current.push(c),
+        }
+    }
+    alternatives.push(current);
+
+    // Recursively expand each alternative (handles nested braces and
+    // braces in the suffix)
+    let mut results = Vec::new();
+    for alt in alternatives {
+        let combined = format!("{prefix}{alt}{suffix}");
+        results.extend(expand_braces(&combined));
+    }
+    results
 }
 
 #[cfg(test)]
@@ -489,5 +567,62 @@ mod tests {
             ro_bind_count, 0,
             "glob with no matches should produce no --ro-bind entries"
         );
+    }
+
+    #[rstest]
+    fn bwrap_args_expand_brace_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let js_path = dir.path().join("app.js");
+        let ts_path = dir.path().join("index.ts");
+        let rs_path = dir.path().join("main.rs");
+        std::fs::write(&js_path, "").unwrap();
+        std::fs::write(&ts_path, "").unwrap();
+        std::fs::write(&rs_path, "").unwrap();
+
+        let glob_pattern = format!("{}/*.{{js,ts}}", dir.path().display());
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.path().to_path_buf()],
+            read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            network_allowed: false,
+        };
+        let args = build_bwrap_args(
+            &policy,
+            dir.path(),
+            Path::new("/usr/bin/runok-linux-sandbox"),
+            "{}",
+            &["ls".to_string()],
+        );
+
+        let ro_bind_targets: std::collections::BTreeSet<&str> = args
+            .windows(3)
+            .filter(|w| w[0] == "--ro-bind" && w[1] != "/")
+            .map(|w| w[1].as_str())
+            .collect();
+
+        let expected: std::collections::BTreeSet<&str> =
+            [js_path.to_str().unwrap(), ts_path.to_str().unwrap()]
+                .into_iter()
+                .collect();
+
+        assert_eq!(ro_bind_targets, expected);
+    }
+
+    // === expand_braces ===
+
+    #[rstest]
+    #[case::simple("{a,b}", &["a", "b"])]
+    #[case::with_prefix("pre{a,b}", &["prea", "preb"])]
+    #[case::with_suffix("{a,b}suf", &["asuf", "bsuf"])]
+    #[case::with_both("pre{a,b}suf", &["preasuf", "prebsuf"])]
+    #[case::three_alt("{a,b,c}", &["a", "b", "c"])]
+    #[case::nested("{a,{b,c}}", &["a", "b", "c"])]
+    #[case::no_braces("plain", &["plain"])]
+    #[case::glob_with_brace("*.{js,ts}", &["*.js", "*.ts"])]
+    #[case::unmatched_open("{a,b", &["{a,b"])]
+    #[case::empty_alternative("{a,}", &["a", ""])]
+    fn expand_braces_cases(#[case] input: &str, #[case] expected: &[&str]) {
+        let result = expand_braces(input);
+        let expected_vec: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        assert_eq!(result, expected_vec);
     }
 }
