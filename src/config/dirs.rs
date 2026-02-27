@@ -5,17 +5,17 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 pub fn config_dir() -> Option<PathBuf> {
-    if let Some(xdg) = non_empty_env("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(xdg));
-    }
-    home_dir().map(|home| home.join(".config"))
+    xdg_dir("XDG_CONFIG_HOME", ".config")
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
-    if let Some(xdg) = non_empty_env("XDG_CACHE_HOME") {
-        return Some(PathBuf::from(xdg));
-    }
-    home_dir().map(|home| home.join(".cache"))
+    xdg_dir("XDG_CACHE_HOME", ".cache")
+}
+
+fn xdg_dir(env_key: &str, fallback_subdir: &str) -> Option<PathBuf> {
+    non_empty_env(env_key)
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(fallback_subdir)))
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -35,18 +35,23 @@ mod tests {
         home.filter(|v| !v.is_empty()).map(PathBuf::from)
     }
 
+    fn xdg_dir_with(
+        xdg_env: Option<&str>,
+        home: Option<&str>,
+        fallback_subdir: &str,
+    ) -> Option<PathBuf> {
+        xdg_env
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home_dir_with(home).map(|h| h.join(fallback_subdir)))
+    }
+
     fn config_dir_with(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
-        if let Some(xdg) = xdg_config_home.filter(|v| !v.is_empty()) {
-            return Some(PathBuf::from(xdg));
-        }
-        home_dir_with(home).map(|h| h.join(".config"))
+        xdg_dir_with(xdg_config_home, home, ".config")
     }
 
     fn cache_dir_with(xdg_cache_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
-        if let Some(xdg) = xdg_cache_home.filter(|v| !v.is_empty()) {
-            return Some(PathBuf::from(xdg));
-        }
-        home_dir_with(home).map(|h| h.join(".cache"))
+        xdg_dir_with(xdg_cache_home, home, ".cache")
     }
 
     #[rstest]
