@@ -10,6 +10,12 @@
 //! - Kernel support for landlock (5.13+) and seccomp
 
 #![cfg(target_os = "linux")]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "integration test helpers use expect/unwrap for brevity"
+)]
 
 use std::path::PathBuf;
 use std::process::Command;
