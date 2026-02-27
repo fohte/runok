@@ -40,6 +40,13 @@ pub fn build_bwrap_args(
         let path_str = subpath.to_string_lossy().to_string();
 
         if is_glob_pattern(&path_str) {
+            // Glob patterns are expanded at mount-setup time, so files created
+            // after the sandbox starts will not be protected by --ro-bind.
+            eprintln!(
+                "runok-linux-sandbox: warning: glob deny pattern {path_str:?} is expanded \
+                 before sandbox execution; files created later will not be protected. \
+                 Use literal paths for complete coverage."
+            );
             // Glob pattern: expand against the filesystem and ro-bind each match
             if path_str.starts_with('/') {
                 expand_and_ro_bind(&path_str, &mut args);
