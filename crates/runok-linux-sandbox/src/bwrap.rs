@@ -53,8 +53,8 @@ pub fn build_bwrap_args(
             } else {
                 // Relative glob: resolve against each writable_root
                 for root in &policy.writable_roots {
-                    let full = format!("{}/{}", root.to_string_lossy(), path_str);
-                    expand_and_ro_bind(&full, &mut args);
+                    let full = root.join(&path_str);
+                    expand_and_ro_bind(&full.to_string_lossy(), &mut args);
                 }
             }
         } else {
@@ -110,6 +110,10 @@ fn is_glob_pattern(path: &str) -> bool {
     path.contains('*') || path.contains('?') || path.contains('[') || path.contains('{')
 }
 
+/// Maximum number of paths a single glob pattern may expand to.
+/// Prevents excessive memory usage and E2BIG errors when invoking bwrap.
+const MAX_GLOB_MATCHES: usize = 10_000;
+
 /// Expand a glob pattern and append `--ro-bind` arguments for each match.
 ///
 /// The `glob` crate does not support brace expansion (`{a,b}`), so braces
@@ -117,17 +121,28 @@ fn is_glob_pattern(path: &str) -> bool {
 ///
 /// Invalid patterns and individual match errors are silently ignored,
 /// consistent with the existing behavior of skipping non-existent literal paths.
+/// Expansion is capped at [`MAX_GLOB_MATCHES`] to avoid DoS from overly broad
+/// patterns.
 fn expand_and_ro_bind(pattern: &str, args: &mut Vec<String>) {
+    let mut count = 0;
     for expanded in expand_braces(pattern) {
         let Ok(paths) = glob::glob(&expanded) else {
             continue;
         };
         for entry in paths {
+            if count >= MAX_GLOB_MATCHES {
+                eprintln!(
+                    "runok-linux-sandbox: warning: glob pattern {pattern:?} matched \
+                     more than {MAX_GLOB_MATCHES} paths; remaining matches are ignored"
+                );
+                return;
+            }
             let Ok(path) = entry else {
                 continue;
             };
             let path_str = path.to_string_lossy().to_string();
             args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+            count += 1;
         }
     }
 }
@@ -468,9 +483,14 @@ mod tests {
 
     // === glob expansion in bwrap args ===
 
+    #[fixture]
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
     #[rstest]
-    fn bwrap_args_expand_absolute_glob() {
-        let dir = tempfile::tempdir().unwrap();
+    fn bwrap_args_expand_absolute_glob(temp_dir: tempfile::TempDir) {
+        let dir = &temp_dir;
         let env_path = dir.path().join(".env");
         let env_local_path = dir.path().join(".env.local");
         let other_path = dir.path().join("README.md");
@@ -507,8 +527,8 @@ mod tests {
     }
 
     #[rstest]
-    fn bwrap_args_expand_relative_glob() {
-        let dir = tempfile::tempdir().unwrap();
+    fn bwrap_args_expand_relative_glob(temp_dir: tempfile::TempDir) {
+        let dir = &temp_dir;
         let env_path = dir.path().join(".env");
         let env_prod_path = dir.path().join(".env.production");
         std::fs::write(&env_path, "").unwrap();
@@ -542,8 +562,8 @@ mod tests {
     }
 
     #[rstest]
-    fn bwrap_args_glob_no_matches_produces_no_ro_bind() {
-        let dir = tempfile::tempdir().unwrap();
+    fn bwrap_args_glob_no_matches_produces_no_ro_bind(temp_dir: tempfile::TempDir) {
+        let dir = &temp_dir;
         // No files created - glob should match nothing
         let glob_pattern = format!("{}/.env*", dir.path().display());
         let policy = SandboxPolicy {
@@ -570,8 +590,8 @@ mod tests {
     }
 
     #[rstest]
-    fn bwrap_args_expand_brace_glob() {
-        let dir = tempfile::tempdir().unwrap();
+    fn bwrap_args_expand_brace_glob(temp_dir: tempfile::TempDir) {
+        let dir = &temp_dir;
         let js_path = dir.path().join("app.js");
         let ts_path = dir.path().join("index.ts");
         let rs_path = dir.path().join("main.rs");
