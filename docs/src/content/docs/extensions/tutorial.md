@@ -15,6 +15,10 @@ A simple extension that denies `curl` commands using `POST` method in production
 
 Create a file called `checks/env_guard.sh`:
 
+:::note
+This script requires [`jq`](https://jqlang.github.io/jq/) for JSON parsing. Install it via your package manager (e.g., `brew install jq`, `apt install jq`).
+:::
+
 ```bash
 #!/bin/sh
 
@@ -22,14 +26,15 @@ Create a file called `checks/env_guard.sh`:
 request=$(cat)
 
 # Extract fields using jq
+id=$(echo "$request" | jq '.id')
 method=$(echo "$request" | jq -r '.params.flags.X // empty')
 env_profile=$(echo "$request" | jq -r '.params.env.AWS_PROFILE // empty')
 
 # Decision logic
 if [ "$method" = "POST" ] && [ "$env_profile" = "prod" ]; then
-  printf '{"jsonrpc":"2.0","id":1,"result":{"status":"deny","message":"POST requests are blocked in production","fix_suggestion":"Use a staging environment instead"}}'
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"deny","message":"POST requests are blocked in production","fix_suggestion":"Use a staging environment instead"}}' "$id"
 else
-  printf '{"jsonrpc":"2.0","id":1,"result":{"status":"allow"}}'
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"allow"}}' "$id"
 fi
 ```
 

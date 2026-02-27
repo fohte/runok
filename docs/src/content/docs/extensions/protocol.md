@@ -69,7 +69,10 @@ Flags are extracted from the parsed command. For example, `curl -X POST --silent
 }
 ```
 
-Short flags with values use the flag letter as the key (e.g., `-X POST` becomes `"X": "POST"`). Boolean flags (no value) use an empty string.
+Flags are parsed into key-value pairs. The flag name (without leading dashes) becomes the key.
+
+- For flags with a value (e.g., `-X POST` or `--request POST`), the value is stored as a string.
+- For boolean flags without a value (e.g., `--silent`), the value is an empty string (`""`).
 
 ## Response
 
