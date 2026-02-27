@@ -230,8 +230,11 @@ pub struct LinuxSandboxExecutor {
 impl LinuxSandboxExecutor {
     /// Create a new LinuxSandboxExecutor using the current executable path.
     pub fn new() -> Result<Self, super::error::SandboxError> {
-        let self_exe =
-            std::env::current_exe().map_err(|_| super::error::SandboxError::NotSupported)?;
+        let self_exe = std::env::current_exe().map_err(|e| {
+            super::error::SandboxError::SetupFailed(format!(
+                "failed to get current executable path: {e}"
+            ))
+        })?;
         Ok(Self { self_exe })
     }
 }
