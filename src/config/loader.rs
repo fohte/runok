@@ -21,15 +21,28 @@ impl Default for DefaultConfigLoader {
 
 impl DefaultConfigLoader {
     pub fn new() -> Self {
-        let global_config_dir = std::env::var("HOME")
-            .ok()
-            .filter(|h| !h.is_empty())
-            .map(|h| PathBuf::from(h).join(".config").join("runok"));
+        let global_config_dir = Self::resolve_global_config_dir();
         let global_config_path = global_config_dir.as_ref().map(|d| d.join("runok.yml"));
         Self {
             global_config_path,
             global_config_dir,
         }
+    }
+
+    /// Resolve the global config directory following XDG Base Directory Specification.
+    /// Uses $XDG_CONFIG_HOME/runok if set, otherwise $HOME/.config/runok.
+    fn resolve_global_config_dir() -> Option<PathBuf> {
+        let base = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|h| !h.is_empty())
+                    .map(|h| PathBuf::from(h).join(".config"))
+            })?;
+        Some(base.join("runok"))
     }
 
     /// Create a loader with an explicit global config path (for testing).
@@ -337,16 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn new_uses_home_env() {
-        let loader = DefaultConfigLoader::new();
-        if let Ok(home) = std::env::var("HOME")
+    fn resolve_global_config_dir_prefers_xdg_config_home() {
+        let dir = DefaultConfigLoader::resolve_global_config_dir();
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+            && !xdg.is_empty()
+        {
+            assert_eq!(dir, Some(PathBuf::from(xdg).join("runok")));
+        } else if let Ok(home) = std::env::var("HOME")
             && !home.is_empty()
         {
-            let expected = PathBuf::from(home)
-                .join(".config")
-                .join("runok")
-                .join("runok.yml");
-            assert_eq!(loader.global_config_path, Some(expected));
+            assert_eq!(dir, Some(PathBuf::from(home).join(".config").join("runok")));
         }
     }
 
