@@ -21,10 +21,7 @@ impl Default for DefaultConfigLoader {
 
 impl DefaultConfigLoader {
     pub fn new() -> Self {
-        let global_config_dir = std::env::var("HOME")
-            .ok()
-            .filter(|h| !h.is_empty())
-            .map(|h| PathBuf::from(h).join(".config").join("runok"));
+        let global_config_dir = super::dirs::config_dir().map(|dir| dir.join("runok"));
         let global_config_path = global_config_dir.as_ref().map(|d| d.join("runok.yml"));
         Self {
             global_config_path,
@@ -334,20 +331,6 @@ mod tests {
             env.load_without_global()
         };
         assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
-    }
-
-    #[test]
-    fn new_uses_home_env() {
-        let loader = DefaultConfigLoader::new();
-        if let Ok(home) = std::env::var("HOME")
-            && !home.is_empty()
-        {
-            let expected = PathBuf::from(home)
-                .join(".config")
-                .join("runok")
-                .join("runok.yml");
-            assert_eq!(loader.global_config_path, Some(expected));
-        }
     }
 
     #[rstest]
