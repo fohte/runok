@@ -268,4 +268,19 @@ mod tests {
         let exit_code = run_command(cmd, &cwd, input.as_bytes());
         assert_eq!(exit_code, 0);
     }
+
+    // === Linux sandbox exec ===
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    fn run_sandbox_exec_rejects_invalid_json() {
+        let args = cli::SandboxExecArgs {
+            policy: "not valid json".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            apply_sandbox_then_exec: false,
+            command: vec!["true".to_string()],
+        };
+        let exit_code = run_sandbox_exec(&args);
+        assert_eq!(exit_code, ExitCode::from(1));
+    }
 }

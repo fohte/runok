@@ -1350,4 +1350,20 @@ mod tests {
         assert_eq!(converted, expected);
         assert_eq!(converted.to_string(), display);
     }
+
+    // === LinuxSandboxExecutor ===
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    fn linux_sandbox_executor_new_succeeds() {
+        let executor = LinuxSandboxExecutor::new().expect("should resolve current exe");
+        assert!(executor.self_exe.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    fn linux_sandbox_executor_is_supported() {
+        let executor = LinuxSandboxExecutor::new().expect("should resolve current exe");
+        assert!(executor.is_supported());
+    }
 }
