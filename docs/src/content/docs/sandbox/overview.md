@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-runok can execute allowed commands inside a **sandbox** that restricts file system writes and network access. Sandboxing is applied at the OS level using platform-native mechanisms ([macOS Seatbelt](/architecture/sandbox-macos/) or [Linux Landlock + seccomp](/architecture/sandbox-linux/)), so sandboxed processes cannot bypass the restrictions.
+runok can execute allowed commands inside a **sandbox** that restricts file system writes and network access. Sandboxing is applied at the OS level using platform-native mechanisms ([macOS Seatbelt](/architecture/sandbox/macos/) or [Linux Landlock + seccomp](/architecture/sandbox/linux/)), so sandboxed processes cannot bypass the restrictions.
 
 ## Defining sandbox presets
 
@@ -110,16 +110,6 @@ When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-comma
 This ensures that a less-restricted command in a pipeline cannot weaken the restrictions of a more-restricted command.
 
 If the intersection of `writable` roots becomes empty (a contradiction), runok escalates the action to `ask` so the user can decide whether to proceed.
-
-:::tip
-If compound commands are too restrictive, run each command separately with `runok exec`:
-
-```bash
-runok exec -- cargo build
-runok exec -- cargo test
-```
-
-:::
 
 ## Example: complete configuration
 
