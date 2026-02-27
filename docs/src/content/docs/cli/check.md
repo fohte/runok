@@ -11,7 +11,7 @@ sidebar:
 
 ```sh
 # Pass command as arguments
-runok check <command> [arguments...]
+runok check [options] -- <command> [arguments...]
 
 # Read from stdin (plaintext)
 echo "git push" | runok check
@@ -38,7 +38,7 @@ printf "git push\nnpm publish\n" | runok check
 When arguments are provided after `runok check`, they are used directly as the command to evaluate. Stdin is not read.
 
 ```sh
-runok check git push --force
+runok check -- git push --force
 ```
 
 ### Stdin auto-detection
