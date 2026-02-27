@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "=1.0.102"
 clap = { version = "=4.5.60", features = ["derive"] }
+glob = "=0.3.3"
 landlock = "=0.4.4"
 libc = "=0.2.182"
 seccompiler = "=0.5.0"

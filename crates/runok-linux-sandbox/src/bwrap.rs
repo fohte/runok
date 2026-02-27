@@ -38,13 +38,23 @@ pub fn build_bwrap_args(
     // Re-bind read-only subpaths (overrides writable mounts)
     for subpath in &policy.read_only_subpaths {
         let path_str = subpath.to_string_lossy().to_string();
-        // Skip glob patterns - bubblewrap operates on actual paths
-        if path_str.contains('*') || path_str.contains('?') {
-            continue;
-        }
-        // Only bind if the path exists
-        if subpath.exists() {
-            args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+
+        if is_glob_pattern(&path_str) {
+            // Glob pattern: expand against the filesystem and ro-bind each match
+            if path_str.starts_with('/') {
+                expand_and_ro_bind(&path_str, &mut args);
+            } else {
+                // Relative glob: resolve against each writable_root
+                for root in &policy.writable_roots {
+                    let full = format!("{}/{}", root.to_string_lossy(), path_str);
+                    expand_and_ro_bind(&full, &mut args);
+                }
+            }
+        } else {
+            // Literal path: only bind if the path exists
+            if subpath.exists() {
+                args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+            }
         }
     }
 
@@ -86,6 +96,28 @@ pub fn build_bwrap_args(
     args.extend_from_slice(command);
 
     args
+}
+
+/// Returns true if the path contains glob metacharacters.
+fn is_glob_pattern(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[') || path.contains('{')
+}
+
+/// Expand a glob pattern and append `--ro-bind` arguments for each match.
+///
+/// Invalid patterns and individual match errors are silently ignored,
+/// consistent with the existing behavior of skipping non-existent literal paths.
+fn expand_and_ro_bind(pattern: &str, args: &mut Vec<String>) {
+    let Ok(paths) = glob::glob(pattern) else {
+        return;
+    };
+    for entry in paths {
+        let Ok(path) = entry else {
+            continue;
+        };
+        let path_str = path.to_string_lossy().to_string();
+        args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +364,123 @@ mod tests {
         assert!(
             args.iter().any(|a| a == "--die-with-parent"),
             "should have --die-with-parent"
+        );
+    }
+
+    // === is_glob_pattern ===
+
+    #[rstest]
+    #[case::star(".env*", true)]
+    #[case::double_star("/etc/**", true)]
+    #[case::question_mark("file?.txt", true)]
+    #[case::bracket("/tmp/log[0-9].txt", true)]
+    #[case::brace("*.{js,ts}", true)]
+    #[case::literal(".git", false)]
+    #[case::absolute_literal("/etc/shadow", false)]
+    fn is_glob_pattern_cases(#[case] input: &str, #[case] expected: bool) {
+        assert_eq!(is_glob_pattern(input), expected);
+    }
+
+    // === glob expansion in bwrap args ===
+
+    #[rstest]
+    fn bwrap_args_expand_absolute_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env_local_path = dir.path().join(".env.local");
+        let other_path = dir.path().join("README.md");
+        std::fs::write(&env_path, "").unwrap();
+        std::fs::write(&env_local_path, "").unwrap();
+        std::fs::write(&other_path, "").unwrap();
+
+        let glob_pattern = format!("{}/.env*", dir.path().display());
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.path().to_path_buf()],
+            read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            network_allowed: false,
+        };
+        let args = build_bwrap_args(
+            &policy,
+            dir.path(),
+            Path::new("/usr/bin/runok-linux-sandbox"),
+            "{}",
+            &["ls".to_string()],
+        );
+
+        let ro_bind_targets: std::collections::BTreeSet<&str> = args
+            .windows(3)
+            .filter(|w| w[0] == "--ro-bind" && w[1] != "/")
+            .map(|w| w[1].as_str())
+            .collect();
+
+        let expected: std::collections::BTreeSet<&str> =
+            [env_path.to_str().unwrap(), env_local_path.to_str().unwrap()]
+                .into_iter()
+                .collect();
+
+        assert_eq!(ro_bind_targets, expected);
+    }
+
+    #[rstest]
+    fn bwrap_args_expand_relative_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let env_prod_path = dir.path().join(".env.production");
+        std::fs::write(&env_path, "").unwrap();
+        std::fs::write(&env_prod_path, "").unwrap();
+
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.path().to_path_buf()],
+            read_only_subpaths: vec![PathBuf::from(".env*")],
+            network_allowed: false,
+        };
+        let args = build_bwrap_args(
+            &policy,
+            dir.path(),
+            Path::new("/usr/bin/runok-linux-sandbox"),
+            "{}",
+            &["ls".to_string()],
+        );
+
+        let ro_bind_targets: std::collections::BTreeSet<&str> = args
+            .windows(3)
+            .filter(|w| w[0] == "--ro-bind" && w[1] != "/")
+            .map(|w| w[1].as_str())
+            .collect();
+
+        let expected: std::collections::BTreeSet<&str> =
+            [env_path.to_str().unwrap(), env_prod_path.to_str().unwrap()]
+                .into_iter()
+                .collect();
+
+        assert_eq!(ro_bind_targets, expected);
+    }
+
+    #[rstest]
+    fn bwrap_args_glob_no_matches_produces_no_ro_bind() {
+        let dir = tempfile::tempdir().unwrap();
+        // No files created - glob should match nothing
+        let glob_pattern = format!("{}/.env*", dir.path().display());
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.path().to_path_buf()],
+            read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            network_allowed: false,
+        };
+        let args = build_bwrap_args(
+            &policy,
+            dir.path(),
+            Path::new("/usr/bin/runok-linux-sandbox"),
+            "{}",
+            &["ls".to_string()],
+        );
+
+        let ro_bind_count = args
+            .windows(3)
+            .filter(|w| w[0] == "--ro-bind" && w[1] != "/")
+            .count();
+        assert_eq!(
+            ro_bind_count, 0,
+            "glob with no matches should produce no --ro-bind entries"
         );
     }
 }
