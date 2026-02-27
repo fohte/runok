@@ -2,7 +2,7 @@
 title: Security Model
 description: What the sandbox protects against and how the security model works.
 sidebar:
-  order: 4
+  order: 2
 ---
 
 This page explains what runok's sandbox is designed to protect against, the trust boundaries it enforces, and the rationale behind its design decisions.
@@ -73,7 +73,7 @@ fs:
     - '.git'
 ```
 
-Then `.git` is protected even though `.` (its parent) is writable. This matches how both [macOS Seatbelt](/sandbox/macos/) and [Linux bubblewrap](/sandbox/linux/) work:
+Then `.git` is protected even though `.` (its parent) is writable. This matches how both [macOS Seatbelt](/architecture/sandbox-macos/) and [Linux bubblewrap](/architecture/sandbox-linux/) work:
 
 - On macOS, Seatbelt's `(deny file-write*)` rules take priority over `(allow file-write*)` rules
 - On Linux, bubblewrap applies `--ro-bind` **after** `--bind`, so read-only mounts overlay writable mounts
@@ -98,8 +98,8 @@ The sandbox is enforced by the operating system kernel, not by runok's own proce
 
 On macOS, this is provided by the Seatbelt kernel extension. On Linux, it is provided by mount namespaces (bubblewrap), Landlock LSM, and seccomp-bpf filters. See the platform-specific pages for details:
 
-- [macOS Sandbox (Seatbelt)](/sandbox/macos/)
-- [Linux Sandbox (Landlock + seccomp)](/sandbox/linux/)
+- [macOS Sandbox (Seatbelt)](/architecture/sandbox-macos/)
+- [Linux Sandbox (Landlock + seccomp)](/architecture/sandbox-linux/)
 
 ## Limitations
 

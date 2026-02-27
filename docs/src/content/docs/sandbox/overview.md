@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-runok can execute allowed commands inside a **sandbox** that restricts file system writes and network access. Sandboxing is applied at the OS level using platform-native mechanisms ([macOS Seatbelt](/sandbox/macos/) or [Linux Landlock + seccomp](/sandbox/linux/)), so sandboxed processes cannot bypass the restrictions.
+runok can execute allowed commands inside a **sandbox** that restricts file system writes and network access. Sandboxing is applied at the OS level using platform-native mechanisms ([macOS Seatbelt](/architecture/sandbox-macos/) or [Linux Landlock + seccomp](/architecture/sandbox-linux/)), so sandboxed processes cannot bypass the restrictions.
 
 ## Defining sandbox presets
 
