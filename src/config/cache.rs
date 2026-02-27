@@ -48,22 +48,12 @@ impl PresetCache {
     }
 
     fn resolve_cache_dir() -> Result<PathBuf, PresetError> {
-        let base = std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .filter(|h| !h.is_empty())
-                    .map(|h| PathBuf::from(h).join(".cache"))
-            })
-            .ok_or_else(|| {
-                PresetError::Cache(
-                    "cannot determine cache directory: neither XDG_CACHE_HOME nor HOME is set"
-                        .to_string(),
-                )
-            })?;
+        let base = super::dirs::cache_dir().ok_or_else(|| {
+            PresetError::Cache(
+                "cannot determine cache directory: neither XDG_CACHE_HOME nor HOME is set"
+                    .to_string(),
+            )
+        })?;
         Ok(base.join("runok").join("presets"))
     }
 
