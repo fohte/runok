@@ -33,21 +33,28 @@ Output detailed rule matching information to stderr.
 
 ## Examples
 
-```console
-# Execute a command with permission checks
-$ runok exec -- npm test
+Execute a command with permission checks:
 
-# Execute with a sandbox preset
-$ runok exec --sandbox strict -- npm install
+```sh
+runok exec -- npm test
+```
 
-# Preview what would happen without executing
-$ runok exec --dry-run -- git push --force
+Execute with a sandbox preset:
 
-# Shell command (single argument, passed to shell)
-$ runok exec -- 'echo hello && echo world'
+```sh
+runok exec --sandbox strict -- npm install
+```
 
-# Argv (multiple arguments, executed directly)
-$ runok exec -- echo hello
+Preview what would happen without executing:
+
+```sh
+runok exec --dry-run -- git push --force
+```
+
+Run a shell expression (single argument, passed to shell):
+
+```sh
+runok exec -- 'echo hello && echo world'
 ```
 
 ## Exit codes

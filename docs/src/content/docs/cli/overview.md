@@ -19,4 +19,4 @@ Evaluate a command against your rules and, if allowed, execute it — optionally
 
 ## Related
 
-- [Denial feedback](/cli/denial-feedback/) — Configure `message` and `fix_suggestion` for denied commands.
+- [Denial feedback](/configuration/denial-feedback/) — Configure `message` and `fix_suggestion` for denied commands.

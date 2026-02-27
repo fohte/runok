@@ -36,31 +36,47 @@ Output detailed rule matching information to stderr.
 
 ## Examples
 
-```console
-# Check a single command
-$ runok check -- git push --force
-deny: Blocked to prevent rewriting remote history (suggestion: git push)
+Check a single command:
 
-# Check with JSON output
-$ runok check --output-format json -- rm -rf /
+```sh
+runok check -- git push --force
+# deny: Blocked to prevent rewriting remote history (suggestion: git push)
+```
+
+Check with JSON output:
+
+```sh
+runok check --output-format json -- rm -rf /
+```
+
+```json
 {
   "decision": "deny",
   "reason": "Do not delete root",
   "fix_suggestion": "rm -rf ./build"
 }
+```
 
-# Read commands from stdin (one per line)
-$ printf "git push\nnpm publish\n" | runok check
-allow
-deny: Publishing is not allowed
+Read commands from stdin (one per line):
 
-# Read from stdin as JSON
-$ echo '{"command":"git push"}' | runok check
-allow
+```sh
+printf "git push\nnpm publish\n" | runok check
+# allow
+# deny: Publishing is not allowed
+```
 
-# Force Claude Code hook format
-$ cat hook-input.json | runok check --input-format claude-code-hook
-allow [sandbox: default]
+Read from stdin as JSON:
+
+```sh
+echo '{"command":"git push"}' | runok check
+# allow
+```
+
+Force Claude Code hook format:
+
+```sh
+cat hook-input.json | runok check --input-format claude-code-hook
+# allow [sandbox: default]
 ```
 
 ## Exit codes

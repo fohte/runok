@@ -2,7 +2,7 @@
 title: Denial feedback
 description: Provide helpful messages and fix suggestions when commands are denied.
 sidebar:
-  order: 4
+  order: 2
 ---
 
 When a rule denies a command, runok can display a human-readable message explaining why, and optionally suggest an alternative command. This is configured with the `message` and `fix_suggestion` fields in rule entries.
@@ -34,24 +34,31 @@ Given the configuration above, here is how denial feedback appears in each conte
 
 ### runok exec
 
-```console
-$ runok exec -- rm -rf /
-runok: denied: rm -rf /
-  reason: Deleting the root filesystem is not allowed.
-  suggestion: rm -rf ./build
+```sh
+runok exec -- rm -rf /
+# runok: denied: rm -rf /
+#   reason: Deleting the root filesystem is not allowed.
+#   suggestion: rm -rf ./build
 ```
 
 The `reason` and `suggestion` lines only appear when the corresponding field is set.
 
 ### runok check
 
-```console
-# Text output (default)
-$ runok check -- rm -rf /
-deny: Deleting the root filesystem is not allowed. (suggestion: rm -rf ./build)
+Text output (default):
 
-# JSON output
-$ runok check --output-format json -- rm -rf /
+```sh
+runok check -- rm -rf /
+# deny: Deleting the root filesystem is not allowed. (suggestion: rm -rf ./build)
+```
+
+JSON output:
+
+```sh
+runok check --output-format json -- rm -rf /
+```
+
+```json
 {
   "decision": "deny",
   "reason": "Deleting the root filesystem is not allowed.",
@@ -63,7 +70,7 @@ $ runok check --output-format json -- rm -rf /
 
 When runok is used as a Claude Code `PreToolUse` hook, the denial reason is returned in the `permissionDecisionReason` field:
 
-```
+```text
 denied: rm -rf / (Deleting the root filesystem is not allowed.) [suggestion: rm -rf ./build]
 ```
 
