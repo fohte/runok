@@ -49,7 +49,7 @@ The `reason` and `suggestion` lines only appear when the corresponding field is 
 Denial information is included in a single line:
 
 ```
-deny: rm -rf / (Deleting the root filesystem is not allowed.) (suggestion: rm -rf ./build)
+deny: Deleting the root filesystem is not allowed. (suggestion: rm -rf ./build)
 ```
 
 ### runok check (JSON output)
@@ -60,8 +60,7 @@ Both fields appear in the JSON response:
 {
   "decision": "deny",
   "reason": "Deleting the root filesystem is not allowed.",
-  "fix_suggestion": "rm -rf ./build",
-  "sandbox": null
+  "fix_suggestion": "rm -rf ./build"
 }
 ```
 

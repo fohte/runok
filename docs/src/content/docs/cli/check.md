@@ -67,7 +67,7 @@ allow
 ```
 
 ```
-deny: rm -rf / (Do not delete root) (suggestion: rm -rf ./build)
+deny: Do not delete root (suggestion: rm -rf ./build)
 ```
 
 The text format includes the decision, optional reason, and optional fix suggestion.
@@ -78,18 +78,17 @@ The text format includes the decision, optional reason, and optional fix suggest
 {
   "decision": "deny",
   "reason": "Do not delete root",
-  "fix_suggestion": "rm -rf ./build",
-  "sandbox": null
+  "fix_suggestion": "rm -rf ./build"
 }
 ```
+
+Fields with no value (`reason`, `fix_suggestion`, `sandbox`) are omitted from the JSON output.
 
 When a sandbox is configured for the matched rule:
 
 ```json
 {
   "decision": "allow",
-  "reason": null,
-  "fix_suggestion": null,
   "sandbox": {
     "preset": "strict",
     "writable_roots": ["/tmp"],
