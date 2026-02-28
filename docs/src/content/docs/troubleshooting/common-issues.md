@@ -122,7 +122,7 @@ extends:
 
 runok uses platform-specific sandboxing:
 
-- **macOS:** `sandbox-exec` (seatbelt/SBPL)
+- **macOS:** `sandbox-exec` (seatbelt/SBPL). Note: `sandbox-exec` is deprecated on macOS and may be removed in future versions.
 - **Linux:** bubblewrap + landlock + seccomp
 
 ### Sandbox not supported on this platform
