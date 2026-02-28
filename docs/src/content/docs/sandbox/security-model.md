@@ -53,14 +53,6 @@ The sandbox does **not** restrict read access. This is a deliberate design decis
 
 Unix domain sockets (`AF_UNIX`) are never blocked, even when `network.allow` is `false`. Many development tools (package managers, build tools, language servers) use Unix sockets for local inter-process communication. Blocking them would break basic tool functionality without meaningful security benefit, since Unix sockets cannot be used for network exfiltration.
 
-## Why sandbox only applies to allow/ask rules
-
-Sandbox can only be attached to `allow` and `ask` rules, not to `deny` rules. This is because:
-
-- **`deny` rules prevent execution entirely** — there is no command to sandbox
-- **`allow` rules permit execution** — the sandbox restricts what the permitted command can do
-- **`ask` rules require confirmation** — if the user approves, the command runs inside the sandbox
-
 ## Deny takes priority over allow
 
 Within the sandbox itself, deny paths always override writable directories. If you configure:
