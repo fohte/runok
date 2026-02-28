@@ -20,13 +20,13 @@ When `XDG_CONFIG_HOME` is not set, the global config directory defaults to `~/.c
 
 In each scope, an optional **local override** file is also loaded:
 
-| Scope   | Override Path                            | Purpose                      |
-| ------- | ---------------------------------------- | ---------------------------- |
-| Global  | `$XDG_CONFIG_HOME/runok/runok.local.yml` | Personal tweaks (gitignored) |
-| Project | `./runok.local.yml` (working directory)  | Personal project overrides   |
+| Scope   | Override Path                            | Purpose                    |
+| ------- | ---------------------------------------- | -------------------------- |
+| Global  | `$XDG_CONFIG_HOME/runok/runok.local.yml` | Personal tweaks            |
+| Project | `./runok.local.yml` (working directory)  | Personal project overrides |
 
 :::tip
-Use `.local.yml` files for personal preferences that should not be committed to version control.
+Use `.local.yml` files for personal preferences. Add `runok.local.yml` to your global gitignore (`~/.config/git/ignore`) to keep them out of version control across all repositories.
 :::
 
 ## File Extension Priority
@@ -42,12 +42,12 @@ This applies to both the main configuration file and the local override file in 
 
 Configuration layers are merged bottom-to-top, with later layers taking higher priority:
 
-```
-1. Global config         ($XDG_CONFIG_HOME/runok/runok.yml)         ← lowest priority
-2. Global local override ($XDG_CONFIG_HOME/runok/runok.local.yml)
-3. Project config        (./runok.yml)
-4. Project local override (./runok.local.yml)                       ← highest priority
-```
+| Priority | Layer                  | Path                                     |
+| -------- | ---------------------- | ---------------------------------------- |
+| 1 (low)  | Global config          | `$XDG_CONFIG_HOME/runok/runok.yml`       |
+| 2        | Global local override  | `$XDG_CONFIG_HOME/runok/runok.local.yml` |
+| 3        | Project config         | `./runok.yml`                            |
+| 4 (high) | Project local override | `./runok.local.yml`                      |
 
 After merging all four layers, the resulting configuration is validated.
 
