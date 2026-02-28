@@ -86,6 +86,7 @@ mod tests {
     #[case::glob_with_brace("*.{js,ts}", &["*.js", "*.ts"])]
     #[case::unmatched_open("{a,b", &["{a,b"])]
     #[case::empty_alternative("{a,}", &["a", ""])]
+    #[case::leading_empty_alternative("ts{,x}", &["ts", "tsx"])]
     fn expand_braces_cases(#[case] input: &str, #[case] expected: &[&str]) {
         let result = expand_braces(input);
         let expected_vec: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
