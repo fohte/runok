@@ -5,7 +5,7 @@ sidebar:
   order: 11
 ---
 
-On Linux, runok uses a combination of three kernel mechanisms to enforce sandbox policies:
+On Linux, runok uses a combination of three kernel mechanisms to enforce [sandbox policies](/sandbox/overview/):
 
 | Mechanism        | Controls                                       |
 | ---------------- | ---------------------------------------------- |
@@ -80,3 +80,9 @@ The `deny` list in the sandbox configuration is enforced through bubblewrap's mo
 :::caution
 Glob expansion happens before the sandbox starts. Files created after the sandbox is running that match a glob pattern will **not** be protected. For guaranteed protection, use literal paths in the `deny` list.
 :::
+
+## Related
+
+- [Sandbox Overview](/sandbox/overview/) -- How sandbox presets are defined and applied.
+- [Security Model](/sandbox/security-model/) -- What the sandbox protects.
+- [macOS Sandbox (Seatbelt)](/architecture/sandbox/macos/) -- macOS implementation.

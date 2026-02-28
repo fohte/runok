@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-runok loads configuration from up to four layers, merging them in a defined order. This allows you to set organization-wide defaults globally while overriding specific settings per project.
+runok loads configuration from up to four layers, merging them in a defined order. This allows you to set organization-wide defaults globally while overriding specific settings per project. For sharing configuration across repositories, see [Extends (Presets)](/configuration/extends/).
 
 ## Configuration File Locations
 
@@ -120,3 +120,8 @@ After merging, runok validates the final configuration:
 - `<path:name>` references are not allowed inside `definitions.paths` values.
 
 All validation errors are collected and reported together so you can fix every issue in a single pass.
+
+## Related
+
+- [Configuration Schema](/configuration/schema/) -- Full reference for `runok.yml` fields.
+- [Extends (Presets)](/configuration/extends/) -- Inherit configuration from other files or repositories.

@@ -63,7 +63,7 @@ The entire compound command is blocked because one sub-command is denied.
 
 ## Default action resolution
 
-Before merging sub-command results, `Action::Default` (no rule matched) is resolved to the configured `defaults.action`. This prevents unmatched sub-commands from being invisible in the aggregation.
+Before merging sub-command results, `Action::Default` (no rule matched) is resolved to the configured [`defaults.action`](/configuration/schema/#defaultsaction). This ensures unmatched sub-commands participate in the aggregation at their effective restriction level.
 
 ```yaml
 defaults:
@@ -85,11 +85,11 @@ Without this resolution, the unmatched `unknown-cmd` would silently pass because
 
 When sub-commands have different sandbox presets, the sandbox policies are merged using the **strictest intersection**:
 
-| Policy field    | Merge strategy | Rationale                                                        |
-| --------------- | -------------- | ---------------------------------------------------------------- |
-| `fs.writable`   | Intersection   | Only paths writable by **all** sub-commands are allowed          |
-| `fs.deny`       | Union          | Paths denied by **any** sub-command are denied                   |
-| `network.allow` | Intersection   | Only network access allowed by **all** sub-commands is permitted |
+| Policy field    | Merge strategy | Rationale                                               |
+| --------------- | -------------- | ------------------------------------------------------- |
+| `fs.writable`   | Intersection   | Only paths writable by **all** sub-commands are allowed |
+| `fs.deny`       | Union          | Paths denied by **any** sub-command are denied          |
+| `network.allow` | AND            | Network is blocked if **any** sub-command denies it     |
 
 ### Writable contradiction escalation
 
@@ -122,3 +122,8 @@ For `build-a release && build-b release`:
 ## Parse failure fallback
 
 If tree-sitter-bash fails to parse the compound command, the entire input string is treated as a single command and evaluated directly. This ensures that unusual or non-standard shell syntax does not cause an outright error.
+
+## Related
+
+- [Priority Model](/rule-evaluation/priority-model/) -- How action priorities work.
+- [Sandbox Overview](/sandbox/overview/) -- How sandbox policies are defined and applied.

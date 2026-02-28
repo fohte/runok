@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This tutorial walks you through creating a minimal runok configuration and verifying it works. By the end, you will have a `runok.yml` that allows safe commands, denies dangerous ones, and asks for confirmation on everything else.
+Create a minimal runok configuration and verify it works. By the end, you will have a `runok.yml` that allows safe commands, denies dangerous ones, and asks for confirmation on everything else.
 
 ## 1. Install runok
 
@@ -42,7 +42,7 @@ defaults:
 ### What this does
 
 - **`allow` rules** permit matching commands to run without prompting.
-- **`deny` rules** block matching commands entirely. Deny always takes priority over allow ([Explicit Deny Wins](/rule-evaluation/overview/)).
+- **`deny` rules** block matching commands entirely. Deny always takes priority over allow ([Explicit Deny Wins](/rule-evaluation/priority-model/)).
 - **`ask` rules** prompt for user confirmation before running the command.
 - **`defaults.action: ask`** means any command that does not match a rule will require confirmation.
 
@@ -50,7 +50,7 @@ The `*` wildcard matches any additional arguments. The `-f|--force` syntax match
 
 For the full list of configuration options (file locations, wrapper definitions, sandbox presets, etc.), see [Configuration](/configuration/schema/).
 
-## 3. Test with `runok check`
+## 3. Test with [`runok check`](/cli/check/)
 
 Use `runok check` to test how runok evaluates commands without executing them:
 
@@ -70,3 +70,5 @@ The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-for
 ## Next steps
 
 - [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook.
+- [CLI Reference](/cli/overview/) -- Full reference for `runok check` and `runok exec`.
+- [Recipes](/recipes/overview/) -- Common configuration patterns and examples.

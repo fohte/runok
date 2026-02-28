@@ -19,7 +19,7 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
 
 **Common causes:**
 
-1. **Combined short flags are not split.** runok treats combined flags like `-am` as a single token. A rule matching `-m` will not match `-am`.
+1. **[Combined short flags](/pattern-syntax/matching-behavior/#combined-short-flags) are not split.** runok treats combined flags like `-am` as a single token. A rule matching `-m` will not match `-am`.
 
    ```yaml
    # This rule will NOT match `git commit -am "msg"`
@@ -48,7 +48,7 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
    - Unclosed `[` in character class patterns
    - Empty alternation branches (e.g., `{a,,b}`)
 
-4. **Wrapper commands not configured.** Commands like `sudo <cmd>` or `env VAR=val <cmd>` need corresponding wrapper definitions. Without them, runok matches the entire command (including the wrapper) against rules.
+4. **[Wrapper commands](/rule-evaluation/wrapper-recursion/) not configured.** Commands like `sudo <cmd>` or `env VAR=val <cmd>` need corresponding wrapper definitions. Without them, runok matches the entire command (including the wrapper) against rules.
 
    ```yaml
    definitions:

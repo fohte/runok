@@ -7,6 +7,8 @@ sidebar:
 
 runok can execute allowed commands inside a **sandbox** that restricts file system writes and network access. Sandboxing is applied at the OS level using platform-native mechanisms ([macOS Seatbelt](/architecture/sandbox/macos/) or [Linux Landlock + seccomp](/architecture/sandbox/linux/)), so sandboxed processes cannot bypass the restrictions.
 
+See [Security Model](/sandbox/security-model/) for trust boundaries and design rationale.
+
 ## Defining sandbox presets
 
 Sandbox policies are defined as named presets under `definitions.sandbox` in your `runok.yml`:
@@ -97,7 +99,7 @@ rules:
     sandbox: build-env # overrides with "build-env"
 ```
 
-## Compound commands and Strictest Wins
+## Sandbox merging for compound commands
 
 When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-command may match a different sandbox preset. runok merges all matched policies using the **Strictest Wins** rule:
 
@@ -152,3 +154,10 @@ rules:
     sandbox: no-network
   - deny: 'rm -rf /'
 ```
+
+## Related
+
+- [Security Model](/sandbox/security-model/) -- What the sandbox protects and design rationale.
+- [macOS Sandbox (Seatbelt)](/architecture/sandbox/macos/) -- macOS implementation details.
+- [Linux Sandbox (Landlock + seccomp)](/architecture/sandbox/linux/) -- Linux implementation details.
+- [Configuration Schema: `definitions.sandbox`](/configuration/schema/#definitionssandbox) -- Sandbox preset configuration reference.

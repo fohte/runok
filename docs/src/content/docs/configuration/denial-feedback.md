@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-When a rule denies a command, runok can display a human-readable message explaining why, and optionally suggest an alternative command. This is configured with the `message` and `fix_suggestion` fields in rule entries.
+When a rule denies a command, runok can display a human-readable message explaining why, and optionally suggest an alternative command. This is configured with the `message` and `fix_suggestion` fields in [rule entries](/configuration/schema/).
 
 ## Configuration
 
@@ -32,7 +32,7 @@ A suggested alternative command. This helps users (and AI agents) quickly correc
 
 Given the configuration above, here is how denial feedback appears in each context.
 
-### runok exec
+### [`runok exec`](/cli/exec/)
 
 ```sh
 runok exec -- rm -rf /
@@ -43,7 +43,7 @@ runok exec -- rm -rf /
 
 The `reason` and `suggestion` lines only appear when the corresponding field is set.
 
-### runok check
+### [`runok check`](/cli/check/)
 
 Text output (default):
 
@@ -66,7 +66,7 @@ runok check --output-format json -- rm -rf /
 }
 ```
 
-### Claude Code hook
+### [Claude Code hook](/getting-started/claude-code/)
 
 When runok is used as a Claude Code `PreToolUse` hook, the denial reason is returned in the `permissionDecisionReason` field:
 

@@ -22,14 +22,9 @@ When runok receives a command, it flows through the following stages:
 
 ### 1. Config Loading
 
-runok merges configuration from four layers (in ascending priority):
+runok merges configuration from [four layers](/configuration/file-discovery/#merge-order) in ascending priority (global config, global local override, project config, project local override).
 
-1. Global config (`~/.config/runok/runok.yml`)
-2. Global local override (`~/.config/runok/runok.local.yml`)
-3. Project config (`runok.yml`)
-4. Project local override (`runok.local.yml`)
-
-The `extends` field triggers recursive preset resolution (DFS with cycle detection, max depth 10). Presets can be loaded from local paths or remote GitHub repositories.
+The [`extends`](/configuration/extends/) field triggers recursive preset resolution (DFS with cycle detection, max depth 10). Presets can be loaded from local paths or remote GitHub repositories.
 
 Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset.rs`](https://github.com/fohte/runok/blob/main/src/config/preset.rs)
 
@@ -46,7 +41,7 @@ Each individual command is then structurally parsed using a `FlagSchema` inferre
 
 The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
 
-- **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](../pattern-matching/), then any `when` clauses are evaluated using a CEL expression evaluator.
+- **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](../pattern-matching/), then any [`when` clauses](/rule-evaluation/when-clause/) are evaluated using a CEL expression evaluator.
 - **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](../design-decisions/#explicit-deny-wins) principle.
 - **Wrapper commands**: If a command matches a wrapper definition (e.g., `bash -c <cmd>`, `sudo <cmd>`), the inner command captured by the `<cmd>` placeholder is recursively evaluated (max depth 10).
 
@@ -108,4 +103,4 @@ runok supports three adapter types that share the same evaluation pipeline but d
 
 - **Exec** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions.
 - **Check** (`runok check`): Performs dry-run evaluation and outputs the result as JSON or text. Always exits with code 0.
-- **Hook**: Integrates with LLM agent hook systems (e.g., Claude Code's `PreToolUse` hook). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.
+- **Hook**: Integrates with LLM agent hook systems (e.g., [Claude Code's `PreToolUse` hook](/getting-started/claude-code/)). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.

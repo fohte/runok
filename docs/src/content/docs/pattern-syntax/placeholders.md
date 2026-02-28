@@ -16,7 +16,7 @@ Tokens wrapped in `<...>` are **placeholders** — special tokens that match dyn
 
 ## Command (`<cmd>`)
 
-The `<cmd>` placeholder captures the **remaining tokens** as the wrapped command. The wrapped command is then evaluated against the other rules in the configuration.
+The `<cmd>` placeholder captures the **remaining tokens** as the wrapped command. The wrapped command is then evaluated against the other rules in the configuration. See [Wrapped Command Recursion](/rule-evaluation/wrapper-recursion/) for details.
 
 ```yaml
 # sudo echo hello -> wrapped command is "echo hello"
@@ -25,7 +25,7 @@ The `<cmd>` placeholder captures the **remaining tokens** as the wrapped command
 
 ### Defining Wrappers
 
-Wrapper patterns are defined in the `definitions` block and referenced by rules:
+Wrapper patterns are defined in the [`definitions.wrappers`](/configuration/schema/#definitionswrappers) block and referenced by rules:
 
 ```yaml
 definitions:
@@ -82,7 +82,7 @@ The `<vars>` placeholder absorbs **zero or more `KEY=VALUE` tokens** — tokens 
 
 ## Path References (`<path:name>`)
 
-The `<path:name>` placeholder matches a command argument against a **named list of paths** defined in the `definitions` block.
+The `<path:name>` placeholder matches a command argument against a **named list of paths** defined in the [`definitions.paths`](/configuration/schema/#definitionspaths) block.
 
 ### Defining Paths
 
@@ -167,3 +167,8 @@ definitions:
 
 - `<cmd>` captures one or more tokens; it tries all possible split points to find a valid wrapped command
 - Optional groups and path references are not supported inside wrapper patterns
+
+## Related
+
+- [Wrapped Command Recursion](/rule-evaluation/wrapper-recursion/) -- How wrapper commands are recursively evaluated.
+- [Configuration Schema](/configuration/schema/#definitionswrappers) -- Wrapper and path definition reference.

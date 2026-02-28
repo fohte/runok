@@ -281,13 +281,7 @@ Whether network access is allowed.
 
 ##### Sandbox Merge Strategy (Strictest Wins)
 
-When multiple sandbox presets apply to a command, they are merged using a "Strictest Wins" policy:
-
-| Field           | Merge strategy | Effect                                      |
-| --------------- | -------------- | ------------------------------------------- |
-| `fs.writable`   | Intersection   | Only paths in all presets remain writable.  |
-| `fs.deny`       | Union          | Denied paths from all presets are combined. |
-| `network.allow` | AND            | If any preset denies network, it is denied. |
+When multiple sandbox presets apply to a command, they are merged using a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules and examples.
 
 #### `definitions.wrappers`
 

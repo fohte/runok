@@ -103,3 +103,8 @@ If you want to match `-am`, write it explicitly:
 ## Recursion Limit
 
 To prevent pathological patterns (such as many consecutive wildcards) from causing excessive computation, matching is limited to **10,000 steps**. Patterns that exceed this limit fail to match.
+
+## Related
+
+- [Pattern Syntax Overview](/pattern-syntax/overview/) -- All syntax elements at a glance.
+- [Architecture: Pattern Matching](/architecture/pattern-matching/) -- Internal implementation details.

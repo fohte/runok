@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`runok exec` evaluates a command against your runok rules and, if allowed, executes it — optionally within a sandbox. If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
+`runok exec` evaluates a command against your runok rules and, if allowed, executes it — [optionally within a sandbox](/sandbox/overview/). If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
 
 ## Usage
 
@@ -21,7 +21,7 @@ A single argument after `--` is interpreted as a shell command (passed to the sh
 
 ### `--sandbox <preset>`
 
-Apply a named sandbox preset from your runok configuration. Overrides any sandbox defined in the matching rule.
+Apply a named [sandbox preset](/sandbox/overview/) from your runok configuration. Overrides any sandbox defined in the matching rule.
 
 ### `--dry-run`
 
@@ -64,3 +64,9 @@ runok exec -- 'echo hello && echo world'
 | _N_  | Command's own exit code (on successful execution).             |
 | `1`  | An error occurred (config error, sandbox setup failure, etc.). |
 | `3`  | Command was denied or requires confirmation (ask).             |
+
+## Related
+
+- [`runok check`](/cli/check/) -- Evaluate commands without executing them.
+- [Sandbox](/sandbox/overview/) -- Configure sandbox presets.
+- [Denial Feedback](/configuration/denial-feedback/) -- Configure feedback for denied commands.

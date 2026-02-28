@@ -47,7 +47,7 @@ The key difference is that runok adds an `ask` tier between `allow` and `deny`, 
 
 ## The default action
 
-When no rule matches a command, the result is `Default`. You can configure what happens in this case:
+When no rule matches a command, the result is `Default`. You can configure what happens in this case with [`defaults.action`](/configuration/schema/#defaultsaction):
 
 ```yaml
 defaults:
@@ -94,3 +94,7 @@ rules:
 ```
 
 For compound commands, sandbox presets from all sub-commands are merged using a [strictest intersection strategy](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
+
+## Related
+
+- [Design Decisions: Explicit Deny Wins](/architecture/design-decisions/#explicit-deny-wins) -- Rationale behind this priority model.

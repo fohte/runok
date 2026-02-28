@@ -35,7 +35,7 @@ export XDG_CACHE_HOME=~/.local/cache
 
 ### `RUNOK_CACHE_TTL`
 
-Time-to-live (in seconds) for cached remote presets with mutable references (tags, branches). Immutable references (commit SHAs) are cached permanently regardless of this setting.
+Time-to-live (in seconds) for cached remote presets with [mutable references (tags, branches)](/configuration/extends/). Immutable references (commit SHAs) are cached permanently regardless of this setting.
 
 **Default:** `86400` (24 hours)\
 **Type:** Integer (seconds)
@@ -58,3 +58,8 @@ export RUNOK_CACHE_TTL=0
 | `XDG_CONFIG_HOME` | Config base directory          | `$HOME/.config`    |
 | `XDG_CACHE_HOME`  | Cache base directory           | `$HOME/.cache`     |
 | `RUNOK_CACHE_TTL` | Mutable preset cache TTL (sec) | `86400` (24 hours) |
+
+## Related
+
+- [File Discovery and Merging](/configuration/file-discovery/) -- How configuration file paths are resolved.
+- [Extends (Presets)](/configuration/extends/) -- How remote preset caching works.

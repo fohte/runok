@@ -162,3 +162,8 @@ types:
 ```
 
 The executor string is split into a program and arguments. In this example, runok spawns `deno` with arguments `["run", "--allow-net", "./checks/url_check.ts"]`. Quoted strings and backslash escapes in the executor command are handled correctly.
+
+## Related
+
+- [Extensions Overview](/extensions/overview/) -- Why and when to use extensions.
+- [Tutorial](/extensions/tutorial/) -- Build your first extension.

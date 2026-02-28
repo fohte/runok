@@ -7,7 +7,7 @@ sidebar:
 
 ## `runok check`: check without executing
 
-The `runok check` command evaluates rules and reports what action would be taken, without executing the command. This is the quickest way to test whether your rules work as expected.
+The [`runok check`](/cli/check/) command evaluates rules and reports what action would be taken, without executing the command. This is the quickest way to test whether your rules work as expected.
 
 ```bash
 runok check -- git status
@@ -45,7 +45,7 @@ runok check --verbose -- rm -rf /
 no match
 ```
 
-For compound commands (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually:
+For [compound commands](/rule-evaluation/compound-commands/) (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually:
 
 ```bash
 runok check --verbose -- 'git add . && git commit -m fix'
@@ -67,7 +67,7 @@ echo "curl -X POST https://example.com" | runok check
 
 ## `runok exec --dry-run`
 
-The `--dry-run` flag on `runok exec` provides similar functionality, prefixed with `runok: dry-run:`:
+The `--dry-run` flag on [`runok exec`](/cli/exec/) provides similar functionality, prefixed with `runok: dry-run:`:
 
 ```bash
 runok exec --dry-run -- curl -X POST https://example.com
@@ -88,3 +88,9 @@ runok exec --verbose -- git push --force
 ```
 
 This prints the rule matching details to stderr while also executing the command.
+
+## Related
+
+- [`runok check` Reference](/cli/check/) -- Full command reference.
+- [`runok exec` Reference](/cli/exec/) -- Full command reference.
+- [Common Issues](/troubleshooting/common-issues/) -- Solutions for frequently encountered problems.

@@ -11,12 +11,12 @@ runok provides two main subcommands for evaluating and executing commands agains
 
 ### [`runok check`](/cli/check/)
 
-Evaluate a command against your rules and report the decision — without executing it. Useful for previewing what runok would do, or for integrating with external tools like Claude Code hooks.
+Evaluate a command against your rules and report the decision — without executing it. Useful for previewing what runok would do, or for integrating with external tools like [Claude Code hooks](/getting-started/claude-code/).
 
 ### [`runok exec`](/cli/exec/)
 
-Evaluate a command against your rules and, if allowed, execute it — optionally within a sandbox.
+Evaluate a command against your rules and, if allowed, execute it — [optionally within a sandbox](/sandbox/overview/).
 
 ## Related
 
-- [Denial feedback](/configuration/denial-feedback/) — Configure `message` and `fix_suggestion` for denied commands.
+- [Denial feedback](/configuration/denial-feedback/) -- Configure `message` and `fix_suggestion` for denied commands.

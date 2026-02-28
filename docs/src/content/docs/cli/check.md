@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command. Useful for previewing what runok would do, or for integrating with external tools like Claude Code hooks.
+`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command. Useful for previewing what runok would do, or for integrating with external tools like [Claude Code hooks](/getting-started/claude-code/).
 
 ## Usage
 

@@ -83,11 +83,11 @@ When multiple rules match, the most restrictive action always wins: `deny` > `as
 
 ### Why this matters
 
-This priority system ensures that security-critical deny rules cannot be overridden by broader allow rules. It enables a common and safe pattern: "allow broadly, deny specifically." Rule order in the config file does not matter — a `deny` rule always takes precedence regardless of where it appears.
+This priority system ensures that security-critical deny rules cannot be overridden by broader allow rules. It enables a common and safe pattern: "allow broadly, deny specifically." Rule order in the config file does not matter -- a `deny` rule always takes precedence regardless of where it appears.
 
 Without this guarantee, a user could accidentally allow dangerous commands by placing an allow rule after a deny rule.
 
-The same priority applies to [compound commands](/rule-evaluation/compound-commands/) — a single denied sub-command causes the entire compound command to be rejected.
+The same priority applies to [compound commands](/rule-evaluation/compound-commands/) -- a single denied sub-command causes the entire compound command to be rejected.
 
 ### Trade-offs
 
@@ -95,7 +95,7 @@ The same priority applies to [compound commands](/rule-evaluation/compound-comma
 - **Pro**: Rule order does not matter, reducing configuration errors.
 - **Con**: Cannot express "allow this specific case even though a deny rule matches" without restructuring rules.
 
-For full details, see [Priority Model: Explicit Deny Wins](/rule-evaluation/priority-model/).
+See [Priority Model](/rule-evaluation/priority-model/) for the full priority rules.
 
 ## Wrapper Command Unwrapping
 
@@ -119,7 +119,7 @@ runok's configuration system is designed around three tiers of users, inspired b
 
 ### Level 1: Casual users
 
-Use presets via `extends` and write simple allow/deny/ask rules using familiar command syntax. No schema definitions needed.
+Use presets via [`extends`](/configuration/extends/) and write simple allow/deny/ask rules using familiar command syntax. No schema definitions needed.
 
 ```yaml
 extends:
@@ -131,7 +131,7 @@ rules:
 
 ### Level 2: Power users
 
-Define custom wrapper commands, use `when` clauses with CEL expressions, and configure sandbox presets for fine-grained control.
+Define custom wrapper commands, use [`when` clauses](/rule-evaluation/when-clause/) with CEL expressions, and configure sandbox presets for fine-grained control.
 
 ```yaml
 rules:
@@ -141,6 +141,6 @@ rules:
 
 ### Level 3: Extension developers
 
-Build custom validators using the JSON-RPC 2.0 extension protocol, and publish presets for the community.
+Build custom validators using the [JSON-RPC 2.0 extension protocol](/extensions/protocol/), and publish presets for the community.
 
 This layered approach ensures that the simple case stays simple, while advanced features are available when needed.

@@ -182,3 +182,8 @@ rules:
   - deny: 'curl -X|--request * *'
     when: "flags.request == 'POST' && args[0].startsWith('https://prod.')"
 ```
+
+## Related
+
+- [Configuration Schema: `when`](/configuration/schema/#when) -- Configuration reference for the `when` field.
+- [Extensions](/extensions/overview/) -- Custom validation beyond CEL expressions.

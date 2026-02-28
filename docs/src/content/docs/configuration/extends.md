@@ -141,3 +141,8 @@ Each cached entry includes a `metadata.json` file tracking:
 - `is_immutable` — Whether the reference is a commit SHA
 - `reference` — The original reference string
 - `resolved_sha` — The resolved commit SHA (if available)
+
+## Related
+
+- [File Discovery and Merging](/configuration/file-discovery/) -- How configuration files are loaded and merged.
+- [Configuration Schema](/configuration/schema/) -- Full reference for `runok.yml`.

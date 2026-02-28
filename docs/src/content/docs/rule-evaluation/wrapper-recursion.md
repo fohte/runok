@@ -78,7 +78,7 @@ Final result: **deny**. The dangerous wrapped command is blocked even though `su
 
 ## Compound commands inside wrapped commands
 
-When the wrapped command extracted via `<cmd>` is a compound command (containing `|`, `&&`, `||`, or `;`), it is split into individual sub-commands using tree-sitter-bash. Each sub-command is evaluated separately, and results are merged using Explicit Deny Wins.
+When the wrapped command extracted via `<cmd>` is a [compound command](/rule-evaluation/compound-commands/) (containing `|`, `&&`, `||`, or `;`), it is split into individual sub-commands using tree-sitter-bash. Each sub-command is evaluated separately, and results are merged using Explicit Deny Wins.
 
 ```yaml
 definitions:
@@ -110,4 +110,4 @@ When a wrapper pattern uses placeholders like `<opts>`, the placeholder consumes
 
 ## Default action resolution
 
-When the wrapped command does not match any rule, the `Action::Default` is resolved to the configured `defaults.action` **before** merging with the outer command's direct match result. This ensures that unmatched wrapped commands are not silently ignored.
+When the wrapped command does not match any rule, the `Action::Default` is resolved to the configured [`defaults.action`](/configuration/schema/#defaultsaction) **before** merging with the outer command's direct match result. This ensures that unmatched wrapped commands are not silently ignored.

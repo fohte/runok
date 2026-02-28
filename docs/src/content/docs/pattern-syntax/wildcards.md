@@ -83,3 +83,8 @@ Wrapping a token in quotes (`"..."` or `'...'`) disables glob expansion. The `*`
 # Matches the literal token hello*world
 - allow: "echo 'hello*world'"
 ```
+
+## Related
+
+- [Matching Behavior](/pattern-syntax/matching-behavior/) -- How commands are parsed and matched against patterns.
+- [Alternation](/pattern-syntax/alternation/) -- Pipe-separated alternatives.

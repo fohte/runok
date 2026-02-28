@@ -61,3 +61,8 @@ A `]` outside of an optional group is also treated as a literal.
 
 - Optional groups **cannot be nested**: `[[-f]]` is a syntax error
 - Optional groups must be closed: `[-f` without `]` is a syntax error
+
+## Related
+
+- [Alternation](/pattern-syntax/alternation/) -- Pipe-separated alternatives.
+- [Matching Behavior](/pattern-syntax/matching-behavior/) -- How commands are parsed and matched against patterns.

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-This tutorial walks you through building a runok extension that validates commands using the JSON-RPC 2.0 protocol. You'll learn how extensions are invoked, how to handle the request/response cycle, and how runok behaves when things go wrong.
+Build a runok extension that validates commands using JSON-RPC 2.0. This tutorial covers how extensions are invoked, the request/response cycle, and how runok handles errors.
 
 ## What you'll build
 
@@ -158,16 +158,9 @@ Extension timed out, asking user for confirmation
 
 ### What happens on other errors
 
-| Scenario                                              | Error type         | Fallback |
-| ----------------------------------------------------- | ------------------ | -------- |
-| Extension binary not found                            | `Spawn`            | ask      |
-| Extension crashes or exits without output             | `InvalidResponse`  | ask      |
-| Extension returns malformed JSON                      | `InvalidResponse`  | ask      |
-| Extension returns a JSON-RPC error object             | `InvalidResponse`  | ask      |
-| Extension returns unknown status (not allow/deny/ask) | N/A (success path) | ask      |
-| Extension times out                                   | `Timeout`          | ask      |
+Extensions always fall back to `ask` on failure. See [Protocol Reference: Error handling](/extensions/protocol/#error-handling) for the complete error catalog.
 
-In every failure case, runok falls back to `ask`. This design ensures that a broken extension never silently allows a command to run -- the user is always involved in the decision.
+This design ensures that a broken extension never silently allows a command to run -- the user is always involved in the decision.
 
 ### Why "ask" is the safe default
 
@@ -206,3 +199,8 @@ Each extension invocation follows this lifecycle:
 5. **Cleanup**: on timeout, runok kills the process and waits for it to exit.
 
 Extensions are spawned fresh for each validation. There is no persistent connection or process reuse.
+
+## Related
+
+- [Extensions Overview](/extensions/overview/) -- Why and when to use extensions.
+- [Protocol Reference](/extensions/protocol/) -- Full JSON-RPC 2.0 specification.

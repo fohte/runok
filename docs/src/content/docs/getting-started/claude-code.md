@@ -72,7 +72,7 @@ rules:
     sandbox: restricted
 ```
 
-When Claude Code runs `python3 script.py`, runok's hook response tells Claude Code to execute `runok exec --sandbox restricted -- 'python3 script.py'` instead, transparently applying the sandbox.
+When Claude Code runs `python3 script.py`, runok's hook response tells Claude Code to execute [`runok exec`](/cli/exec/) `--sandbox restricted -- 'python3 script.py'` instead, transparently applying the sandbox.
 
 You can also set a default sandbox for all allowed commands:
 
@@ -94,3 +94,5 @@ The `.claude/settings.json` file can be placed at different scopes:
 | `~/.claude/settings.json`              | User-global, applies to all projects   |
 
 For team-wide enforcement, commit `.claude/settings.json` alongside your `runok.yml` in the project repository.
+
+See [`runok check`](/cli/check/) for full command reference.

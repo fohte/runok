@@ -62,5 +62,5 @@ The first token is always the command name. The remaining tokens define the argu
 - [Matching Behavior](/pattern-syntax/matching-behavior/) — Flag inference, order-independent matching, and combined short flags
 
 :::note
-Pattern syntax and [`when` expressions](/configuration/schema/#when) work on string tokens. If you need to parse structured arguments (e.g., GraphQL queries, URLs), see [Extensions](/extensions/overview/).
+Pattern syntax and [`when` expressions](/rule-evaluation/when-clause/) work on string tokens. If you need to parse structured arguments (e.g., GraphQL queries, URLs), see [Extensions](/extensions/overview/).
 :::

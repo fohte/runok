@@ -86,3 +86,8 @@ Negated alternatives support glob patterns:
 # Matches any verb that does NOT start with "list-"
 - deny: 'kubectl !list-* *'
 ```
+
+## Related
+
+- [Optional Groups](/pattern-syntax/optional-groups/) -- Tokens that may or may not be present.
+- [Wildcards](/pattern-syntax/wildcards/) -- Token and glob wildcards.

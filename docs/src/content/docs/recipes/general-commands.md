@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This recipe shows how to build a general-purpose runok configuration that covers shell builtins, file operations, development tools, and interpreters. It works well as a global config at `~/.config/runok/runok.yml`.
+This recipe shows how to build a general-purpose runok configuration that covers shell builtins, file operations, development tools, and interpreters. It works well as a global config at [`~/.config/runok/runok.yml`](/configuration/file-discovery/).
 
 ## Complete Example
 
@@ -181,7 +181,7 @@ This lets you safely run scripts for data processing or calculation without risk
 
 ### Sensitive file protection
 
-The `definitions.paths.sensitive` list defines files that should never be accessible from sandboxed commands. The `<path:sensitive>` reference in sandbox `deny` lists expands to this list. Glob patterns like `~/.ssh/**` match all files under a directory.
+The `definitions.paths.sensitive` list defines files that should never be accessible from sandboxed commands. The [`<path:sensitive>`](/pattern-syntax/placeholders/) reference in sandbox `deny` lists expands to this list. Glob patterns like `~/.ssh/**` match all files under a directory.
 
 ### Wrapper unwrapping
 
@@ -193,7 +193,7 @@ wrappers:
   - 'xargs <cmd>'
 ```
 
-When a command is wrapped (e.g., `sudo rm -rf /`), runok unwraps it and evaluates the inner command (`rm -rf /`) against your rules. The `<cmd>` placeholder captures the inner command.
+When a command is wrapped (e.g., `sudo rm -rf /`), runok unwraps it and evaluates the inner command (`rm -rf /`) against your rules. The [`<cmd>` placeholder](/pattern-syntax/placeholders/#command-cmd) captures the inner command.
 
 ## Variations
 

@@ -16,7 +16,7 @@ defaults:
   action: ask
 
 rules:
-  # === deny rules (evaluated first due to "deny wins" priority) ===
+  # === deny rules ===
 
   - deny: 'git [-C *] commit --amend *'
     message: 'Amending rewrites the previous commit, which may destroy work.'
@@ -62,11 +62,11 @@ rules:
 
 ### `[-C *]` optional pattern
 
-The `[-C *]` pattern matches an optional `-C <path>` argument. This lets rules apply whether the user runs `git status` or `git -C /path/to/repo status`.
+The [`[-C *]` optional group](/pattern-syntax/optional-groups/) pattern matches an optional `-C <path>` argument. This lets rules apply whether the user runs `git status` or `git -C /path/to/repo status`.
 
 ### Deny rules win
 
-When both an allow and a deny rule match the same command, the deny rule always takes priority regardless of rule order. This means you can broadly allow `git push *` while still blocking `git push --force *`.
+When both an allow and a deny rule match the same command, the [deny rule always takes priority](/rule-evaluation/priority-model/) regardless of rule order. This means you can broadly allow `git push *` while still blocking `git push --force *`.
 
 ### Read-only operations
 
@@ -84,7 +84,7 @@ Both `git push` and `git pull` are allowed. However, force push variants (`--for
 
 ### Unmatched commands fall through to `ask`
 
-Commands not covered by any rule (e.g., `git merge`, `git rebase`, `git checkout`, `git reset`) fall through to the `defaults.action: ask` setting, prompting the user for confirmation.
+Commands not covered by any rule (e.g., `git merge`, `git rebase`, `git checkout`, `git reset`) fall through to the [`defaults.action: ask`](/configuration/schema/#defaultsaction) setting, prompting the user for confirmation.
 
 ## Variations
 

@@ -21,11 +21,11 @@ runok evaluates commands against your rules to decide whether to **allow**, **de
 
 When runok receives a command:
 
-1. **Parse compound command**: Split into sub-commands using tree-sitter-bash.
+1. **Parse compound command**: Split into sub-commands using tree-sitter-bash (see [Compound Commands](/rule-evaluation/compound-commands/)).
 2. **For each sub-command**:
    a. Match against all rules (pattern + `when` clause filtering).
-   b. Try `definitions.wrappers` pattern matching to extract wrapped commands for recursive evaluation.
+   b. Try [`definitions.wrappers`](/configuration/schema/#definitionswrappers) pattern matching to extract wrapped commands for recursive evaluation.
    c. Merge direct and wrapped command results using Explicit Deny Wins.
 3. **Aggregate**: Merge all sub-command results (strictest wins).
-4. **Resolve sandbox**: Merge sandbox policies from matched presets.
+4. **Resolve [sandbox](/sandbox/overview/)**: Merge sandbox policies from matched presets.
 5. **Return**: The final action (`allow`, `deny`, `ask`, or `default` if no rule matched) and sandbox policy.

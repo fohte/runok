@@ -39,7 +39,7 @@ When `network.allow` is `false`, the sandbox prevents the command from:
 
 The sandbox treats every executed command as potentially untrusted. Even commands from `allow` rules may behave unexpectedly — a dependency could have a supply-chain vulnerability, a script could contain bugs, or an AI agent could construct a command that does more than intended.
 
-The sandbox provides a **second layer of defense** beyond the rule-based allow/deny system. A command is first checked against rules (is it allowed to run?), then executed inside a sandbox (what can it do?).
+The sandbox provides a **second layer of defense** beyond the [rule-based allow/deny system](/rule-evaluation/overview/). A command is first checked against rules (is it allowed to run?), then executed inside a sandbox (what can it do?).
 
 ### Read access is always permitted
 
@@ -72,13 +72,9 @@ Then `.git` is protected even though `.` (its parent) is writable. This matches 
 
 ## Strictest Wins for compound commands
 
-When multiple commands with different sandbox presets run in a single compound command (e.g., `sh -c "cmd1 && cmd2"`), runok merges the policies by taking the **strictest** setting from each:
+When multiple sandbox policies apply, runok uses a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules.
 
-- **Writable directories**: intersection (only directories allowed by all policies)
-- **Deny paths**: union (paths denied by any policy)
-- **Network**: AND (blocked if any policy denies it)
-
-This prevents a less-restricted command from weakening the sandbox of a more-restricted command in the same pipeline. See [Sandbox Overview](/sandbox/overview/#compound-commands-and-strictest-wins) for details and examples.
+This prevents a less-restricted command from weakening the sandbox of a more-restricted command in the same pipeline.
 
 ## OS-level enforcement
 

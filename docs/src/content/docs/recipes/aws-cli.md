@@ -60,7 +60,7 @@ rules:
 - allow: 'aws * get-*|list-*|describe-* *'
 ```
 
-The alternation `get-*|list-*|describe-*` matches any subcommand starting with `get-`, `list-`, or `describe-` across all AWS services. The `*` before it matches the service name (e.g., `ec2`, `iam`, `logs`), and the `*` after it matches any arguments.
+The [alternation](/pattern-syntax/alternation/) `get-*|list-*|describe-*` matches any subcommand starting with `get-`, `list-`, or `describe-` across all AWS services. The `*` before it matches the service name (e.g., `ec2`, `iam`, `logs`), and the `*` after it matches any arguments.
 
 This single rule covers commands like:
 
@@ -75,11 +75,11 @@ This single rule covers commands like:
 - deny: 'aws * terminate-* *'
 ```
 
-The same glob approach works for deny rules. `delete-*` catches `delete-stack`, `delete-db-instance`, `delete-user`, etc. across all services. Since deny rules always win, these override the `get-*|list-*|describe-*` allow even if a subcommand somehow matched both.
+The same glob approach works for deny rules. `delete-*` catches `delete-stack`, `delete-db-instance`, `delete-user`, etc. across all services. Since [deny rules always win](/rule-evaluation/priority-model/), these override the `get-*|list-*|describe-*` allow even if a subcommand somehow matched both.
 
 ### Production environment protection
 
-The `when` condition uses a CEL expression to check the `AWS_PROFILE` environment variable. When it is set to `production`, **all** AWS operations are denied — even read-only ones.
+The [`when` condition](/rule-evaluation/when-clause/) uses a CEL expression to check the `AWS_PROFILE` environment variable. When it is set to `production`, **all** AWS operations are denied — even read-only ones.
 
 Because deny rules take priority over allow rules, the production deny rule overrides the allow rules.
 
@@ -102,7 +102,7 @@ rules:
 
 ### Sandbox network access for AWS CLI
 
-Combine rules with sandbox policies to restrict filesystem access while allowing network:
+Combine rules with [sandbox policies](/sandbox/overview/) to restrict filesystem access while allowing network:
 
 ```yaml
 definitions:
