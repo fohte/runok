@@ -122,7 +122,6 @@ runok's configuration system is designed around three tiers of users, inspired b
 Use presets via `extends` and write simple allow/deny/ask rules using familiar command syntax. No schema definitions needed.
 
 ```yaml
-# NOTE: this is a hypothetical example; the preset does not exist yet
 extends:
   - 'github:example-org/runok-preset-standard@v1'
 rules:
