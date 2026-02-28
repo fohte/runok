@@ -17,7 +17,7 @@ importers:
         specifier: 0.33.5
         version: 0.33.5
       starlight-llms-txt:
-        specifier: ^0.7.0
+        specifier: 0.7.0
         version: 0.7.0(@astrojs/starlight@0.37.6(astro@5.18.0(rollup@4.59.0)(typescript@5.9.3)))(astro@5.18.0(rollup@4.59.0)(typescript@5.9.3))
 
 packages:
