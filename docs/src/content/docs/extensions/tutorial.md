@@ -127,10 +127,15 @@ console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }))
 Configure the executor accordingly:
 
 ```yaml
+# Python
 types:
   ProdGuard:
     executor: 'python3 ./checks/env_guard.py'
-  # or
+```
+
+```yaml
+# Deno
+types:
   ProdGuard:
     executor: 'deno run --allow-read ./checks/env_guard.ts'
 ```
