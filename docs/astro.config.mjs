@@ -7,6 +7,13 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'runok',
+      favicon: '/favicon.svg',
+      logo: {
+        dark: './src/assets/logo-dark.svg',
+        light: './src/assets/logo-light.svg',
+        alt: 'runok',
+        replacesTitle: true,
+      },
       customCss: ['./src/styles/custom.css'],
       social: [
         {

@@ -1,8 +1,16 @@
-# runok
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/src/assets/logo-light.svg">
+    <img alt="runok" src="docs/src/assets/logo-light.svg" width="300">
+  </picture>
+</p>
 
-[![CI](https://github.com/fohte/runok/actions/workflows/test.yml/badge.svg)](https://github.com/fohte/runok/actions/workflows/test.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/fohte/runok)](https://github.com/fohte/runok/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://github.com/fohte/runok/actions/workflows/test.yml"><img src="https://github.com/fohte/runok/actions/workflows/test.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/fohte/runok/releases/latest"><img src="https://img.shields.io/github/v/release/fohte/runok" alt="GitHub Release"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
 Command execution permission framework for LLM agents, primarily designed for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 

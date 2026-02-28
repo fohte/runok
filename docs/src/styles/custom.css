@@ -141,6 +141,19 @@ starlight-file-tree .highlight {
   padding-block: 3rem;
 }
 
+/* Replace the text title with the logo image */
+.hero h1 {
+  display: none;
+}
+
+/* Show logo image above text content, not side-by-side */
+.hero > img {
+  order: 0 !important;
+  width: min(80%, 360px) !important;
+  height: auto !important;
+  margin-inline: auto !important;
+}
+
 .hero .stack {
   align-items: center;
   text-align: center;
