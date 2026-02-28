@@ -2,7 +2,7 @@
 title: Linux Sandbox (Landlock + seccomp)
 description: How runok uses Landlock, seccomp-bpf, and bubblewrap to sandbox commands on Linux.
 sidebar:
-  order: 3
+  order: 11
 ---
 
 On Linux, runok uses a combination of three kernel mechanisms to enforce sandbox policies:
@@ -19,7 +19,7 @@ Linux sandboxing requires a **two-stage execution** model because the different 
 
 ### Stage 1: Namespace isolation (bubblewrap)
 
-The main `runok` binary launches `runok-linux-sandbox` (a helper binary) via **bubblewrap** (`bwrap`), which creates an isolated mount namespace:
+`runok` launches itself inside **bubblewrap** (`bwrap`) using a hidden `__sandbox-exec` subcommand, which creates an isolated mount namespace:
 
 - `/` is mounted **read-only** (the entire root file system)
 - Writable directories are re-mounted with write access
@@ -30,13 +30,13 @@ The main `runok` binary launches `runok-linux-sandbox` (a helper binary) via **b
 
 ### Stage 2: Process-level restrictions (Landlock + seccomp)
 
-Inside the bubblewrap namespace, the helper binary applies:
+Inside the bubblewrap namespace, the re-invoked `runok` process applies:
 
 1. **Landlock** rules for file system access control
 2. **seccomp-bpf** filters for network system call blocking
 3. Then replaces itself with the target command via `execvp`
 
-This two-stage model is necessary because bubblewrap sets up the namespace before `exec`, while Landlock and seccomp must be applied within the namespace.
+This two-stage model is necessary because bubblewrap sets up the namespace before `exec`, while Landlock and seccomp must be applied within the namespace. By re-invoking itself via `runok __sandbox-exec`, runok achieves this without requiring a separate helper binary.
 
 ## Landlock (file system access)
 
@@ -75,22 +75,8 @@ All other system calls are unaffected — seccomp is only used for network contr
 The `deny` list in the sandbox configuration is enforced through bubblewrap's mount ordering:
 
 - **Literal paths** (e.g., `.git`, `/etc/shadow`) are mounted read-only via `--ro-bind`
-- **Glob patterns** (e.g., `.env*`, `~/.ssh/**`) are **skipped by bubblewrap** because it can only operate on real paths, not patterns
+- **Glob patterns** (e.g., `.env*`, `~/.ssh/**`) are expanded against the filesystem at startup, and each matched real path is mounted read-only
 
 :::caution
-On Linux, glob patterns in `deny` are not enforced by bubblewrap mounts. They are still enforced by other layers when possible, but for maximum protection, use literal paths in the `deny` list.
+Glob expansion happens before the sandbox starts. Files created after the sandbox is running that match a glob pattern will **not** be protected. For guaranteed protection, use literal paths in the `deny` list.
 :::
-
-## Required binaries
-
-Linux sandboxing requires two binaries:
-
-| Binary                | Purpose                                                            |
-| --------------------- | ------------------------------------------------------------------ |
-| `runok`               | Main binary — generates the sandbox policy and launches the helper |
-| `runok-linux-sandbox` | Helper binary — applies Landlock + seccomp and execs the command   |
-
-The helper binary is searched in the following order:
-
-1. The same directory as the `runok` binary
-2. The system `PATH`

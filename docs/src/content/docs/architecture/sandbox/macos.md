@@ -2,7 +2,7 @@
 title: macOS Sandbox (Seatbelt)
 description: How runok uses macOS Seatbelt to sandbox commands.
 sidebar:
-  order: 2
+  order: 10
 ---
 
 On macOS, runok uses the **Seatbelt** framework (`sandbox-exec`) to enforce sandbox policies. Seatbelt is a kernel-level mandatory access control system built into macOS.

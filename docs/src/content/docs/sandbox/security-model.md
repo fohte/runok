@@ -106,5 +106,5 @@ On macOS, this is provided by the Seatbelt kernel extension. On Linux, it is pro
 - **Read access is not restricted** — the sandbox cannot prevent data from being read
 - **Network granularity is binary** — network access is either fully allowed or fully blocked; per-host or per-port filtering is not supported
 - **macOS Seatbelt is deprecated** — Apple has deprecated `sandbox-exec` but provides no replacement. It continues to work and is used by Apple's own tools
-- **Linux glob deny patterns** — glob patterns in `deny` are not enforced by bubblewrap mount ordering on Linux (bubblewrap operates on real paths only)
+- **Linux glob deny patterns are expanded at startup** — on Linux, glob patterns in `deny` are expanded against the filesystem before the sandbox starts. Files created after startup that match a glob pattern will not be protected
 - **Landlock kernel version** — Landlock requires Linux 5.13 or later. On older kernels, file system restrictions may be partially enforced
