@@ -152,7 +152,7 @@ The command parser operates on the input command (not the pattern). It provides:
 ```rust
 struct ParsedCommand {
     command: String,           // Command name
-    flags: HashMap<String, FlagValue>, // Recognized flags and their values
+    flags: HashMap<String, Option<String>>, // Recognized flags and their values
     args: Vec<String>,         // Positional arguments
     raw_tokens: Vec<String>,   // Original token list
 }
