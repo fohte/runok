@@ -2,99 +2,116 @@
 title: 'Git Workflow'
 description: Control which Git operations are allowed, require confirmation for pushes, and block dangerous commands.
 sidebar:
-  order: 2
+  order: 3
 ---
 
-This recipe shows how to configure runok to enforce safe Git practices. It covers read-only operations, protected pushes, and blocked destructive commands.
+This recipe shows how to configure runok to enforce safe Git practices. It covers read-only operations, safe writes, and blocked destructive commands.
 
 ## Complete Example
 
 ```yaml
-# yaml-language-server: $schema=https://runok.fohte.net/schema/runok.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 
 defaults:
   action: ask
 
 rules:
-  # Read-only operations — always allowed
-  - allow: 'git status'
-  - allow: 'git diff *'
-  - allow: 'git log *'
-  - allow: 'git show *'
-  - allow: 'git branch *'
-  - allow: 'git stash list'
+  # === deny rules (evaluated first due to "deny wins" priority) ===
 
-  # Safe write operations — allowed
-  - allow: 'git add *'
-  - allow: 'git commit *'
-  - allow: 'git stash *'
-  - allow: 'git checkout *'
-  - allow: 'git switch *'
-  - allow: 'git merge *'
-  - allow: 'git rebase *'
-  - allow: 'git fetch *'
-  - allow: 'git pull *'
+  - deny: 'git [-C *] commit --amend *'
+    message: 'Amending rewrites the previous commit, which may destroy work.'
+    fix_suggestion: 'git commit -m "fix: ..."'
 
-  # Push — require confirmation
-  - ask: 'git push *'
+  - deny: 'git [-C *] commit -n|--no-verify *'
+    message: 'Skipping pre-commit hooks is not allowed.'
+    fix_suggestion: 'git commit -m "..."'
 
-  # Dangerous operations — blocked
-  - deny: 'git push -f|--force *'
+  - deny: 'git [-C *] push -f|--force|--force-with-lease *'
     message: 'Force push can overwrite remote history.'
-    fix_suggestion: 'git push --force-with-lease'
+    fix_suggestion: 'git push'
 
-  - deny: 'git reset --hard *'
-    message: 'Hard reset discards uncommitted changes permanently.'
-    fix_suggestion: 'git stash'
+  # === allow rules ===
 
-  - deny: 'git clean -f *'
-    message: 'git clean -f permanently deletes untracked files.'
-    fix_suggestion: 'git clean -n'
+  # Read-only operations
+  - allow: 'git [-C *] status *'
+  - allow: 'git [-C *] diff *'
+  - allow: 'git [-C *] log *'
+  - allow: 'git [-C *] show *'
+  - allow: 'git [-C *] branch *'
+  - allow: 'git [-C *] rev-parse *'
+  - allow: 'git [-C *] ls-files *'
+  - allow: 'git [-C *] ls-tree *'
+  - allow: 'git [-C *] grep *'
+  - allow: 'git [-C *] remote get-url *'
+
+  # Local write operations
+  - allow: 'git [-C *] add *'
+  - allow: 'git [-C *] commit *'
+  - allow: 'git [-C *] mv *'
+  - allow: 'git [-C *] fetch *'
+
+  # Push and pull
+  - allow: 'git [-C *] push *'
+  - allow: 'git [-C *] pull *'
 ```
 
 ## How It Works
 
+### `[-C *]` optional pattern
+
+The `[-C *]` pattern matches an optional `-C <path>` argument. This lets rules apply whether the user runs `git status` or `git -C /path/to/repo status`.
+
+### Deny rules win
+
+When both an allow and a deny rule match the same command, the deny rule always takes priority regardless of rule order. This means you can broadly allow `git push *` while still blocking `git push --force *`.
+
 ### Read-only operations
 
-Commands like `git status`, `git diff`, and `git log` are safe to run at any time. The `*` wildcard matches any additional arguments, so `git diff --cached` and `git log --oneline -10` are both covered.
+Commands like `git status`, `git diff`, `git log`, and `git show` only read repository state. These are always safe to allow.
 
-### Safe write operations
+### Local write operations
 
-Local write operations (`git add`, `git commit`, `git checkout`, etc.) modify only the local repository. These are allowed without confirmation.
+`git add`, `git commit`, `git fetch`, and `git mv` modify only the local repository. They are allowed without confirmation.
 
-### Push with confirmation
+Note that `git commit` is allowed, but `git commit --amend` and `git commit --no-verify` are denied by the deny rules above.
 
-`git push` sends commits to a remote, which is a shared resource. The `ask` action prompts the user to confirm before executing.
+### Push and pull
 
-### Blocked destructive commands
+Both `git push` and `git pull` are allowed. However, force push variants (`--force`, `-f`, `--force-with-lease`) are all denied.
 
-- **`git push --force`** — Rewrites remote history. The `fix_suggestion` recommends `--force-with-lease`, which fails if someone else has pushed.
-- **`git reset --hard`** — Discards all uncommitted work. The suggestion is to `git stash` first.
-- **`git clean -f`** — Permanently removes untracked files. The suggestion is `git clean -n` (dry run).
+### Unmatched commands fall through to `ask`
+
+Commands not covered by any rule (e.g., `git merge`, `git rebase`, `git checkout`, `git reset`) fall through to the `defaults.action: ask` setting, prompting the user for confirmation.
 
 ## Variations
 
-### Allow force push to feature branches only
+### Strict mode — require confirmation for pushes
 
-Use a `when` condition with the CEL expression language to allow force pushes to branches that start with `feature/`:
+If you prefer to confirm before pushing to a remote:
 
 ```yaml
 rules:
-  - allow: 'git push -f|--force *'
-    when: "args.exists(a, a.startsWith('feature/'))"
-
-  - deny: 'git push -f|--force *'
-    message: 'Force push is only allowed on feature/ branches.'
+  # Change push from allow to ask
+  - ask: 'git push *'
 ```
 
-Since deny rules take priority, the deny rule catches everything that the allow rule doesn't match.
+Since `defaults.action` is `ask`, you can also simply omit the push allow rule — any unmatched command falls through to the default action.
 
 ### Block pushes to main branch
 
 ```yaml
 rules:
-  - deny: 'git push * main'
+  - deny: 'git [-C *] push * main|master'
     message: 'Direct push to main is not allowed. Use a pull request.'
-  - deny: 'git push * master'
-    message: 'Direct push to master is not allowed. Use a pull request.'
+```
+
+### Allow rebase for local branches
+
+If you want to allow rebase but only for local work (not on shared branches):
+
+```yaml
+rules:
+  - allow: 'git [-C *] rebase -i|--interactive *'
+  - deny: 'git [-C *] rebase *'
+    message: 'Non-interactive rebase is not allowed.'
 ```

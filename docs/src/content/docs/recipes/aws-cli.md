@@ -2,7 +2,7 @@
 title: 'AWS CLI'
 description: Restrict destructive AWS operations, protect production environments, and enforce safe defaults.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 This recipe shows how to configure runok to guard against accidental or unauthorized AWS CLI operations, especially in production environments.
@@ -10,30 +10,32 @@ This recipe shows how to configure runok to guard against accidental or unauthor
 ## Complete Example
 
 ```yaml
-# yaml-language-server: $schema=https://runok.fohte.net/schema/runok.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 
 defaults:
   action: ask
 
 rules:
-  # Read-only operations — always allowed
-  - allow: 'aws sts get-caller-identity'
-  - allow: 'aws s3 ls *'
-  - allow: 'aws ec2 describe-* *'
-  - allow: 'aws iam list-* *'
-  - allow: 'aws logs get-* *'
-  - allow: 'aws logs describe-* *'
-  - allow: 'aws cloudformation describe-* *'
-  - allow: 'aws cloudformation list-* *'
+  # === deny rules ===
 
   # Block all operations in production
   - deny: 'aws *'
     when: "env.AWS_PROFILE == 'production'"
-    message: "All AWS operations are blocked when AWS_PROFILE is 'production'. Switch to a non-production profile."
+    message: "All AWS operations are blocked when AWS_PROFILE is 'production'."
+
+  # Secret access — blocked
+  - deny: 'aws secretsmanager get-secret-value *'
+    message: 'Retrieving secret values via CLI is not allowed.'
+
+  - deny: 'aws ssm get-parameter* * --with-decryption *'
+    message: 'Decrypting SSM parameters via CLI is not allowed.'
 
   # Destructive operations — blocked
-  - deny: 'aws ec2 terminate-instances *'
-    message: 'Terminating EC2 instances requires manual confirmation in the AWS console.'
+  - deny: 'aws * delete-* *'
+    message: 'Deletion operations are not allowed via CLI.'
+
+  - deny: 'aws * terminate-* *'
+    message: 'Terminate operations are not allowed via CLI.'
 
   - deny: 'aws s3 rb *'
     message: 'Removing S3 buckets is not allowed via CLI.'
@@ -42,59 +44,52 @@ rules:
     message: 'Recursive S3 deletion is not allowed.'
     fix_suggestion: 'aws s3 rm s3://bucket/key'
 
-  - deny: 'aws iam delete-* *'
-    message: 'IAM deletion operations are not allowed via CLI.'
+  # === allow rules ===
 
-  - deny: 'aws rds delete-db-instance *'
-    message: 'Deleting RDS instances requires manual confirmation in the AWS console.'
-
-  - deny: 'aws cloudformation delete-stack *'
-    message: 'Deleting CloudFormation stacks is not allowed via CLI.'
+  # Read-only operations — always allowed
+  - allow: 'aws sts get-caller-identity'
+  - allow: 'aws s3 ls *'
+  - allow: 'aws * get-*|list-*|describe-* *'
 ```
 
 ## How It Works
 
-### Read-only operations
+### Read-only operations with glob patterns
 
-Commands that only read data (`describe-*`, `list-*`, `ls`, `get-caller-identity`) are safe and allowed without confirmation.
+```yaml
+- allow: 'aws * get-*|list-*|describe-* *'
+```
 
-The `*` in patterns like `aws ec2 describe-* *` matches any subcommand starting with `describe-` and any arguments.
+The alternation `get-*|list-*|describe-*` matches any subcommand starting with `get-`, `list-`, or `describe-` across all AWS services. The `*` before it matches the service name (e.g., `ec2`, `iam`, `logs`), and the `*` after it matches any arguments.
+
+This single rule covers commands like:
+
+- `aws ec2 describe-instances --filters ...`
+- `aws iam list-roles`
+- `aws logs get-log-events --log-group-name ...`
+
+### Destructive operation blocks with glob patterns
+
+```yaml
+- deny: 'aws * delete-* *'
+- deny: 'aws * terminate-* *'
+```
+
+The same glob approach works for deny rules. `delete-*` catches `delete-stack`, `delete-db-instance`, `delete-user`, etc. across all services. Since deny rules always win, these override the `get-*|list-*|describe-*` allow even if a subcommand somehow matched both.
 
 ### Production environment protection
 
 The `when` condition uses a CEL expression to check the `AWS_PROFILE` environment variable. When it is set to `production`, **all** AWS operations are denied — even read-only ones.
 
-Because deny rules take priority over allow rules, the production deny rule overrides the read-only allow rules above it.
+Because deny rules take priority over allow rules, the production deny rule overrides the allow rules.
 
-### Destructive operation blocks
+### Secret access protection
 
-Specific destructive operations are blocked with clear messages explaining why. The `fix_suggestion` field offers safer alternatives where applicable.
+`aws secretsmanager get-secret-value` and `aws ssm get-parameter --with-decryption` are blocked to prevent secrets from being exposed in terminal output or logs. The `get-parameter*` glob also matches `get-parameters` and `get-parameters-by-path`.
+
+Note that `get-secret-value` is denied even though `get-*` is allowed — deny always wins.
 
 ## Variations
-
-### Allow read-only access in production
-
-If you want to allow read-only operations even in production, add specific allow rules **without** the `when` condition. The deny rule with `when: "env.AWS_PROFILE == 'production'"` only applies when the condition is true, but remember that explicit deny always wins.
-
-A better approach is to use separate config files:
-
-```yaml
-# runok.yml (base rules)
-rules:
-  - allow: 'aws sts get-caller-identity'
-  - allow: 'aws s3 ls *'
-  - allow: 'aws ec2 describe-* *'
-```
-
-```yaml
-# runok.local.yml (personal overrides, git-ignored)
-rules:
-  - deny: 'aws *'
-    when: "env.AWS_PROFILE == 'production'"
-    message: 'Production access is restricted.'
-```
-
-Since deny always wins regardless of file order, the production guard remains effective.
 
 ### Restrict by AWS region
 
@@ -111,13 +106,17 @@ Combine rules with sandbox policies to restrict filesystem access while allowing
 
 ```yaml
 definitions:
+  paths:
+    sensitive:
+      - '~/.ssh/**'
+      - '.env*'
+
   sandbox:
     aws-sandbox:
       fs:
         writable: [./output, /tmp]
         deny:
-          - '~/.ssh/**'
-          - '.env*'
+          - '<path:sensitive>'
       network:
         allow: true
 
