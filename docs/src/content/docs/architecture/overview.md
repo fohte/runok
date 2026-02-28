@@ -22,7 +22,7 @@ When runok receives a command, it flows through the following stages:
 
 ### 1. Config Loading
 
-`DefaultConfigLoader` merges configuration from four layers (in ascending priority):
+runok merges configuration from four layers (in ascending priority):
 
 1. Global config (`~/.config/runok/runok.yml`)
 2. Global local override (`~/.config/runok/runok.local.yml`)
@@ -46,8 +46,8 @@ Each individual command is then structurally parsed using a `FlagSchema` inferre
 
 The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
 
-- **Single commands**: `evaluate_command()` runs the [pattern matching pipeline](../pattern-matching/) against each rule, then evaluates any `when` clauses using a CEL expression evaluator.
-- **Compound commands**: `evaluate_compound()` evaluates each sub-command individually, then aggregates results using the [Explicit Deny Wins](../design-decisions/#explicit-deny-wins) principle.
+- **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](../pattern-matching/), then any `when` clauses are evaluated using a CEL expression evaluator.
+- **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](../design-decisions/#explicit-deny-wins) principle.
 - **Wrapper commands**: If a command matches a wrapper definition (e.g., `bash -c <cmd>`, `sudo <cmd>`), the inner command captured by the `<cmd>` placeholder is recursively evaluated (max depth 10).
 
 ### 4. Action Decision
@@ -65,11 +65,11 @@ For compound commands, actions are aggregated by priority: `Deny` > `Ask` > `All
 
 ### 5. Sandbox Resolution
 
-If a matching rule specifies a `sandbox` preset name, the adapter resolves it to a concrete `SandboxPolicy`:
+If a matching rule specifies a `sandbox` preset name, the adapter resolves it to a concrete policy:
 
 1. Look up the preset in `definitions.sandbox`
-2. Convert to `MergedSandboxPolicy` (resolving CWD-relative paths)
-3. For compound commands, merge all sub-command policies using `merge_strictest()`:
+2. Resolve CWD-relative paths to absolute paths
+3. For compound commands, merge all sub-command policies using a strictest-wins strategy:
    - `writable` paths: intersection (more restrictive)
    - `deny` paths: union (all denied paths combined)
    - `network`: AND (denied if either denies)
@@ -86,10 +86,10 @@ The executor layer ([`src/exec/`](https://github.com/fohte/runok/blob/main/src/e
 | `SpawnAndWait`     | Spawns a child process and waits for it to complete |
 | `ShellExec`        | Runs through `sh -c` for shell features             |
 
-When a sandbox policy is active, a platform-specific `SandboxExecutor` wraps the execution:
+When a sandbox policy is active, a platform-specific sandbox wraps the execution:
 
-- **macOS**: `MacOsSandboxExecutor` generates an SBPL (Seatbelt Profile Language) profile and runs the command through `sandbox-exec`.
-- **Linux**: `LinuxSandboxExecutor` uses Landlock LSM for filesystem access control.
+- **macOS**: Generates an SBPL (Seatbelt Profile Language) profile and runs the command through `sandbox-exec`.
+- **Linux**: Uses Landlock LSM for filesystem access control.
 
 ## Module Overview
 
@@ -106,6 +106,6 @@ The source code ([`src/`](https://github.com/fohte/runok/tree/main/src)) is orga
 
 runok supports three adapter types that share the same evaluation pipeline but differ in how they handle the result:
 
-- **ExecAdapter** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions.
-- **CheckAdapter** (`runok check`): Performs dry-run evaluation and outputs the result as JSON or text. Always exits with code 0.
-- **HookAdapter**: Integrates with LLM agent hook systems (e.g., Claude Code's `PreToolUse` hook). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.
+- **Exec** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions.
+- **Check** (`runok check`): Performs dry-run evaluation and outputs the result as JSON or text. Always exits with code 0.
+- **Hook**: Integrates with LLM agent hook systems (e.g., Claude Code's `PreToolUse` hook). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.
