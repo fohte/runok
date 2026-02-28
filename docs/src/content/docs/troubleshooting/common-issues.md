@@ -1,88 +1,18 @@
 ---
-title: Troubleshooting
-description: Common issues and debugging tips for runok.
+title: Common Issues
+description: Solutions for frequently encountered problems with runok.
+sidebar:
+  order: 2
 ---
 
-This page covers common issues you may encounter when using runok, along with solutions and debugging techniques.
-
-## Debugging tools
-
-runok provides two flags to help diagnose issues: `--verbose` and `--dry-run`.
-
-### `--verbose`: inspect rule matching
-
-The `--verbose` flag prints detailed rule matching information to stderr, prefixed with `[verbose]`.
-
-```bash
-runok exec --verbose -- git status
-```
-
-Example output:
-
-```
-[verbose] Evaluating command: "git status"
-[verbose] Rule matched: allow 'git *' (matched tokens: ["status"])
-[verbose] Evaluation result: Allow
-```
-
-When no rule matches:
-
-```
-[verbose] Evaluating command: "rm -rf /"
-[verbose] No rules matched
-[verbose] No matching rule, using default behavior
-```
-
-For compound commands (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually:
-
-```
-[verbose] Compound command detected (2 sub-commands)
-[verbose]   sub-command 1: "git add ."
-[verbose]   sub-command 2: "git commit -m 'fix'"
-[verbose] Compound evaluation result: Allow
-```
-
-### `--dry-run`: check without executing
-
-The `--dry-run` flag evaluates rules and reports what action would be taken, without actually executing the command.
-
-```bash
-runok exec --dry-run -- curl -X POST https://example.com
-```
-
-Example output:
-
-```
-runok: dry-run: command would be allowed
-```
-
-Possible dry-run messages:
-
-| Message                                         | Meaning                            |
-| ----------------------------------------------- | ---------------------------------- |
-| `command would be allowed`                      | A rule matched with `allow` action |
-| `command would be denied: <reason>`             | A rule matched with `deny` action  |
-| `command would require confirmation: <message>` | A rule matched with `ask` action   |
-| `no matching rule (default behavior)`           | No rule matched the command        |
-
-Dry-run always exits with code 0, regardless of the action result.
-
-Combine both flags for maximum insight:
-
-```bash
-runok exec --verbose --dry-run -- git push --force
-```
-
-## Common issues
-
-### Rules not matching
+## Rules not matching
 
 **Symptom:** A command is not matched by any rule, even though you expect it to be.
 
-**Diagnosis:** Run with `--verbose` to see exactly how runok evaluates the command:
+**Diagnosis:** Run [`runok check --verbose`](/troubleshooting/debugging/) to see exactly how runok evaluates the command:
 
 ```bash
-runok exec --verbose --dry-run -- <your-command>
+runok check --verbose -- <your-command>
 ```
 
 Look for the `[verbose] No rules matched` message to confirm, then check the following causes.
@@ -94,11 +24,11 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
    ```yaml
    # This rule will NOT match `git commit -am "msg"`
    rules:
-     - allow: "git commit -m *"
+     - allow: 'git commit -m *'
 
    # Use a separate pattern for the combined flag
    rules:
-     - allow: "git commit -am *"
+     - allow: 'git commit -am *'
    ```
 
 2. **Redirects are stripped before matching.** runok uses tree-sitter to parse commands and removes redirects before rule evaluation. A rule that includes redirects will never match.
@@ -106,11 +36,11 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
    ```yaml
    # This rule will NOT match, because the redirect is stripped
    rules:
-     - allow: "echo hello > file.txt"
+     - allow: 'echo hello > file.txt'
 
    # Match the command without the redirect
    rules:
-     - allow: "echo hello"
+     - allow: 'echo hello'
    ```
 
 3. **Pattern syntax errors.** If a pattern has unmatched brackets or invalid syntax, it may silently fail to match. Check for these errors:
@@ -127,7 +57,7 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
        - 'env * <cmd>'
    ```
 
-### Stale preset cache
+## Stale preset cache
 
 **Symptom:** Configuration changes from a remote preset are not reflected after updating the preset repository.
 
@@ -163,7 +93,7 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
 warning: Failed to update preset 'github:org/repo', using cached version
 ```
 
-### Mutable preset reference warnings
+## Mutable preset reference warnings
 
 **Symptom:** Warning message about mutable preset references appears on every run.
 
@@ -179,28 +109,87 @@ warning: Mutable preset reference 'github:org/repo@main'
 ```yaml
 # Before
 extends:
-  - "github:org/repo@main"
+  - 'github:org/repo@main'
 
 # After
 extends:
-  - "github:org/repo@a1b2c3d4e5f6"
+  - 'github:org/repo@a1b2c3d4e5f6'
 ```
 
-### Sandbox errors
+## Sandbox errors
 
 **Symptom:** Commands fail with sandbox-related error messages.
 
-#### Sandbox not supported on this platform
+runok uses platform-specific sandboxing:
+
+- **macOS:** `sandbox-exec` (seatbelt/SBPL)
+- **Linux:** bubblewrap + landlock + seccomp
+
+### Sandbox not supported on this platform
 
 ```
 sandbox not supported on this platform
 ```
 
-runok uses platform-specific sandboxing: `sandbox-exec` on macOS. If the sandbox mechanism is not available, this error occurs.
+This occurs on platforms where no sandbox mechanism is available (e.g., Windows, or a Linux/macOS environment missing required components).
 
-**Solution:** Remove or disable the sandbox preset for the affected rule, or run on a supported platform.
+**Solution:** Remove the `sandbox` field from the affected rule, or run on a supported platform.
 
-#### Sandbox setup failed: cannot canonicalize path
+### bubblewrap (bwrap) not found (Linux)
+
+```
+bubblewrap execution failed: bubblewrap (bwrap) not found. Install it with your package manager.
+```
+
+The Linux sandbox requires [bubblewrap](https://github.com/containers/bubblewrap) for namespace isolation.
+
+**Solution:** Install bubblewrap:
+
+```bash
+# Debian/Ubuntu
+sudo apt install bubblewrap
+
+# Fedora
+sudo dnf install bubblewrap
+
+# Arch Linux
+sudo pacman -S bubblewrap
+```
+
+### Glob deny pattern warning (Linux)
+
+```
+warning: glob deny pattern "/some/glob/*" is expanded before sandbox execution; files created later will not be protected. Use literal paths for complete coverage.
+```
+
+On Linux, glob patterns in `read_only_subpaths` are expanded at sandbox startup time. Files created after the sandbox starts will not be covered by the read-only restriction.
+
+**Solution:** Use literal paths instead of glob patterns for reliable protection:
+
+```yaml
+definitions:
+  sandbox:
+    my-preset:
+      read_only_subpaths:
+        # Glob pattern - files created later are NOT protected
+        # - '/project/.env*'
+
+        # Literal paths - always protected
+        - '/project/.env'
+        - '/project/.env.local'
+```
+
+### Glob pattern match limit exceeded (Linux)
+
+```
+warning: glob pattern "/some/glob/*" matched more than 1000 paths; remaining matches are ignored
+```
+
+A glob pattern in the sandbox definition matched too many paths. Only the first 1000 matches are applied.
+
+**Solution:** Use more specific paths or patterns to reduce the number of matches.
+
+### Sandbox setup failed: cannot canonicalize path
 
 ```
 sandbox setup failed: cannot canonicalize path '/some/path': No such file or directory
@@ -218,7 +207,7 @@ definitions:
         - '/path/that/exists'
 ```
 
-#### Conflicting sandbox policies
+### Conflicting sandbox policies
 
 ```
 conflicting sandbox policies: no common writable roots
@@ -242,7 +231,7 @@ For compound commands with irreconcilable sandbox policies, runok escalates the 
 sandbox policy conflict: writable roots are contradictory
 ```
 
-#### Sandbox preset not defined
+### Sandbox preset not defined
 
 ```
 sandbox preset 'my-preset' is not defined in definitions.sandbox
@@ -260,26 +249,12 @@ definitions:
         - '.'
 ```
 
-### Preset loading errors
+## Preset loading errors
 
-#### Circular reference detected
+### Circular reference detected
 
 Remote presets that `extends` each other in a cycle cause an error. Check the `extends` chain across all referenced presets.
 
-#### Maximum extends depth exceeded
+### Maximum extends depth exceeded
 
 Preset chains deeper than the maximum allowed depth cause an error. Flatten the chain or reduce the nesting level.
-
-#### Git clone failed
-
-```
-git clone failed for 'github:org/repo': <message>
-```
-
-This occurs on the first fetch of a remote preset when there is no cached version available. Common causes:
-
-- Network connectivity issues
-- Invalid repository URL
-- Repository is private and no authentication is configured
-
-**Solution:** Verify the repository URL, check network connectivity, and ensure `git` has access to the repository.
