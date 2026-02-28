@@ -65,7 +65,7 @@ definitions:
           - '<path:sensitive>'
 ```
 
-The `<path:sensitive>` reference expands to all paths listed under `definitions.paths.sensitive`.
+The `<path:sensitive>` reference expands to all paths listed under `definitions.paths.sensitive`. See [`definitions.paths`](/configuration/schema/#definitionspaths) for details.
 
 ## Applying sandbox to rules
 
