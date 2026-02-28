@@ -9,33 +9,24 @@ runok uses a 3-layer pipeline to match rule patterns against shell commands: **L
 
 ## Overview
 
-```
-Rule pattern string              Shell command string
-       │                                │
-       ▼                                ▼
-   ┌────────┐                   ┌───────────────┐
-   │ Lexer  │                   │ Command Parser │
-   └───┬────┘                   └──────┬────────┘
-       │ Vec<LexToken>                 │ ParsedCommand
-       ▼                               │
-   ┌────────┐                          │
-   │ Parser │                          │
-   └───┬────┘                          │
-       │ Pattern                       │
-       ▼                               ▼
-   ┌─────────────────────────────────────┐
-   │             Matcher                 │
-   └─────────────────────────────────────┘
-       │
-       ▼
-   Match result (bool / captures)
-```
+The pipeline has two independent input paths that converge at the Matcher:
 
-The rule pattern goes through the Lexer and Parser to produce a `Pattern` AST. The input command is independently tokenized and structurally parsed into a `ParsedCommand`. The Matcher then compares the two.
+**Rule pattern path:**
+
+1. **Lexer** — splits the pattern string into a list of tokens (literals, wildcards, alternations, etc.)
+2. **Parser** — transforms the token list into a structured pattern with command name, flags, and arguments
+
+**Command path:**
+
+1. **Command Parser** — tokenizes and structurally parses the shell command string into a command name, flags, and positional arguments
+
+**Convergence:**
+
+- The **Matcher** receives the structured pattern and the parsed command, compares them, and returns a match result (with optional captures for wrapper placeholder extraction).
 
 ## Layer 1: Lexer
 
-**Source**: `src/rules/pattern_lexer.rs`
+**Source**: [`src/rules/pattern_lexer.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_lexer.rs)
 
 The lexer converts a pattern string into a flat list of `LexToken` values. It handles:
 
@@ -65,7 +56,7 @@ Lexer output:
 
 ## Layer 2: Parser
 
-**Source**: `src/rules/pattern_parser.rs`
+**Source**: [`src/rules/pattern_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_parser.rs)
 
 The parser transforms `Vec<LexToken>` into a structured `Pattern`:
 
@@ -93,11 +84,11 @@ This is how `deny: "curl -X POST"` teaches runok that `-X`/`--request` is a flag
 
 ### FlagSchema inference
 
-The parser's output drives **FlagSchema** construction in the rule engine. By examining which patterns have `FlagWithValue` tokens, runok infers which flags take values and which are boolean — without needing an explicit flag definition file. This is core to the [WYSIWHIP](../design-decisions/#wysiwhip-what-you-see-is-what-it-parses) design principle.
+The parser's output drives **FlagSchema** construction in the rule engine. By examining which patterns have `FlagWithValue` tokens, runok infers which flags take values and which are boolean — without needing an explicit flag definition file. This is core to the [Pattern-Driven Parsing](../design-decisions/#pattern-driven-parsing) design principle.
 
 ## Layer 3: Matcher
 
-**Source**: `src/rules/pattern_matcher.rs`
+**Source**: [`src/rules/pattern_matcher.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_matcher.rs)
 
 The matcher compares a `Pattern` against a `ParsedCommand` and returns whether they match (optionally with captures for placeholder extraction).
 
@@ -142,7 +133,7 @@ Example: With wrapper `sudo <cmd>`, the command `sudo rm -rf /` matches, and `rm
 
 ## Command Parser
 
-**Source**: `src/rules/command_parser.rs`
+**Source**: [`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)
 
 The command parser operates on the input command (not the pattern). It provides:
 

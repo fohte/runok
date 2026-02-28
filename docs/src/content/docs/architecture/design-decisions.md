@@ -7,13 +7,9 @@ sidebar:
 
 This page documents the key design decisions in runok, their rationale, and the trade-offs involved.
 
-## WYSIWHIP: What You See Is What It Parses
+## Pattern-Driven Parsing
 
-The most fundamental principle in runok's design: **the way you write a rule is exactly how it will be parsed and matched**.
-
-### Motivation
-
-Traditional command allowlisting tools require users to learn a separate schema language to define flag types, value separators, and argument positions. runok eliminates this by inferring parsing behavior directly from the rule pattern itself.
+The most fundamental principle in runok's design: **the way you write a rule is exactly how it will be parsed and matched**. There is no separate schema language for flag types or argument positions — runok infers parsing behavior directly from the rule pattern itself.
 
 ### How it works
 
@@ -53,57 +49,9 @@ runok deliberately does **not** split combined short flags like `-am`, `-rf`, or
 
 This means `deny: "git commit -m 'WIP*'"` does **not** match `git commit -am "WIP fix"`. To cover both, users write separate rules for `-m` and `-am`. This is intentional: the pattern says exactly what it matches.
 
-### Trade-offs
+### FlagSchema inference
 
-- **Pro**: No surprises. Rules behave exactly as written, without distant definitions altering semantics.
-- **Pro**: No learning curve for flag schemas or type annotations.
-- **Con**: Users must write explicit patterns for each flag combination they want to cover.
-- **Con**: Cannot express "any flag that takes a value" generically.
-
-## Explicit Deny Wins
-
-Rule evaluation follows a strict priority order inspired by AWS IAM Policy evaluation:
-
-```
-1. Deny match  → Reject (all other rules ignored)
-2. Allow match → Permit
-3. Ask match   → Prompt user for confirmation
-4. No match    → Fall back to configured default
-```
-
-### Motivation
-
-This priority system ensures that security-critical deny rules cannot be overridden by broader allow rules. It enables a common and safe pattern: "allow broadly, deny specifically."
-
-```yaml
-rules:
-  - allow: 'git *' # Allow all git commands
-  - deny: 'git push -f|--force *' # But never allow force push
-```
-
-Without Explicit Deny Wins, the order of these rules would matter, and a user could accidentally allow dangerous commands by placing an allow rule after a deny rule. With this system, the deny rule always takes precedence regardless of order.
-
-### Compound command aggregation
-
-For compound commands (e.g., `git add . && git push -f`), each sub-command is evaluated independently, and the strictest action wins:
-
-`Deny` > `Ask` > `Allow` > `Default`
-
-This means a single denied sub-command causes the entire compound command to be rejected.
-
-### Trade-offs
-
-- **Pro**: Secure by default. Deny rules are guaranteed to be enforced.
-- **Pro**: Rule order does not matter, reducing configuration errors.
-- **Con**: Cannot express "allow this specific case even though a deny rule matches" without restructuring rules.
-
-## Policy-Derived Schema
-
-runok infers the structure of commands (which flags take values, which are boolean) from the rule patterns themselves, rather than requiring explicit schema definitions.
-
-### How inference works
-
-The rule engine scans all patterns to build a `FlagSchema`:
+The rule engine scans all patterns to build a `FlagSchema` automatically:
 
 ```yaml
 # From these rules:
@@ -120,58 +68,50 @@ runok infers:
 
 This schema is then used to structurally parse input commands: `curl -X POST https://example.com` is parsed as `command=curl, flags={-X: POST}, args=[https://example.com]`.
 
-### Fallback behavior
+Unknown flags (not seen in any pattern) default to boolean, and unrecognized tokens are treated as positional arguments. This ensures runok can handle any command without errors, even those not covered by rules.
 
-- Unknown flags (not seen in any pattern) are treated as boolean.
-- Unrecognized tokens are treated as positional arguments.
+### Trade-offs
 
-This ensures runok can handle any command, even those not covered by rules, without errors.
+- **Pro**: No surprises. Rules behave exactly as written, without distant definitions altering semantics.
+- **Pro**: No learning curve for flag schemas or type annotations.
+- **Con**: Users must write explicit patterns for each flag combination they want to cover.
+- **Con**: Cannot express "any flag that takes a value" generically.
+
+## Explicit Deny Wins
+
+When multiple rules match, the most restrictive action always wins: `deny` > `ask` > `allow` > `default`. This is inspired by [AWS IAM policy evaluation](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html).
+
+### Why this matters
+
+This priority system ensures that security-critical deny rules cannot be overridden by broader allow rules. It enables a common and safe pattern: "allow broadly, deny specifically." Rule order in the config file does not matter — a `deny` rule always takes precedence regardless of where it appears.
+
+Without this guarantee, a user could accidentally allow dangerous commands by placing an allow rule after a deny rule.
+
+The same priority applies to [compound commands](/rule-evaluation/compound-commands/) — a single denied sub-command causes the entire compound command to be rejected.
+
+### Trade-offs
+
+- **Pro**: Secure by default. Deny rules are guaranteed to be enforced.
+- **Pro**: Rule order does not matter, reducing configuration errors.
+- **Con**: Cannot express "allow this specific case even though a deny rule matches" without restructuring rules.
+
+For full details, see [Priority Model: Explicit Deny Wins](/rule-evaluation/priority-model/).
 
 ## Wrapper Command Unwrapping
 
-Commands like `bash -c`, `sudo`, and `xargs` wrap other commands. runok recursively evaluates the inner command rather than treating the wrapper as an opaque string.
+Commands like `bash -c`, `sudo`, and `xargs` wrap other commands. Without special handling, `sudo rm -rf /` would not match `deny: "rm -rf /"` because the command name is `sudo`, not `rm`.
 
-### Definition
+runok solves this by recognizing wrapper patterns (defined in [`definitions.wrappers`](/rule-evaluation/wrapper-recursion/#defining-wrapped-command-patterns)) and recursively evaluating the inner command captured by the `<cmd>` placeholder. Recursion is limited to a depth of 10 to prevent infinite loops.
 
-Wrapper patterns are defined in `definitions.wrappers`:
-
-```yaml
-definitions:
-  wrappers:
-    - 'bash -c <cmd>'
-    - 'sudo <cmd>'
-    - 'xargs <cmd>'
-    - "find <paths>... -exec <cmd> \\;"
-```
-
-The `<cmd>` placeholder marks the position where the inner command appears. When a command matches a wrapper pattern, the matcher captures the tokens at `<cmd>` and the rule engine recursively evaluates them.
-
-### Recursion limit
-
-Wrapper evaluation is limited to a depth of 10 to prevent infinite recursion (e.g., `sudo sudo sudo ...`).
-
-### Example
-
-Given `deny: "rm -rf /"` and wrapper `sudo <cmd>`:
-
-1. Input: `sudo rm -rf /`
-2. Matches wrapper `sudo <cmd>`, captures `rm -rf /`
-3. Recursively evaluates `rm -rf /`
-4. Matches deny rule → command is rejected
-
-Without wrapper unwrapping, `sudo rm -rf /` would not match `deny: "rm -rf /"` because the command name is `sudo`, not `rm`.
+This ensures that rules apply to what actually runs, not just the outer wrapper command.
 
 ## Sandbox Merge Strategy: Strictest Wins
 
-When a compound command triggers multiple sandbox policies, runok merges them using the strictest combination:
+When a compound command triggers multiple [sandbox](/sandbox/overview/) policies, runok merges them by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
 
-- **Writable paths**: Intersection (only paths allowed by all sub-commands remain writable)
-- **Denied paths**: Union (paths denied by any sub-command are denied)
-- **Network access**: AND (denied if any sub-command denies network)
+The rationale: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. No sub-command in a pipeline can weaken the sandbox of another.
 
-### Rationale
-
-A compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. The strictest-merge approach ensures that no sub-command in a pipeline can weaken the sandbox of another.
+For the full merge table and contradiction handling, see [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
 
 ## Three-Tier User Design
 
@@ -182,8 +122,9 @@ runok's configuration system is designed around three tiers of users, inspired b
 Use presets via `extends` and write simple allow/deny/ask rules using familiar command syntax. No schema definitions needed.
 
 ```yaml
+# NOTE: this is a hypothetical example; the preset does not exist yet
 extends:
-  - 'github:runok/preset-standard@v1'
+  - 'github:example-org/runok-preset-standard@v1'
 rules:
   - allow: 'git *'
   - deny: 'rm -rf /'

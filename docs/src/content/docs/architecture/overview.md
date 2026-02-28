@@ -11,27 +11,14 @@ This page describes the internal architecture of runok for contributors and adva
 
 When runok receives a command, it flows through the following stages:
 
-```
-Input (shell command string)
-  │
-  ▼
-Config Loading ─── 4-layer merge + preset resolution
-  │
-  ▼
-Command Parsing ─── tokenization + compound command splitting
-  │
-  ▼
-Rule Evaluation ─── pattern matching + when-clause evaluation
-  │
-  ▼
-Action Decision ─── Allow / Deny / Ask / Default
-  │
-  ▼
-Sandbox Resolution ─── preset lookup + strictest-merge
-  │
-  ▼
-Command Execution ─── sandboxed or direct execution
-```
+| Step | Stage              | Description                               |
+| ---- | ------------------ | ----------------------------------------- |
+| 1    | Config Loading     | 4-layer merge + preset resolution         |
+| 2    | Command Parsing    | Tokenization + compound command splitting |
+| 3    | Rule Evaluation    | Pattern matching + when-clause evaluation |
+| 4    | Action Decision    | Allow / Deny / Ask / Default              |
+| 5    | Sandbox Resolution | Preset lookup + strictest-merge           |
+| 6    | Command Execution  | Sandboxed or direct execution             |
 
 ### 1. Config Loading
 
@@ -44,11 +31,11 @@ Command Execution ─── sandboxed or direct execution
 
 The `extends` field triggers recursive preset resolution (DFS with cycle detection, max depth 10). Presets can be loaded from local paths or remote GitHub repositories.
 
-Source: `src/config/loader.rs`, `src/config/preset.rs`
+Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset.rs`](https://github.com/fohte/runok/blob/main/src/config/preset.rs)
 
 ### 2. Command Parsing
 
-The command parser (`src/rules/command_parser.rs`) handles two tasks:
+The command parser ([`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)) handles two tasks:
 
 - **Tokenization**: Shell-aware splitting that respects single/double quotes and backslash escapes.
 - **Compound command splitting**: Uses `tree-sitter-bash` to decompose pipelines (`|`), logical operators (`&&`, `||`), semicolons (`;`), subshells, loops, conditionals, and command substitutions into individual commands.
@@ -57,7 +44,7 @@ Each individual command is then structurally parsed using a `FlagSchema` inferre
 
 ### 3. Rule Evaluation
 
-The rule engine (`src/rules/rule_engine.rs`) evaluates each command against the configured rules:
+The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
 
 - **Single commands**: `evaluate_command()` runs the [pattern matching pipeline](../pattern-matching/) against each rule, then evaluates any `when` clauses using a CEL expression evaluator.
 - **Compound commands**: `evaluate_compound()` evaluates each sub-command individually, then aggregates results using the [Explicit Deny Wins](../design-decisions/#explicit-deny-wins) principle.
@@ -91,7 +78,7 @@ If no rule-level sandbox is specified, the global `defaults.sandbox` is applied 
 
 ### 6. Command Execution
 
-The executor layer (`src/exec/`) runs the command in one of three modes:
+The executor layer ([`src/exec/`](https://github.com/fohte/runok/blob/main/src/exec/)) runs the command in one of three modes:
 
 | Mode               | Description                                         |
 | ------------------ | --------------------------------------------------- |
@@ -104,40 +91,16 @@ When a sandbox policy is active, a platform-specific `SandboxExecutor` wraps the
 - **macOS**: `MacOsSandboxExecutor` generates an SBPL (Seatbelt Profile Language) profile and runs the command through `sandbox-exec`.
 - **Linux**: `LinuxSandboxExecutor` uses Landlock LSM for filesystem access control.
 
-## Module Structure
+## Module Overview
 
-```
-src/
-├── main.rs                  # Entry point, platform detection, CLI dispatch
-├── lib.rs                   # Public module exports
-├── cli/
-│   ├── mod.rs               # CLI argument definitions (clap)
-│   └── route.rs             # Check subcommand routing
-├── adapter/
-│   ├── mod.rs               # Endpoint trait, run_with_options() orchestration
-│   ├── exec_adapter.rs      # ExecAdapter: execute commands
-│   ├── check_adapter.rs     # CheckAdapter: dry-run checks
-│   └── hook_adapter.rs      # ClaudeCodeHookAdapter: LLM agent hook integration
-├── rules/
-│   ├── pattern_lexer.rs     # Pattern string → LexToken list
-│   ├── pattern_parser.rs    # LexToken list → Pattern AST
-│   ├── pattern_matcher.rs   # Pattern vs ParsedCommand matching
-│   ├── command_parser.rs    # Shell command tokenization and structural parsing
-│   ├── rule_engine.rs       # Rule evaluation orchestration
-│   ├── expr_evaluator.rs    # CEL expression evaluation (when clauses)
-│   └── error.rs             # Rule-related error types
-├── config/
-│   ├── model.rs             # Config data model (Config, RuleEntry, SandboxPreset, etc.)
-│   ├── loader.rs            # 4-layer config loading and merging
-│   └── preset.rs            # Preset resolution (extends)
-└── exec/
-    ├── command_executor.rs  # CommandExecutor/SandboxExecutor traits, ExecMode
-    ├── macos_sandbox/
-    │   ├── mod.rs           # MacOsSandboxExecutor, SBPL generation
-    │   └── glob_pattern.rs  # Glob-to-SBPL regex conversion
-    ├── extension_runner.rs  # JSON-RPC 2.0 extension protocol
-    └── error.rs             # Execution-related error types
-```
+The source code ([`src/`](https://github.com/fohte/runok/tree/main/src)) is organized into four top-level modules:
+
+| Module                                                           | Responsibility                                                                                            |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [`cli/`](https://github.com/fohte/runok/tree/main/src/cli)       | CLI argument definitions and subcommand routing                                                           |
+| [`config/`](https://github.com/fohte/runok/tree/main/src/config) | Config data model, 4-layer loading/merging, and preset resolution                                         |
+| [`rules/`](https://github.com/fohte/runok/tree/main/src/rules)   | Pattern matching pipeline (lexer, parser, matcher), rule engine, command parser, CEL expression evaluator |
+| [`exec/`](https://github.com/fohte/runok/tree/main/src/exec)     | Command execution, platform-specific sandbox implementations, extension runner                            |
 
 ## Adapter Layer
 
