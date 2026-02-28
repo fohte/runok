@@ -1,0 +1,231 @@
+/* runok docs theme — minimal, monochrome */
+
+/* ── Dark mode (default) ──────────────────────────────────
+ *
+ * Color references (contrast ratio vs background #131213):
+ *   white  #ededec  ~14.5:1  — headings
+ *   gray-1 #cdccc9  ~10.6:1  — body text
+ *   gray-2 #9a9996  ~ 6.2:1  — secondary text (AA)
+ *   gray-3 #6e6c6a  ~ 3.5:1  — muted / disabled
+ *   gray-4 #3d3b3a  — borders, separators
+ *   gray-5 #252323  — subtle backgrounds
+ *   gray-6 #1a1819  — card / sidebar bg
+ *   black  #131213  — page background
+ */
+
+:root {
+  --sl-color-accent-low: hsl(0, 0%, 18%);
+  --sl-color-accent: hsl(0, 0%, 65%);
+  --sl-color-accent-high: hsl(0, 0%, 88%);
+
+  --sl-color-white: #ededec;
+  --sl-color-gray-1: #dfdeda;
+  --sl-color-gray-2: #b5b3b0;
+  --sl-color-gray-3: #6e6c6a;
+  --sl-color-gray-4: #3d3b3a;
+  --sl-color-gray-5: #252323;
+  --sl-color-gray-6: #1a1819;
+  --sl-color-black: #131213;
+}
+
+/* ── Light mode ──────────────────────────────────────────── */
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: hsl(0, 0%, 90%);
+  --sl-color-accent: hsl(0, 0%, 40%);
+  --sl-color-accent-high: hsl(0, 0%, 18%);
+
+  --sl-color-white: #1c1b1b;
+  --sl-color-gray-1: #3d3b3a;
+  --sl-color-gray-2: #6e6c6a;
+  --sl-color-gray-3: #9a9996;
+  --sl-color-gray-4: #cdccc9;
+  --sl-color-gray-5: #e5e4e2;
+  --sl-color-gray-6: #f5f4f2;
+  --sl-color-black: #faf9f7;
+}
+
+/* ── Global polish ───────────────────────────────────────── */
+
+:root {
+  --sl-border-radius: 0;
+}
+
+/* Sidebar active indicator */
+nav.sidebar a[aria-current='page'] {
+  border-inline-start: 2px solid var(--sl-color-white);
+  background: transparent;
+  color: var(--sl-color-white);
+  font-weight: 500;
+}
+
+/* ── Kill all border-radius ──────────────────────────────── */
+
+/* Code blocks */
+.expressive-code pre,
+.expressive-code .frame {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Sidebar links */
+nav.sidebar a {
+  border-radius: 0;
+}
+
+/* Search */
+button[data-open-modal] {
+  border-radius: 0 !important;
+}
+button[data-open-modal] > kbd {
+  border-radius: 0 !important;
+}
+dialog {
+  border-radius: 0 !important;
+}
+#starlight__search {
+  --sl-search-corners: 0;
+}
+
+/* Cards, LinkCards */
+.sl-link-card,
+.card .icon {
+  border-radius: 0;
+}
+
+/* Badges */
+.sl-badge {
+  border-radius: 0;
+}
+
+/* Pagination */
+.pagination-links a {
+  border-radius: 0;
+}
+
+/* Table of contents */
+starlight-toc a {
+  border-radius: 0;
+}
+
+/* Mobile ToC toggle */
+mobile-starlight-toc .toggle {
+  border-radius: 0;
+}
+
+/* LinkButton (hero CTAs) */
+.sl-link-button {
+  border-radius: 0 !important;
+}
+
+/* FileTree highlight */
+starlight-file-tree .highlight {
+  border-radius: 0;
+}
+
+/* Steps counter */
+.sl-steps > li::before {
+  border-radius: 0;
+}
+
+/* ── Hero section ────────────────────────────────────────── */
+
+.hero {
+  grid-template-columns: 1fr !important;
+  text-align: center;
+  padding-block: 3rem;
+}
+
+.hero .stack {
+  align-items: center;
+  text-align: center;
+}
+
+.hero .copy {
+  align-items: center;
+  text-align: center;
+}
+
+.hero .copy > * {
+  text-align: center;
+}
+
+.hero .tagline {
+  font-size: var(--sl-text-lg);
+  color: var(--sl-color-gray-1);
+}
+
+/* ── Features ─────────────────────────────────────────────── */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Starlight の markdown.css が .sl-markdown-content 内の隣接兄弟要素に
+   margin-top: var(--sl-content-gap-y) を付与するため、
+   grid 内の 2, 3列目の .feature が下にずれる。これを打ち消す。 */
+.features .feature {
+  margin-top: 0 !important;
+}
+
+.feature {
+  padding: 0 1.5rem;
+  border-inline-start: 1px solid var(--sl-color-gray-4);
+}
+
+.feature:first-child {
+  padding-inline-start: 0;
+  border-inline-start: none;
+}
+
+.features .feature h3 {
+  margin: 0 0 0.5rem !important;
+  padding: 0 !important;
+  font-size: var(--sl-text-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--sl-color-white);
+}
+
+.features .feature p {
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+  line-height: 1.6;
+}
+
+@media (max-width: 50rem) {
+  .features {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .feature {
+    padding-inline: 0;
+    padding-block-start: 1.5rem;
+    border-inline-start: none;
+    border-block-start: 1px solid var(--sl-color-gray-4);
+  }
+
+  .feature:first-child {
+    padding-block-start: 0;
+    border-block-start: none;
+  }
+}
+
+/* ── Demo section ────────────────────────────────────────── */
+
+.demo-section {
+  margin-block: 2rem;
+  padding-block: 2rem;
+  border-block-start: 1px solid var(--sl-color-gray-4);
+}
+
+.demo-section h3 {
+  margin-block-start: 0 !important;
+}

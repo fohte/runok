@@ -14,7 +14,50 @@ hero:
       variant: minimal
 ---
 
-import { CardGrid, Card } from '@astrojs/starlight/components'
+import { CardGrid, Card, LinkCard } from '@astrojs/starlight/components'
+
+<div class="features">
+  <div class="feature">
+    <h3>Command Allowlisting</h3>
+    <p>Define exactly which commands are allowed. Everything else is denied by default.</p>
+  </div>
+  <div class="feature">
+    <h3>Pattern Matching</h3>
+    <p>Wildcards, placeholders, and alternation to match commands precisely.</p>
+  </div>
+  <div class="feature">
+    <h3>Sandbox Execution</h3>
+    <p>Run allowed commands in a restricted environment with filesystem and network isolation.</p>
+  </div>
+</div>
+
+<div class="demo-section">
+
+### How it works
+
+Define allowed commands in `runok.yml`:
+
+```yaml
+rules:
+  - allow: "git push|pull|fetch **"
+  - allow: "npm install|test|run **"
+  - deny: "rm -rf /"
+```
+
+Then use runok to check or execute commands:
+
+```sh
+$ runok check "git push origin main"
+# ✅ allowed
+
+$ runok check "rm -rf /"
+# ❌ denied
+
+$ runok exec "npm test"
+# runs in a sandboxed environment
+```
+
+</div>
 
 ## Explore the docs
 
@@ -22,7 +65,7 @@ import { CardGrid, Card } from '@astrojs/starlight/components'
   <Card title="Getting Started" icon="rocket">
     Install runok and set up your first configuration.
 
-    [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code Integration](/getting-started/claude-code/)
+    [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code](/getting-started/claude-code/)
 
   </Card>
   <Card title="Configuration" icon="setting">
@@ -37,46 +80,13 @@ import { CardGrid, Card } from '@astrojs/starlight/components'
     [Pattern Syntax Reference](/pattern-syntax/overview/)
 
   </Card>
-  <Card title="Rule Evaluation" icon="approve-check-circle">
-    Understand how runok evaluates rules and resolves conflicts.
-
-    [Rule Evaluation](/rule-evaluation/overview/)
-
-  </Card>
-  <Card title="Sandbox" icon="random">
-    Run allowed commands in a restricted sandbox environment.
-
-    [Sandbox](/sandbox/overview/)
-
-  </Card>
   <Card title="CLI Reference" icon="laptop">
     Reference for `runok check`, `runok exec`, and other commands.
 
     [CLI Reference](/cli/overview/)
 
   </Card>
-  <Card title="Extensions" icon="puzzle">
-    Extend runok with custom plugins via JSON-RPC.
-
-    [Extensions](/extensions/overview/)
-
-  </Card>
-  <Card title="Architecture" icon="open-book">
-    Internal architecture and design decisions.
-
-    [Architecture](/architecture/overview/)
-
-  </Card>
-  <Card title="Recipes" icon="list-format">
-    Practical configuration examples for common use cases.
-
-    [Recipes](/recipes/overview/)
-
-  </Card>
-  <Card title="Troubleshooting" icon="warning">
-    Common issues and debugging tips.
-
-    [Debugging](/troubleshooting/debugging/) | [Common Issues](/troubleshooting/common-issues/)
-
-  </Card>
 </CardGrid>
+
+<LinkCard title="Recipes" href="/recipes/overview/" description="Practical configuration examples for common use cases." />
+<LinkCard title="Troubleshooting" href="/troubleshooting/debugging/" description="Common issues and debugging tips." />
