@@ -55,23 +55,17 @@ For the full list of configuration options (file locations, wrapper definitions,
 Use `runok check` to test how runok evaluates commands without executing them:
 
 ```sh
-# This should be allowed
+# This should print "allow"
 runok check -- git status
 
-# This should be denied
+# This should print "deny"
 runok check -- git push --force origin main
 
-# This should ask for confirmation
+# This should print "ask"
 runok check -- git push origin main
 ```
 
-The exit code indicates the result:
-
-| Exit code | Meaning |
-| --------- | ------- |
-| `0`       | Allowed |
-| `1`       | Denied  |
-| `2`       | Ask     |
+The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-format json` for machine-readable output.
 
 ## Next steps
 
