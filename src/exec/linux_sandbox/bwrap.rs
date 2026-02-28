@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::policy::SandboxPolicy;
+use crate::exec::command_executor::SandboxPolicy;
 
 /// Build bubblewrap command-line arguments for namespace isolation.
 ///
@@ -10,11 +10,11 @@ use crate::policy::SandboxPolicy;
 /// - Re-bind read-only subpaths as read-only (overriding writable)
 /// - Bind-mount /proc, /dev, /tmp as needed
 /// - Set working directory
-/// - Execute the helper binary itself with --apply-sandbox-then-exec for stage 2
+/// - Execute the runok binary itself with `__sandbox-exec --apply-sandbox-then-exec` for stage 2
 pub fn build_bwrap_args(
     policy: &SandboxPolicy,
     cwd: &Path,
-    helper_binary: &Path,
+    self_exe: &Path,
     policy_json: &str,
     command: &[String],
 ) -> Vec<String> {
@@ -74,9 +74,10 @@ pub fn build_bwrap_args(
     // Set working directory
     args.extend(["--chdir".to_string(), cwd.to_string_lossy().to_string()]);
 
-    // Execute the helper binary in stage 2 mode
+    // Execute the runok binary in stage 2 mode via hidden subcommand
     args.push("--".to_string());
-    args.push(helper_binary.to_string_lossy().to_string());
+    args.push(self_exe.to_string_lossy().to_string());
+    args.push("__sandbox-exec".to_string());
     args.push("--apply-sandbox-then-exec".to_string());
     args.push("--policy".to_string());
     args.push(policy_json.to_string());
@@ -109,7 +110,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -124,7 +125,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -140,7 +141,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -162,7 +163,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/tmp"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -173,13 +174,17 @@ mod tests {
     }
 
     #[rstest]
-    fn bwrap_args_contain_stage2_flag(test_policy: SandboxPolicy) {
+    fn bwrap_args_contain_stage2_subcommand_and_flag(test_policy: SandboxPolicy) {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["git".to_string(), "status".to_string()],
+        );
+        assert!(
+            args.iter().any(|a| a == "__sandbox-exec"),
+            "should contain __sandbox-exec subcommand"
         );
         assert!(
             args.iter().any(|a| a == "--apply-sandbox-then-exec"),
@@ -192,7 +197,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["git".to_string(), "status".to_string()],
         );
@@ -210,7 +215,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -231,7 +236,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/home/user"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -251,7 +256,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/tmp"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -271,7 +276,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -291,7 +296,7 @@ mod tests {
         let args = build_bwrap_args(
             &policy,
             Path::new("/tmp/myproject"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -306,7 +311,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
@@ -325,7 +330,7 @@ mod tests {
         let args = build_bwrap_args(
             &test_policy,
             Path::new("/home/user/project"),
-            Path::new("/usr/bin/runok-linux-sandbox"),
+            Path::new("/usr/bin/runok"),
             "{}",
             &["ls".to_string()],
         );
