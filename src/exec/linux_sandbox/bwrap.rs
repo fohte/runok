@@ -43,7 +43,7 @@ pub fn build_bwrap_args(
             // Glob patterns are expanded at mount-setup time, so files created
             // after the sandbox starts will not be protected by --ro-bind.
             eprintln!(
-                "runok-linux-sandbox: warning: glob deny pattern {path_str:?} is expanded \
+                "warning: glob deny pattern {path_str:?} is expanded \
                  before sandbox execution; files created later will not be protected. \
                  Use literal paths for complete coverage."
             );
@@ -133,7 +133,7 @@ fn expand_and_ro_bind(pattern: &str, args: &mut Vec<String>) {
         for entry in paths {
             if count >= MAX_GLOB_MATCHES {
                 eprintln!(
-                    "runok-linux-sandbox: warning: glob pattern {pattern:?} matched \
+                    "warning: glob pattern {pattern:?} matched \
                      more than {MAX_GLOB_MATCHES} paths; remaining matches are ignored"
                 );
                 return;
