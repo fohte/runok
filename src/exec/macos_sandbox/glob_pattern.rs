@@ -76,32 +76,35 @@ pub(super) fn glob_to_sbpl_regex(pattern: &str) -> String {
             }
         } else if chars[i] == '{' {
             // Convert brace expansion `{a,b,c}` to alternation `(a|b|c)`.
-            // Each alternative is recursively converted through the same rules.
-            i += 1;
-            let mut alternatives: Vec<String> = Vec::new();
-            let mut current = String::new();
-            let mut depth = 1;
-            while i < len && depth > 0 {
-                if chars[i] == '{' {
-                    current.push(chars[i]);
-                    depth += 1;
-                } else if chars[i] == '}' {
-                    depth -= 1;
-                    if depth == 0 {
-                        alternatives.push(current);
-                        current = String::new();
-                    } else {
-                        current.push(chars[i]);
+            // Use shared expand_braces to extract alternatives, then convert each
+            // through glob_to_sbpl_regex.
+            //
+            // Extract the brace group from the current position and expand it in
+            // isolation so that we get the individual alternatives without
+            // prefix/suffix interference.
+            let mut depth = 0;
+            let mut close = i;
+            for (j, &c) in chars.iter().enumerate().skip(i) {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = j;
+                            break;
+                        }
                     }
-                } else if chars[i] == ',' && depth == 1 {
-                    alternatives.push(current);
-                    current = String::new();
-                } else {
-                    current.push(chars[i]);
+                    _ => {}
                 }
-                i += 1;
             }
-            // Convert each alternative through glob_to_sbpl_regex and strip the `^` anchor
+            if close == i {
+                // Unmatched `{` — treat as literal
+                regex.push_str(r"\{");
+                i += 1;
+                continue;
+            }
+            let brace_group: String = chars[i..=close].iter().collect();
+            let alternatives = crate::exec::glob_utils::expand_braces(&brace_group);
             let alt_regexes: Vec<String> = alternatives
                 .iter()
                 .map(|alt| {
@@ -113,6 +116,7 @@ pub(super) fn glob_to_sbpl_regex(pattern: &str) -> String {
             regex.push('(');
             regex.push_str(&alt_regexes.join("|"));
             regex.push(')');
+            i = close + 1;
         } else if is_regex_metachar(chars[i]) {
             regex.push('\\');
             regex.push(chars[i]);
@@ -269,7 +273,7 @@ mod tests {
         &[],
     )]
     #[case::brace_nested(
-        "{a,{b,c}}", "^(a|(b|c))",
+        "{a,{b,c}}", "^(a|b|c)",
         &["a", "b", "c"],
         &["d"],
     )]
@@ -292,6 +296,12 @@ mod tests {
     #[case::plus_escaped("a+b", r"^a\+b", &["a+b"], &["aab"])]
     #[case::parens_escaped("(test)", r"^\(test\)", &["(test)"], &["test"])]
     #[case::pipe_escaped("a|b", r"^a\|b", &["a|b"], &[])]
+    // --- unmatched brace ---
+    #[case::unmatched_brace(
+        "{unclosed", r"^\{unclosed",
+        &["{unclosed"],
+        &["unclosed"],
+    )]
     // --- misc ---
     #[case::empty_pattern("", "^", &[], &[])]
     #[case::star_and_question(
