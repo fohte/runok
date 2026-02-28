@@ -14,10 +14,10 @@ Wrapped command patterns are defined in the `definitions.wrappers` section of yo
 ```yaml
 definitions:
   wrappers:
-    - pattern: 'bash -c <cmd>'
-    - pattern: 'sudo <cmd>'
-    - pattern: 'xargs <cmd>'
-    - pattern: 'env * <cmd>'
+    - 'bash -c <cmd>'
+    - 'sudo <cmd>'
+    - 'xargs <opts> <cmd>'
+    - 'env <opts> <vars> <cmd>'
 ```
 
 The `<cmd>` placeholder captures one or more tokens. For single-token captures (like `bash -c "ls -la"`), the captured string is passed as-is for further parsing. For multi-token captures (like `sudo ls -la`), the tokens are re-quoted using shell quoting rules before evaluation.
@@ -40,8 +40,8 @@ Config:
 ```yaml
 definitions:
   wrappers:
-    - pattern: 'sudo <cmd>'
-    - pattern: 'bash -c <cmd>'
+    - 'sudo <cmd>'
+    - 'bash -c <cmd>'
 
 rules:
   - allow: 'sudo *'
@@ -83,7 +83,7 @@ When the wrapped command extracted via `<cmd>` is a compound command (containing
 ```yaml
 definitions:
   wrappers:
-    - pattern: 'bash -c <cmd>'
+    - 'bash -c <cmd>'
 
 rules:
   - allow: 'ls *'
@@ -106,14 +106,7 @@ The depth counter increments each time a wrapped command is extracted and evalua
 
 ## Ambiguous captures
 
-Some patterns like `xargs * <cmd>` have ambiguous captures — the wildcard could consume varying numbers of tokens, leaving different wrapped commands for `<cmd>`. runok handles this by trying all possible captures and selecting the one with the **highest action priority** (most restrictive).
-
-For example, with `xargs -I{} rm -rf {}`:
-
-- Capture 1: wildcard consumes `-I{}`, wrapped command = `rm -rf {}`
-- Capture 2: wildcard consumes `-I{} rm`, wrapped command = `-rf {}`
-
-Each capture is evaluated and the most restrictive result is used.
+When a wrapper pattern uses placeholders like `<opts>`, the placeholder consumes matching tokens (e.g., flag-like tokens starting with `-`) and the remaining tokens become the wrapped command via `<cmd>`. If a wildcard `*` is used instead of `<opts>`, multiple split points are possible, and runok tries all captures and selects the one with the **highest action priority** (most restrictive).
 
 ## Default action resolution
 

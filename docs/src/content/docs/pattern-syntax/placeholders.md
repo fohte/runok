@@ -23,16 +23,6 @@ The `<cmd>` placeholder captures the **remaining tokens** as the wrapped command
 - allow: 'sudo <cmd>'
 ```
 
-When combined with a wildcard, `<cmd>` tries all possible split points:
-
-```yaml
-# xargs -I{} echo hello -> tries:
-#   wrapped command = "-I{} echo hello"
-#   wrapped command = "echo hello"
-#   wrapped command = "hello"
-- allow: 'xargs * <cmd>'
-```
-
 ### Defining Wrappers
 
 Wrapper patterns are defined in the `definitions` block and referenced by rules:
@@ -40,8 +30,8 @@ Wrapper patterns are defined in the `definitions` block and referenced by rules:
 ```yaml
 definitions:
   wrappers:
-    - pattern: 'sudo <cmd>'
-    - pattern: 'xargs * <cmd>'
+    - 'sudo <cmd>'
+    - 'xargs <opts> <cmd>'
 
 rules:
   - allow: 'echo *'
@@ -164,13 +154,13 @@ Placeholders can be combined to handle complex wrapper patterns:
 definitions:
   wrappers:
     # Handles: env [-i] [-u NAME] [KEY=VALUE...] command [args...]
-    - pattern: 'env <opts> <vars> <cmd>'
+    - 'env <opts> <vars> <cmd>'
 
     # Handles: sudo [-u user] command [args...]
-    - pattern: 'sudo <opts> <cmd>'
+    - 'sudo <opts> <cmd>'
 
     # Handles: xargs [flags...] command [args...]
-    - pattern: 'xargs <opts> <cmd>'
+    - 'xargs <opts> <cmd>'
 ```
 
 ## Restrictions

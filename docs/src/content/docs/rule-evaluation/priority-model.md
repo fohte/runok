@@ -67,7 +67,7 @@ For example:
 ```yaml
 definitions:
   wrappers:
-    - pattern: 'sudo <cmd>'
+    - 'sudo <cmd>'
 
 rules:
   - allow: 'sudo *'
