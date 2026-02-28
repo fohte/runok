@@ -97,6 +97,12 @@ pub(super) fn glob_to_sbpl_regex(pattern: &str) -> String {
                     _ => {}
                 }
             }
+            if close == i {
+                // Unmatched `{` — treat as literal
+                regex.push_str(r"\{");
+                i += 1;
+                continue;
+            }
             let brace_group: String = chars[i..=close].iter().collect();
             let alternatives = crate::exec::glob_utils::expand_braces(&brace_group);
             let alt_regexes: Vec<String> = alternatives
@@ -290,6 +296,12 @@ mod tests {
     #[case::plus_escaped("a+b", r"^a\+b", &["a+b"], &["aab"])]
     #[case::parens_escaped("(test)", r"^\(test\)", &["(test)"], &["test"])]
     #[case::pipe_escaped("a|b", r"^a\|b", &["a|b"], &[])]
+    // --- unmatched brace ---
+    #[case::unmatched_brace(
+        "{unclosed", r"^\{unclosed",
+        &["{unclosed"],
+        &["unclosed"],
+    )]
     // --- misc ---
     #[case::empty_pattern("", "^", &[], &[])]
     #[case::star_and_question(
