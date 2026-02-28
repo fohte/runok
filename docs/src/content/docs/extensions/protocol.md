@@ -153,7 +153,7 @@ Extension output is sanitized before display. ASCII control characters (except `
 
 ## Executor command
 
-The extension process is specified via the `executor` field in the configuration. runok uses shell-style tokenization (`shlex`) to parse the command:
+The extension process is specified via the `executor` field in the [configuration](/configuration/schema/). runok uses shell-style tokenization (`shlex`) to parse the command:
 
 ```yaml
 types:

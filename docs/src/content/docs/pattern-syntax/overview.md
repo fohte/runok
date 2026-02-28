@@ -60,3 +60,7 @@ The first token is always the command name. The remaining tokens define the argu
 - [Optional Groups](/pattern-syntax/optional-groups/) — Tokens that may or may not be present
 - [Placeholders](/pattern-syntax/placeholders/) — `<cmd>`, `<opts>`, `<vars>`, `<path:...>` placeholders
 - [Matching Behavior](/pattern-syntax/matching-behavior/) — Flag inference, order-independent matching, and combined short flags
+
+:::note
+Pattern syntax and [`when` expressions](/configuration/schema/#when) work on string tokens. If you need to parse structured arguments (e.g., GraphQL queries, URLs), see [Extensions](/extensions/overview/).
+:::

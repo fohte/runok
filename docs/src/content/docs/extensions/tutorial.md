@@ -46,7 +46,7 @@ chmod +x checks/env_guard.sh
 
 ## Step 2: Configure runok
 
-Add the extension to your `runok.yml`:
+Add the extension to your [`runok.yml`](/configuration/schema/):
 
 ```yaml
 types:
