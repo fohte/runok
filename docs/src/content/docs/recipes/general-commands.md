@@ -189,6 +189,8 @@ The `definitions.paths.sensitive` list defines files that should never be access
 wrappers:
   - 'sudo <cmd>'
   - 'bash -c <cmd>'
+  - 'sh -c <cmd>'
+  - 'xargs <cmd>'
 ```
 
 When a command is wrapped (e.g., `sudo rm -rf /`), runok unwraps it and evaluates the inner command (`rm -rf /`) against your rules. The `<cmd>` placeholder captures the inner command.

@@ -105,13 +105,11 @@ rules:
     message: 'Direct push to main is not allowed. Use a pull request.'
 ```
 
-### Allow rebase for local branches
+### Allow only interactive rebase
 
-If you want to allow rebase but only for local work (not on shared branches):
+If you want to allow interactive rebase while prompting for other rebase commands, simply add an allow rule. Other rebase invocations fall through to the default `ask` action:
 
 ```yaml
 rules:
   - allow: 'git [-C *] rebase -i|--interactive *'
-  - deny: 'git [-C *] rebase *'
-    message: 'Non-interactive rebase is not allowed.'
 ```
