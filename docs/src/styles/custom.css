@@ -51,6 +51,11 @@
   --sl-border-radius: 0;
 }
 
+/* Improve underline legibility */
+a {
+  text-underline-offset: 0.25em;
+}
+
 /* Sidebar active indicator */
 nav.sidebar a[aria-current='page'] {
   border-inline-start: 2px solid var(--sl-color-white);
