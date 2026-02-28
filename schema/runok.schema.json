@@ -4,16 +4,6 @@
   "description": "Top-level runok configuration.",
   "type": "object",
   "properties": {
-    "extends": {
-      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>@<ref>`).",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "type": "string"
-      }
-    },
     "defaults": {
       "description": "Default settings applied when no rule matches.",
       "anyOf": [
@@ -25,16 +15,6 @@
         }
       ]
     },
-    "rules": {
-      "description": "Ordered list of permission rules evaluated against each command.",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/$defs/RuleEntry"
-      }
-    },
     "definitions": {
       "description": "Reusable definitions for paths, sandbox presets, wrappers, and commands.",
       "anyOf": [
@@ -45,9 +25,38 @@
           "type": "null"
         }
       ]
+    },
+    "extends": {
+      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>@<ref>`).",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules": {
+      "description": "Ordered list of permission rules evaluated against each command.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/RuleEntry"
+      }
     }
   },
   "$defs": {
+    "ActionKind": {
+      "description": "Permission action kind.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ]
+    },
     "Defaults": {
       "description": "Default settings applied when no rule matches a command.",
       "type": "object",
@@ -72,140 +81,20 @@
         }
       }
     },
-    "ActionKind": {
-      "description": "Permission action kind.",
-      "type": "string",
-      "enum": [
-        "allow",
-        "ask",
-        "deny"
-      ]
-    },
-    "RuleEntry": {
-      "description": "A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "deny": {
-              "description": "Command pattern to deny. Matched commands are rejected.",
-              "type": "string"
-            },
-            "when": {
-              "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "message": {
-              "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "fix_suggestion": {
-              "description": "Suggested fix command shown when a deny rule matches.",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "deny"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "allow": {
-              "description": "Command pattern to allow. Matched commands are permitted.",
-              "type": "string"
-            },
-            "when": {
-              "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "message": {
-              "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "fix_suggestion": {
-              "description": "Suggested fix command shown when a deny rule matches.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sandbox": {
-              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "allow"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "ask": {
-              "description": "Command pattern to ask about. Matched commands prompt for confirmation.",
-              "type": "string"
-            },
-            "when": {
-              "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "message": {
-              "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "fix_suggestion": {
-              "description": "Suggested fix command shown when a deny rule matches.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sandbox": {
-              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "ask"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
     "Definitions": {
       "description": "Reusable definitions for paths, sandbox presets, wrappers, and commands.",
       "type": "object",
       "properties": {
+        "commands": {
+          "description": "Additional command patterns to recognize.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "paths": {
           "description": "Named path lists referenced by `<path:name>` in sandbox deny rules.",
           "type": [
@@ -238,9 +127,25 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "FsPolicy": {
+      "description": "Filesystem access policy within a sandbox preset.",
+      "type": "object",
+      "properties": {
+        "deny": {
+          "description": "Paths the sandboxed process is denied access to. Supports `<path:name>` references.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
-        "commands": {
-          "description": "Additional command patterns to recognize.",
+        "writable": {
+          "description": "Directories the sandboxed process is allowed to write to.",
           "type": [
             "array",
             "null"
@@ -250,6 +155,140 @@
           }
         }
       }
+    },
+    "NetworkPolicy": {
+      "description": "Network access policy within a sandbox preset.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Whether network access is allowed.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "RuleEntry": {
+      "description": "A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "deny": {
+              "description": "Command pattern to deny. Matched commands are rejected.",
+              "type": "string"
+            },
+            "fix_suggestion": {
+              "description": "Suggested fix command shown when a deny rule matches.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "description": "Message shown when the rule matches (primarily for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "when": {
+              "description": "CEL expression that must evaluate to true for this rule to apply.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "deny"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "description": "Command pattern to allow. Matched commands are permitted.",
+              "type": "string"
+            },
+            "fix_suggestion": {
+              "description": "Suggested fix command shown when a deny rule matches.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "description": "Message shown when the rule matches (primarily for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sandbox": {
+              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "when": {
+              "description": "CEL expression that must evaluate to true for this rule to apply.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "allow"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ask": {
+              "description": "Command pattern to ask about. Matched commands prompt for confirmation.",
+              "type": "string"
+            },
+            "fix_suggestion": {
+              "description": "Suggested fix command shown when a deny rule matches.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "description": "Message shown when the rule matches (primarily for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sandbox": {
+              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "when": {
+              "description": "CEL expression that must evaluate to true for this rule to apply.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ask"
+          ]
+        }
+      ]
     },
     "SandboxPreset": {
       "description": "Sandbox preset defining filesystem and network restrictions.",
@@ -275,45 +314,6 @@
             {
               "type": "null"
             }
-          ]
-        }
-      }
-    },
-    "FsPolicy": {
-      "description": "Filesystem access policy within a sandbox preset.",
-      "type": "object",
-      "properties": {
-        "writable": {
-          "description": "Directories the sandboxed process is allowed to write to.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "deny": {
-          "description": "Paths the sandboxed process is denied access to. Supports `<path:name>` references.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "NetworkPolicy": {
-      "description": "Network access policy within a sandbox preset.",
-      "type": "object",
-      "properties": {
-        "allow": {
-          "description": "Whether network access is allowed.",
-          "type": [
-            "boolean",
-            "null"
           ]
         }
       }
