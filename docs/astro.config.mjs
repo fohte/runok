@@ -61,7 +61,7 @@ export default defineConfig({
         },
         {
           label: 'Troubleshooting',
-          slug: 'troubleshooting',
+          autogenerate: { directory: 'troubleshooting' },
         },
       ],
     }),
