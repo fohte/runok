@@ -141,6 +141,10 @@ CEL (Common Expression Language) expression that must evaluate to `true` for thi
   when: "env.CI == 'true'"
 ```
 
+:::tip
+`when` expressions work on parsed tokens (flags, args, environment variables). For validation that requires deeper argument parsing -- such as inspecting a GraphQL query string or parsing a URL -- use an [extension](/extensions/overview/) instead.
+:::
+
 ##### `message`
 
 Message shown to the user when the rule matches. Primarily useful for `deny` rules to explain why a command is blocked. See [Denial Feedback](/configuration/denial-feedback/) for usage examples.
