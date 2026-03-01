@@ -324,3 +324,58 @@ fn flag_with_value_position_independence(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Path ref + alternation + wildcard combination
+// ========================================
+
+#[rstest]
+#[case::cat_sensitive_denied("cat .env", assert_deny as ActionAssertion)]
+#[case::less_sensitive_denied("less /etc/passwd", assert_deny as ActionAssertion)]
+#[case::head_sensitive_denied("head .envrc", assert_deny as ActionAssertion)]
+#[case::cat_safe_default("cat README.md", assert_default as ActionAssertion)]
+#[case::vim_sensitive_default("vim .env", assert_default as ActionAssertion)]
+fn path_ref_with_alternation_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cat|less|head <path:sensitive>'
+        definitions:
+          paths:
+            sensitive:
+              - .env
+              - .envrc
+              - /etc/passwd
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Optional notation + negation combination
+// ========================================
+
+#[rstest]
+#[case::force_push_main_denied("git push --force main", assert_deny as ActionAssertion)]
+#[case::force_push_master_denied("git push -f master", assert_deny as ActionAssertion)]
+#[case::force_push_develop_default("git push --force develop", assert_default as ActionAssertion)]
+#[case::normal_push_main_default("git push main", assert_default as ActionAssertion)]
+fn optional_flag_with_negation(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'git push -f|--force main|master'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

@@ -595,3 +595,164 @@ fn wrapper_inner_compound_all_sub_wrappers_allowed(empty_context: EvalContext) {
     .unwrap();
     assert_eq!(result.action, Action::Allow);
 }
+
+// ========================================
+// Wrapper + sandbox: inner command's sandbox preset survives
+// when no direct rule matches the wrapper command
+// ========================================
+
+#[rstest]
+fn wrapper_preserves_inner_sandbox_preset(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: restricted
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+          sandbox_presets:
+            restricted:
+              writable:
+                - /tmp
+              deny:
+                - /etc
+              network: false
+    "})
+    .unwrap();
+
+    // sudo python3 script.py -> no direct rule for "sudo *",
+    // wrapper unwraps to "python3 script.py" -> allow with sandbox "restricted"
+    let result = evaluate_command(&config, "sudo python3 script.py", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.sandbox_preset.as_deref(), Some("restricted"));
+}
+
+// ========================================
+// Wrapper + sandbox: direct rule overrides inner sandbox
+// when direct rule has higher priority
+// ========================================
+
+#[rstest]
+fn wrapper_direct_rule_overrides_inner_sandbox(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'sudo *'
+          - allow: 'python3 *'
+            sandbox: restricted
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+          sandbox_presets:
+            restricted:
+              writable:
+                - /tmp
+              deny:
+                - /etc
+              network: false
+    "})
+    .unwrap();
+
+    // sudo python3 script.py:
+    // - direct: "sudo *" -> Ask (priority 2)
+    // - wrapper: "python3 *" -> Allow (priority 1) with sandbox "restricted"
+    // - merge_results: Ask wins (higher priority), its sandbox_preset (None) is used
+    let result = evaluate_command(&config, "sudo python3 script.py", &empty_context).unwrap();
+    assert!(
+        matches!(result.action, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        result.action
+    );
+    assert_eq!(result.sandbox_preset, None);
+}
+
+// ========================================
+// bash -c with double quotes: same behavior as single quotes
+// ========================================
+
+#[rstest]
+#[case::single_quoted(r#"bash -c 'echo hello'"#, assert_allow as ActionAssertion)]
+#[case::double_quoted(r#"bash -c "echo hello""#, assert_allow as ActionAssertion)]
+fn bash_c_double_vs_single_quotes(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Wrapper without <cmd> placeholder: no recursive evaluation
+// ========================================
+
+#[rstest]
+fn wrapper_without_cmd_placeholder_no_recurse(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'time *'
+    "})
+    .unwrap();
+
+    // "time ls -la": time * matches as wrapper but has no <cmd>,
+    // so no recursive evaluation occurs. "time" itself has no rule -> Default
+    let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// Wrapper + compound + sandbox: multiple sandbox sub-commands
+// ========================================
+
+#[rstest]
+fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: py_sandbox
+          - allow: 'node *'
+            sandbox: node_sandbox
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+          sandbox_presets:
+            py_sandbox:
+              writable:
+                - /tmp
+                - /var/lib/python
+              deny:
+                - /etc
+              network: false
+            node_sandbox:
+              writable:
+                - /tmp
+                - /var/lib/node
+              deny:
+                - /etc
+                - /sys
+              network: false
+    "})
+    .unwrap();
+
+    // bash -c 'python3 a.py && node b.js'
+    // -> compound: python3 a.py (sandbox: py_sandbox) && node b.js (sandbox: node_sandbox)
+    // -> sandbox merge_strictest: writable=[/tmp] (intersection), deny=[/etc, /sys] (union)
+    let result = evaluate_command(
+        &config,
+        "bash -c 'python3 a.py && node b.js'",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
