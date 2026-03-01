@@ -1,0 +1,57 @@
+---
+title: Installation
+description: How to install runok on macOS and Linux.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+runok supports **macOS** and **Linux**. Choose the installation method that suits your environment.
+
+## From source (cargo)
+
+If you have a Rust toolchain installed, you can install runok directly from the Git repository:
+
+```sh
+cargo install --git https://github.com/fohte/runok.git
+```
+
+This builds and installs the `runok` binary into your Cargo bin directory (typically `~/.cargo/bin/`).
+
+## From GitHub Releases
+
+Pre-built binaries are available on the [GitHub Releases](https://github.com/fohte/runok/releases) page.
+
+<Tabs syncKey="os">
+  <TabItem label="macOS (Apple Silicon)">
+    ```sh
+    curl -fsSL https://github.com/fohte/runok/releases/latest/download/runok-aarch64-apple-darwin.tar.gz | tar xz
+    sudo mv runok /usr/local/bin/
+    ```
+  </TabItem>
+  <TabItem label="Linux (x86_64)">
+    ```sh
+    curl -fsSL https://github.com/fohte/runok/releases/latest/download/runok-x86_64-unknown-linux-gnu.tar.gz | tar xz
+    sudo mv runok /usr/local/bin/
+    ```
+  </TabItem>
+  <TabItem label="Linux (aarch64)">
+    ```sh
+    curl -fsSL https://github.com/fohte/runok/releases/latest/download/runok-aarch64-unknown-linux-gnu.tar.gz | tar xz
+    sudo mv runok /usr/local/bin/
+    ```
+  </TabItem>
+</Tabs>
+
+## Verify installation
+
+After installation, verify that runok is available:
+
+```sh
+runok --version
+```
+
+## Next steps
+
+Proceed to the [Quick Start](/getting-started/quickstart/) to create your first `runok.yml` configuration.

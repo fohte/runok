@@ -1,0 +1,29 @@
+{
+  "name": "runok-docs",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.37.6",
+    "astro": "5.18.0",
+    "sharp": "0.33.5",
+    "starlight-links-validator": "0.19.2",
+    "starlight-llms-txt": "0.7.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ]
+  },
+  "devDependencies": {
+    "wrangler": "4.69.0"
+  }
+}
