@@ -84,7 +84,7 @@ This is how `deny: "curl -X POST"` teaches runok that `-X`/`--request` is a flag
 
 ### FlagSchema inference
 
-The parser's output drives **FlagSchema** construction in the rule engine. By examining which patterns have `FlagWithValue` tokens, runok infers which flags take values and which are boolean — without needing an explicit flag definition file. This is core to the [Pattern-Driven Parsing](../design-decisions/#pattern-driven-parsing) design principle.
+The parser's output drives **FlagSchema** construction in the rule engine. By examining which patterns have `FlagWithValue` tokens, runok infers which flags take values and which are boolean — without needing an explicit flag definition file. This is core to the [Pattern-Driven Parsing](/architecture/design-decisions/#pattern-driven-parsing) design principle.
 
 ## Layer 3: Matcher
 

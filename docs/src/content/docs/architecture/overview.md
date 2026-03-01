@@ -35,14 +35,14 @@ The command parser ([`src/rules/command_parser.rs`](https://github.com/fohte/run
 - **Tokenization**: Shell-aware splitting that respects single/double quotes and backslash escapes.
 - **Compound command splitting**: Uses `tree-sitter-bash` to decompose pipelines (`|`), logical operators (`&&`, `||`), semicolons (`;`), subshells, loops, conditionals, and command substitutions into individual commands.
 
-Each individual command is then structurally parsed using a `FlagSchema` inferred from rule patterns (see [Pattern Matching](../pattern-matching/)).
+Each individual command is then structurally parsed using a `FlagSchema` inferred from rule patterns (see [Pattern Matching](/architecture/pattern-matching/)).
 
 ### 3. Rule Evaluation
 
 The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
 
-- **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](../pattern-matching/), then any [`when` clauses](/rule-evaluation/when-clause/) are evaluated using a CEL expression evaluator.
-- **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](../design-decisions/#explicit-deny-wins) principle.
+- **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](/architecture/pattern-matching/), then any [`when` clauses](/rule-evaluation/when-clause/) are evaluated using a CEL expression evaluator.
+- **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](/architecture/design-decisions/#explicit-deny-wins) principle.
 - **Wrapper commands**: If a command matches a wrapper definition (e.g., `bash -c <cmd>`, `sudo <cmd>`), the inner command captured by the `<cmd>` placeholder is recursively evaluated (max depth 10).
 
 ### 4. Action Decision
