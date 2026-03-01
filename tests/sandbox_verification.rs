@@ -1,7 +1,7 @@
 //! Integration tests that verify the Linux sandbox actually enforces restrictions.
 //!
-//! These tests build and run the `runok-linux-sandbox` helper binary with various
-//! policies, verifying that filesystem writes, read-only subpaths, and network
+//! These tests build and run the `runok` binary with the `__sandbox-exec`
+//! subcommand, verifying that filesystem writes, read-only subpaths, and network
 //! access are properly restricted by the bubblewrap + landlock + seccomp stack.
 //!
 //! Requirements:
@@ -10,16 +10,22 @@
 //! - Kernel support for landlock (5.13+) and seccomp
 
 #![cfg(target_os = "linux")]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "integration test helpers use expect/unwrap for brevity"
+)]
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use rstest::rstest;
-use runok_linux_sandbox::policy::SandboxPolicy;
+use runok::exec::command_executor::SandboxPolicy;
 
-/// Path to the helper binary, provided by Cargo for integration tests.
-fn helper_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_runok-linux-sandbox"))
+/// Path to the runok binary, provided by Cargo for integration tests.
+fn runok_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_runok"))
 }
 
 /// Check if bubblewrap is available on the system.
@@ -33,12 +39,13 @@ fn bwrap_available() -> bool {
 
 /// Run a command inside the sandbox with the given policy.
 ///
-/// Returns the exit code of the helper binary.
+/// Returns the exit code of the runok binary.
 fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
     let policy_json = serde_json::to_string(policy).expect("failed to serialize policy");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
 
     let mut args = vec![
+        "__sandbox-exec".to_string(),
         "--policy".to_string(),
         policy_json,
         "--cwd".to_string(),
@@ -47,10 +54,10 @@ fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
     ];
     args.extend(command.iter().map(|s| s.to_string()));
 
-    let output = Command::new(helper_binary())
+    let output = Command::new(runok_binary())
         .args(&args)
         .output()
-        .expect("failed to execute helper binary");
+        .expect("failed to execute runok binary");
 
     output.status.code().unwrap_or(1)
 }

@@ -6,7 +6,7 @@ use seccompiler::{
     SeccompRule,
 };
 
-use crate::error::SandboxError;
+use super::error::SandboxError;
 
 /// Apply seccomp filters to block network access (except AF_UNIX).
 ///
