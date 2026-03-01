@@ -12,145 +12,91 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-Command execution permission framework for LLM agents, primarily designed for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+<p align="center">
+  <a href="https://runok.fohte.net">Documentation</a> &middot;
+  <a href="https://runok.fohte.net/getting-started/quickstart/">Quick Start</a> &middot;
+  <a href="https://runok.fohte.net/configuration/schema/">Configuration</a> &middot;
+  <a href="https://runok.fohte.net/recipes/overview/">Recipes</a>
+</p>
 
-runok replaces Claude Code's built-in Bash tool permission system with a more powerful alternative. Define intuitive rules using the commands you already know, and runok handles allow/deny/ask decisions with structural matching that goes beyond simple prefix matching. While built with Claude Code as the primary target, runok also works with other LLM agents via its generic check interface.
+runok is a command permission tool for LLM coding agents.
 
 ## Why runok?
 
-Claude Code's built-in permission system has limitations:
+Even with allow rules configured, Claude Code asks for confirmation in cases like these:
 
-- **Prefix-only matching** -- `git push -f` can be bypassed with `git push branch -f`
-- **No pipe awareness** -- permissions don't apply inside piped commands
-- **Wrapper command blind spots** -- `sudo`, `bash -c`, `xargs` bypass permission rules
-- **Shell parsing bugs** -- comments, `for` loops, and special characters cause misbehavior
+```sh
+# Claude adds a comment before the command -- no longer matches your allow rule
+⏺ Bash(# check logs
+      git log --oneline -5)
+  ⎿  Running…
 
-runok solves these by providing structural (order-independent) argument matching, wrapper command unwrapping, and OS-level sandboxing -- all integrated via Claude Code's PreToolUse hook.
+Command contains newlines that could separate multiple commands
+
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+```
+
+```sh
+# Claude chains commands with && -- same problem
+⏺ Bash(git log --oneline -5 && echo "---" && git status)
+  ⎿  Running…
+
+Command contains quoted characters in flag names
+
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+```
+
+runok parses commands with `tree-sitter-bash`, so comments, compound commands (`&&`, `|`, `;`), and wrapper commands (`sudo`, `bash -c`, `xargs`) are all handled correctly. Each sub-command is evaluated independently against your rules.
 
 ## Features
 
-- **Intuitive rule syntax** -- write rules as commands you already know (`deny: "git push -f|--force *"`)
-- **Structural matching** -- argument-order-independent matching with alias support (`-X|--request`)
-- **Three actions** -- `allow`, `deny`, `ask` with Explicit Deny Wins priority (like AWS IAM)
-- **Wrapper command unwrapping** -- recursively evaluate commands inside `bash -c`, `sudo`, `xargs`, etc.
-- **OS-level sandboxing** -- restrict file and network access via macOS Seatbelt or Linux Landlock/seccomp
-- **Claude Code hook integration** -- use `runok check` as a PreToolUse hook
-- **Generic check interface** -- `runok check --command` works with any agent
-- **Preset sharing** -- share configs via `extends` with local paths or remote Git repositories
-- **Conditional rules** -- `when` clause with CEL expressions for environment-aware decisions
-- **Denial feedback** -- custom messages and fix suggestions when commands are denied
+**Flexible command parsing**
 
-## Installation
+- `tree-sitter-bash` AST parsing -- comments, pipes, `&&`, `;` are understood, not treated as opaque strings
+- `sudo`, `bash -c`, `xargs` are recursively unwrapped so rules apply to the inner command
 
-### From source (cargo)
+**Flexible rule configuration**
+
+- Wildcards, flag alternation (`-f|--force`), optional groups, argument-order-independent matching
+- Conditional `when` clauses with CEL expressions for environment-aware decisions
+- OS-level sandboxing (macOS Seatbelt / Linux Landlock) for file and network restrictions
+
+**And more** -- [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/)
+
+## Quick start
+
+### Install
 
 ```sh
 cargo install --git https://github.com/fohte/runok.git
 ```
 
-### From GitHub Releases
+Pre-built binaries are also available on [GitHub Releases](https://github.com/fohte/runok/releases). See [Installation](https://runok.fohte.net/getting-started/installation/) for details.
 
-Download the pre-built binary from [GitHub Releases](https://github.com/fohte/runok/releases) and place it in your `PATH`.
+### Configure
 
-## Usage
-
-### Configuration file
-
-Create a `runok.yml` in your project root or `~/.config/runok/runok.yml` for global settings:
+Create `~/.config/runok/runok.yml`:
 
 ```yaml
 rules:
-  # Allow safe read-only commands
   - allow: 'git status'
   - allow: 'git diff *'
   - allow: 'git log *'
-
-  # Allow curl GET requests
-  - allow: 'curl [-X|--request GET] *'
-
-  # Ask before push
   - ask: 'git push *'
-
-  # Never allow force push
   - deny: 'git push -f|--force *'
     message: 'Force push is not allowed'
-    fix_suggestion: 'git push --force-with-lease'
-
-  # Block production AWS operations
-  - deny: 'aws *'
-    when: "env.AWS_PROFILE == 'prod'"
-    message: 'Production AWS operations are not allowed'
-
-definitions:
-  # Define wrapper commands for recursive evaluation
-  wrappers:
-    - 'sudo <cmd>'
-    - 'bash -c <cmd>'
-    - 'sh -c <cmd>'
-    - 'xargs <cmd>'
-
-  # Named path lists for sandbox deny rules
-  paths:
-    sensitive:
-      - '.env*'
-      - '~/.ssh/**'
-      - '/etc/**'
-
-  # Sandbox presets
-  sandbox:
-    restricted:
-      fs:
-        writable: [./tmp, /tmp]
-        deny:
-          - '<path:sensitive>'
-      network:
-        allow: true
 
 defaults:
   action: ask
 ```
 
-### Rule priority
+### Integrate with Claude Code
 
-Rules are evaluated with **Explicit Deny Wins** priority:
-
-1. `deny` match -- command is rejected (overrides everything)
-2. `allow` match -- command is permitted
-3. `ask` match -- prompt for user confirmation
-4. No match -- falls back to `defaults.action` (default: `ask`)
-
-### Subcommands
-
-#### `runok check` -- Check command permissions
-
-Check whether a command would be allowed without executing it:
-
-```sh
-# Check a command directly
-runok check --command "git push origin main"
-
-# Read from stdin (plaintext)
-echo "git push -f origin main" | runok check
-
-# Claude Code PreToolUse hook format
-echo '{"toolName":"Bash","toolInput":{"command":"git status"},...}' | runok check --format claude-code-hook
-```
-
-#### `runok exec` -- Execute with permission checks
-
-Execute a command after checking permissions, with optional sandbox enforcement:
-
-```sh
-# Execute with permission check
-runok exec -- git status
-
-# Execute with sandbox
-runok exec --sandbox restricted -- python3 script.py
-```
-
-### Claude Code integration
-
-Add runok as a PreToolUse hook in your Claude Code settings (`.claude/settings.json`):
+Add runok as a PreToolUse hook in `.claude/settings.json`:
 
 ```json
 {
@@ -158,63 +104,27 @@ Add runok as a PreToolUse hook in your Claude Code settings (`.claude/settings.j
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": ["runok check --format claude-code-hook"]
+        "hooks": ["runok check --input-format claude-code-hook"]
       }
     ]
   }
 }
 ```
 
-### Pattern syntax
+See [Claude Code Integration](https://runok.fohte.net/getting-started/claude-code/) for sandbox setup and advanced configuration.
 
-| Syntax          | Meaning                             | Example                     |
-| --------------- | ----------------------------------- | --------------------------- |
-| `*`             | Match any arguments                 | `git push *`                |
-| `-X\|--request` | Alias/alternation (space-free `\|`) | `curl -X\|--request GET *`  |
-| `!`             | Negation                            | `curl -X\|--request !GET *` |
-| `[...]`         | Optional group                      | `git [-C *] status`         |
-| `<cmd>`         | Wrapper placeholder                 | `sudo <cmd>`                |
-| `<path:name>`   | Path list reference                 | `<path:sensitive>`          |
+### Verify
 
-## Configuration
-
-### File locations
-
-| Location                    | Scope                                              |
-| --------------------------- | -------------------------------------------------- |
-| `~/.config/runok/runok.yml` | Global (all projects)                              |
-| `./runok.yml`               | Project-local (overrides global)                   |
-| `./runok.local.yml`         | Personal override (overrides project, git-ignored) |
-
-All files recognize both `.yml` and `.yaml` extensions (`.yml` takes precedence).
-
-`runok.local.yml` is intended for personal, environment-specific settings that should not be committed to version control. Add it to your `.gitignore`:
-
-```gitignore
-runok.local.yml
-runok.local.yaml
+```sh
+runok check -- git status        # => allow
+runok check -- git push -f main  # => deny
+runok check -- git push main     # => ask
 ```
 
-### Presets (`extends`)
+## Full Documentation
 
-Share configurations across projects:
+See **[runok.fohte.net](https://runok.fohte.net)**
 
-```yaml
-extends:
-  - './local-rules.yml'
-  - 'github:<owner>/<repo>@<ref>'
-```
+## Feedback
 
-Remote presets are cached in `~/.cache/runok/` via shallow clone.
-
-### Editor integration (JSON Schema)
-
-A JSON Schema for `runok.yml` is available at [`schema/runok.schema.json`](schema/runok.schema.json). Add the following modeline to your `runok.yml` to enable autocompletion and validation in editors that support [yaml-language-server](https://github.com/redhat-developer/yaml-language-server):
-
-```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
-```
-
-## License
-
-MIT
+Feature requests and bug reports are welcome on [GitHub Issues](https://github.com/fohte/runok/issues).
