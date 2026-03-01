@@ -610,13 +610,13 @@ fn wrapper_preserves_inner_sandbox_preset(empty_context: EvalContext) {
         definitions:
           wrappers:
             - 'sudo <cmd>'
-          sandbox_presets:
+          sandbox:
             restricted:
-              writable:
-                - /tmp
-              deny:
-                - /etc
-              network: false
+              fs:
+                writable: [/tmp]
+                deny: [/etc]
+              network:
+                allow: false
     "})
     .unwrap();
 
@@ -642,13 +642,13 @@ fn wrapper_direct_rule_overrides_inner_sandbox(empty_context: EvalContext) {
         definitions:
           wrappers:
             - 'sudo <cmd>'
-          sandbox_presets:
+          sandbox:
             restricted:
-              writable:
-                - /tmp
-              deny:
-                - /etc
-              network: false
+              fs:
+                writable: [/tmp]
+                deny: [/etc]
+              network:
+                allow: false
     "})
     .unwrap();
 
@@ -712,7 +712,10 @@ fn wrapper_without_cmd_placeholder_no_recurse(empty_context: EvalContext) {
 }
 
 // ========================================
-// Wrapper + compound + sandbox: multiple sandbox sub-commands
+// Wrapper + compound + sandbox: merge_results picks sandbox_preset
+// from the sub-command with the highest action priority.
+// Both sub-commands have Allow (same priority), so the first one's
+// sandbox_preset is kept.
 // ========================================
 
 #[rstest]
@@ -726,28 +729,25 @@ fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
         definitions:
           wrappers:
             - 'bash -c <cmd>'
-          sandbox_presets:
+          sandbox:
             py_sandbox:
-              writable:
-                - /tmp
-                - /var/lib/python
-              deny:
-                - /etc
-              network: false
+              fs:
+                writable: [/tmp, /var/lib/python]
+                deny: [/etc]
+              network:
+                allow: false
             node_sandbox:
-              writable:
-                - /tmp
-                - /var/lib/node
-              deny:
-                - /etc
-                - /sys
-              network: false
+              fs:
+                writable: [/tmp, /var/lib/node]
+                deny: [/etc, /sys]
+              network:
+                allow: false
     "})
     .unwrap();
 
     // bash -c 'python3 a.py && node b.js'
-    // -> compound: python3 a.py (sandbox: py_sandbox) && node b.js (sandbox: node_sandbox)
-    // -> sandbox merge_strictest: writable=[/tmp] (intersection), deny=[/etc, /sys] (union)
+    // -> compound inside wrapper: merge_results picks one sandbox_preset
+    //    based on action priority (both Allow -> first wins: py_sandbox)
     let result = evaluate_command(
         &config,
         "bash -c 'python3 a.py && node b.js'",
@@ -755,4 +755,5 @@ fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
     )
     .unwrap();
     assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.sandbox_preset.as_deref(), Some("py_sandbox"));
 }
