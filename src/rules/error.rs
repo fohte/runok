@@ -34,6 +34,8 @@ pub enum RuleError {
     RecursionDepthExceeded(usize),
     #[error("unsupported token in wrapper pattern: {0}")]
     UnsupportedWrapperToken(String),
+    #[error("shell quoting error: {0}")]
+    ShellQuote(#[from] shlex::QuoteError),
 }
 
 #[derive(Debug, thiserror::Error)]

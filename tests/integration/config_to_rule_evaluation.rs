@@ -374,3 +374,187 @@ fn full_config_evaluates_correctly(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Multi-word alternation (end-to-end via YAML config)
+// ========================================
+
+#[rstest]
+#[case::npx_prettier_allowed(
+    "npx prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::bunx_prettier_allowed(
+    "bunx prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::bare_prettier_allowed(
+    "prettier --write .",
+    assert_allow as ActionAssertion,
+)]
+#[case::unrelated_command_default(
+    "yarn prettier --write .",
+    assert_default as ActionAssertion,
+)]
+fn multi_word_alternation_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: '"npx prettier"|"bunx prettier"|prettier *'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::npx_denied("npx prettier --write /etc/passwd", assert_deny as ActionAssertion)]
+#[case::bare_denied("prettier --write /etc/passwd", assert_deny as ActionAssertion)]
+#[case::npx_allowed("npx prettier --write .", assert_allow as ActionAssertion)]
+#[case::bare_allowed("prettier --write .", assert_allow as ActionAssertion)]
+fn multi_word_alternation_allow_and_deny(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: '"npx prettier"|prettier *'
+          - deny: '"npx prettier"|prettier --write /etc/passwd'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Alternation with glob wildcard in config
+// ========================================
+
+#[rstest]
+#[case::glob_alt_list_buckets(
+    "aws s3api list-buckets",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_get_object(
+    "aws s3api get-object my-bucket",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_describe_instances(
+    "aws ec2 describe-instances",
+    assert_allow as ActionAssertion,
+)]
+#[case::glob_alt_delete_blocked(
+    "aws s3api delete-bucket my-bucket",
+    assert_default as ActionAssertion,
+)]
+fn alternation_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws * describe-*|get-*|list-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::negated_glob_allows_delete(
+    "kubectl delete my-pod",
+    assert_allow as ActionAssertion,
+)]
+#[case::negated_glob_denies_list_pods(
+    "kubectl list-pods",
+    assert_deny as ActionAssertion,
+)]
+#[case::negated_glob_denies_describe(
+    "kubectl describe my-pod",
+    assert_deny as ActionAssertion,
+)]
+#[case::negated_glob_denies_get(
+    "kubectl get pods",
+    assert_deny as ActionAssertion,
+)]
+fn negation_alternation_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'kubectl *'
+          - deny: 'kubectl describe|get|list-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Literal token with glob wildcard in config
+// ========================================
+
+#[rstest]
+#[case::literal_glob_deny_matches(
+    "aws ssm get-parameter --name foo --with-decryption",
+    assert_deny as ActionAssertion,
+)]
+#[case::literal_glob_deny_matches_variant(
+    "aws ssm get-parameters-by-path --path /prod",
+    assert_deny as ActionAssertion,
+)]
+#[case::literal_glob_deny_no_match(
+    "aws ssm put-parameter --name foo --value bar",
+    assert_allow as ActionAssertion,
+)]
+fn literal_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws *'
+          - deny: 'aws ssm get-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::negated_literal_glob_allows(
+    "aws ssm put-parameter --name foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::negated_literal_glob_denies(
+    "aws ssm get-parameter --name foo",
+    assert_deny as ActionAssertion,
+)]
+fn negated_literal_glob_wildcard_config(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'aws ssm !get-* *'
+          - deny: 'aws ssm get-* *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

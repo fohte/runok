@@ -214,10 +214,6 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     let mut commands = Vec::new();
     collect_commands(root, trimmed.as_bytes(), &mut commands);
 
-    if commands.is_empty() {
-        return Err(CommandParseError::SyntaxError);
-    }
-
     Ok(commands)
 }
 
@@ -239,6 +235,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         | "compound_statement"
         | "else_clause"
         | "command_substitution"
+        | "process_substitution"
         | "while_statement"
         | "if_statement"
         | "elif_clause" => {
@@ -282,10 +279,90 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 }
             }
         }
+        // redirected_statement: recurse into the body (the actual command),
+        // stripping redirect operators (>, >>, <, 2>&1, etc.).
+        // Redirect target paths are left to the OS-level sandbox to enforce.
+        // Also recurse into redirect children to extract nested commands
+        // (e.g. process substitutions: `cmd > >(nested_cmd)`).
+        "redirected_statement" => {
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_commands(body, source, commands);
+            }
+            for i in 0..node.child_count() {
+                if node.field_name_for_child(i as u32) == Some("redirect")
+                    && let Some(child) = node.child(i)
+                {
+                    collect_substitutions_recursive(child, source, commands);
+                }
+            }
+        }
+        // comment: skip shell comments (e.g. `# description`)
+        "comment" => {}
+        // variable_assignment: transparent container — skip the assignment itself
+        // and recursively find command_substitution / process_substitution nodes
+        // anywhere in the subtree (they may be nested inside string nodes when
+        // the value is quoted, e.g. X="$(cmd)").
+        "variable_assignment" => {
+            collect_substitutions_recursive(node, source, commands);
+        }
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
                 collect_commands(body, source, commands);
+            }
+        }
+        // command node: strip leading variable_assignment children
+        // (environment variable prefixes like `FOO=bar echo hello`), strip
+        // redirect children (herestring_redirect, etc. that tree-sitter
+        // attaches directly to a command node), extract nested
+        // command_substitution nodes, and emit the remaining text.
+        "command" => {
+            for i in 0..node.child_count() {
+                let Some(child) = node.child(i) else {
+                    continue;
+                };
+                if !child.is_named() {
+                    continue;
+                }
+                if node.field_name_for_child(i as u32) == Some("redirect") {
+                    // Recurse into redirect children for nested substitutions
+                    // (e.g. `cat <<< $(secret_cmd)`)
+                    collect_substitutions_recursive(child, source, commands);
+                } else {
+                    match child.kind() {
+                        "command_substitution" => {
+                            collect_commands(child, source, commands);
+                        }
+                        "variable_assignment" => {
+                            collect_substitutions_recursive(child, source, commands);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Build command text excluding variable_assignment and redirect children.
+            // Redirects (e.g. herestring_redirect) attached directly to a command
+            // node use the field name "redirect".
+            let parts: Vec<&str> = (0..node.child_count())
+                .filter_map(|i| {
+                    let child = node.child(i)?;
+                    if !child.is_named() {
+                        return None;
+                    }
+                    if child.kind() == "variable_assignment" {
+                        return None;
+                    }
+                    if node.field_name_for_child(i as u32) == Some("redirect") {
+                        return None;
+                    }
+                    let text = &source[child.start_byte()..child.end_byte()];
+                    std::str::from_utf8(text).ok()
+                })
+                .collect();
+            let text = parts.join(" ");
+            let text = text.trim();
+            if !text.is_empty() {
+                commands.push(text.to_string());
             }
         }
         // Leaf command nodes — extract the source text, and also recurse
@@ -306,44 +383,36 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
     }
 }
 
+/// Recursively walk a subtree to find `command_substitution` and
+/// `process_substitution` nodes, then hand them off to `collect_commands`.
+/// Used by `variable_assignment` to reach substitutions nested inside
+/// `string` nodes (e.g. `X="$(cmd)"`).
+fn collect_substitutions_recursive(
+    node: tree_sitter::Node,
+    source: &[u8],
+    commands: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "command_substitution" | "process_substitution" => {
+                collect_commands(child, source, commands);
+            }
+            _ => {
+                collect_substitutions_recursive(child, source, commands);
+            }
+        }
+    }
+}
+
 /// Join tokens into a shell-safe string by quoting tokens that contain
 /// spaces or shell metacharacters. Tokens without special characters are
 /// emitted verbatim.
-pub fn shell_quote_join(tokens: &[String]) -> String {
-    tokens
-        .iter()
-        .map(|t| shell_quote(t))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Quote a single token for safe shell usage. If the token contains no
-/// shell-significant characters it is returned as-is. Otherwise it is
-/// wrapped in single quotes, with internal single quotes escaped as `'\''`.
-fn shell_quote(token: &str) -> String {
-    if token.is_empty() {
-        return "''".to_string();
-    }
-    // Characters that require quoting in POSIX shells
-    if token.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '%' | '+' | ',')
-    }) {
-        return token.to_string();
-    }
-    // Wrap in single quotes, escaping internal single quotes
-    let mut quoted = String::with_capacity(token.len() + 2);
-    quoted.push('\'');
-    for ch in token.chars() {
-        if ch == '\'' {
-            // End current quote, insert escaped quote, restart quote
-            quoted.push_str("'\\''");
-        } else {
-            quoted.push(ch);
-        }
-    }
-    quoted.push('\'');
-    quoted
+///
+/// Returns an error if any token contains a NUL byte (which cannot be
+/// represented in shell syntax).
+pub fn shell_quote_join(tokens: &[String]) -> Result<String, shlex::QuoteError> {
+    shlex::try_join(tokens.iter().map(|s| s.as_str()))
 }
 
 #[cfg(test)]
@@ -571,7 +640,73 @@ mod tests {
         "}
         .trim_end();
         let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec![input]);
+        // heredoc is a redirected_statement; only the body command is extracted
+        assert_eq!(result, vec!["cat"]);
+    }
+
+    // ========================================
+    // extract_commands: redirected statements
+    // ========================================
+
+    #[rstest]
+    #[case::stdout_to_file("echo hello > file.txt", vec!["echo hello"])]
+    #[case::append_to_file("echo hello >> file.txt", vec!["echo hello"])]
+    #[case::stdin_from_file("cat < input.txt", vec!["cat"])]
+    #[case::stderr_to_devnull("cmd 2> /dev/null", vec!["cmd"])]
+    #[case::stdout_and_stderr("cmd > out.txt 2>&1", vec!["cmd"])]
+    #[case::fd_redirect_only("echo hello 2>&1", vec!["echo hello"])]
+    #[case::devnull_redirect("curl url > /dev/null", vec!["curl url"])]
+    #[case::herestring("cat <<< hello", vec!["cat"])]
+    #[case::redirect_with_pipeline(
+        "echo hello 2>&1 | grep world",
+        vec!["echo hello", "grep world"],
+    )]
+    #[case::redirect_with_list(
+        "echo hello > file.txt && cat file.txt",
+        vec!["echo hello", "cat file.txt"],
+    )]
+    #[case::redirect_in_compound(
+        r#"X="test" && echo "$X" 2>&1"#,
+        vec![r#"echo "$X""#],
+    )]
+    #[case::process_substitution_in_redirect(
+        "cmd > >(nested_cmd)",
+        vec!["cmd", "nested_cmd"],
+    )]
+    #[case::command_substitution_in_redirect(
+        "cmd > $(echo /tmp/file)",
+        vec!["cmd", "echo /tmp/file"],
+    )]
+    #[case::command_substitution_in_herestring(
+        "cat <<< $(secret_cmd)",
+        vec!["secret_cmd", "cat"],
+    )]
+    fn extract_redirected_statements(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: comments
+    // ========================================
+
+    #[rstest]
+    #[case::comment_before_command(
+        "# description\ngh api -X GET /repos",
+        vec!["gh api -X GET /repos"],
+    )]
+    #[case::comment_before_pipeline(
+        "# list agents\ngh api -X GET /repos | jq '.name'",
+        vec!["gh api -X GET /repos", "jq '.name'"],
+    )]
+    #[case::comment_only("# just a comment", vec![])]
+    #[case::inline_comment_after_semicolon(
+        "echo hello; # trailing comment",
+        vec!["echo hello"],
+    )]
+    fn extract_comments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================
@@ -630,6 +765,59 @@ mod tests {
     #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
     #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands: variable assignments
+    // ========================================
+
+    #[rstest]
+    #[case::assignment_then_command("X=1 && echo hello", vec!["echo hello"])]
+    #[case::assignment_with_cmd_substitution("X=$(echo test)", vec!["echo test"])]
+    #[case::assignment_with_cmd_substitution_and_command(
+        "X=$(rm -rf /) && echo hello",
+        vec!["rm -rf /", "echo hello"]
+    )]
+    #[case::multiple_assignments("A=1 && B=2 && echo done", vec!["echo done"])]
+    #[case::assignment_with_backtick_substitution("X=`ls`", vec!["ls"])]
+    #[case::quoted_cmd_substitution(r#"X="$(echo test)""#, vec!["echo test"])]
+    #[case::quoted_backtick_substitution(r#"X="`ls`""#, vec!["ls"])]
+    #[case::process_substitution_in_assignment("X=<(cat file)", vec!["cat file"])]
+    fn extract_variable_assignments(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extract_bare_variable_assignment_returns_empty() {
+        // A bare variable assignment (no command substitution) produces no commands.
+        let result = extract_commands("X=1").unwrap();
+        assert!(result.is_empty());
+    }
+
+    // ========================================
+    // extract_commands: env-prefix commands (VAR=value cmd args)
+    // ========================================
+
+    #[rstest]
+    #[case::single_env_prefix("FOO=bar echo hello", vec!["echo hello"])]
+    #[case::multiple_env_prefixes("FOO=bar BAZ=qux echo hello", vec!["echo hello"])]
+    #[case::env_prefix_with_flags("FOO=bar curl -X POST https://example.com", vec!["curl -X POST https://example.com"])]
+    #[case::env_prefix_with_pipeline("FOO=bar echo hello | grep hello", vec!["echo hello", "grep hello"])]
+    #[case::env_prefix_with_cmd_substitution(
+        "FOO=$(echo bar) echo hello",
+        vec!["echo bar", "echo hello"]
+    )]
+    // `env FOO=bar echo hello`: tree-sitter treats `env` as the command name
+    // and `FOO=bar` as a regular argument (word node), not a variable_assignment.
+    // The entire text is preserved as a single command for wrapper evaluation.
+    #[case::env_cmd_with_var_arg(
+        "env FOO=bar echo hello",
+        vec!["env FOO=bar echo hello"]
+    )]
+    fn extract_env_prefix_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
     }
@@ -815,11 +1003,11 @@ mod tests {
     #[case::simple(&["echo", "hello"], "echo hello")]
     #[case::space_in_token(&["echo", "hello world"], "echo 'hello world'")]
     #[case::empty_token(&["echo", ""], "echo ''")]
-    #[case::single_quote_in_token(&["echo", "it's"], "echo 'it'\\''s'")]
+    #[case::single_quote_in_token(&["echo", "it's"], "echo \"it's\"")]
     #[case::flags_and_paths(&["rm", "-rf", "/tmp/dir"], "rm -rf /tmp/dir")]
     #[case::single_token(&["ls"], "ls")]
     fn shell_quote_join_cases(#[case] tokens: &[&str], #[case] expected: &str) {
         let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
-        assert_eq!(shell_quote_join(&owned), expected);
+        assert_eq!(shell_quote_join(&owned).unwrap(), expected);
     }
 }

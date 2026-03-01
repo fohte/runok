@@ -1,88 +1,26 @@
-mod bwrap;
-mod error;
-mod landlock_sandbox;
-mod policy;
-mod seccomp_sandbox;
+pub mod bwrap;
+pub mod error;
+pub mod landlock_sandbox;
+pub mod seccomp_sandbox;
 
 use std::ffi::CString;
-use std::path::PathBuf;
-use std::process::ExitCode;
 
-use clap::Parser;
-
+use crate::exec::command_executor::SandboxPolicy;
 use error::SandboxError;
-use policy::SandboxPolicy;
-
-/// Linux sandbox helper for runok.
-///
-/// Applies bubblewrap namespace isolation, landlock filesystem restrictions,
-/// and seccomp network filtering before executing a command.
-///
-/// This binary operates in two stages:
-/// - Stage 1 (default): Sets up bubblewrap and re-invokes itself inside the sandbox
-/// - Stage 2 (--apply-sandbox-then-exec): Applies landlock + seccomp, then execvp
-#[derive(Parser, Debug)]
-#[command(name = "runok-linux-sandbox")]
-struct Args {
-    /// Sandbox policy as JSON string.
-    #[arg(long)]
-    policy: String,
-
-    /// Working directory for the sandboxed command.
-    #[arg(long)]
-    cwd: PathBuf,
-
-    /// Stage 2 mode: apply landlock + seccomp, then exec the command.
-    /// Used internally when re-invoked inside bubblewrap.
-    #[arg(long)]
-    apply_sandbox_then_exec: bool,
-
-    /// The command and its arguments to execute.
-    #[arg(last = true, required = true)]
-    command: Vec<String>,
-}
-
-fn main() -> ExitCode {
-    let args = Args::parse();
-
-    let policy: SandboxPolicy = match serde_json::from_str(&args.policy) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("runok-linux-sandbox: invalid policy JSON: {e}");
-            return ExitCode::from(1);
-        }
-    };
-
-    if args.apply_sandbox_then_exec {
-        // Stage 2: apply landlock + seccomp, then exec
-        if let Err(e) = run_stage2(&policy, &args.command) {
-            eprintln!("runok-linux-sandbox: {e}");
-            return ExitCode::from(1);
-        }
-        // exec_command never returns on success
-        unreachable!()
-    }
-
-    // Stage 1: set up bubblewrap and re-invoke
-    match run_stage1(&policy, &args.cwd, &args.policy, &args.command) {
-        Ok(code) => ExitCode::from(code as u8),
-        Err(e) => {
-            eprintln!("runok-linux-sandbox: {e}");
-            ExitCode::from(1)
-        }
-    }
-}
 
 /// Stage 1: Build bubblewrap arguments and execute bwrap.
-fn run_stage1(
+///
+/// This sets up the mount namespace via bubblewrap, then re-invokes the runok
+/// binary itself inside the sandbox with `__sandbox-exec --apply-sandbox-then-exec`.
+pub fn run_stage1(
     policy: &SandboxPolicy,
     cwd: &std::path::Path,
     policy_json: &str,
     command: &[String],
 ) -> Result<i32, SandboxError> {
-    let helper_binary = std::env::current_exe().map_err(SandboxError::Exec)?;
+    let self_exe = std::env::current_exe().map_err(SandboxError::Exec)?;
 
-    let bwrap_args = bwrap::build_bwrap_args(policy, cwd, &helper_binary, policy_json, command);
+    let bwrap_args = bwrap::build_bwrap_args(policy, cwd, &self_exe, policy_json, command);
 
     let status = std::process::Command::new("bwrap")
         .args(&bwrap_args)
@@ -102,7 +40,7 @@ fn run_stage1(
 }
 
 /// Stage 2: Apply landlock and seccomp restrictions, then exec the command.
-fn run_stage2(policy: &SandboxPolicy, command: &[String]) -> Result<(), SandboxError> {
+pub fn run_stage2(policy: &SandboxPolicy, command: &[String]) -> Result<(), SandboxError> {
     // Apply landlock filesystem restrictions
     landlock_sandbox::apply_landlock(policy)?;
 

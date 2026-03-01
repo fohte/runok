@@ -1,2 +1,6 @@
 # Auto-generated files
 CHANGELOG.md
+schema/runok.schema.json
+
+# MDX files (Prettier breaks code blocks inside JSX components)
+*.mdx

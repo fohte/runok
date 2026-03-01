@@ -24,28 +24,28 @@ fn hook_env() -> TestEnv {
 
 fn bash_hook_json(command: &str) -> String {
     serde_json::json!({
-        "sessionId": "test-session",
-        "transcriptPath": "/tmp/transcript",
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript",
         "cwd": "/tmp",
-        "permissionMode": "default",
-        "hookEventName": "PreToolUse",
-        "toolName": "Bash",
-        "toolInput": {"command": command},
-        "toolUseId": "test-123"
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": "test-123"
     })
     .to_string()
 }
 
 fn non_bash_hook_json(tool_name: &str) -> String {
     serde_json::json!({
-        "sessionId": "test-session",
-        "transcriptPath": "/tmp/transcript",
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript",
         "cwd": "/tmp",
-        "permissionMode": "default",
-        "hookEventName": "PreToolUse",
-        "toolName": tool_name,
-        "toolInput": {},
-        "toolUseId": "test-456"
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": {},
+        "tool_use_id": "test-456"
     })
     .to_string()
 }
@@ -56,7 +56,7 @@ fn non_bash_hook_json(tool_name: &str) -> String {
 fn hook_bash_deny(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("rm -rf /"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -76,7 +76,7 @@ fn hook_bash_deny(hook_env: TestEnv) {
 fn hook_bash_allow(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -96,7 +96,7 @@ fn hook_bash_allow(hook_env: TestEnv) {
 fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(non_bash_hook_json(tool_name))
         .assert();
     assert.code(0).stdout(predicates::str::is_empty());
@@ -108,7 +108,7 @@ fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
 fn hook_invalid_json_exits_2(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("invalid json")
         .assert();
     assert.code(2);
@@ -120,7 +120,7 @@ fn hook_invalid_json_exits_2(hook_env: TestEnv) {
 fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("echo hello"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
@@ -141,13 +141,28 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     );
 }
 
+// --- Bash tool: no matching rule → ask ---
+
+#[rstest]
+fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("unknown-command --flag"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
+}
+
 // --- Hook event name ---
 
 #[rstest]
 fn hook_output_contains_event_name(hook_env: TestEnv) {
     let assert = hook_env
         .command()
-        .args(["check", "--format", "claude-code-hook"])
+        .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("git status"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();

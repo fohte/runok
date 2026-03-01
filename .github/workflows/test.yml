@@ -107,15 +107,8 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
-      # On Linux, test the full workspace including the Linux sandbox helper.
-      # On macOS, exclude the Linux-only sandbox crate (depends on landlock/seccompiler).
       - name: Run tests with coverage
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cargo llvm-cov --workspace --lcov --output-path lcov.info
-          else
-            cargo llvm-cov --workspace --exclude runok-linux-sandbox --lcov --output-path lcov.info
-          fi
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

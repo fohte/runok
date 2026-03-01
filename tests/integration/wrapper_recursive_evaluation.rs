@@ -4,7 +4,7 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{Config, parse_config};
 use runok::rules::RuleError;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
 
 fn config_with_standard_wrappers() -> &'static str {
     indoc! {"
@@ -103,6 +103,34 @@ fn compound_commands_inside_wrapper(
 }
 
 // ========================================
+// Compound commands inside wrappers: unmatched resolved via defaults.action
+// ========================================
+
+#[rstest]
+fn compound_in_wrapper_unmatched_uses_defaults_action(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // "echo hello" matches allow, "unknown_cmd" is unmatched.
+    // With defaults.action = ask, the unmatched sub-command resolves to Ask.
+    let result =
+        evaluate_command(&config, "bash -c 'echo hello; unknown_cmd'", &empty_context).unwrap();
+    assert!(
+        matches!(result.action, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        result.action
+    );
+}
+
+// ========================================
 // Deny wins over direct rule allow (wrapper inner takes priority)
 // ========================================
 
@@ -167,6 +195,62 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
 // Wrapper preserves quoting
 // ========================================
 
+// ========================================
+// env wrapper: env-prefix variables are consumed by wildcard,
+// inner command is correctly evaluated
+// ========================================
+
+#[rstest]
+#[case::env_var_echo_allowed("env FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::env_var_rm_denied("env FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+#[case::env_multiple_vars("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
+#[case::env_var_unmatched_default("env FOO=bar hg status", assert_default as ActionAssertion)]
+fn env_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'env <opts> <vars> <cmd>'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Bare env-prefix command (no `env` wrapper):
+// FOO=bar echo hello is evaluated as echo hello via evaluate_compound,
+// which calls extract_commands to strip variable assignments.
+// ========================================
+
+#[rstest]
+#[case::bare_env_prefix_allowed("FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::bare_env_prefix_denied("FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+fn bare_env_prefix_evaluates_stripped_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Wrapper preserves quoting
+// ========================================
+
 #[rstest]
 fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
     let config = parse_config(indoc! {"
@@ -180,4 +264,119 @@ fn wrapper_preserves_quoted_arguments(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "sudo echo 'hello world'", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
+}
+
+// ========================================
+// Wildcard-with-placeholder wrapper: greedy wildcard consumes flags
+// ========================================
+
+#[rstest]
+#[case::xargs_flags_echo_allowed("xargs -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::xargs_flags_rm_denied("xargs -I{} rm -rf /", assert_deny as ActionAssertion)]
+#[case::xargs_no_flags_echo_allowed("xargs echo hello", assert_allow as ActionAssertion)]
+#[case::xargs_multiple_flags_echo_allowed("xargs -0 -I{} echo hello", assert_allow as ActionAssertion)]
+fn wildcard_wrapper_greedy_consumes_flags(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'xargs * <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// <opts> wrapper: consumes flags and their arguments
+// ========================================
+
+#[rstest]
+#[case::opts_single_flag("xargs -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::opts_flag_rm_denied("xargs -I{} rm -rf /", assert_deny as ActionAssertion)]
+#[case::opts_no_flags("xargs echo hello", assert_allow as ActionAssertion)]
+#[case::opts_multiple_flags("xargs -0 -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::opts_flag_with_separate_arg("xargs -n 5 echo hello", assert_allow as ActionAssertion)]
+#[case::opts_mixed_flags_and_args("xargs -0 -n 5 -I{} echo hello", assert_allow as ActionAssertion)]
+#[case::opts_digit_flag_self_contained("xargs -0 echo hello", assert_allow as ActionAssertion)]
+#[case::opts_end_of_options("xargs -- echo hello", assert_allow as ActionAssertion)]
+#[case::opts_flags_then_end_of_options("xargs -0 -- echo hello", assert_allow as ActionAssertion)]
+fn opts_wrapper_consumes_flags(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'xargs <opts> <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// <opts> wrapper with defaults.action: deny
+// ========================================
+
+#[rstest]
+fn opts_wrapper_with_defaults_action_deny(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        defaults:
+          action: deny
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'xargs <opts> <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "xargs -I{} echo hello", &empty_context).unwrap();
+    assert!(
+        matches!(result.action, Action::Allow),
+        "expected Allow, got {:?}",
+        result.action
+    );
+}
+
+// ========================================
+// <vars> wrapper: consumes KEY=VALUE tokens
+// ========================================
+
+#[rstest]
+#[case::vars_single("env FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::vars_multiple("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
+#[case::vars_none("env echo hello", assert_allow as ActionAssertion)]
+#[case::vars_with_opts("env -i FOO=bar echo hello", assert_allow as ActionAssertion)]
+#[case::vars_with_opts_rm_denied("env -i FOO=bar rm -rf /", assert_deny as ActionAssertion)]
+fn vars_wrapper_consumes_assignments(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'env <opts> <vars> <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
 }

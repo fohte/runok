@@ -18,6 +18,36 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// Print the JSON Schema for runok.yml to stdout
+    #[cfg(feature = "config-schema")]
+    ConfigSchema,
+
+    /// Internal: Linux sandbox execution (stage 1/stage 2)
+    #[cfg(target_os = "linux")]
+    #[command(name = "__sandbox-exec", hide = true)]
+    SandboxExec(SandboxExecArgs),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct SandboxExecArgs {
+    /// Sandbox policy as JSON string.
+    #[arg(long)]
+    pub policy: String,
+
+    /// Working directory for the sandboxed command.
+    #[arg(long)]
+    pub cwd: std::path::PathBuf,
+
+    /// Stage 2 mode: apply landlock + seccomp, then exec the command.
+    /// Used internally when re-invoked inside bubblewrap.
+    #[arg(long)]
+    pub apply_sandbox_then_exec: bool,
+
+    /// The command and its arguments to execute.
+    #[arg(last = true, required = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -43,21 +73,27 @@ pub struct ExecArgs {
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct CheckArgs {
-    /// Command string to check (skips stdin)
-    #[arg(long)]
-    pub command: Option<String>,
-
     /// Input format: "claude-code-hook" or omit for auto-detection
     #[arg(long)]
-    pub format: Option<String>,
+    pub input_format: Option<String>,
 
-    /// Show what would happen without side effects
-    #[arg(long)]
-    pub dry_run: bool,
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub output_format: OutputFormat,
 
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
+
+    /// Command and arguments to check (skips stdin)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
+pub enum OutputFormat {
+    Json,
+    Text,
 }
 
 #[cfg(test)]
@@ -87,24 +123,24 @@ mod tests {
         Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: None, dry_run: true, verbose: true }),
     )]
     #[case::check_with_command(
-        &["runok", "check", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: false, verbose: false }),
+        &["runok", "check", "--", "git", "status"],
+        Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: false, command: vec!["git".into(), "status".into()] }),
     )]
-    #[case::check_with_format(
-        &["runok", "check", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: None, format: Some("claude-code-hook".into()), dry_run: false, verbose: false }),
+    #[case::check_with_input_format(
+        &["runok", "check", "--input-format", "claude-code-hook"],
+        Commands::Check(CheckArgs { input_format: Some("claude-code-hook".into()), output_format: OutputFormat::Text, verbose: false, command: vec![] }),
+    )]
+    #[case::check_with_output_format_json(
+        &["runok", "check", "--output-format", "json", "--", "ls"],
+        Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Json, verbose: false, command: vec!["ls".into()] }),
     )]
     #[case::check_with_both(
-        &["runok", "check", "--command", "ls", "--format", "claude-code-hook"],
-        Commands::Check(CheckArgs { command: Some("ls".into()), format: Some("claude-code-hook".into()), dry_run: false, verbose: false }),
-    )]
-    #[case::check_with_dry_run(
-        &["runok", "check", "--dry-run", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: true, verbose: false }),
+        &["runok", "check", "--input-format", "claude-code-hook", "--", "ls"],
+        Commands::Check(CheckArgs { input_format: Some("claude-code-hook".into()), output_format: OutputFormat::Text, verbose: false, command: vec!["ls".into()] }),
     )]
     #[case::check_with_verbose(
-        &["runok", "check", "--verbose", "--command", "git status"],
-        Commands::Check(CheckArgs { command: Some("git status".into()), format: None, dry_run: false, verbose: true }),
+        &["runok", "check", "--verbose", "--", "git", "status"],
+        Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);

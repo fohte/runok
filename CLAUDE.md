@@ -55,3 +55,26 @@ If the same assertion chain appears in 3+ tests, extract it into a helper.
 ### Do not write tests that only verify test helpers
 
 Tests must verify production code. Tests that only assert on test helpers, fixtures, or mocks are unnecessary. Remove them.
+
+## Documentation rules
+
+### Keep docs and README up to date
+
+When adding, changing, or removing user-facing features, CLI options, configuration fields, or behavior, update the relevant documentation:
+
+- **README.md** -- Update if the change affects the project overview, feature list, or getting-started instructions.
+- **docs/ (Starlight site)** -- Update the corresponding page(s) under `docs/src/content/docs/`. Common areas:
+  - CLI changes: `cli/`
+  - Configuration changes: `configuration/`
+  - Pattern syntax changes: `pattern-syntax/`
+  - Rule evaluation changes: `rule-evaluation/`
+  - Sandbox changes: `sandbox/`
+  - New recipes or examples: `recipes/`
+
+Do not create new doc pages unless the change introduces an entirely new concept. Prefer updating existing pages first.
+
+## Code rules
+
+### Use the `shlex` crate for shell quoting and splitting
+
+Use `shlex::try_join`, `shlex::try_quote`, and `shlex::split` for shell quoting and command splitting. Do not implement custom shell quoting or whitespace-based command splitting.

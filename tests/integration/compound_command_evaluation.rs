@@ -4,7 +4,7 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_compound};
+use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
 
 // ========================================
 // Individual evaluation of each command in a compound expression
@@ -276,6 +276,111 @@ fn writable_contradiction_does_not_downgrade_deny(empty_context: EvalContext) {
 }
 
 // ========================================
+// Unmatched sub-commands resolved via defaults.action
+// ========================================
+
+#[rstest]
+#[case::allow_plus_unmatched_defaults_ask(
+    "echo hello; eval \"rm -rf /\"",
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::allow_plus_unmatched_defaults_deny(
+    "echo hello; eval \"rm -rf /\"",
+    indoc! {"
+        defaults:
+          action: deny
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::allow_plus_unmatched_defaults_allow(
+    "echo hello; unknown_cmd",
+    indoc! {"
+        defaults:
+          action: allow
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::deny_rule_still_wins_over_resolved_default(
+    "echo hello && rm -rf /",
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+fn unmatched_sub_command_uses_defaults_action(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirected statements: redirects are stripped before rule evaluation
+// ========================================
+
+#[rstest]
+#[case::stdout_redirect(
+    "echo hello > file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::stderr_redirect(
+    "git branch --help 2>&1",
+    assert_allow as ActionAssertion,
+)]
+#[case::devnull_redirect(
+    "echo hello > /dev/null 2>&1",
+    assert_allow as ActionAssertion,
+)]
+#[case::compound_with_redirect(
+    r#"X="test" && echo "$X" 2>&1"#,
+    assert_allow as ActionAssertion,
+)]
+#[case::deny_still_works_with_redirect(
+    "rm -rf /tmp/data > /dev/null 2>&1",
+    assert_deny as ActionAssertion,
+)]
+#[case::redirect_in_pipeline(
+    "echo hello 2>&1 | grep world",
+    assert_allow as ActionAssertion,
+)]
+fn redirected_statements_match_rules(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'git *'
+          - allow: 'grep *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Execution mode: compound commands are represented as Shell input (sh -c)
 // ========================================
 
@@ -295,4 +400,93 @@ fn compound_command_uses_shell_input(#[case] input: CommandInput, #[case] expect
     if expected_compound {
         assert_eq!(input.program(), "sh");
     }
+}
+
+// ========================================
+// evaluate_command: compound command guard
+// ========================================
+// evaluate_command splits compound commands internally so that
+// wildcard patterns do not greedily match across shell operators.
+
+#[rstest]
+#[case::cd_wildcard_does_not_match_entire_compound(
+    "cd /path/to/dir && rm -rf dist .astro && pnpm build 2>&1",
+    indoc! {"
+        rules:
+          - allow: 'cd *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::cd_and_rm_deny_wins(
+    "cd /path && rm -rf dist",
+    indoc! {"
+        rules:
+          - allow: 'cd *'
+          - deny: 'rm *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::all_sub_commands_allowed(
+    "cd /path && pnpm build",
+    indoc! {"
+        rules:
+          - allow: 'cd *'
+          - allow: 'pnpm *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::unmatched_sub_command_escalates_to_ask(
+    "cd /path && unknown-cmd",
+    indoc! {"
+        rules:
+          - allow: 'cd *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::unmatched_with_defaults_action_deny(
+    "cd /path && unknown-cmd",
+    indoc! {"
+        defaults:
+          action: deny
+        rules:
+          - allow: 'cd *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::pipe_separated(
+    "echo hello | grep world",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'grep *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::or_separated_deny(
+    "false || rm -rf /",
+    indoc! {"
+        rules:
+          - allow: 'false'
+          - deny: 'rm *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::semicolon_separated_deny(
+    "cd /path ; rm -rf /",
+    indoc! {"
+        rules:
+          - allow: 'cd *'
+          - deny: 'rm *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+fn evaluate_command_splits_compound_before_matching(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
 }

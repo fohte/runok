@@ -10,7 +10,7 @@ use crate::rules::command_parser::{
 };
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
 use crate::rules::pattern_matcher::{extract_placeholder, matches_with_captures};
-use crate::rules::pattern_parser::{Pattern, PatternToken, parse as parse_pattern};
+use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
 
 /// Context for rule evaluation, providing environment variables and
 /// working directory for `when` clause evaluation.
@@ -124,10 +124,15 @@ pub fn evaluate_compound(
             preset_names.push(name);
         }
 
+        // Resolve Action::Default to the configured defaults.action so that
+        // unmatched sub-commands are compared at their effective restriction
+        // level (e.g. ask) rather than being silently swallowed by Allow.
+        let resolved_action = resolve_default_action(result.action, config);
+
         // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
-            Some(prev) => merge_actions(prev, result.action),
-            None => result.action,
+            Some(prev) => merge_actions(prev, resolved_action),
+            None => resolved_action,
         });
     }
 
@@ -223,6 +228,39 @@ fn evaluate_command_inner(
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
     }
 
+    // Guard: if the command is compound (contains &&, ||, ;, |), split it and
+    // evaluate each sub-command individually. This prevents wildcard patterns
+    // from greedily matching across shell operators (e.g. `cd *` matching
+    // `cd /path && rm -rf dist`).
+    if let Ok(sub_commands) = extract_commands(command)
+        && sub_commands.len() > 1
+    {
+        let mut merged: Option<EvalResult> = None;
+        for sub in &sub_commands {
+            let result = evaluate_command_inner(config, sub, context, depth)?;
+            // Resolve Action::Default to the configured defaults.action.
+            // When defaults.action is not configured, escalate to Ask so that
+            // unmatched sub-commands do not get silently swallowed by Allow.
+            let resolved_action = match resolve_default_action(result.action, config) {
+                Action::Default => Action::Ask(None),
+                other => other,
+            };
+            let result = EvalResult {
+                action: resolved_action,
+                ..result
+            };
+            merged = Some(match merged {
+                Some(prev) => merge_results(prev, result),
+                None => result,
+            });
+        }
+        return Ok(merged.unwrap_or(EvalResult {
+            action: Action::Default,
+            sandbox_preset: None,
+            matched_rules: Vec::new(),
+        }));
+    }
+
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -247,36 +285,43 @@ fn evaluate_command_inner(
             None => continue,
         };
 
-        let pattern = parse_pattern(pattern_str)?;
-        let schema = build_flag_schema(&pattern);
-        let parsed_command = parse_command(command, &schema)?;
+        let patterns = parse_multi(pattern_str)?;
 
-        let captures = matches_with_captures(&pattern, &parsed_command, definitions);
-        if captures.is_none() {
-            continue;
-        }
+        // Try each expanded pattern (multi-word alternation produces multiple patterns);
+        // use the first matching pattern for this rule.
+        for pattern in &patterns {
+            let schema = build_flag_schema(pattern);
+            let parsed_command = parse_command(command, &schema)?;
 
-        // Evaluate when clause if present
-        if let Some(when_expr) = &rule.when {
-            let expr_context = build_expr_context(&parsed_command, context, definitions);
-            match evaluate(when_expr, &expr_context) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(e) => return Err(e.into()),
+            let captures = matches_with_captures(pattern, &parsed_command, definitions);
+            if captures.is_none() {
+                continue;
             }
+
+            // Evaluate when clause if present
+            if let Some(when_expr) = &rule.when {
+                let expr_context = build_expr_context(&parsed_command, context, definitions);
+                match evaluate(when_expr, &expr_context) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            match_infos.push(RuleMatchInfo {
+                action_kind,
+                pattern: pattern_str.to_string(),
+                matched_tokens: captures.unwrap_or_default(),
+            });
+
+            matched.push(MatchedRule {
+                action_kind,
+                rule,
+                pattern_str: pattern_str.to_string(),
+            });
+
+            break;
         }
-
-        match_infos.push(RuleMatchInfo {
-            action_kind,
-            pattern: pattern_str.to_string(),
-            matched_tokens: captures.unwrap_or_default(),
-        });
-
-        matched.push(MatchedRule {
-            action_kind,
-            rule,
-            pattern_str: pattern_str.to_string(),
-        });
     }
 
     // Try wrapper pattern matching for recursive evaluation
@@ -348,11 +393,30 @@ fn try_unwrap_wrapper(
     };
 
     for wrapper_pattern_str in wrappers {
-        let pattern = parse_pattern(wrapper_pattern_str)?;
-        let schema = build_flag_schema(&pattern);
-        let parsed_command = parse_command(command, &schema)?;
+        let patterns = parse_multi(wrapper_pattern_str)?;
 
-        if let Some(tokens) = extract_placeholder(&pattern, &parsed_command, definitions)? {
+        // Try each expanded pattern for this wrapper definition
+        let mut all_candidates: Vec<Vec<String>> = Vec::new();
+        for pattern in &patterns {
+            let schema = build_flag_schema(pattern);
+            let parsed_command = parse_command(command, &schema)?;
+
+            let candidates = extract_placeholder(pattern, &parsed_command, definitions)?;
+            if !candidates.is_empty() {
+                all_candidates = candidates;
+                break;
+            }
+        }
+
+        if all_candidates.is_empty() {
+            continue;
+        }
+
+        // Try each candidate capture and pick the one with the highest
+        // action priority. This handles ambiguous patterns like `xargs * <cmd>`
+        // where the wildcard can consume varying numbers of tokens.
+        let mut best: Option<EvalResult> = None;
+        for tokens in all_candidates {
             // Single token: a shell script string (e.g., from `bash -c <cmd>`)
             // that should be passed as-is for tree-sitter to parse.
             // Multiple tokens: a structured command + args (e.g., from `sudo <cmd>`)
@@ -363,7 +427,7 @@ fn try_unwrap_wrapper(
                 };
                 single
             } else {
-                shell_quote_join(&tokens)
+                shell_quote_join(&tokens)?
             };
             // Split compound commands (e.g., "ls; rm -rf /") into individual ones
             let sub_commands =
@@ -371,13 +435,29 @@ fn try_unwrap_wrapper(
 
             let mut result: Option<EvalResult> = None;
             for cmd in &sub_commands {
-                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                let mut sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                sub_result.action = resolve_default_action(sub_result.action, config);
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
                     None => sub_result,
                 });
             }
-            return Ok(result);
+
+            if let Some(candidate_result) = result {
+                best = Some(match best {
+                    Some(prev)
+                        if action_priority(&candidate_result.action)
+                            > action_priority(&prev.action) =>
+                    {
+                        candidate_result
+                    }
+                    Some(prev) => prev,
+                    None => candidate_result,
+                });
+            }
+        }
+        if best.is_some() {
+            return Ok(best);
         }
     }
 
@@ -422,6 +502,29 @@ fn action_priority(action: &Action) -> u8 {
         Action::Allow => 1,
         Action::Ask(_) => 2,
         Action::Deny(_) => 3,
+    }
+}
+
+/// Resolve `Action::Default` to the configured `defaults.action`, so that
+/// unmatched sub-commands in compound evaluation participate in the
+/// Explicit Deny Wins comparison at their effective restriction level.
+///
+/// When `defaults.action` is not configured, `Action::Default` is preserved
+/// (the adapter layer will apply its own interpretation later).
+fn resolve_default_action(action: Action, config: &Config) -> Action {
+    use crate::config::ActionKind;
+    if !matches!(action, Action::Default) {
+        return action;
+    }
+    match config.defaults.as_ref().and_then(|d| d.action) {
+        Some(ActionKind::Allow) => Action::Allow,
+        Some(ActionKind::Deny) => Action::Deny(DenyResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
+        Some(ActionKind::Ask) => Action::Ask(None),
+        None => Action::Default,
     }
 }
 
@@ -482,7 +585,7 @@ fn build_expr_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, Definitions, RuleEntry};
+    use crate::config::{Config, Defaults, Definitions, RuleEntry};
     use rstest::{fixture, rstest};
     use std::collections::HashMap;
 
@@ -682,6 +785,32 @@ mod tests {
     }
 
     // ========================================
+    // Wildcard command name in rules
+    // ========================================
+
+    #[rstest]
+    #[case::help_matches("* --help", "git --help", Action::Allow)]
+    #[case::version_matches("* --version", "node --version", Action::Allow)]
+    #[case::no_match_without_flag("* --help", "git status", Action::Default)]
+    fn wildcard_command_matching(
+        #[case] pattern: &str,
+        #[case] command: &str,
+        #[case] expected: Action,
+        empty_context: EvalContext,
+    ) {
+        let config = make_config(vec![allow_rule(pattern)]);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        assert_eq!(result.action, expected);
+    }
+
+    #[rstest]
+    fn wildcard_command_deny_wins_over_wildcard_allow(empty_context: EvalContext) {
+        let config = make_config(vec![allow_rule("* --help"), deny_rule("rm *")]);
+        let result = evaluate_command(&config, "rm --help", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    // ========================================
     // When clause filtering
     // ========================================
 
@@ -859,6 +988,81 @@ mod tests {
     }
 
     // ========================================
+    // Compound command guard in evaluate_command
+    // ========================================
+
+    #[rstest]
+    #[case::cd_and_rm(
+        "cd /path && rm -rf dist",
+        vec![allow_rule("cd *"), deny_rule("rm *")],
+        "Deny",
+    )]
+    #[case::cd_and_pnpm_build(
+        "cd /path && pnpm build",
+        vec![allow_rule("cd *"), allow_rule("pnpm *")],
+        "Allow",
+    )]
+    #[case::cd_and_unmatched_escalates_to_ask(
+        "cd /path && unknown-cmd",
+        vec![allow_rule("cd *")],
+        "Ask",
+    )]
+    #[case::triple_compound(
+        "cd /path/to/dir && rm -rf dist .astro && pnpm build",
+        vec![allow_rule("cd *"), deny_rule("rm *"), allow_rule("pnpm *")],
+        "Deny",
+    )]
+    #[case::semicolon_separated(
+        "cd /path ; rm -rf /",
+        vec![allow_rule("cd *"), deny_rule("rm *")],
+        "Deny",
+    )]
+    #[case::pipe_separated(
+        "echo hello | grep world",
+        vec![allow_rule("echo *"), allow_rule("grep *")],
+        "Allow",
+    )]
+    #[case::or_separated(
+        "false || rm -rf /",
+        vec![allow_rule("false"), deny_rule("rm *")],
+        "Deny",
+    )]
+    fn compound_command_guard_splits_and_evaluates_individually(
+        empty_context: EvalContext,
+        #[case] command: &str,
+        #[case] rules: Vec<RuleEntry>,
+        #[case] expected_variant: &str,
+    ) {
+        let config = make_config(rules);
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        let variant = format!("{:?}", result.action);
+        assert!(
+            variant.starts_with(expected_variant),
+            "expected action starting with '{expected_variant}', got '{variant}'"
+        );
+    }
+
+    #[rstest]
+    fn compound_guard_cd_wildcard_does_not_match_entire_compound(empty_context: EvalContext) {
+        // This is the exact bug scenario: `cd *` must NOT match the entire
+        // compound command `cd /path && rm -rf dist && pnpm build`.
+        // Unmatched sub-commands escalate to Ask even without defaults.action,
+        // so the overall result must be Ask, not Allow.
+        let config = make_config(vec![allow_rule("cd *")]);
+        let result = evaluate_command(
+            &config,
+            "cd /path/to/dir && rm -rf dist .astro && pnpm build 2>&1",
+            &empty_context,
+        )
+        .unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask (from unmatched sub-commands), got {:?}",
+            result.action
+        );
+    }
+
+    // ========================================
     // Wrapper command recursive evaluation
     // ========================================
 
@@ -999,6 +1203,31 @@ mod tests {
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
+    #[rstest]
+    fn wrapper_compound_unmatched_resolved_via_defaults_action(empty_context: EvalContext) {
+        // bash -c 'echo hello; unknown_cmd' with defaults.action = ask
+        // should resolve the unmatched "unknown_cmd" to Ask, not silently allow.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            definitions: Some(Definitions {
+                wrappers: Some(vec!["bash -c <cmd>".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result =
+            evaluate_command(&config, "bash -c 'echo hello; unknown_cmd'", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
     // ========================================
     // Compound command evaluation
     // ========================================
@@ -1068,6 +1297,114 @@ mod tests {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_compound(&config, "hg status | wc -l", &empty_context).unwrap();
         assert_eq!(result.action, Action::Default);
+    }
+
+    // ========================================
+    // Compound: Default resolved via defaults.action
+    // ========================================
+
+    #[rstest]
+    fn compound_default_resolved_to_ask_wins_over_allow(empty_context: EvalContext) {
+        // When one sub-command is allowed and another is unmatched,
+        // the unmatched sub-command should be resolved via defaults.action.
+        // With defaults.action = ask, the overall result should be Ask (not Allow).
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result =
+            evaluate_compound(&config, "echo hello; eval \"rm -rf /\"", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_default_resolved_to_deny_wins_over_allow(empty_context: EvalContext) {
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Deny),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Deny(_)),
+            "expected Deny, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_default_resolved_to_allow_stays_allow(empty_context: EvalContext) {
+        // When defaults.action = allow, unmatched commands resolve to Allow,
+        // and the overall result remains Allow.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Allow),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_no_defaults_preserves_default_action(empty_context: EvalContext) {
+        // Without defaults.action configured, Default is preserved as-is.
+        // When merged with Allow, Allow wins (backward-compatible behavior).
+        let config = make_config(vec![allow_rule("echo *")]);
+        let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Allow);
+    }
+
+    #[rstest]
+    fn compound_all_unmatched_with_defaults_ask(empty_context: EvalContext) {
+        // All sub-commands unmatched with defaults.action = ask
+        // should result in Ask.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("git status")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "unknown_a && unknown_b", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_deny_rule_still_wins_over_resolved_default(empty_context: EvalContext) {
+        // Even when defaults.action = ask, an explicit deny rule should still win.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *"), deny_rule("rm -rf *")]),
+            ..Default::default()
+        };
+        let result = evaluate_compound(&config, "echo hello && rm -rf /", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Deny(_)),
+            "expected Deny, got {:?}",
+            result.action
+        );
     }
 
     // ========================================
