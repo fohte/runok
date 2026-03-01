@@ -12,14 +12,16 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
+<p align="center"><b>runok</b> is a command permission tool for LLM coding agents.</p>
+
 <p align="center">
-  <a href="https://runok.fohte.net">Documentation</a> &middot;
-  <a href="https://runok.fohte.net/getting-started/quickstart/">Quick Start</a> &middot;
-  <a href="https://runok.fohte.net/configuration/schema/">Configuration</a> &middot;
-  <a href="https://runok.fohte.net/recipes/overview/">Recipes</a>
+  <a href="https://runok.fohte.net">📖 Documentation</a> &middot;
+  <a href="https://runok.fohte.net/getting-started/quickstart/">🚀 Quick Start</a> &middot;
+  <a href="https://runok.fohte.net/configuration/schema/">🔧 Configuration</a> &middot;
+  <a href="https://runok.fohte.net/recipes/overview/">📋 Recipes</a>
 </p>
 
-runok is a command permission tool for LLM coding agents.
+---
 
 ## Why runok?
 
