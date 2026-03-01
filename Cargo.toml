@@ -8,6 +8,7 @@ edition = "2024"
 description = "Command execution permission framework for LLM agents"
 license = "MIT"
 repository = "https://github.com/fohte/runok"
+homepage = "https://runok.fohte.net"
 readme = "README.md"
 keywords = ["llm", "sandbox", "security", "cli", "permissions"]
 categories = ["command-line-utilities", "development-tools"]
