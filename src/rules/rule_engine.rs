@@ -232,33 +232,47 @@ fn evaluate_command_inner(
     // evaluate each sub-command individually. This prevents wildcard patterns
     // from greedily matching across shell operators (e.g. `cd *` matching
     // `cd /path && rm -rf dist`).
+    //
+    // Filter out sub-commands identical to the original command to avoid
+    // infinite recursion. This happens when extract_commands returns the
+    // parent command alongside embedded sub-commands (e.g. command
+    // substitutions: `echo $(rm -rf /)` extracts both `echo $(rm -rf /)`
+    // and `rm -rf /`).
     if let Ok(sub_commands) = extract_commands(command)
         && sub_commands.len() > 1
     {
-        let mut merged: Option<EvalResult> = None;
-        for sub in &sub_commands {
-            let result = evaluate_command_inner(config, sub, context, depth)?;
-            // Resolve Action::Default to the configured defaults.action.
-            // When defaults.action is not configured, escalate to Ask so that
-            // unmatched sub-commands do not get silently swallowed by Allow.
-            let resolved_action = match resolve_default_action(result.action, config) {
-                Action::Default => Action::Ask(None),
-                other => other,
-            };
-            let result = EvalResult {
-                action: resolved_action,
-                ..result
-            };
-            merged = Some(match merged {
-                Some(prev) => merge_results(prev, result),
-                None => result,
-            });
+        let sub_commands: Vec<&String> = sub_commands
+            .iter()
+            .filter(|sub| sub.as_str() != command)
+            .collect();
+        if sub_commands.is_empty() {
+            // All sub-commands were the original command; skip splitting.
+        } else {
+            let mut merged: Option<EvalResult> = None;
+            for sub in &sub_commands {
+                let result = evaluate_command_inner(config, sub, context, depth)?;
+                // Resolve Action::Default to the configured defaults.action.
+                // When defaults.action is not configured, escalate to Ask so that
+                // unmatched sub-commands do not get silently swallowed by Allow.
+                let resolved_action = match resolve_default_action(result.action, config) {
+                    Action::Default => Action::Ask(None),
+                    other => other,
+                };
+                let result = EvalResult {
+                    action: resolved_action,
+                    ..result
+                };
+                merged = Some(match merged {
+                    Some(prev) => merge_results(prev, result),
+                    None => result,
+                });
+            }
+            return Ok(merged.unwrap_or(EvalResult {
+                action: Action::Default,
+                sandbox_preset: None,
+                matched_rules: Vec::new(),
+            }));
         }
-        return Ok(merged.unwrap_or(EvalResult {
-            action: Action::Default,
-            sandbox_preset: None,
-            matched_rules: Vec::new(),
-        }));
     }
 
     let rules = match &config.rules {

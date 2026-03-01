@@ -653,10 +653,6 @@ fn for_loop_subcommand_extraction(
     "(echo hello && echo world) | grep hello",
     assert_allow as ActionAssertion,
 )]
-// NOTE: command substitution ($(...)) and backtick (`...`) tests are omitted
-// here because evaluate_command_inner's compound guard causes infinite
-// recursion when extract_commands returns the parent command alongside
-// its substitution-embedded sub-commands.
 fn shell_construct_subcommand_extraction(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -667,6 +663,39 @@ fn shell_construct_subcommand_extraction(
           - allow: 'echo *'
           - allow: 'grep *'
           - allow: 'ls *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Command substitution and backtick extraction
+// ========================================
+
+#[rstest]
+#[case::command_substitution_deny(
+    "echo $(rm -rf /tmp/data)",
+    assert_deny as ActionAssertion,
+)]
+#[case::command_substitution_allowed(
+    "echo $(echo inner)",
+    assert_allow as ActionAssertion,
+)]
+#[case::backtick_substitution_deny(
+    "echo `rm -rf /tmp/data`",
+    assert_deny as ActionAssertion,
+)]
+fn command_substitution_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
           - deny: 'rm -rf *'
     "})
     .unwrap();
