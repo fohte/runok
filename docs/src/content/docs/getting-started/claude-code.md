@@ -111,6 +111,22 @@ The [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin
 
 ### Install the plugin
 
+#### In Claude Code chat
+
+1. Add the marketplace:
+
+   ```
+   /plugin marketplace add fohte/runok-claude-code-plugin
+   ```
+
+2. Install the plugin:
+
+   ```
+   /plugin install runok@runok-claude-code-plugin
+   ```
+
+#### From the CLI
+
 1. Add the marketplace:
 
    ```sh
