@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 pub use route::{CheckRoute, route_check};
 
 #[derive(Parser)]
-#[command(name = "runok")]
+#[command(name = "runok", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
