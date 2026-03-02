@@ -164,18 +164,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_global_yml_takes_priority_over_yaml() {
+    #[rstest]
+    #[case::global("runok.yml", "runok.yaml")]
+    #[case::global_local_override("runok.local.yml", "runok.local.yaml")]
+    fn load_global_yml_takes_priority_over_yaml(#[case] yml_file: &str, #[case] yaml_file: &str) {
         let env = TestEnv::new();
         env.write_global(
-            "runok.yml",
+            yml_file,
             indoc! {"
                 defaults:
                   action: deny
             "},
         );
         env.write_global(
-            "runok.yaml",
+            yaml_file,
             indoc! {"
                 defaults:
                   action: allow
@@ -218,31 +220,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_global_local_override_yml_takes_priority_over_yaml() {
-        let env = TestEnv::new();
-        env.write_global(
-            "runok.local.yml",
-            indoc! {"
-                defaults:
-                  action: deny
-            "},
-        );
-        env.write_global(
-            "runok.local.yaml",
-            indoc! {"
-                defaults:
-                  action: allow
-            "},
-        );
-
-        let config = env.load().unwrap();
-        assert_eq!(
-            config.defaults.unwrap().action,
-            Some(crate::config::ActionKind::Deny)
-        );
-    }
-
     // -- Project config: .yml / .yaml support and priority --
 
     #[rstest]
@@ -265,18 +242,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_yml_takes_priority_over_yaml() {
+    #[rstest]
+    #[case::project("runok.yml", "runok.yaml")]
+    #[case::project_local_override("runok.local.yml", "runok.local.yaml")]
+    fn load_project_yml_takes_priority_over_yaml(#[case] yml_file: &str, #[case] yaml_file: &str) {
         let env = TestEnv::new();
         env.write_local(
-            "runok.yml",
+            yml_file,
             indoc! {"
                 defaults:
                   action: deny
             "},
         );
         env.write_local(
-            "runok.yaml",
+            yaml_file,
             indoc! {"
                 defaults:
                   action: allow
@@ -316,31 +295,6 @@ mod tests {
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Allow)
-        );
-    }
-
-    #[test]
-    fn load_local_override_yml_takes_priority_over_yaml() {
-        let env = TestEnv::new();
-        env.write_local(
-            "runok.local.yml",
-            indoc! {"
-                defaults:
-                  action: deny
-            "},
-        );
-        env.write_local(
-            "runok.local.yaml",
-            indoc! {"
-                defaults:
-                  action: allow
-            "},
-        );
-
-        let config = env.load_without_global().unwrap();
-        assert_eq!(
-            config.defaults.unwrap().action,
-            Some(crate::config::ActionKind::Deny)
         );
     }
 
