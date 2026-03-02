@@ -97,9 +97,9 @@ For team-wide enforcement, commit `.claude/settings.json` alongside your `runok.
 
 See [`runok check`](/cli/check/) for full command reference.
 
-## Configuration plugin
+## Claude Code plugin
 
-Separately from the hook, the [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin) teaches Claude Code how to read and edit runok configuration files. With the plugin installed, you can manage your `runok.yml` through natural language instead of editing YAML by hand.
+The [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin) gives Claude Code knowledge of runok -- its configuration format, pattern syntax, and rule evaluation model. With the plugin installed, Claude Code can answer questions about runok and manage your `runok.yml` through natural language.
 
 ### What the plugin provides
 
