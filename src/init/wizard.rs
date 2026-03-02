@@ -417,24 +417,37 @@ mod tests {
 
         let config_content =
             std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
-        // Verify the converted rules appear at the end of the config
-        let expected_tail = indoc! {"
-            # Converted from Claude Code permissions:
-            rules:
-              - allow: 'git status'
-              - deny: 'rm -rf /'
-        "};
-        assert!(config_content.ends_with(expected_tail));
+        assert_eq!(
+            config_content,
+            indoc! {"\
+                # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 
-        // Hook should be registered
-        let settings_content =
-            std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&settings_content).unwrap();
-        assert!(settings["hooks"]["PreToolUse"].is_array());
+                # Converted from Claude Code permissions:
+                rules:
+                  - allow: 'git status'
+                  - deny: 'rm -rf /'
+            "}
+        );
 
-        // Permissions should be removed
-        assert!(settings["permissions"].get("allow").is_none());
-        assert!(settings["permissions"].get("deny").is_none());
+        // Hook registered and permissions removed
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {},
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "type": "command",
+                            "command": "runok check --input-format claude-code-hook"
+                        }
+                    ]
+                }
+            })
+        );
     }
 
     #[rstest]
@@ -492,12 +505,16 @@ mod tests {
         env.run(Some(&InitScope::Project), true, false).unwrap();
 
         let config_content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
-        let expected_tail = indoc! {"
-            # Converted from Claude Code permissions:
-            rules:
-              - allow: 'cargo test'
-        "};
-        assert!(config_content.ends_with(expected_tail));
+        assert_eq!(
+            config_content,
+            indoc! {"\
+                # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+
+                # Converted from Claude Code permissions:
+                rules:
+                  - allow: 'cargo test'
+            "}
+        );
     }
 
     #[rstest]

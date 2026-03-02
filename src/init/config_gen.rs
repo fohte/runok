@@ -4,19 +4,7 @@ use super::error::InitError;
 
 /// Boilerplate template for a new runok.yml configuration file.
 const BOILERPLATE_TEMPLATE: &str = "\
-# runok configuration
-# See https://runok.fohte.net for documentation.
-
-# rules:
-#   - allow: 'git status'
-#   - allow: 'git diff *'
-#   - allow: 'git log *'
-#
-#   - ask: 'git push *'
-#
-#   - deny: 'git push -f|--force *'
-#     message: Use --force-with-lease instead
-#     fix_suggestion: 'git push --force-with-lease'
+# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 ";
 
 /// Config filenames to check for existing configuration.
@@ -84,21 +72,7 @@ mod tests {
         let tmpl = boilerplate();
         assert_eq!(
             tmpl,
-            indoc::indoc! {"\
-                # runok configuration
-                # See https://runok.fohte.net for documentation.
-
-                # rules:
-                #   - allow: 'git status'
-                #   - allow: 'git diff *'
-                #   - allow: 'git log *'
-                #
-                #   - ask: 'git push *'
-                #
-                #   - deny: 'git push -f|--force *'
-                #     message: Use --force-with-lease instead
-                #     fix_suggestion: 'git push --force-with-lease'
-            "}
+            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
         );
     }
 
@@ -161,15 +135,17 @@ mod tests {
     fn build_config_content_with_rules() {
         let rules = "  - allow: 'git status'\n  - deny: 'rm -rf /'\n";
         let content = build_config_content(Some(rules));
-        let expected_suffix = indoc::indoc! {"
+        assert_eq!(
+            content,
+            indoc::indoc! {"\
+                # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 
-            # Converted from Claude Code permissions:
-            rules:
-              - allow: 'git status'
-              - deny: 'rm -rf /'
-        "};
-        assert!(content.starts_with(boilerplate()));
-        assert!(content.ends_with(expected_suffix.trim_start()));
+                # Converted from Claude Code permissions:
+                rules:
+                  - allow: 'git status'
+                  - deny: 'rm -rf /'
+            "}
+        );
     }
 
     #[rstest]

@@ -108,28 +108,39 @@ fn init_with_claude_code_integration() {
     // Verify config was created with converted rules
     let config = std::fs::read_to_string(env.cwd().join("runok.yml"))
         .unwrap_or_else(|e| panic!("failed to read config: {e}"));
-    let expected_tail = indoc! {"
-        # Converted from Claude Code permissions:
-        rules:
-          - allow: 'git status'
-          - allow: 'npm install *'
-          - deny: 'rm -rf /'
-    "};
-    assert!(config.ends_with(expected_tail));
-
-    // Verify hook was registered
-    let settings = std::fs::read_to_string(claude_dir.join("settings.json"))
-        .unwrap_or_else(|e| panic!("failed to read settings: {e}"));
-    let settings_json: serde_json::Value =
-        serde_json::from_str(&settings).unwrap_or_else(|e| panic!("failed to parse settings: {e}"));
     assert_eq!(
-        settings_json["hooks"]["PreToolUse"][0]["command"].as_str(),
-        Some("runok check --input-format claude-code-hook")
+        config,
+        indoc! {"\
+            # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+
+            # Converted from Claude Code permissions:
+            rules:
+              - allow: 'git status'
+              - allow: 'npm install *'
+              - deny: 'rm -rf /'
+        "}
     );
 
-    // Verify permissions were removed
-    assert!(settings_json["permissions"].get("allow").is_none());
-    assert!(settings_json["permissions"].get("deny").is_none());
+    // Verify hook registered and permissions removed
+    let settings_json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(claude_dir.join("settings.json"))
+            .unwrap_or_else(|e| panic!("failed to read settings: {e}")),
+    )
+    .unwrap_or_else(|e| panic!("failed to parse settings: {e}"));
+    assert_eq!(
+        settings_json,
+        serde_json::json!({
+            "permissions": {},
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                    }
+                ]
+            }
+        })
+    );
 }
 
 #[rstest]

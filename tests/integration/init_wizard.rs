@@ -91,31 +91,37 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
 
     env.run(Some(&InitScope::User), true, false)?;
 
-    // Config file created
     let config = std::fs::read_to_string(env.user_config_path())?;
-    let expected_tail = indoc! {"
-        # Converted from Claude Code permissions:
-        rules:
-          - allow: 'git status'
-          - allow: 'npm install *'
-          - deny: 'rm -rf /'
-    "};
-    assert!(config.ends_with(expected_tail));
-
-    // Hook registered
-    let settings_path = env.user_claude_dir().join("settings.json");
-    let settings_str = std::fs::read_to_string(&settings_path)?;
-    let settings: serde_json::Value = serde_json::from_str(&settings_str)?;
-    let hooks = &settings["hooks"]["PreToolUse"];
-    assert!(hooks.is_array());
     assert_eq!(
-        hooks[0]["command"].as_str(),
-        Some("runok check --input-format claude-code-hook")
+        config,
+        indoc! {"\
+            # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+
+            # Converted from Claude Code permissions:
+            rules:
+              - allow: 'git status'
+              - allow: 'npm install *'
+              - deny: 'rm -rf /'
+        "}
     );
 
-    // Permissions removed
-    assert!(settings["permissions"].get("allow").is_none());
-    assert!(settings["permissions"].get("deny").is_none());
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        env.user_claude_dir().join("settings.json"),
+    )?)?;
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "permissions": {},
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                    }
+                ]
+            }
+        })
+    );
     Ok(())
 }
 
@@ -125,10 +131,11 @@ fn project_flow_creates_config_in_cwd() -> Result<(), Box<dyn std::error::Error>
 
     env.run(Some(&InitScope::Project), true, false)?;
 
-    let config_path = env.cwd.join("runok.yml");
-    assert!(config_path.exists());
-    let config = std::fs::read_to_string(&config_path)?;
-    assert!(config.starts_with("# runok configuration"));
+    let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
+    assert_eq!(
+        config,
+        "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+    );
     Ok(())
 }
 
@@ -146,13 +153,35 @@ fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
     env.run(Some(&InitScope::Project), true, false)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
-    let expected_tail = indoc! {"
-        # Converted from Claude Code permissions:
-        rules:
-          - allow: 'cargo test'
-          - allow: 'cargo build'
-    "};
-    assert!(config.ends_with(expected_tail));
+    assert_eq!(
+        config,
+        indoc! {"\
+            # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+
+            # Converted from Claude Code permissions:
+            rules:
+              - allow: 'cargo test'
+              - allow: 'cargo build'
+        "}
+    );
+
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        env.project_claude_dir().join("settings.json"),
+    )?)?;
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "permissions": {},
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                    }
+                ]
+            }
+        })
+    );
     Ok(())
 }
 
@@ -164,8 +193,10 @@ fn force_overwrites_existing_config() -> Result<(), Box<dyn std::error::Error>> 
     env.run(Some(&InitScope::Project), true, true)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
-    assert_ne!(config, "old content");
-    assert!(config.starts_with("# runok configuration"));
+    assert_eq!(
+        config,
+        "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+    );
     Ok(())
 }
 
