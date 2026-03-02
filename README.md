@@ -67,7 +67,7 @@ runok parses commands with `tree-sitter-bash`, so comments, compound commands (`
 - Conditional `when` clauses with CEL expressions for environment-aware decisions
 - OS-level sandboxing (macOS Seatbelt / Linux Landlock) for file and network restrictions
 
-**And more** -- [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/)
+**And more** -- [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/), [Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin) for managing rules through natural language
 
 ## Quick start
 
