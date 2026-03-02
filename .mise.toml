@@ -1,6 +1,6 @@
 [tools]
 lefthook = "2.1.0"
-"cargo:ast-grep" = "0.40.5"
+"cargo:ast-grep" = "0.41.0"
 
 # sandbox runtime for tests
 "npm:@anthropic-ai/sandbox-runtime" = "0.0.34"
