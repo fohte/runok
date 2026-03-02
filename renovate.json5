@@ -4,4 +4,14 @@
     'github>fohte/renovate-config:base.json5',
     'github>fohte/renovate-config:rust.json5',
   ],
+  packageRules: [
+    // docs/ site dependencies are not part of the runok CLI release.
+    // Override the shared 'deps:' commit type to 'chore:' so that
+    // release-please does not trigger a version bump for docs-only updates.
+    {
+      matchFileNames: ['docs/**'],
+      commitMessagePrefix: 'chore:',
+      semanticCommitScope: null,
+    },
+  ],
 }
