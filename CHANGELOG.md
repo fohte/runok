@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1](https://github.com/fohte/runok/compare/v0.1.0...v0.1.1) (2026-03-02)
+
+
+### Bug Fixes
+
+* **cli:** add `--version` flag ([#138](https://github.com/fohte/runok/issues/138)) ([a284a3b](https://github.com/fohte/runok/commit/a284a3b2e152a016a7aabd807b24c378b615dba6))
+* **config:** support `runok.yaml` for global config file discovery ([#141](https://github.com/fohte/runok/issues/141)) ([b338d30](https://github.com/fohte/runok/commit/b338d30edf71a93cb58dce6d3e3202bba5ac6f8c))
+
+
+### Dependencies
+
+* update pnpm to v10.30.1 ([#133](https://github.com/fohte/runok/issues/133)) ([94023f8](https://github.com/fohte/runok/commit/94023f8015f706da3022597b710e257f5dd0b6d1))
+* update rust crate tree-sitter to v0.26.5 ([#16](https://github.com/fohte/runok/issues/16)) ([4287cb2](https://github.com/fohte/runok/commit/4287cb2ffba0811eb709d51dcdbc9c4d71da525d))
+
 ## [0.1.0](https://github.com/fohte/runok/compare/v0.1.0...v0.1.0) (2026-03-01)
 
 
