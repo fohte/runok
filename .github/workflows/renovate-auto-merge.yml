@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   copier:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: >-
       github.actor == 'renovate[bot]' &&
       startsWith(github.head_ref, 'renovate/https-github.com-fohte-generic-boilerplate-')
