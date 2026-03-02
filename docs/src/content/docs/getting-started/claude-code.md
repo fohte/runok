@@ -96,3 +96,60 @@ The `.claude/settings.json` file can be placed at different scopes:
 For team-wide enforcement, commit `.claude/settings.json` alongside your `runok.yml` in the project repository.
 
 See [`runok check`](/cli/check/) for full command reference.
+
+## Claude Code plugin
+
+The [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin) gives Claude Code knowledge of runok -- its configuration format, pattern syntax, and rule evaluation model. With the plugin installed, Claude Code can answer questions about runok and manage your `runok.yml` through natural language.
+
+### What the plugin provides
+
+- **Configuration reading** -- Discovers and reads global (`~/.config/runok/runok.yml`), project (`./runok.yml`), and override (`./runok.local.yml`) configuration files.
+- **Rule management** -- Add, edit, and remove `allow`/`deny`/`ask` rules with full pattern syntax support (wildcards, alternation, negation, optional groups, quoted literals, `when` clauses).
+- **Definitions management** -- Manage `paths`, `wrappers`, `sandbox` presets, and `commands` under the `definitions` section.
+- **Extends management** -- Add and remove shared presets via local paths, GitHub shorthand (`github:org/repo@ref`), or Git URLs.
+- **Initialization** -- Generate a starter `runok.yml` for new projects with sensible defaults.
+
+### Install the plugin
+
+#### In Claude Code chat
+
+1. Add the marketplace:
+
+   ```
+   /plugin marketplace add fohte/runok-claude-code-plugin
+   ```
+
+2. Install the plugin:
+
+   ```
+   /plugin install runok@runok-claude-code-plugin
+   ```
+
+#### From the CLI
+
+1. Add the marketplace:
+
+   ```sh
+   claude plugin marketplace add fohte/runok-claude-code-plugin
+   ```
+
+2. Install the plugin:
+
+   ```sh
+   claude plugin install runok@runok-claude-code-plugin
+   ```
+
+### Usage
+
+The plugin activates automatically when you work with runok configuration or mention "runok" in conversation. You can also invoke the skill directly:
+
+```
+/runok
+```
+
+For example, you can ask Claude Code to:
+
+- "Add a rule to allow `cargo test`"
+- "Deny force pushes with a helpful message"
+- "Show me my current runok rules"
+- "Initialize runok for this project"
