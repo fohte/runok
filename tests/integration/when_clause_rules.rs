@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_default, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -262,4 +262,211 @@ fn when_clause_with_logical_and() {
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// when clause + compound command: different when results per sub-command
+// ========================================
+
+#[rstest]
+fn when_clause_compound_different_results_per_subcommand() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'echo *'
+    "})
+    .unwrap();
+
+    let ctx = EvalContext {
+        env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    // echo hello && aws s3 ls
+    // -> echo hello -> Allow (when clause on deny rule doesn't apply to echo)
+    // -> aws s3 ls -> Deny (when clause matches for prod)
+    // -> overall: Deny (strictest wins)
+    let result =
+        runok::rules::rule_engine::evaluate_compound(&config, "echo hello && aws s3 ls", &ctx)
+            .unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        result.action
+    );
+}
+
+#[rstest]
+fn when_clause_compound_all_skipped_falls_back() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'echo *'
+          - allow: 'aws *'
+    "})
+    .unwrap();
+
+    let ctx = EvalContext {
+        env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+
+    // echo hello && aws s3 ls in dev
+    // -> echo hello -> Allow
+    // -> aws s3 ls -> when skipped, falls back to allow
+    // -> overall: Allow
+    let result =
+        runok::rules::rule_engine::evaluate_compound(&config, "echo hello && aws s3 ls", &ctx)
+            .unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// when clause with logical OR
+// ========================================
+
+#[rstest]
+fn when_clause_with_logical_or() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'deploy *'
+            when: \"env.ENV == 'prod' || env.ENV == 'staging'\"
+          - allow: 'deploy *'
+    "})
+    .unwrap();
+
+    // prod -> deny
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "prod".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert!(matches!(result.action, Action::Deny(_)));
+
+    // staging -> deny
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "staging".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert!(matches!(result.action, Action::Deny(_)));
+
+    // dev -> allow (deny skipped, allow matches)
+    let ctx = EvalContext {
+        env: HashMap::from([("ENV".to_string(), "dev".to_string())]),
+        cwd: PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// All when conditions false -> Default
+// ========================================
+
+#[rstest]
+fn all_when_false_returns_default(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'deploy *'
+            when: \"has(env.ENV) && env.ENV == 'prod'\"
+          - ask: 'deploy *'
+            when: \"has(env.ENV) && env.ENV == 'staging'\"
+    "})
+    .unwrap();
+
+    // No matching env -> all when clauses false -> no rules match -> Default
+    let result = evaluate_command(&config, "deploy app", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// Empty args with size guard in when clause
+// ========================================
+
+#[rstest]
+#[case::no_args_allowed("git status", assert_allow as ActionAssertion)]
+#[case::with_args_denied("git status --short", assert_deny as ActionAssertion)]
+fn empty_args_size_guard(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    // args for "git status" are ["status"], for "git status --short"
+    // args are ["status"] and flags include "short".
+    // Use flags.size() to distinguish.
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git *'
+            when: \"flags.size() == 0\"
+          - deny: 'git *'
+            when: \"flags.size() > 0\"
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Hyphenated flag name access in CEL (--no-verify -> flags["no-verify"])
+// ========================================
+
+#[rstest]
+#[case::with_no_verify("git commit --no-verify", assert_deny as ActionAssertion)]
+#[case::without_no_verify("git commit -m hello", assert_default as ActionAssertion)]
+fn hyphenated_flag_name_in_cel(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    // Flags with hyphens (--no-verify) have leading dashes stripped
+    // but internal hyphens preserved: key becomes "no-verify".
+    // CEL's has() macro doesn't support bracket notation, so use "in" operator.
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'git commit *'
+            when: '"no-verify" in flags'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// When clause + path ref pattern combination
+// ========================================
+
+#[rstest]
+#[case::sensitive_in_prod_denied("cat .env", "prod", assert_deny as ActionAssertion)]
+#[case::sensitive_in_dev_default("cat .env", "dev", assert_default as ActionAssertion)]
+#[case::safe_in_prod_default("cat README.md", "prod", assert_default as ActionAssertion)]
+fn when_clause_with_path_ref(
+    #[case] command: &str,
+    #[case] env_value: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cat <path:sensitive>'
+            when: \"env.ENV == 'prod'\"
+        definitions:
+          paths:
+            sensitive:
+              - .env
+              - .envrc
+    "})
+    .unwrap();
+
+    let context = EvalContext {
+        env: HashMap::from([("ENV".to_string(), env_value.to_string())]),
+        ..empty_context
+    };
+
+    let result = evaluate_command(&config, command, &context).unwrap();
+    expected(&result.action);
 }

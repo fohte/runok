@@ -558,3 +558,332 @@ fn negated_literal_glob_wildcard_config(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Rule order independence: deny wins regardless of definition order
+// ========================================
+
+#[rstest]
+#[case::deny_before_allow(
+    indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'rm *'
+    "},
+    "rm -rf /tmp",
+    assert_deny as ActionAssertion,
+)]
+#[case::allow_before_deny(
+    indoc! {"
+        rules:
+          - allow: 'rm *'
+          - deny: 'rm -rf *'
+    "},
+    "rm -rf /tmp",
+    assert_deny as ActionAssertion,
+)]
+#[case::ask_before_deny(
+    indoc! {"
+        rules:
+          - ask: 'git push *'
+          - deny: 'git push -f|--force *'
+    "},
+    "git push --force origin",
+    assert_deny as ActionAssertion,
+)]
+#[case::deny_before_ask(
+    indoc! {"
+        rules:
+          - deny: 'git push -f|--force *'
+          - ask: 'git push *'
+    "},
+    "git push --force origin",
+    assert_deny as ActionAssertion,
+)]
+fn rule_order_independence(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Wildcard command patterns
+// ========================================
+
+#[rstest]
+#[case::star_help_matches_any_command(
+    indoc! {"
+        rules:
+          - allow: '* --help'
+    "},
+    "git --help",
+    assert_allow as ActionAssertion,
+)]
+#[case::star_help_matches_curl(
+    indoc! {"
+        rules:
+          - allow: '* --help'
+    "},
+    "curl --help",
+    assert_allow as ActionAssertion,
+)]
+#[case::deny_rm_star_vs_allow_star_help(
+    indoc! {"
+        rules:
+          - deny: 'rm *'
+          - allow: '* --help'
+    "},
+    "rm --help",
+    assert_deny as ActionAssertion,
+)]
+#[case::allow_star_help_unmatched_without_flag(
+    indoc! {"
+        rules:
+          - allow: '* --help'
+    "},
+    "git status",
+    assert_default as ActionAssertion,
+)]
+fn wildcard_command_patterns(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Wildcard deny beats specific allow
+// ========================================
+
+#[rstest]
+#[case::deny_git_star_overrides_allow_git_status(
+    "git status",
+    assert_deny as ActionAssertion,
+)]
+#[case::deny_git_star_overrides_allow_git_diff(
+    "git diff HEAD",
+    assert_deny as ActionAssertion,
+)]
+#[case::unrelated_command_not_affected(
+    "echo hello",
+    assert_default as ActionAssertion,
+)]
+fn wildcard_deny_beats_specific_allow(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git status'
+          - allow: 'git diff *'
+          - deny: 'git *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// defaults.sandbox: no sandbox -> sandbox_preset is None
+// ========================================
+
+#[rstest]
+fn no_sandbox_rule_returns_none_preset(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    assert!(
+        result.sandbox_preset.is_none(),
+        "expected sandbox_preset to be None, got {:?}",
+        result.sandbox_preset
+    );
+}
+
+#[rstest]
+fn defaults_sandbox_does_not_apply_to_rules_without_sandbox(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        defaults:
+          sandbox: restricted
+        rules:
+          - allow: 'echo *'
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    // defaults.sandbox does not automatically apply to rules that don't specify sandbox
+    assert!(
+        result.sandbox_preset.is_none(),
+        "expected sandbox_preset to be None when rule has no sandbox, got {:?}",
+        result.sandbox_preset
+    );
+}
+
+// ========================================
+// Ask response preserves message
+// ========================================
+
+#[rstest]
+fn ask_response_preserves_message(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'git push *'
+            message: 'Are you sure you want to push?'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
+    match &result.action {
+        Action::Ask(msg) => {
+            assert_eq!(msg.as_deref(), Some("Are you sure you want to push?"));
+        }
+        other => panic!("expected Ask, got {:?}", other),
+    }
+}
+
+#[rstest]
+fn ask_without_message_has_none(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'git push *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
+    match &result.action {
+        Action::Ask(msg) => {
+            assert!(msg.is_none(), "expected None message, got {:?}", msg);
+        }
+        other => panic!("expected Ask, got {:?}", other),
+    }
+}
+
+// ========================================
+// Unicode in commands
+// ========================================
+
+#[rstest]
+#[case::unicode_arg_allowed("echo こんにちは", assert_allow as ActionAssertion)]
+#[case::unicode_in_path("cat /tmp/日本語.txt", assert_default as ActionAssertion)]
+fn unicode_in_commands(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Equals-sign in flag tokens
+// ========================================
+
+#[rstest]
+#[case::equals_flag_matches("java -Denv=prod Main", assert_allow as ActionAssertion)]
+#[case::different_value_no_match("java -Denv=staging Main", assert_default as ActionAssertion)]
+fn equals_sign_in_flag_token(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'java -Denv=prod *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Duplicate rules: deny still wins
+// ========================================
+
+#[rstest]
+fn duplicate_rules_deny_wins(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git status'
+          - allow: 'git status'
+          - deny: 'git status'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "git status", &empty_context).unwrap();
+    assert!(matches!(result.action, Action::Deny(_)));
+}
+
+// ========================================
+// Empty rules list returns Default
+// ========================================
+
+#[rstest]
+fn empty_rules_returns_default(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules: []
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// QuotedLiteral suppresses glob: "*" in YAML does not glob-expand
+// ========================================
+
+#[rstest]
+#[case::exact_literal_star_matches(
+    "git commit -m 'WIP*'",
+    assert_deny as ActionAssertion,
+)]
+#[case::glob_like_prefix_does_not_match(
+    "git commit -m 'WIP: fixup'",
+    assert_default as ActionAssertion,
+)]
+#[case::unrelated_does_not_match(
+    "git commit -m 'DONE: release'",
+    assert_default as ActionAssertion,
+)]
+fn quoted_literal_suppresses_glob(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'git commit -m "WIP*"'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

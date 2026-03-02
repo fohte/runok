@@ -1,4 +1,6 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{
+    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
+};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -400,6 +402,457 @@ fn compound_command_uses_shell_input(#[case] input: CommandInput, #[case] expect
     if expected_compound {
         assert_eq!(input.program(), "sh");
     }
+}
+
+// ========================================
+// Mixed operators: ;, |, && in a single compound
+// ========================================
+
+#[rstest]
+#[case::semicolon_pipe_and(
+    "echo hello; cat file.txt | grep pattern && echo done",
+    assert_allow as ActionAssertion,
+)]
+#[case::mixed_with_deny(
+    "echo hello; cat file.txt | rm -rf /tmp && echo done",
+    assert_deny as ActionAssertion,
+)]
+#[case::pipe_then_semicolon(
+    "ls -la | grep foo; echo done",
+    assert_allow as ActionAssertion,
+)]
+fn mixed_operators_compound(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'cat *'
+          - allow: 'grep *'
+          - allow: 'ls *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Partial sandbox in compound: only some sub-commands have sandbox
+// ========================================
+
+#[rstest]
+fn partial_sandbox_compound(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: restricted
+          - allow: 'echo *'
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    // python3 has sandbox, echo does not -> sandbox policy still present from python3
+    let result =
+        evaluate_compound(&config, "python3 script.py && echo done", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    let policy = result.sandbox_policy.unwrap();
+    assert_eq!(policy.writable, vec!["./tmp".to_string()]);
+    assert!(!policy.network_allowed);
+}
+
+// ========================================
+// 3+ sandbox presets: progressive intersection
+// ========================================
+
+#[rstest]
+fn three_preset_progressive_intersection(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'cmd_a *'
+            sandbox: preset_a
+          - allow: 'cmd_b *'
+            sandbox: preset_b
+          - allow: 'cmd_c *'
+            sandbox: preset_c
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src, ./tmp, ./build]
+                deny: [/etc/passwd]
+              network:
+                allow: true
+            preset_b:
+              fs:
+                writable: [./tmp, ./build, ./dist]
+                deny: [/etc/shadow]
+              network:
+                allow: true
+            preset_c:
+              fs:
+                writable: [./tmp, ./dist, ./out]
+                deny: [/root]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(
+        &config,
+        "cmd_a run && cmd_b run && cmd_c run",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
+
+    let policy = result.sandbox_policy.unwrap();
+    // writable: intersection of [src,tmp,build] & [tmp,build,dist] & [tmp,dist,out] = [tmp]
+    assert_eq!(policy.writable, vec!["./tmp".to_string()]);
+    // deny: union of [/etc/passwd] + [/etc/shadow] + [/root]
+    let mut deny_sorted = policy.deny.clone();
+    deny_sorted.sort();
+    assert_eq!(
+        deny_sorted,
+        vec![
+            "/etc/passwd".to_string(),
+            "/etc/shadow".to_string(),
+            "/root".to_string(),
+        ]
+    );
+    // network: AND of true & true & false = false
+    assert!(!policy.network_allowed);
+}
+
+// ========================================
+// Sandbox contradiction preserves existing Ask
+// ========================================
+
+#[rstest]
+fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
+    // One command is Ask, plus writable contradiction -> Ask is preserved (not downgraded)
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'cmd_risky *'
+            sandbox: preset_a
+          - allow: 'cmd_safe *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+            preset_b:
+              fs:
+                writable: [./build]
+    "})
+    .unwrap();
+
+    let result =
+        evaluate_compound(&config, "cmd_risky run && cmd_safe run", &empty_context).unwrap();
+    // Ask from cmd_risky + writable contradiction -> Ask (contradiction doesn't downgrade)
+    assert!(
+        matches!(result.action, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        result.action
+    );
+}
+
+// ========================================
+// defaults.action absent: compound backward compatibility
+// ========================================
+
+#[rstest]
+#[case::no_defaults_unmatched_merged_with_allow(
+    "echo hello && unknown_cmd",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::no_defaults_all_unmatched(
+    "unknown_a && unknown_b",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_default as ActionAssertion,
+)]
+#[case::no_defaults_all_matched(
+    "echo hello && echo world",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn defaults_action_absent_compound_backward_compat(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// for loop: sub-commands are extracted and evaluated
+// ========================================
+
+#[rstest]
+#[case::for_loop_all_allowed(
+    "for f in a b c; do echo $f; done",
+    assert_allow as ActionAssertion,
+)]
+#[case::for_loop_with_deny(
+    "for f in a b c; do rm -rf $f; done",
+    assert_deny as ActionAssertion,
+)]
+#[case::for_loop_mixed(
+    "for f in a b; do echo $f && rm -rf /; done",
+    assert_deny as ActionAssertion,
+)]
+fn for_loop_subcommand_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Shell constructs: subshell, command substitution, backticks
+// ========================================
+
+#[rstest]
+#[case::subshell_with_deny(
+    "(echo hello && rm -rf /) | ls",
+    assert_deny as ActionAssertion,
+)]
+#[case::subshell_all_allowed(
+    "(echo hello && echo world) | grep hello",
+    assert_allow as ActionAssertion,
+)]
+fn shell_construct_subcommand_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'grep *'
+          - allow: 'ls *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Command substitution and backtick extraction
+// ========================================
+
+#[rstest]
+#[case::command_substitution_deny(
+    "echo $(rm -rf /tmp/data)",
+    assert_deny as ActionAssertion,
+)]
+#[case::command_substitution_allowed(
+    "echo $(echo inner)",
+    assert_allow as ActionAssertion,
+)]
+#[case::backtick_substitution_deny(
+    "echo `rm -rf /tmp/data`",
+    assert_deny as ActionAssertion,
+)]
+fn command_substitution_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Control structures: if/while/case
+// ========================================
+
+#[rstest]
+#[case::if_then_with_deny(
+    "if true; then rm -rf /; fi",
+    assert_deny as ActionAssertion,
+)]
+#[case::if_else_deny_in_else(
+    "if true; then echo hello; else rm -rf /; fi",
+    assert_deny as ActionAssertion,
+)]
+#[case::if_all_allowed(
+    "if true; then echo hello; else echo world; fi",
+    assert_allow as ActionAssertion,
+)]
+#[case::while_loop_with_deny(
+    "while true; do rm -rf /; done",
+    assert_deny as ActionAssertion,
+)]
+#[case::case_statement_with_deny(
+    "case x in a) echo hello;; b) rm -rf /;; esac",
+    assert_deny as ActionAssertion,
+)]
+fn control_structure_subcommand_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'true'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Function definition: body commands are extracted
+// ========================================
+
+#[rstest]
+#[case::function_def_with_deny(
+    "f() { rm -rf /; }",
+    assert_deny as ActionAssertion,
+)]
+#[case::function_def_all_allowed(
+    "f() { echo hello; }",
+    assert_allow as ActionAssertion,
+)]
+fn function_definition_subcommand_extraction(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Empty rules list
+// ========================================
+
+#[rstest]
+fn empty_rules_compound_returns_default(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules: []
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, "echo hello && ls", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Default);
+}
+
+// ========================================
+// Sandbox: deny-only presets merge without contradiction
+// ========================================
+
+#[rstest]
+fn deny_only_sandbox_presets_no_contradiction(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'cmd_a *'
+            sandbox: preset_a
+          - allow: 'cmd_b *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                deny: [/etc/passwd]
+            preset_b:
+              fs:
+                deny: [/etc/shadow]
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
+    // No writable defined -> no contradiction -> stays Allow
+    assert_eq!(result.action, Action::Allow);
+    let policy = result.sandbox_policy.unwrap();
+    assert!(policy.writable.is_empty());
+    let mut deny_sorted = policy.deny.clone();
+    deny_sorted.sort();
+    assert_eq!(
+        deny_sorted,
+        vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()]
+    );
+}
+
+// ========================================
+// Single sandbox preset via evaluate_compound
+// ========================================
+
+#[rstest]
+fn single_sandbox_preset_via_compound(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+                deny: [/etc/passwd]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, "python3 script.py", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    let policy = result.sandbox_policy.unwrap();
+    assert_eq!(policy.writable, vec!["./tmp".to_string()]);
+    assert_eq!(policy.deny, vec!["/etc/passwd".to_string()]);
+    assert!(!policy.network_allowed);
 }
 
 // ========================================

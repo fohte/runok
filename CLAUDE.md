@@ -56,6 +56,10 @@ If the same assertion chain appears in 3+ tests, extract it into a helper.
 
 Tests must verify production code. Tests that only assert on test helpers, fixtures, or mocks are unnecessary. Remove them.
 
+### Integration tests for rule evaluation logic
+
+Write integration tests in `tests/integration/`. Integration tests verify the end-to-end path: YAML config -> `parse_config` -> `evaluate_command`/`evaluate_compound`. Unit tests focus on internal algorithm correctness (pattern matching, command parsing, expression evaluation). Both may exercise the same code paths from different perspectives (ripgrep-style test separation).
+
 ## Documentation rules
 
 ### Keep docs and README up to date
