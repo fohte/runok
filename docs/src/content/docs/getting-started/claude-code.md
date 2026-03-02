@@ -111,9 +111,17 @@ The [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin
 
 ### Install the plugin
 
-```sh
-claude plugin add github:fohte/runok-claude-code-plugin
-```
+1. Add the marketplace:
+
+   ```sh
+   claude plugin marketplace add fohte/runok-claude-code-plugin
+   ```
+
+2. Install the plugin:
+
+   ```sh
+   claude plugin install runok@runok-claude-code-plugin
+   ```
 
 ### Usage
 
