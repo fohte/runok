@@ -90,7 +90,7 @@ fn init_with_claude_code_integration() {
         indoc! {r#"
             {
                 "permissions": {
-                    "allow": ["Bash(git status)", "Bash(npm:install:*)"],
+                    "allow": ["Bash(git status)", "Bash(npm install *)"],
                     "deny": ["Bash(rm -rf /)"]
                 }
             }

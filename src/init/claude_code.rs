@@ -26,14 +26,6 @@ fn parse_permission_entry(entry: &str) -> Option<(&str, &str)> {
     Some((tool, pattern))
 }
 
-/// Convert a Bash permission pattern to a runok rule pattern.
-///
-/// - Replaces `:` separators with spaces (e.g., `git:status` -> `git status`)
-/// - Preserves `*` wildcards
-fn convert_bash_pattern(pattern: &str) -> String {
-    pattern.replace(':', " ")
-}
-
 /// Convert Claude Code permission entries to runok rule YAML lines.
 ///
 /// Processes both `allow` and `deny` entries. Entries that are not `Bash(...)`
@@ -44,10 +36,7 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
     for entry in allow_entries {
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
-                let converted = convert_bash_pattern(pattern);
-                result
-                    .rules
-                    .push_str(&format!("  - allow: '{}'\n", converted));
+                result.rules.push_str(&format!("  - allow: '{pattern}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -61,10 +50,7 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
     for entry in deny_entries {
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
-                let converted = convert_bash_pattern(pattern);
-                result
-                    .rules
-                    .push_str(&format!("  - deny: '{}'\n", converted));
+                result.rules.push_str(&format!("  - deny: '{pattern}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -227,24 +213,12 @@ mod tests {
 
     #[rstest]
     #[case::bash_simple("Bash(git status)", Some(("Bash", "git status")))]
-    #[case::bash_wildcard("Bash(git:*)", Some(("Bash", "git:*")))]
+    #[case::bash_wildcard("Bash(git *)", Some(("Bash", "git *")))]
     #[case::read_tool("Read(/tmp/file)", Some(("Read", "/tmp/file")))]
     #[case::no_parens("invalid", None)]
     #[case::empty_parens("Bash()", Some(("Bash", "")))]
     fn test_parse_permission_entry(#[case] entry: &str, #[case] expected: Option<(&str, &str)>) {
         assert_eq!(parse_permission_entry(entry), expected);
-    }
-
-    // --- convert_bash_pattern ---
-
-    #[rstest]
-    #[case::simple("git status", "git status")]
-    #[case::colon_separated("git:status", "git status")]
-    #[case::wildcard("git:*", "git *")]
-    #[case::complex("npm:install:*", "npm install *")]
-    #[case::no_colon("ls", "ls")]
-    fn test_convert_bash_pattern(#[case] pattern: &str, #[case] expected: &str) {
-        assert_eq!(convert_bash_pattern(pattern), expected);
     }
 
     // --- convert_permissions ---
@@ -253,7 +227,7 @@ mod tests {
     fn convert_permissions_basic() {
         let allow = vec![
             "Bash(git status)".to_string(),
-            "Bash(npm:install:*)".to_string(),
+            "Bash(npm install *)".to_string(),
         ];
         let deny = vec!["Bash(rm -rf /)".to_string()];
 
@@ -301,7 +275,7 @@ mod tests {
             indoc! {r#"
                 {
                     "permissions": {
-                        "allow": ["Bash(git status)", "Bash(npm:install:*)"],
+                        "allow": ["Bash(git status)", "Bash(npm install *)"],
                         "deny": ["Bash(rm -rf /)"]
                     }
                 }
@@ -310,7 +284,7 @@ mod tests {
         .unwrap();
 
         let (allow, deny) = read_permissions(&claude_dir).unwrap();
-        assert_eq!(allow, vec!["Bash(git status)", "Bash(npm:install:*)"]);
+        assert_eq!(allow, vec!["Bash(git status)", "Bash(npm install *)"]);
         assert_eq!(deny, vec!["Bash(rm -rf /)"]);
     }
 

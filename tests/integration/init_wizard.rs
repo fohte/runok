@@ -83,7 +83,7 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
     env.setup_user_claude_settings(indoc! {r#"
         {
             "permissions": {
-                "allow": ["Bash(git status)", "Bash(npm:install:*)", "Read(/tmp)"],
+                "allow": ["Bash(git status)", "Bash(npm install *)", "Read(/tmp)"],
                 "deny": ["Bash(rm -rf /)", "Write(/etc/passwd)"]
             }
         }
@@ -138,7 +138,7 @@ fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
     env.setup_project_claude_settings(indoc! {r#"
         {
             "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo:build)"]
+                "allow": ["Bash(cargo test)", "Bash(cargo build)"]
             }
         }
     "#})?;
