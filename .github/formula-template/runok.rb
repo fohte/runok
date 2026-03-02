@@ -32,6 +32,6 @@ class Runok < Formula
   end
 
   test do
-    assert_match "Usage:", shell_output("#{bin}/runok check --help")
+    assert_match "runok #{version}", shell_output("#{bin}/runok --version")
   end
 end
