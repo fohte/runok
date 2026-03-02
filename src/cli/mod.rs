@@ -1,6 +1,6 @@
 mod route;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 pub use route::{CheckRoute, route_check};
 
@@ -18,6 +18,8 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// Initialize runok configuration
+    Init(InitArgs),
     /// Print the JSON Schema for runok.yml to stdout
     #[cfg(feature = "config-schema")]
     ConfigSchema,
@@ -26,6 +28,30 @@ pub enum Commands {
     #[cfg(target_os = "linux")]
     #[command(name = "__sandbox-exec", hide = true)]
     SandboxExec(SandboxExecArgs),
+}
+
+/// Scope for init configuration: user-level or project-level.
+#[derive(Clone, ValueEnum)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum InitScope {
+    User,
+    Project,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct InitArgs {
+    /// Configuration scope: "user" for global, "project" for local
+    #[arg(long, value_enum)]
+    pub scope: Option<InitScope>,
+
+    /// Accept all defaults without prompting
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
+
+    /// Overwrite existing configuration files
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -142,8 +168,43 @@ mod tests {
         &["runok", "check", "--verbose", "--", "git", "status"],
         Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
     )]
+    #[case::init_defaults(
+        &["runok", "init"],
+        Commands::Init(InitArgs { scope: None, yes: false, force: false }),
+    )]
+    #[case::init_with_scope_user(
+        &["runok", "init", "--scope", "user"],
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: false, force: false }),
+    )]
+    #[case::init_with_scope_project(
+        &["runok", "init", "--scope", "project"],
+        Commands::Init(InitArgs { scope: Some(InitScope::Project), yes: false, force: false }),
+    )]
+    #[case::init_with_yes(
+        &["runok", "init", "-y"],
+        Commands::Init(InitArgs { scope: None, yes: true, force: false }),
+    )]
+    #[case::init_with_yes_long(
+        &["runok", "init", "--yes"],
+        Commands::Init(InitArgs { scope: None, yes: true, force: false }),
+    )]
+    #[case::init_with_force(
+        &["runok", "init", "--force"],
+        Commands::Init(InitArgs { scope: None, yes: false, force: true }),
+    )]
+    #[case::init_all_flags(
+        &["runok", "init", "--scope", "user", "-y", "--force"],
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true, force: true }),
+    )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);
         assert_eq!(cli.command, expected);
+    }
+
+    #[rstest]
+    #[case::invalid_scope(&["runok", "init", "--scope", "invalid"])]
+    fn cli_parsing_errors(#[case] argv: &[&str]) {
+        let result = Cli::try_parse_from(argv);
+        assert!(result.is_err());
     }
 }

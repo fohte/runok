@@ -61,9 +61,29 @@ fn main() -> ExitCode {
         return run_sandbox_exec(args);
     }
 
+    // Init runs independently without loading config
+    if let Commands::Init(ref args) = cli.command {
+        return run_init(args);
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exit_code = run_command(cli.command, &cwd, std::io::stdin());
     ExitCode::from(exit_code as u8)
+}
+
+fn run_init(args: &cli::InitArgs) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let scope = args.scope.as_ref().map(|s| match s {
+        cli::InitScope::User => runok::init::InitScope::User,
+        cli::InitScope::Project => runok::init::InitScope::Project,
+    });
+    match runok::init::run_wizard(scope.as_ref(), args.yes, args.force, &cwd) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("runok: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
@@ -74,6 +94,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
     let config_error_exit_code = match &command {
         Commands::Exec(_) => 1,
         Commands::Check(_) => 2,
+        Commands::Init(_) => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
         #[cfg(target_os = "linux")]
@@ -133,6 +154,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 }
             }
         }
+        Commands::Init(_) => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
         #[cfg(target_os = "linux")]
