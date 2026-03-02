@@ -238,22 +238,26 @@ fn evaluate_command_inner(
     // parent command alongside embedded sub-commands (e.g. command
     // substitutions: `echo $(rm -rf /)` extracts both `echo $(rm -rf /)`
     // and `rm -rf /`).
+    //
+    // When self-referencing sub-commands are filtered out, the remaining
+    // nested sub-commands are still evaluated recursively, and the original
+    // command falls through to simple-command rule evaluation below. Both
+    // results are merged so that rules matching the outer command (e.g.
+    // `rm *` for `rm $(echo hello)`) are not skipped.
     if let Ok(sub_commands) = extract_commands(command)
         && sub_commands.len() > 1
     {
-        let sub_commands: Vec<&String> = sub_commands
+        let nested_subs: Vec<&String> = sub_commands
             .iter()
             .filter(|sub| sub.as_str() != command)
             .collect();
-        if sub_commands.is_empty() {
-            // All sub-commands were the original command; skip splitting.
-        } else {
+        let had_self_reference = nested_subs.len() < sub_commands.len();
+
+        if !had_self_reference {
+            // Pure compound (no self-reference): evaluate all sub-commands and return.
             let mut merged: Option<EvalResult> = None;
-            for sub in &sub_commands {
+            for sub in &nested_subs {
                 let result = evaluate_command_inner(config, sub, context, depth)?;
-                // Resolve Action::Default to the configured defaults.action.
-                // When defaults.action is not configured, escalate to Ask so that
-                // unmatched sub-commands do not get silently swallowed by Allow.
                 let resolved_action = match resolve_default_action(result.action, config) {
                     Action::Default => Action::Ask(None),
                     other => other,
@@ -273,8 +277,57 @@ fn evaluate_command_inner(
                 matched_rules: Vec::new(),
             }));
         }
+        // Self-reference detected (e.g. command substitution): evaluate only
+        // the nested sub-commands here, then fall through to evaluate the
+        // original command as a simple command. The results are merged at the end.
+        if !nested_subs.is_empty() {
+            let mut nested_merged: Option<EvalResult> = None;
+            for sub in &nested_subs {
+                let result = evaluate_command_inner(config, sub, context, depth)?;
+                let resolved_action = match resolve_default_action(result.action, config) {
+                    Action::Default => Action::Ask(None),
+                    other => other,
+                };
+                let result = EvalResult {
+                    action: resolved_action,
+                    ..result
+                };
+                nested_merged = Some(match nested_merged {
+                    Some(prev) => merge_results(prev, result),
+                    None => result,
+                });
+            }
+            // Fall through to simple-command evaluation below, then merge.
+            // Store the nested result to merge after simple-command evaluation.
+            // We use a closure-like approach: evaluate the rest of this function
+            // and merge before returning.
+            if let Some(nested_result) = nested_merged {
+                // Evaluate the original command as a simple command (skip the
+                // compound guard by calling the remaining logic directly).
+                let simple_result = evaluate_simple_command(config, command, context, depth)?;
+                return Ok(merge_results(nested_result, simple_result));
+            }
+        }
+        // nested_subs was empty and had self-reference: fall through to
+        // simple-command evaluation.
     }
 
+    evaluate_simple_command(config, command, context, depth)
+}
+
+/// Evaluate a single (non-compound) command against rules and wrappers.
+///
+/// This contains the core rule-matching and wrapper-unwrapping logic,
+/// separated from `evaluate_command_inner` so the compound guard can
+/// call it directly when it needs to evaluate the original command as
+/// a simple command (e.g. after filtering out self-referencing sub-commands
+/// from command substitutions).
+fn evaluate_simple_command(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+    depth: usize,
+) -> Result<EvalResult, RuleError> {
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
