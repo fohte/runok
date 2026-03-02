@@ -272,7 +272,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 if node.field_name_for_child(i as u32) == Some("value") {
                     continue;
                 }
-                if let Some(child) = node.child(i)
+                if let Some(child) = node.child(i as u32)
                     && child.is_named()
                 {
                     collect_commands(child, source, commands);
@@ -290,7 +290,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             }
             for i in 0..node.child_count() {
                 if node.field_name_for_child(i as u32) == Some("redirect")
-                    && let Some(child) = node.child(i)
+                    && let Some(child) = node.child(i as u32)
                 {
                     collect_substitutions_recursive(child, source, commands);
                 }
@@ -318,7 +318,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         // command_substitution nodes, and emit the remaining text.
         "command" => {
             for i in 0..node.child_count() {
-                let Some(child) = node.child(i) else {
+                let Some(child) = node.child(i as u32) else {
                     continue;
                 };
                 if !child.is_named() {
@@ -345,7 +345,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             // node use the field name "redirect".
             let parts: Vec<&str> = (0..node.child_count())
                 .filter_map(|i| {
-                    let child = node.child(i)?;
+                    let child = node.child(i as u32)?;
                     if !child.is_named() {
                         return None;
                     }
