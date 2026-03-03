@@ -73,11 +73,19 @@ runok parses commands with `tree-sitter-bash`, so comments, compound commands (`
 
 ### Install
 
+**Homebrew**
+
+```sh
+brew install fohte/tap/runok
+```
+
+**From source with Cargo**
+
 ```sh
 cargo install --git https://github.com/fohte/runok.git
 ```
 
-Pre-built binaries are also available on [GitHub Releases](https://github.com/fohte/runok/releases). See [Installation](https://runok.fohte.net/getting-started/installation/) for details.
+Pre-built binaries are also available on [GitHub Releases](https://github.com/fohte/runok/releases). See [Installation](https://runok.fohte.net/getting-started/installation/) for all options.
 
 ### Configure
 
