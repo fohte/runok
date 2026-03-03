@@ -59,6 +59,7 @@ And that's just the start. Claude Code's built-in permissions have other limitat
 **Denied commands give no explanation.** The agent has no idea why a command was blocked. With runok, deny rules include a message and a suggested fix -- the agent reads it and self-corrects:
 
 ```yaml
+# runok.yml
 - deny: 'git push -f|--force *'
   message: 'Force push is not allowed.'
   fix_suggestion: 'git push --force-with-lease'
@@ -67,6 +68,7 @@ And that's just the start. Claude Code's built-in permissions have other limitat
 **Global flags break matching.** Claude sometimes adds flags like `-C` before the subcommand. `git -C /path commit` does not match `Bash(git commit *)`. runok handles this with optional groups and order-independent matching:
 
 ```yaml
+# runok.yml
 - allow: 'git [-C *] commit *'
 # matches: git commit -m "fix"
 # matches: git -C /path/to/repo commit -m "fix"
@@ -75,6 +77,7 @@ And that's just the start. Claude Code's built-in permissions have other limitat
 **No recursive parsing of wrappers.** Claude Code does not inspect `sudo`, `bash -c`, or `$()`. runok recursively unwraps them to evaluate the inner command:
 
 ```yaml
+# runok.yml
 definitions:
   wrappers:
     - 'sudo <cmd>'
@@ -88,6 +91,7 @@ rules:
 **JSON only, no comments.** `settings.json` cannot be annotated. runok uses YAML:
 
 ```yaml
+# runok.yml
 rules:
   # read-only git commands are always safe
   - allow: 'git status'

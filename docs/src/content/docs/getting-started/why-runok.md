@@ -24,7 +24,7 @@ Even though `Bash(git log *)` is in your allow list, the comment introduces a ne
 
 runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to parse the command into an AST. Comments are stripped during parsing. The actual command `git log --oneline -5` is extracted and evaluated against your rules.
 
-```yaml
+```yaml title="runok.yml"
 rules:
   - allow: 'git log *'
 ```
@@ -45,7 +45,7 @@ Claude Code recognizes shell operators like `&&` and blocks compound commands fr
 
 runok decomposes compound commands (`&&`, `||`, `;`, `|`) into individual sub-commands using tree-sitter-bash. Each sub-command is evaluated independently, and the strictest result wins. If all sub-commands are allowed, the compound command as a whole is allowed. See [Compound Commands](/rule-evaluation/compound-commands/) for details.
 
-```yaml
+```yaml title="runok.yml"
 rules:
   - allow: 'git add *'
   - allow: 'git commit *'
@@ -57,7 +57,7 @@ rules:
 
 In Claude Code's `settings.json`, the deny list is an array of patterns:
 
-```json
+```json title="settings.json"
 {
   "permissions": {
     "deny": ["Bash(git push --force*)"]
@@ -71,7 +71,7 @@ When Claude tries `git push --force`, the command is blocked -- but neither the 
 
 runok supports `message` and `fix_suggestion` fields on deny rules:
 
-```yaml
+```yaml title="runok.yml"
 rules:
   - deny: 'git push -f|--force *'
     message: 'Force push rewrites history and is not allowed on this project.'
@@ -94,7 +94,7 @@ Claude Code's glob matching for `Bash(git commit *)` does not match this because
 
 runok's pattern syntax supports [optional groups](/pattern-syntax/optional-groups/) that match zero or one occurrence of a flag in any position:
 
-```yaml
+```yaml title="runok.yml"
 rules:
   - allow: 'git [-C *] commit *'
 ```
@@ -115,7 +115,7 @@ Claude Code evaluates the entire string as one command. It cannot look inside `s
 
 runok defines wrapper patterns in `definitions.wrappers` and recursively extracts and evaluates the inner command:
 
-```yaml
+```yaml title="runok.yml"
 definitions:
   wrappers:
     - 'sudo <cmd>'
@@ -136,7 +136,7 @@ Claude Code's OS-level sandbox applies the same restrictions to all commands. Th
 
 runok attaches sandbox presets to individual rules:
 
-```yaml
+```yaml title="runok.yml"
 definitions:
   sandbox:
     restricted:
@@ -163,7 +163,7 @@ Claude Code uses `settings.json` for configuration. JSON does not support commen
 
 runok uses YAML, which supports comments natively:
 
-```yaml
+```yaml title="runok.yml"
 rules:
   # read-only git commands are always safe
   - allow: 'git status'
@@ -189,7 +189,7 @@ Claude Code's `Bash(pattern*)` glob syntax supports `*` wildcards at any positio
 
 runok's [pattern syntax](/pattern-syntax/overview/) covers all of these:
 
-```yaml
+```yaml title="runok.yml"
 rules:
   # Flag alternation
   - deny: 'git push -f|--force *'

@@ -54,7 +54,7 @@ runok strips comments and decomposes `&&` / `;` / `|` with tree-sitter-bash, eva
 
 **Denied commands give no explanation.** The agent cannot learn why a command was blocked. With runok, deny rules include a message and a suggested fix:
 
-```yaml
+```yaml title="runok.yml"
 - deny: 'git push -f|--force *'
   message: 'Force push is not allowed.'
   fix_suggestion: 'git push --force-with-lease'
@@ -62,7 +62,7 @@ runok strips comments and decomposes `&&` / `;` / `|` with tree-sitter-bash, eva
 
 **Global flags break matching.** `git -C /path commit` does not match `git commit *`. runok supports [optional groups, alternation, and order-independent matching](/pattern-syntax/overview/):
 
-```yaml
+```yaml title="runok.yml"
 - allow: 'git [-C *] commit *'
 # matches both "git commit" and "git -C /path commit"
 ```
