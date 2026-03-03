@@ -89,9 +89,14 @@ rules:
 
 ```yaml
 rules:
-  # Security team policy -- see JIRA-1234
-  - deny: 'curl * -k|--insecure *'
-    message: 'Insecure TLS connections are not allowed.'
+  # read-only git commands are always safe
+  - allow: 'git status'
+  - allow: 'git diff *'
+
+  # allow push, but not force push -- rewrites shared history
+  - deny: 'git push -f|--force *'
+    message: 'Use --force-with-lease instead.'
+  - ask: 'git push *'
 ```
 
 See [Why runok?](https://runok.fohte.net/getting-started/why-runok/) for a full comparison table.

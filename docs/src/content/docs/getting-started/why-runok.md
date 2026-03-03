@@ -165,13 +165,15 @@ runok uses YAML, which supports comments natively:
 
 ```yaml
 rules:
-  # Security team policy -- see JIRA-1234
-  - deny: 'curl * -k|--insecure *'
-    message: 'Insecure TLS connections are not allowed.'
+  # read-only git commands are always safe
+  - allow: 'git status'
+  - allow: 'git diff *'
+  - allow: 'git log *'
 
-  # Safe to auto-approve
-  - allow: 'npm test'
-  - allow: 'cargo test *'
+  # allow push, but not force push -- rewrites shared history
+  - deny: 'git push -f|--force *'
+    message: 'Use --force-with-lease instead.'
+  - ask: 'git push *'
 ```
 
 ## Pattern matching expressiveness
