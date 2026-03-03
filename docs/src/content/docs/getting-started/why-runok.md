@@ -47,7 +47,7 @@ Similarly, `$()` subshell expressions are not expanded, so commands like `echo $
 
 **How runok handles this:**
 
-runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to build a full AST. It distinguishes arguments from flags, decomposes compound commands (`&&`, `||`, `;`, `|`) into individual sub-commands, and evaluates each one independently. The strictest result wins. See [Compound Commands](/rule-evaluation/compound-commands/) for details.
+runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to build a full AST. It decomposes compound commands (`&&`, `||`, `;`, `|`) into individual sub-commands and evaluates each one independently against your rules. `echo "---"` simply matches `echo *` -- no flag-like heuristics involved. See [Compound Commands](/rule-evaluation/compound-commands/) for details.
 
 ```yaml title="runok.yml"
 rules:

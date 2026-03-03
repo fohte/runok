@@ -50,7 +50,7 @@ Claude Code's built-in permissions use simple glob matching. This works for basi
 Command contains newlines that could separate multiple commands
 ```
 
-Or `echo "---"` gets flagged because `--` is misinterpreted as a flag. runok uses tree-sitter-bash to parse commands into an AST, stripping comments, decomposing compound commands, and distinguishing arguments from flags.
+Arguments like `echo "---"` also get flagged because `--` is misinterpreted as a flag. runok uses tree-sitter-bash to parse commands into an AST, so comments and compound commands are handled correctly without these false positives.
 
 **Denied commands give no explanation.** The agent cannot learn why a command was blocked. With runok, deny rules include a message and a suggested fix:
 
