@@ -87,6 +87,12 @@ fn preview_register_hook(content: &str) -> Result<Option<String>, InitError> {
     Ok(Some(serde_json::to_string_pretty(&root)?))
 }
 
+/// Re-format JSON through serde to normalize indentation.
+fn normalize_json(content: &str) -> Result<String, InitError> {
+    let value: serde_json::Value = serde_json::from_str(content)?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
 /// Print a unified-style diff between two strings.
 fn print_diff(filename: &str, before: &str, after: &str) {
     let diff = similar::TextDiff::from_lines(before, after);
@@ -154,7 +160,7 @@ fn run_claude_code_integration(
 
     let settings_path = claude_dir.join("settings.json");
     let original_content = if settings_path.exists() {
-        std::fs::read_to_string(&settings_path)?
+        normalize_json(&std::fs::read_to_string(&settings_path)?)?
     } else {
         String::new()
     };
@@ -184,7 +190,7 @@ fn run_claude_code_integration(
 
     // Show diff preview: settings.json after adding hook
     let current_content = if settings_path.exists() {
-        std::fs::read_to_string(&settings_path)?
+        normalize_json(&std::fs::read_to_string(&settings_path)?)?
     } else {
         original_content.clone()
     };
