@@ -93,14 +93,43 @@ fn normalize_json(content: &str) -> Result<String, InitError> {
     Ok(serde_json::to_string_pretty(&value)?)
 }
 
-/// Print a unified-style diff between two strings.
+/// Print a colored unified-style diff between two strings.
 fn print_diff(filename: &str, before: &str, after: &str) {
+    use similar::ChangeTag;
+
     let diff = similar::TextDiff::from_lines(before, after);
-    let udiff = diff
-        .unified_diff()
-        .header(&format!("a/{filename}"), &format!("b/{filename}"))
-        .to_string();
-    eprint!("{udiff}");
+
+    // ANSI color codes
+    const RED: &str = "\x1b[31m";
+    const GREEN: &str = "\x1b[32m";
+    const CYAN: &str = "\x1b[36m";
+    const RESET: &str = "\x1b[0m";
+
+    eprintln!("{RED}--- a/{filename}{RESET}");
+    eprintln!("{GREEN}+++ b/{filename}{RESET}");
+
+    for group in diff.grouped_ops(3) {
+        let first = &group[0];
+        let last = &group[group.len() - 1];
+        let old_start = first.old_range().start + 1;
+        let old_len = last.old_range().end - first.old_range().start;
+        let new_start = first.new_range().start + 1;
+        let new_len = last.new_range().end - first.new_range().start;
+        eprintln!("{CYAN}@@ -{old_start},{old_len} +{new_start},{new_len} @@{RESET}");
+        for op in &group {
+            for change in diff.iter_changes(op) {
+                let (sign, color) = match change.tag() {
+                    ChangeTag::Delete => ("-", RED),
+                    ChangeTag::Insert => ("+", GREEN),
+                    ChangeTag::Equal => (" ", ""),
+                };
+                eprint!("{color}{sign}{change}{RESET}");
+                if change.missing_newline() {
+                    eprintln!();
+                }
+            }
+        }
+    }
 }
 
 /// Summary of actions performed by the init wizard.
@@ -155,8 +184,6 @@ fn run_claude_code_integration(
     auto_yes: bool,
 ) -> Result<(Option<String>, bool, bool), InitError> {
     let mut converted_rules = None;
-    let mut hook_registered = false;
-    let mut permissions_removed = false;
 
     let settings_path = claude_dir.join("settings.json");
     let original_content = if settings_path.exists() {
@@ -165,47 +192,76 @@ fn run_claude_code_integration(
         String::new()
     };
 
-    // Read and convert permissions
+    // Determine what changes are needed
     let (allow, deny) = claude_code::read_permissions(claude_dir)?;
-    if !allow.is_empty() || !deny.is_empty() {
+    let has_permissions = !allow.is_empty() || !deny.is_empty();
+    let mut has_rules = false;
+
+    if has_permissions {
         let conversion = claude_code::convert_permissions(&allow, &deny);
         if !conversion.rules.is_empty() {
             converted_rules = Some(conversion.rules.clone());
-
-            // Show diff preview: settings.json after removing permissions
-            let after = preview_remove_permissions(&original_content)?;
-            print_diff("settings.json", &original_content, &after);
-            eprintln!();
-        }
-
-        let should_remove = prompt::confirm(
-            "Remove converted permissions from Claude Code settings?",
-            true,
-            auto_yes,
-        )?;
-        if should_remove {
-            permissions_removed = claude_code::remove_permissions(claude_dir)?;
+            has_rules = true;
         }
     }
 
-    // Show diff preview: settings.json after adding hook
-    let current_content = if settings_path.exists() {
-        normalize_json(&std::fs::read_to_string(&settings_path)?)?
+    // Build the preview: simulate both operations to show combined diff
+    let after_permissions = if has_rules {
+        preview_remove_permissions(&original_content)?
     } else {
         original_content.clone()
     };
-    let after = preview_register_hook(&current_content)?;
-    if let Some(ref after_content) = after {
-        print_diff("settings.json", &current_content, after_content);
+    let hook_preview = preview_register_hook(&after_permissions)?;
+    let has_hook_change = hook_preview.is_some();
+
+    if !has_rules && !has_hook_change {
+        return Ok((converted_rules, false, false));
+    }
+
+    // Display all planned changes with step numbers
+    let mut step = 1;
+    let total_steps = usize::from(has_rules) + usize::from(has_hook_change);
+
+    if has_rules {
+        eprintln!("[{step}/{total_steps}] Convert Claude Code permissions to runok rules");
+        eprintln!("  Bash permissions in settings.json will be moved to runok.yml.");
+        eprintln!();
+        print_diff("settings.json", &original_content, &after_permissions);
+        eprintln!();
+        eprintln!("  The following rules will be created in runok.yml:");
+        if let Some(ref rules) = converted_rules {
+            for line in rules.lines() {
+                eprintln!("    {}", line.trim());
+            }
+        }
+        eprintln!();
+        step += 1;
+    }
+
+    if has_hook_change {
+        eprintln!("[{step}/{total_steps}] Register runok hook");
+        eprintln!("  runok will evaluate Bash commands via a PreToolUse hook.");
+        eprintln!();
+        if let Some(ref after_hook) = hook_preview {
+            print_diff("settings.json", &after_permissions, after_hook);
+        }
         eprintln!();
     }
 
-    let should_register = prompt::confirm(
-        "Register runok hook in Claude Code settings?",
-        true,
-        auto_yes,
-    )?;
-    if should_register {
+    let should_apply = prompt::confirm("Apply these changes?", true, auto_yes)?;
+
+    if !should_apply {
+        return Ok((converted_rules, false, false));
+    }
+
+    // Apply changes
+    let mut permissions_removed = false;
+    if has_rules {
+        permissions_removed = claude_code::remove_permissions(claude_dir)?;
+    }
+
+    let mut hook_registered = false;
+    if has_hook_change {
         hook_registered = claude_code::register_hook(claude_dir)?;
     }
 
@@ -634,5 +690,120 @@ mod tests {
         // User config should not be overwritten
         let content = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
         assert_eq!(content, "existing");
+    }
+
+    // --- preview helpers ---
+
+    #[rstest]
+    fn normalize_json_reformats_indentation() {
+        let input = "{\n   \"key\":   \"value\"\n}";
+        let result = normalize_json(input).unwrap();
+        assert_eq!(
+            result,
+            indoc! {r#"
+                {
+                  "key": "value"
+                }"#}
+        );
+    }
+
+    #[rstest]
+    fn preview_remove_permissions_strips_allow_and_deny() {
+        let input = indoc! {r#"
+            {
+              "permissions": {
+                "allow": ["Bash(git status)"],
+                "deny": ["Bash(rm *)"],
+                "defaultMode": "acceptEdits"
+              },
+              "hooks": {}
+            }"#};
+        let result = preview_remove_permissions(input).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "permissions": {
+                    "defaultMode": "acceptEdits"
+                },
+                "hooks": {}
+            })
+        );
+    }
+
+    #[rstest]
+    fn preview_remove_permissions_empty_input() {
+        let result = preview_remove_permissions("").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[rstest]
+    fn preview_register_hook_adds_hook_entry() {
+        let input = indoc! {r#"
+            {
+              "permissions": {}
+            }"#};
+        let result = preview_register_hook(input).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["hooks"]["PreToolUse"],
+            serde_json::json!([
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "runok check --input-format claude-code-hook"
+                        }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[rstest]
+    fn preview_register_hook_returns_none_when_already_registered() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_register_hook(input).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
+    fn preview_register_hook_empty_input() {
+        let result = preview_register_hook("").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "runok check --input-format claude-code-hook"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            })
+        );
     }
 }
