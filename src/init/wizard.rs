@@ -5,6 +5,98 @@ use super::config_gen;
 use super::error::InitError;
 use super::prompt;
 
+/// Simulate removing permissions from settings.json content and return the result.
+fn preview_remove_permissions(content: &str) -> Result<String, InitError> {
+    if content.is_empty() {
+        return Ok(content.to_string());
+    }
+    let mut root: serde_json::Value = serde_json::from_str(content)?;
+    if let Some(obj) = root.get_mut("permissions").and_then(|p| p.as_object_mut()) {
+        obj.remove("allow");
+        obj.remove("deny");
+    }
+    Ok(serde_json::to_string_pretty(&root)?)
+}
+
+/// Simulate registering the hook in settings.json content and return the result.
+/// Returns `None` if the hook is already registered.
+fn preview_register_hook(content: &str) -> Result<Option<String>, InitError> {
+    let mut root = if content.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str::<serde_json::Value>(content)?
+    };
+
+    let hook_command = "runok check --input-format claude-code-hook";
+
+    // Check if already registered
+    if let Some(arr) = root
+        .get("hooks")
+        .and_then(|h| h.get("PreToolUse"))
+        .and_then(|p| p.as_array())
+    {
+        for entry in arr {
+            if entry
+                .get("hooks")
+                .and_then(|h| h.as_array())
+                .is_some_and(|hooks| {
+                    hooks
+                        .iter()
+                        .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(hook_command))
+                })
+            {
+                return Ok(None);
+            }
+        }
+    }
+
+    let hook_entry = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": hook_command}]
+    });
+
+    let hooks = root
+        .as_object_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "settings.json root is not an object",
+            )
+        })?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let pre_tool_use = hooks
+        .as_object_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "hooks is not an object")
+        })?
+        .entry("PreToolUse")
+        .or_insert_with(|| serde_json::json!([]));
+
+    pre_tool_use
+        .as_array_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "PreToolUse is not an array",
+            )
+        })?
+        .push(hook_entry);
+
+    Ok(Some(serde_json::to_string_pretty(&root)?))
+}
+
+/// Print a unified-style diff between two strings.
+fn print_diff(filename: &str, before: &str, after: &str) {
+    let diff = similar::TextDiff::from_lines(before, after);
+    let udiff = diff
+        .unified_diff()
+        .header(&format!("a/{filename}"), &format!("b/{filename}"))
+        .to_string();
+    eprint!("{udiff}");
+}
+
 /// Summary of actions performed by the init wizard.
 struct Summary {
     user_config_created: Option<PathBuf>,
@@ -60,6 +152,13 @@ fn run_claude_code_integration(
     let mut hook_registered = false;
     let mut permissions_removed = false;
 
+    let settings_path = claude_dir.join("settings.json");
+    let original_content = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)?
+    } else {
+        String::new()
+    };
+
     // Read and convert permissions
     let (allow, deny) = claude_code::read_permissions(claude_dir)?;
     if !allow.is_empty() || !deny.is_empty() {
@@ -67,17 +166,12 @@ fn run_claude_code_integration(
         if !conversion.rules.is_empty() {
             converted_rules = Some(conversion.rules.clone());
 
-            eprintln!(
-                "Found {} Bash permission(s):",
-                conversion.rules.lines().count()
-            );
-            for line in conversion.rules.lines() {
-                eprintln!("  {}", line.trim());
-            }
+            // Show diff preview: settings.json after removing permissions
+            let after = preview_remove_permissions(&original_content)?;
+            print_diff("settings.json", &original_content, &after);
             eprintln!();
         }
 
-        // Remove converted permissions from settings.json
         let should_remove = prompt::confirm(
             "Remove converted permissions from Claude Code settings?",
             true,
@@ -88,7 +182,18 @@ fn run_claude_code_integration(
         }
     }
 
-    // Register hook
+    // Show diff preview: settings.json after adding hook
+    let current_content = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)?
+    } else {
+        original_content.clone()
+    };
+    let after = preview_register_hook(&current_content)?;
+    if let Some(ref after_content) = after {
+        print_diff("settings.json", &current_content, after_content);
+        eprintln!();
+    }
+
     let should_register = prompt::confirm(
         "Register runok hook in Claude Code settings?",
         true,
