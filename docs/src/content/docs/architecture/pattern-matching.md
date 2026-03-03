@@ -32,8 +32,7 @@ The lexer converts a pattern string into a flat list of `LexToken` values. It ha
 
 | Token type                     | Example                    | Description                                         |
 | ------------------------------ | -------------------------- | --------------------------------------------------- |
-| `Literal`                      | `git`                      | Plain string token                                  |
-| `QuotedLiteral`                | `'WIP*'`                   | Quoted string (preserves content)                   |
+| `Literal`                      | `git`, `'hello world'`     | Plain string token (quotes act as grouping only)    |
 | `Alternation`                  | `-X\|--request`            | Pipe-separated alternatives (no spaces around `\|`) |
 | `Wildcard`                     | `*`                        | Matches any number of arguments                     |
 | `Negation`                     | `!prod`                    | Must not match the value                            |
@@ -106,7 +105,7 @@ A step counter (`MAX_MATCH_STEPS = 10,000`) prevents exponential blowup on patho
 
 | Pattern token   | Matching behavior                                                                                                                                          |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Literal`       | Exact string match at current position                                                                                                                     |
+| `Literal`       | Exact string match; unescaped `*` acts as a glob. `\*` matches a literal `*`                                                                               |
 | `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                           |
 | `Alternation`   | Matches if the command token equals any alternative                                                                                                        |
 | `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. **Order-independent**: the flag can appear anywhere in the command |

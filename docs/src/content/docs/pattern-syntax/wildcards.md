@@ -72,16 +72,31 @@ When `*` appears **inside a literal token** (not as a standalone token), it acts
 Only `*` is supported for glob matching. Other glob characters like `?` or `[...]` are treated as literal characters.
 :::
 
-### Quoted Literals Disable Glob
+### Escaping `*` with Backslash
 
-Wrapping a token in quotes (`"..."` or `'...'`) disables glob expansion. The `*` is matched literally:
+To match a literal `*` character (without glob expansion), escape it with a backslash (`\*`). This works both inside and outside quotes:
 
 ```yaml
 # Only matches the exact string "WIP*" (including the asterisk character)
+- deny: 'git commit -m "WIP\*"'
+
+# Also works outside quotes
+- allow: 'cmd WIP\*'
+```
+
+### Quotes and Glob
+
+Quotes (`"..."` or `'...'`) act as **grouping only** — they allow spaces inside a single token but do **not** disable glob expansion. A `*` inside quotes is still treated as a glob:
+
+```yaml
+# Matches: renovate-config-validator foo.json, renovate-config-validator bar.json
+- allow: "npx -c 'renovate-config-validator *'"
+
+# WIP* is a glob — matches WIPfoo, WIPbar, etc.
 - deny: 'git commit -m "WIP*"'
 
-# Matches the literal token hello*world
-- allow: "echo 'hello*world'"
+# Use \* to match the literal asterisk
+- deny: 'git commit -m "WIP\*"'
 ```
 
 ## Related
