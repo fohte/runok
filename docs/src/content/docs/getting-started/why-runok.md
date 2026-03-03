@@ -165,11 +165,11 @@ runok uses YAML, which supports comments natively:
 
 ```yaml
 rules:
-  # Required by security team -- see JIRA-1234
+  # Security team policy -- see JIRA-1234
   - deny: 'curl * -k|--insecure *'
     message: 'Insecure TLS connections are not allowed.'
 
-  # Allow test commands -- approved 2025-01
+  # Safe to auto-approve
   - allow: 'npm test'
   - allow: 'cargo test *'
 ```
