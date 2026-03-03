@@ -115,8 +115,13 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
             "hooks": {
                 "PreToolUse": [
                     {
-                        "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "runok check --input-format claude-code-hook"
+                            }
+                        ]
                     }
                 ]
             }
@@ -175,8 +180,13 @@ fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
             "hooks": {
                 "PreToolUse": [
                     {
-                        "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "runok check --input-format claude-code-hook"
+                            }
+                        ]
                     }
                 ]
             }

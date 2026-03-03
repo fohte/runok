@@ -441,8 +441,13 @@ mod tests {
                 "hooks": {
                     "PreToolUse": [
                         {
-                            "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "runok check --input-format claude-code-hook"
+                                }
+                            ]
                         }
                     ]
                 }

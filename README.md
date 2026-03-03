@@ -106,7 +106,12 @@ Add runok as a PreToolUse hook in `.claude/settings.json`:
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": ["runok check --input-format claude-code-hook"]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "runok check --input-format claude-code-hook"
+          }
+        ]
       }
     ]
   }

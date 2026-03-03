@@ -100,9 +100,29 @@ pub fn read_permissions(claude_dir: &Path) -> Result<(Vec<String>, Vec<String>),
     Ok((allow_entries, deny_entries))
 }
 
+/// Check whether a PreToolUse entry already contains the runok hook command.
+fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
+    // Current format: {"matcher": "Bash", "hooks": [{"type": "command", "command": "runok check ..."}]}
+    if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array())
+        && hooks
+            .iter()
+            .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+    {
+        return true;
+    }
+    // Legacy format: {"type": "command", "command": "runok check ..."} (top-level command)
+    if entry.get("command").and_then(|c| c.as_str()) == Some(command)
+        && entry.get("hooks").is_none()
+    {
+        return true;
+    }
+    false
+}
+
 /// Register runok hook in Claude Code settings.json.
 ///
-/// Adds a PreToolUse hook entry that runs `runok check --input-format claude-code-hook`.
+/// Adds a PreToolUse hook entry with `"matcher": "Bash"` that runs
+/// `runok check --input-format claude-code-hook`.
 /// If the hook is already registered, does nothing.
 /// Creates the file if it doesn't exist.
 pub fn register_hook(claude_dir: &Path) -> Result<bool, InitError> {
@@ -117,23 +137,28 @@ pub fn register_hook(claude_dir: &Path) -> Result<bool, InitError> {
 
     let hook_command = "runok check --input-format claude-code-hook";
 
-    // Check if hook already exists
+    // Check if hook already exists in any format
     if let Some(arr) = root
         .get("hooks")
         .and_then(|h| h.get("PreToolUse"))
         .and_then(|p| p.as_array())
     {
         for entry in arr {
-            if entry.get("command").and_then(|c| c.as_str()) == Some(hook_command) {
+            if entry_has_runok_hook(entry, hook_command) {
                 return Ok(false);
             }
         }
     }
 
-    // Add the hook
+    // Add the hook in the current Claude Code format
     let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": hook_command
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": hook_command
+            }
+        ]
     });
 
     let hooks = root
@@ -345,38 +370,65 @@ mod tests {
         let registered = register_hook(&claude_dir).unwrap();
         assert!(registered);
 
-        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let hooks = &value["hooks"]["PreToolUse"];
-        assert!(hooks.is_array());
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            hooks[0]["command"],
-            "runok check --input-format claude-code-hook"
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "runok check --input-format claude-code-hook"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            })
         );
     }
 
     #[rstest]
-    fn register_hook_skips_duplicate() {
-        let tmp = TempDir::new().unwrap();
-        let claude_dir = tmp.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-
-        std::fs::write(
-            claude_dir.join("settings.json"),
-            indoc! {r#"
-                {
-                    "hooks": {
-                        "PreToolUse": [
+    #[case::current_format(indoc! {r#"
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
                             {
                                 "type": "command",
                                 "command": "runok check --input-format claude-code-hook"
                             }
                         ]
                     }
-                }
-            "#},
-        )
-        .unwrap();
+                ]
+            }
+        }
+    "#})]
+    #[case::legacy_format(indoc! {r#"
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                    }
+                ]
+            }
+        }
+    "#})]
+    fn register_hook_skips_duplicate(#[case] existing: &str) {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(claude_dir.join("settings.json"), existing).unwrap();
 
         let registered = register_hook(&claude_dir).unwrap();
         assert!(!registered);
@@ -394,7 +446,7 @@ mod tests {
                 {
                     "someKey": "someValue",
                     "hooks": {
-                        "PostToolUse": [{"type": "command", "command": "other-tool"}]
+                        "PostToolUse": [{"hooks": [{"command": "other-tool", "type": "command"}]}]
                     }
                 }
             "#},
@@ -404,11 +456,25 @@ mod tests {
         let registered = register_hook(&claude_dir).unwrap();
         assert!(registered);
 
-        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(value["someKey"], "someValue");
-        assert!(value["hooks"]["PostToolUse"].is_array());
-        assert!(value["hooks"]["PreToolUse"].is_array());
+        assert_eq!(
+            value["hooks"]["PreToolUse"],
+            serde_json::json!([
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "runok check --input-format claude-code-hook"
+                        }
+                    ]
+                }
+            ])
+        );
     }
 
     // --- remove_permissions ---
@@ -439,11 +505,15 @@ mod tests {
 
         let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert!(value["permissions"].get("allow").is_none());
-        assert!(value["permissions"].get("deny").is_none());
-        // Other keys preserved
-        assert!(value["permissions"]["scopes"].is_object());
-        assert!(value["hooks"].is_object());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "permissions": {
+                    "scopes": {"project": {}}
+                },
+                "hooks": {}
+            })
+        );
     }
 
     #[rstest]
