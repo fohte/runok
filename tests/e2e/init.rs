@@ -102,7 +102,9 @@ fn init_with_claude_code_integration() {
         .args(["init", "--scope", "project", "-y"])
         .assert()
         .success()
-        .stderr(predicates::str::contains("permission(s) converted"))
+        .stderr(predicates::str::contains(
+            "permissions converted to runok rules",
+        ))
         .stderr(predicates::str::contains("Claude Code hook registered"));
 
     // Verify config was created with converted rules

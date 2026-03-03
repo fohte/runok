@@ -7,7 +7,7 @@ pub fn confirm(message: &str, default: bool, auto_yes: bool) -> Result<bool, Ini
     if auto_yes {
         return Ok(default);
     }
-    let result = dialoguer::Confirm::new()
+    let result = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
         .with_prompt(message)
         .default(default)
         .interact()?;

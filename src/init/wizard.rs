@@ -10,9 +10,8 @@ struct Summary {
     user_config_created: Option<PathBuf>,
     project_config_created: Option<PathBuf>,
     hook_registered: bool,
-    permissions_converted: usize,
+    converted_rules: Option<String>,
     permissions_removed: bool,
-    skipped_entries: Vec<String>,
 }
 
 /// Scope for init configuration.
@@ -52,13 +51,12 @@ fn resolve_paths() -> Result<ResolvedPaths, InitError> {
 
 /// Run the Claude Code integration steps for a given `.claude/` directory.
 ///
-/// Returns `(converted_rules, skipped_entries, hook_registered, permissions_removed)`.
+/// Returns `(converted_rules, hook_registered, permissions_removed)`.
 fn run_claude_code_integration(
     claude_dir: &Path,
     auto_yes: bool,
-) -> Result<(Option<String>, Vec<String>, bool, bool), InitError> {
+) -> Result<(Option<String>, bool, bool), InitError> {
     let mut converted_rules = None;
-    let mut skipped = Vec::new();
     let mut hook_registered = false;
     let mut permissions_removed = false;
 
@@ -67,9 +65,17 @@ fn run_claude_code_integration(
     if !allow.is_empty() || !deny.is_empty() {
         let conversion = claude_code::convert_permissions(&allow, &deny);
         if !conversion.rules.is_empty() {
-            converted_rules = Some(conversion.rules);
+            converted_rules = Some(conversion.rules.clone());
+
+            eprintln!(
+                "Found {} Bash permission(s):",
+                conversion.rules.lines().count()
+            );
+            for line in conversion.rules.lines() {
+                eprintln!("  {}", line.trim());
+            }
+            eprintln!();
         }
-        skipped = conversion.skipped;
 
         // Remove converted permissions from settings.json
         let should_remove = prompt::confirm(
@@ -92,21 +98,15 @@ fn run_claude_code_integration(
         hook_registered = claude_code::register_hook(claude_dir)?;
     }
 
-    Ok((
-        converted_rules,
-        skipped,
-        hook_registered,
-        permissions_removed,
-    ))
+    Ok((converted_rules, hook_registered, permissions_removed))
 }
 
 /// Result of setting up a single scope.
 struct ScopeResult {
     config_path: Option<PathBuf>,
     hook_registered: bool,
-    permissions_converted: usize,
+    converted_rules: Option<String>,
     permissions_removed: bool,
-    skipped_entries: Vec<String>,
 }
 
 /// Set up configuration for a given scope (user or project).
@@ -117,16 +117,14 @@ fn setup_scope(
     force: bool,
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
-    let mut skipped = Vec::new();
     let mut hook_registered = false;
     let mut permissions_removed = false;
 
     if let Some(cd) = claude_dir
         && cd.exists()
     {
-        let (rules, sk, hr, pr) = run_claude_code_integration(cd, auto_yes)?;
+        let (rules, hr, pr) = run_claude_code_integration(cd, auto_yes)?;
         converted_rules = rules;
-        skipped = sk;
         hook_registered = hr;
         permissions_removed = pr;
     }
@@ -134,18 +132,11 @@ fn setup_scope(
     let content = config_gen::build_config_content(converted_rules.as_deref());
     let config_path = config_gen::write_config(config_dir, &content, force)?;
 
-    let permissions_count = converted_rules.as_deref().map_or(0, |r| {
-        r.lines()
-            .filter(|l| l.trim_start().starts_with("- "))
-            .count()
-    });
-
     Ok(ScopeResult {
         config_path: Some(config_path),
         hook_registered,
-        permissions_converted: permissions_count,
+        converted_rules,
         permissions_removed,
-        skipped_entries: skipped,
     })
 }
 
@@ -161,20 +152,11 @@ fn print_summary(summary: &Summary) {
     if summary.hook_registered {
         eprintln!("  - Claude Code hook registered");
     }
-    if summary.permissions_converted > 0 {
-        eprintln!(
-            "  - {} permission(s) converted to runok rules",
-            summary.permissions_converted
-        );
+    if summary.converted_rules.is_some() {
+        eprintln!("  - Claude Code permissions converted to runok rules");
     }
     if summary.permissions_removed {
         eprintln!("  - Claude Code permissions removed from settings.json");
-    }
-    if !summary.skipped_entries.is_empty() {
-        eprintln!(
-            "  - Skipped non-Bash entries: {}",
-            summary.skipped_entries.join(", ")
-        );
     }
 }
 
@@ -190,9 +172,8 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
         summary.project_config_created = result.config_path;
     }
     summary.hook_registered = result.hook_registered;
-    summary.permissions_converted = result.permissions_converted;
+    summary.converted_rules = result.converted_rules;
     summary.permissions_removed = result.permissions_removed;
-    summary.skipped_entries = result.skipped_entries;
 }
 
 /// Merge a scope result into the summary, accumulating fields.
@@ -205,11 +186,19 @@ fn merge_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
     if result.hook_registered {
         summary.hook_registered = true;
     }
-    summary.permissions_converted += result.permissions_converted;
+    if let Some(rules) = result.converted_rules {
+        match summary.converted_rules {
+            Some(ref mut existing) => {
+                existing.push_str(&rules);
+            }
+            None => {
+                summary.converted_rules = Some(rules);
+            }
+        }
+    }
     if result.permissions_removed {
         summary.permissions_removed = true;
     }
-    summary.skipped_entries.extend(result.skipped_entries);
 }
 
 /// Run the init wizard.
@@ -248,9 +237,8 @@ pub fn run_wizard_with_paths(
         user_config_created: None,
         project_config_created: None,
         hook_registered: false,
-        permissions_converted: 0,
+        converted_rules: None,
         permissions_removed: false,
-        skipped_entries: Vec::new(),
     };
 
     match scope {
