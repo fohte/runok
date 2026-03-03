@@ -41,7 +41,7 @@ import { CardGrid, Card, LinkCard } from '@astrojs/starlight/components'
 
 Claude Code's built-in permissions use simple glob matching. This works for basic cases, but breaks down quickly.
 
-**Comments and arguments trigger false positives.** Even when `git log` is in your allow list, Claude adds a comment and you get prompted:
+**Text-based parsing causes false positives.** Even when `git log` is in your allow list, Claude adds a comment and you get prompted:
 
 ```
 ⏺ Bash(# check logs
@@ -50,7 +50,7 @@ Claude Code's built-in permissions use simple glob matching. This works for basi
 Command contains newlines that could separate multiple commands
 ```
 
-Arguments like `echo "---"` also get flagged because `--` is misinterpreted as a flag. runok uses tree-sitter-bash to parse commands into an AST, so comments and compound commands are handled correctly without these false positives.
+runok uses tree-sitter-bash to parse commands into an AST, so comments, compound commands, and other shell constructs are handled correctly.
 
 **Denied commands give no explanation.** The agent cannot learn why a command was blocked. With runok, deny rules include a message and a suggested fix:
 

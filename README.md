@@ -41,7 +41,7 @@ Do you want to proceed?
 ```
 
 ```sh
-# "---" is just an argument to echo, but "--" is misinterpreted as a flag
+# Text-based parsing flags safe commands as suspicious
 ⏺ Bash(git log --oneline -5 && echo "---" && git status)
   ⎿  Running…
 
