@@ -41,7 +41,7 @@ Do you want to proceed?
 ```
 
 ```sh
-# Claude chains commands with && -- same problem
+# "---" is just an argument to echo, but "--" is misinterpreted as a flag
 ⏺ Bash(git log --oneline -5 && echo "---" && git status)
   ⎿  Running…
 

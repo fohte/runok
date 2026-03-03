@@ -31,26 +31,31 @@ rules:
 
 This rule matches regardless of leading comments.
 
-## Compound commands are always blocked
+## Command arguments are misinterpreted as flags
 
-Claude chains commands naturally:
+Claude Code parses commands to check for suspicious patterns, but this parsing sometimes produces false positives. For example:
 
-```sh
-git add . && git commit -m "update"
+```
+⏺ Bash(git log --oneline -5 && echo "---" && git status)
+
+Command contains quoted characters in flag names
 ```
 
-Claude Code recognizes shell operators like `&&` and blocks compound commands from being auto-approved -- even when every individual sub-command is in the allow list. This is a safety measure, but it means you get confirmation prompts for routine command chains that are entirely safe.
+Here, `"---"` is just an argument to `echo`, but Claude Code interprets the `--` inside it as a flag-like pattern and triggers a confirmation prompt. This happens even though every sub-command is individually allowed.
+
+Similarly, `$()` subshell expressions are not expanded, so commands like `echo $(date)` may be treated differently than expected.
 
 **How runok handles this:**
 
-runok decomposes compound commands (`&&`, `||`, `;`, `|`) into individual sub-commands using tree-sitter-bash. Each sub-command is evaluated independently, and the strictest result wins. If all sub-commands are allowed, the compound command as a whole is allowed. See [Compound Commands](/rule-evaluation/compound-commands/) for details.
+runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to build a full AST. It distinguishes arguments from flags, decomposes compound commands (`&&`, `||`, `;`, `|`) into individual sub-commands, and evaluates each one independently. The strictest result wins. See [Compound Commands](/rule-evaluation/compound-commands/) for details.
 
 ```yaml title="runok.yml"
 rules:
-  - allow: 'git add *'
-  - allow: 'git commit *'
-# "git add . && git commit -m 'update'" -> both sub-commands are
-# individually allowed -> final result: allow
+  - allow: 'git log *'
+  - allow: 'echo *'
+  - allow: 'git status'
+# "git log --oneline -5 && echo '---' && git status"
+# -> each sub-command is allowed -> final result: allow
 ```
 
 ## Denied commands provide no feedback
@@ -230,17 +235,17 @@ The tree-sitter-bash parser handles edge cases (comments, compound commands, wra
 
 ## Summary
 
-| Capability                          | Claude Code settings.json         | runok                                             |
-| ----------------------------------- | --------------------------------- | ------------------------------------------------- |
-| Configuration format                | JSON (no comments)                | YAML (comments supported)                         |
-| Pattern matching                    | Simple glob (`*` wildcards)       | Wildcards, alternation, optional groups, negation |
-| Flag order                          | Position-dependent                | Order-independent                                 |
-| Comments in commands                | Break matching                    | Stripped by tree-sitter-bash                      |
-| Compound commands (`&&`, `\|`, `;`) | Always blocked from auto-approval | Decomposed and evaluated individually             |
-| Deny feedback                       | Pattern only, no message          | `message` + `fix_suggestion` fields               |
-| Subshell/wrapper parsing            | Not inspected                     | Recursive unwrapping (`sudo`, `bash -c`, `$()`)   |
-| Per-command sandboxing              | Same restrictions for all         | Per-rule sandbox presets                          |
-| Debugging                           | Limited                           | `runok check` with JSON output                    |
+| Capability                          | Claude Code settings.json                | runok                                             |
+| ----------------------------------- | ---------------------------------------- | ------------------------------------------------- |
+| Configuration format                | JSON (no comments)                       | YAML (comments supported)                         |
+| Pattern matching                    | Simple glob (`*` wildcards)              | Wildcards, alternation, optional groups, negation |
+| Flag order                          | Position-dependent                       | Order-independent                                 |
+| Comments in commands                | Break matching                           | Stripped by tree-sitter-bash                      |
+| Compound commands (`&&`, `\|`, `;`) | Arguments can be misinterpreted as flags | Decomposed and evaluated individually via AST     |
+| Deny feedback                       | Pattern only, no message                 | `message` + `fix_suggestion` fields               |
+| Subshell/wrapper parsing            | Not inspected                            | Recursive unwrapping (`sudo`, `bash -c`, `$()`)   |
+| Per-command sandboxing              | Same restrictions for all                | Per-rule sandbox presets                          |
+| Debugging                           | Limited                                  | `runok check` with JSON output                    |
 
 ## Next steps
 
