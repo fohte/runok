@@ -68,20 +68,6 @@ Flags (tokens starting with `-`) in patterns are matched **regardless of their p
 
 This applies to both standalone flags ([alternation](/pattern-syntax/alternation/)) and [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
 
-### The `--` Separator is Position-dependent
-
-The bare double-dash `--` is **not** treated as a flag, even though it starts with `-`. It is matched positionally like any other literal token. This preserves the POSIX convention where `--` separates options from positional arguments:
-
-```yaml
-- allow: 'git [-C *] checkout -- *'
-```
-
-| Command                             | Result         |
-| ----------------------------------- | -------------- |
-| `git checkout -- README.md`         | Matches        |
-| `git -C /tmp checkout -- README.md` | Matches        |
-| `git checkout HEAD~1 -- README.md`  | Does not match |
-
 ### Non-flag Tokens are Position-dependent
 
 Tokens that do not start with `-` are matched **in order**:
