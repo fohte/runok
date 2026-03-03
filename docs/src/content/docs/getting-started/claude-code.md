@@ -28,7 +28,12 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": ["runok check --input-format claude-code-hook"]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "runok check --input-format claude-code-hook"
+          }
+        ]
       }
     ]
   }
@@ -38,7 +43,7 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
 ### What each field means
 
 - **`"matcher": "Bash"`** -- Only triggers the hook for Bash tool calls. Other tools (file edits, web searches, etc.) are not affected.
-- **`"hooks"`** -- The command(s) to run. Claude Code pipes the tool invocation as JSON to stdin. `runok check --input-format claude-code-hook` parses this JSON format and returns the evaluation result.
+- **`"hooks"`** -- An array of hook handler objects. Each object must have `"type": "command"` and a `"command"` string. Claude Code pipes the tool invocation as JSON to stdin. `runok check --input-format claude-code-hook` parses this JSON format and returns the evaluation result.
 
 ## Step 3: Verify the integration
 
