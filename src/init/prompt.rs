@@ -44,14 +44,14 @@ impl Prompter for DialoguerPrompter {
     }
 }
 
-/// Non-interactive prompter that always returns the default value.
+/// Non-interactive prompter that always answers "yes" to confirmations.
 ///
 /// Used when the `-y` flag is specified.
 pub struct AutoYesPrompter;
 
 impl Prompter for AutoYesPrompter {
-    fn confirm(&self, _message: &str, default: bool) -> Result<bool, InitError> {
-        Ok(default)
+    fn confirm(&self, _message: &str, _default: bool) -> Result<bool, InitError> {
+        Ok(true)
     }
 
     fn select(&self, _message: &str, _items: &[&str], default: usize) -> Result<usize, InitError> {
@@ -65,18 +65,14 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::auto_yes_default_true("Continue?", true, true)]
-    #[case::auto_yes_default_false("Continue?", false, false)]
-    fn auto_yes_confirm_returns_default(
-        #[case] message: &str,
-        #[case] default: bool,
-        #[case] expected: bool,
-    ) {
+    #[case::auto_yes_default_true("Continue?", true)]
+    #[case::auto_yes_default_false("Continue?", false)]
+    fn auto_yes_confirm_always_returns_true(#[case] message: &str, #[case] default: bool) {
         let prompter = AutoYesPrompter;
         let result = prompter
             .confirm(message, default)
             .unwrap_or_else(|e| panic!("unexpected error: {e}"));
-        assert_eq!(result, expected);
+        assert!(result, "AutoYesPrompter should always return true");
     }
 
     #[rstest]

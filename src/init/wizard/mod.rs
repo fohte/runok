@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_project_scope_skips_migration_creates_boilerplate() {
+    fn wizard_project_scope_auto_yes_migrates_and_applies() {
         let env = TestEnv::new();
         let project_claude = env.project_claude_dir();
         std::fs::create_dir_all(&project_claude).unwrap();
@@ -403,18 +403,23 @@ mod tests {
         )
         .unwrap();
 
-        // AutoYesPrompter: migration default=false → No, apply default=true → Yes
-        // This creates boilerplate runok.yml without migration rules
+        // AutoYesPrompter: always returns true → migration Yes, apply Yes
         env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
         let config = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
         assert_eq!(
             config,
-            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+            indoc! {"\
+                # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
+
+                # Converted from Claude Code permissions:
+                rules:
+                  - allow: 'cargo test'
+            "}
         );
 
-        // settings.json unchanged (migration declined, no hook for project scope)
+        // Permissions removed (migration accepted, no hook for project scope)
         let settings: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(project_claude.join("settings.json")).unwrap(),
         )
@@ -422,9 +427,7 @@ mod tests {
         assert_eq!(
             settings,
             serde_json::json!({
-                "permissions": {
-                    "allow": ["Bash(cargo test)"]
-                }
+                "permissions": {}
             })
         );
     }

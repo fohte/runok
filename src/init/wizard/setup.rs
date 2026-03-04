@@ -182,12 +182,26 @@ pub(super) fn setup_scope(
     };
 
     // Create config file:
-    // - No Claude Code config detected: always create boilerplate
-    // - User approved changes: create with converted rules
+    // - User approved changes in "Detected" block: create with converted rules
+    // - No Claude Code config detected: create boilerplate (ask if file exists)
     // - User declined all changes: skip (don't create silently)
-    let config_path = if !detected_claude_config || approved {
+    let config_path = if approved {
         let content = config_gen::build_config_content(converted_rules.as_deref());
         Some(config_gen::write_config(config_dir, &content)?)
+    } else if !detected_claude_config {
+        let config_path = config_dir.join("runok.yml");
+        if config_path.exists() {
+            let overwrite = prompter.confirm("runok.yml already exists. Overwrite?", false)?;
+            if overwrite {
+                let content = config_gen::build_config_content(None);
+                Some(config_gen::write_config(config_dir, &content)?)
+            } else {
+                None
+            }
+        } else {
+            let content = config_gen::build_config_content(None);
+            Some(config_gen::write_config(config_dir, &content)?)
+        }
     } else {
         None
     };
