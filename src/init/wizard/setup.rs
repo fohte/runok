@@ -39,6 +39,7 @@ pub(super) fn setup_scope(
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
     let mut approved = false;
+    let mut detected_claude_config = false;
     let mut has_rules = false;
     let mut has_hook_change = false;
 
@@ -72,6 +73,7 @@ pub(super) fn setup_scope(
 
         // Only show "Detected" and ask migration if there's something to do
         if has_migratable_rules || would_add_hook {
+            detected_claude_config = true;
             let settings_path_display = settings_path.display();
             eprintln!(
                 "\x1b[1mDetected Claude Code configuration in {settings_path_display}\x1b[0m"
@@ -182,11 +184,16 @@ pub(super) fn setup_scope(
         false
     };
 
-    // Always create config file.
-    // If user approved migration: config includes converted rules.
-    // Otherwise: boilerplate only.
-    let content = config_gen::build_config_content(converted_rules.as_deref());
-    let config_path = Some(config_gen::write_config(config_dir, &content)?);
+    // Create config file:
+    // - No Claude Code config detected: always create boilerplate
+    // - User approved changes: create with converted rules
+    // - User declined all changes: skip (don't create silently)
+    let config_path = if !detected_claude_config || approved {
+        let content = config_gen::build_config_content(converted_rules.as_deref());
+        Some(config_gen::write_config(config_dir, &content)?)
+    } else {
+        None
+    };
 
     Ok(ScopeResult {
         config_path,

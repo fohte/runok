@@ -407,11 +407,10 @@ mod tests {
         env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
-        // Boilerplate only (no rules migrated)
-        let config_content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
-        assert_eq!(
-            config_content,
-            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+        // runok.yml not created when migration declined
+        assert!(
+            !env.cwd.join("runok.yml").exists(),
+            "runok.yml should not be created when user declined migration"
         );
     }
 
@@ -545,7 +544,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_batch_decline_skips_claude_changes_but_creates_config() {
+    fn wizard_batch_decline_skips_all_changes() {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
@@ -555,11 +554,10 @@ mod tests {
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
-        // runok.yml is always created (boilerplate without rules when declined)
-        let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
-        assert_eq!(
-            config,
-            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+        // runok.yml not created when user declined
+        assert!(
+            !env.user_config_dir.join("runok.yml").exists(),
+            "runok.yml should not be created when user declined all changes"
         );
 
         // settings.json unchanged
