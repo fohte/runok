@@ -207,7 +207,6 @@ fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decisi
         rules:
           - allow: 'echo *'
           - allow: 'curl *'
-          - allow: 'eval *'
           - deny: 'rm -rf *'
     "});
     let assert = env

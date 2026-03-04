@@ -1090,8 +1090,6 @@ fn command_substitution_in_quoted_string(
         definitions:
           wrappers:
             - 'eval <cmd>'
-        rules:
-          - allow: 'eval *'
     "},
     assert_ask as ActionAssertion,
 )]
@@ -1102,7 +1100,6 @@ fn command_substitution_in_quoted_string(
           wrappers:
             - 'eval <cmd>'
         rules:
-          - allow: 'eval *'
           - allow: 'echo *'
     "},
     assert_allow as ActionAssertion,
