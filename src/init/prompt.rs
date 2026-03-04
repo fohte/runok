@@ -1,17 +1,45 @@
 use super::error::InitError;
 
-/// Ask a yes/no confirmation question.
+/// Abstraction over yes/no confirmation prompts.
 ///
-/// When `auto_yes` is true, returns `default` without prompting.
-pub fn confirm(message: &str, default: bool, auto_yes: bool) -> Result<bool, InitError> {
-    if auto_yes {
-        return Ok(default);
+/// Production code uses `DialoguerPrompter`, which delegates to dialoguer.
+/// Tests inject a `Prompter` that returns pre-configured responses.
+pub trait Prompter {
+    fn confirm(&self, message: &str, default: bool) -> Result<bool, InitError>;
+}
+
+/// Production prompter that uses dialoguer for interactive prompts.
+pub struct DialoguerPrompter;
+
+impl Prompter for DialoguerPrompter {
+    fn confirm(&self, message: &str, default: bool) -> Result<bool, InitError> {
+        let items = ["Yes", "No"];
+        let default_idx = if default { 0 } else { 1 };
+        let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+            .with_prompt(message)
+            .items(&items)
+            .default(default_idx)
+            .report(false)
+            .interact()?;
+        let accepted = selection == 0;
+        if accepted {
+            eprintln!("\x1b[32m✔\x1b[0m {message} · Yes");
+        } else {
+            eprintln!("\x1b[33m✘\x1b[0m {message} · No");
+        }
+        Ok(accepted)
     }
-    let result = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-        .with_prompt(message)
-        .default(default)
-        .interact()?;
-    Ok(result)
+}
+
+/// Non-interactive prompter that always returns the default value.
+///
+/// Used when the `-y` flag is specified.
+pub struct AutoYesPrompter;
+
+impl Prompter for AutoYesPrompter {
+    fn confirm(&self, _message: &str, default: bool) -> Result<bool, InitError> {
+        Ok(default)
+    }
 }
 
 #[cfg(test)]
@@ -22,13 +50,15 @@ mod tests {
     #[rstest]
     #[case::auto_yes_default_true("Continue?", true, true)]
     #[case::auto_yes_default_false("Continue?", false, false)]
-    fn confirm_auto_yes_returns_default(
+    fn auto_yes_returns_default(
         #[case] message: &str,
         #[case] default: bool,
         #[case] expected: bool,
     ) {
-        let result =
-            confirm(message, default, true).unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        let prompter = AutoYesPrompter;
+        let result = prompter
+            .confirm(message, default)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"));
         assert_eq!(result, expected);
     }
 }

@@ -15,7 +15,7 @@ pub struct ConversionResult {
 ///
 /// Returns `Some((tool_name, pattern))` if the entry matches the expected format,
 /// or `None` if parsing fails.
-fn parse_permission_entry(entry: &str) -> Option<(&str, &str)> {
+pub fn parse_permission_entry(entry: &str) -> Option<(&str, &str)> {
     let open = entry.find('(')?;
     let close = entry.rfind(')')?;
     if close <= open {
@@ -101,7 +101,7 @@ pub fn read_permissions(claude_dir: &Path) -> Result<(Vec<String>, Vec<String>),
 }
 
 /// Check whether a PreToolUse entry already contains the runok hook command.
-fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
+pub fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
     // Current format: {"matcher": "Bash", "hooks": [{"type": "command", "command": "runok check ..."}]}
     if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array())
         && hooks
@@ -200,6 +200,10 @@ pub fn register_hook(claude_dir: &Path) -> Result<bool, InitError> {
 /// Remove permissions.allow and permissions.deny from Claude Code settings.json.
 ///
 /// Preserves other keys within the permissions object and other top-level keys.
+/// Remove only Bash permission entries from allow/deny arrays.
+///
+/// Non-Bash entries (e.g. `Read(...)`, `Skill`, `WebFetch`) are preserved.
+/// If an array becomes empty after filtering, the key is removed entirely.
 pub fn remove_permissions(claude_dir: &Path) -> Result<bool, InitError> {
     let path = claude_dir.join("settings.json");
     if !path.exists() {
@@ -211,11 +215,22 @@ pub fn remove_permissions(claude_dir: &Path) -> Result<bool, InitError> {
 
     let mut modified = false;
     if let Some(obj) = root.get_mut("permissions").and_then(|p| p.as_object_mut()) {
-        if obj.remove("allow").is_some() {
-            modified = true;
-        }
-        if obj.remove("deny").is_some() {
-            modified = true;
+        for key in &["allow", "deny"] {
+            if let Some(arr) = obj.get_mut(*key).and_then(|v| v.as_array_mut()) {
+                let before_len = arr.len();
+                arr.retain(|entry| {
+                    entry
+                        .as_str()
+                        .and_then(parse_permission_entry)
+                        .is_none_or(|(tool, _)| tool != "Bash")
+                });
+                if arr.len() != before_len {
+                    modified = true;
+                }
+                if arr.is_empty() {
+                    obj.remove(*key);
+                }
+            }
         }
     }
 
@@ -480,7 +495,46 @@ mod tests {
     // --- remove_permissions ---
 
     #[rstest]
-    fn remove_permissions_deletes_allow_and_deny() {
+    fn remove_permissions_removes_only_bash_entries() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            indoc! {r#"
+                {
+                    "permissions": {
+                        "allow": ["Bash(git status)", "Read(/tmp)", "WebFetch"],
+                        "deny": ["Bash(rm *)", "NotebookEdit"],
+                        "scopes": {"project": {}}
+                    },
+                    "hooks": {}
+                }
+            "#},
+        )
+        .unwrap();
+
+        let modified = remove_permissions(&claude_dir).unwrap();
+        assert!(modified);
+
+        let content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Read(/tmp)", "WebFetch"],
+                    "deny": ["NotebookEdit"],
+                    "scopes": {"project": {}}
+                },
+                "hooks": {}
+            })
+        );
+    }
+
+    #[rstest]
+    fn remove_permissions_removes_key_when_only_bash() {
         let tmp = TempDir::new().unwrap();
         let claude_dir = tmp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
