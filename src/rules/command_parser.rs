@@ -785,9 +785,9 @@ mod tests {
         r#"curl -u "user:`secret_cmd`" https://example.com"#,
         vec!["secret_cmd", r#"curl -u "user:`secret_cmd`" https://example.com"#],
     )]
-    #[case::eval_with_cmd_sub(
-        r#"eval "$(secret_cmd)""#,
-        vec!["secret_cmd", r#"eval "$(secret_cmd)""#],
+    #[case::docker_env_with_cmd_sub(
+        r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+        vec!["cat /tmp/secret", r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#],
     )]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
