@@ -3,7 +3,7 @@ mod setup;
 
 use std::path::{Path, PathBuf};
 
-use setup::{ScopeResult, setup_scope};
+use setup::{HookPolicy, MigrationPolicy, ScopeResult, setup_scope};
 
 use super::error::InitError;
 use super::prompt::{AutoYesPrompter, DialoguerPrompter, Prompter};
@@ -141,12 +141,21 @@ pub fn run_wizard_with_paths(
                 claude_dir_if_exists(&claude_dir),
                 prompter,
                 force,
+                HookPolicy::Register,
+                MigrationPolicy::Always,
             )?;
             apply_scope_result(&mut summary, result, true);
         }
         Some(InitScope::Project) => {
             let claude_dir = cwd.join(".claude");
-            let result = setup_scope(cwd, claude_dir_if_exists(&claude_dir), prompter, force)?;
+            let result = setup_scope(
+                cwd,
+                claude_dir_if_exists(&claude_dir),
+                prompter,
+                force,
+                HookPolicy::Skip,
+                MigrationPolicy::Ask,
+            )?;
             apply_scope_result(&mut summary, result, false);
         }
         None => {
@@ -156,24 +165,26 @@ pub fn run_wizard_with_paths(
 
             match selection {
                 0 => {
-                    // User scope
                     let user_claude_dir = home_dir.join(".claude");
                     let result = setup_scope(
                         user_config_dir,
                         claude_dir_if_exists(&user_claude_dir),
                         prompter,
                         force,
+                        HookPolicy::Register,
+                        MigrationPolicy::Always,
                     )?;
                     apply_scope_result(&mut summary, result, true);
                 }
                 _ => {
-                    // Project scope
                     let project_claude_dir = cwd.join(".claude");
                     let result = setup_scope(
                         cwd,
                         claude_dir_if_exists(&project_claude_dir),
                         prompter,
                         force,
+                        HookPolicy::Skip,
+                        MigrationPolicy::Ask,
                     )?;
                     apply_scope_result(&mut summary, result, false);
                 }
@@ -423,7 +434,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_project_scope_with_claude_code() {
+    fn wizard_project_scope_skips_migration_by_default() {
         let env = TestEnv::new();
         let project_claude = env.project_claude_dir();
         std::fs::create_dir_all(&project_claude).unwrap();
@@ -439,8 +450,41 @@ mod tests {
         )
         .unwrap();
 
+        // AutoYesPrompter: migration confirm default is false, so skipped
         env.run(Some(&InitScope::Project), &AutoYesPrompter, false)
             .unwrap();
+
+        // Boilerplate only (no rules migrated)
+        let config_content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
+        assert_eq!(
+            config_content,
+            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+        );
+    }
+
+    #[rstest]
+    fn wizard_project_scope_migrates_when_opted_in() {
+        let env = TestEnv::new();
+        let project_claude = env.project_claude_dir();
+        std::fs::create_dir_all(&project_claude).unwrap();
+        std::fs::write(
+            project_claude.join("settings.json"),
+            indoc! {r#"
+                {
+                    "permissions": {
+                        "allow": ["Bash(cargo test)"]
+                    }
+                }
+            "#},
+        )
+        .unwrap();
+
+        // Confirm(true) for migration ask, Confirm(true) for batch apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::Project), &prompter, false)
+            .unwrap();
+        prompter.assert_exhausted();
 
         let config_content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
         assert_eq!(
@@ -453,6 +497,36 @@ mod tests {
                   - allow: 'cargo test'
             "}
         );
+
+        // Permissions removed but no hook registered (project scope)
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(project_claude.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {}
+            })
+        );
+    }
+
+    #[rstest]
+    fn wizard_project_scope_never_registers_hook() {
+        let env = TestEnv::new();
+        let project_claude = env.project_claude_dir();
+        std::fs::create_dir_all(&project_claude).unwrap();
+        std::fs::write(project_claude.join("settings.json"), "{}").unwrap();
+
+        env.run(Some(&InitScope::Project), &AutoYesPrompter, false)
+            .unwrap();
+
+        // No hook should be added even though .claude exists
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(project_claude.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings, serde_json::json!({}));
     }
 
     #[rstest]

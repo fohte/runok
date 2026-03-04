@@ -15,7 +15,7 @@ pub struct TestEnv {
     _tmp: TempDir,
     pub cwd: PathBuf,
     /// Isolated HOME directory to prevent global config interference.
-    home: PathBuf,
+    pub home: PathBuf,
 }
 
 impl TestEnv {

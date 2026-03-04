@@ -15,16 +15,37 @@ pub(super) struct ScopeResult {
     pub permissions_removed: bool,
 }
 
+/// Whether to register the runok hook in settings.json.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HookPolicy {
+    /// Register hook (user scope).
+    Register,
+    /// Never register hook (project scope — shared config should not
+    /// assume all contributors use runok).
+    Skip,
+}
+
+/// Whether to migrate Claude Code permissions to runok rules.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MigrationPolicy {
+    /// Always migrate when Bash permissions exist (user scope).
+    Always,
+    /// Ask the user whether to migrate (project scope).
+    Ask,
+}
+
 /// Set up configuration for a given scope (user or project).
 ///
-/// Shows all pending changes as a combined diff, then asks a single
-/// "Apply these changes?" confirmation.  On accept every change is
-/// applied; on decline none are.
+/// For user scope: migrates permissions automatically and registers hook.
+/// For project scope: creates runok.yml template, optionally migrates
+/// permissions if the user opts in, and never registers a hook.
 pub(super) fn setup_scope(
     config_dir: &Path,
     claude_dir: Option<&Path>,
     prompter: &dyn Prompter,
     force: bool,
+    hook_policy: HookPolicy,
+    migration_policy: MigrationPolicy,
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
     let mut approved = false;
@@ -50,25 +71,44 @@ pub(super) fn setup_scope(
         if has_permissions {
             let conversion = claude_code::convert_permissions(&allow, &deny);
             if !conversion.rules.is_empty() {
-                converted_rules = Some(conversion.rules.clone());
-                has_rules = true;
+                // For project scope, ask whether to migrate
+                let should_migrate = match migration_policy {
+                    MigrationPolicy::Always => true,
+                    MigrationPolicy::Ask => prompter.confirm(
+                        "Migrate Claude Code Bash permissions to runok rules?",
+                        false,
+                    )?,
+                };
+                if should_migrate {
+                    converted_rules = Some(conversion.rules.clone());
+                    has_rules = true;
+                }
             }
         }
 
-        // Build the preview
+        // Build the preview (only compute hook if policy allows)
         let after_permissions = if has_rules {
             preview_remove_permissions(&original_content)?
         } else {
             original_content.clone()
         };
-        let hook_preview = preview_register_hook(&after_permissions)?;
-        has_hook_change = hook_preview.is_some();
+
+        if hook_policy == HookPolicy::Register {
+            let hook_preview = preview_register_hook(&after_permissions)?;
+            has_hook_change = hook_preview.is_some();
+        }
+
         has_any_change = has_rules || has_hook_change;
 
         if has_any_change {
             let settings_path_display = settings_path.display();
             let config_path = config_dir.join("runok.yml");
             let config_path_display = config_path.display();
+
+            eprintln!(
+                "\x1b[1mDetected Claude Code configuration in {settings_path_display}\x1b[0m"
+            );
+            eprintln!();
 
             // Show all diffs together
             if has_rules {
@@ -89,6 +129,7 @@ pub(super) fn setup_scope(
             }
 
             if has_hook_change {
+                let hook_preview = preview_register_hook(&after_permissions)?;
                 eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
                 eprintln!();
                 if let Some(ref after_hook) = hook_preview {

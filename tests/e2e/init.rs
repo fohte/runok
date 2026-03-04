@@ -23,6 +23,10 @@ impl InitTestEnv {
     fn cwd(&self) -> &std::path::Path {
         &self.env.cwd
     }
+
+    fn home(&self) -> &std::path::Path {
+        &self.env.home
+    }
 }
 
 #[rstest]
@@ -77,12 +81,11 @@ fn init_project_scope_force_overwrites() {
 }
 
 #[rstest]
-fn init_with_claude_code_integration() {
+fn init_user_scope_with_claude_code_integration() {
     let env = InitTestEnv::new();
-    let _ = std::fs::remove_file(env.cwd().join("runok.yml"));
 
-    // Set up .claude/settings.json in project directory
-    let claude_dir = env.cwd().join(".claude");
+    // Set up ~/.claude/settings.json in isolated HOME
+    let claude_dir = env.home().join(".claude");
     std::fs::create_dir_all(&claude_dir)
         .unwrap_or_else(|e| panic!("failed to create .claude dir: {e}"));
     std::fs::write(
@@ -99,7 +102,7 @@ fn init_with_claude_code_integration() {
     .unwrap_or_else(|e| panic!("failed to write settings.json: {e}"));
 
     env.command()
-        .args(["init", "--scope", "project", "-y"])
+        .args(["init", "--scope", "user", "-y"])
         .assert()
         .success()
         .stderr(predicates::str::contains(
@@ -108,7 +111,8 @@ fn init_with_claude_code_integration() {
         .stderr(predicates::str::contains("Claude Code hook registered"));
 
     // Verify config was created with converted rules
-    let config = std::fs::read_to_string(env.cwd().join("runok.yml"))
+    let user_config_dir = env.home().join(".config").join("runok");
+    let config = std::fs::read_to_string(user_config_dir.join("runok.yml"))
         .unwrap_or_else(|e| panic!("failed to read config: {e}"));
     assert_eq!(
         config,

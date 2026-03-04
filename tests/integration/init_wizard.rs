@@ -196,7 +196,7 @@ fn project_flow_creates_config_in_cwd() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[rstest]
-fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
+fn project_flow_skips_migration_by_default() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_project_claude_settings(indoc! {r#"
         {
@@ -206,7 +206,44 @@ fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
         }
     "#})?;
 
+    // AutoYesPrompter returns default=false for migration confirm → skips migration
     env.run(Some(&InitScope::Project), &AutoYesPrompter, false)?;
+
+    let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
+    assert_eq!(
+        config,
+        "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+    );
+
+    // settings.json unchanged (no migration, no hook)
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        env.project_claude_dir().join("settings.json"),
+    )?)?;
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "permissions": {
+                "allow": ["Bash(cargo test)", "Bash(cargo build)"]
+            }
+        })
+    );
+    Ok(())
+}
+
+#[rstest]
+fn project_flow_migrates_when_opted_in() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_project_claude_settings(indoc! {r#"
+        {
+            "permissions": {
+                "allow": ["Bash(cargo test)", "Bash(cargo build)"]
+            }
+        }
+    "#})?;
+
+    // First confirm: "Migrate?" → yes, Second confirm: "Apply these changes?" → yes
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter, false)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
     assert_eq!(
@@ -221,26 +258,14 @@ fn project_flow_with_claude_code() -> Result<(), Box<dyn std::error::Error>> {
         "}
     );
 
+    // Permissions removed but no hook registered (project scope never adds hook)
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         env.project_claude_dir().join("settings.json"),
     )?)?;
     assert_eq!(
         settings,
         serde_json::json!({
-            "permissions": {},
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "runok check --input-format claude-code-hook"
-                            }
-                        ]
-                    }
-                ]
-            }
+            "permissions": {}
         })
     );
     Ok(())
