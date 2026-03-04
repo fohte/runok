@@ -1003,3 +1003,97 @@ fn command_substitution_with_redirects_no_stack_overflow(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Command substitution in quoted strings and other constructs
+// ========================================
+
+#[rstest]
+#[case::cmd_sub_in_double_quotes_deny(
+    r#"curl -u "user:$(rm -rf /tmp/data)" https://example.com"#,
+    indoc! {"
+        rules:
+          - allow: 'curl *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::cmd_sub_in_double_quotes_all_allowed(
+    r#"curl -u "user:$(cat token)" https://example.com"#,
+    indoc! {"
+        rules:
+          - allow: 'curl *'
+          - allow: 'cat *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::cmd_sub_in_double_quotes_inner_unmatched_is_ask(
+    r#"curl -u "user:$(printenv SECRET)" https://example.com"#,
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'curl *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::nested_wrapper_in_cmd_sub_in_quotes(
+    r#"curl -u "user:$(mise x -- printenv SECRET)" https://example.com"#,
+    indoc! {"
+        defaults:
+          action: ask
+        definitions:
+          wrappers:
+            - 'mise x|exec -- <cmd>'
+        rules:
+          - allow: 'curl *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::single_quotes_no_substitution(
+    "echo '$(rm -rf /)'",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::backtick_in_double_quotes_deny(
+    r#"curl -u "user:`rm -rf /`" https://example.com"#,
+    indoc! {"
+        rules:
+          - allow: 'curl *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::docker_env_with_secret_cmd_sub(
+    r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'docker *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::git_commit_with_date_cmd_sub(
+    r#"git commit -m "$(date +%Y-%m-%d): release""#,
+    indoc! {"
+        rules:
+          - allow: 'git *'
+          - allow: 'date *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn command_substitution_in_strings(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
