@@ -62,6 +62,13 @@ struct InitTestEnv {
     user_config_dir: std::path::PathBuf,
 }
 
+/// Content pre-seeded into runok.yml for "existing config" test cases.
+const EXISTING_CONFIG: &str = "\
+# existing user config
+rules:
+  - allow: 'echo hello'
+";
+
 impl InitTestEnv {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let tmp = TempDir::new()?;
@@ -113,6 +120,15 @@ impl InitTestEnv {
         let dir = self.claude_dir_for_scope(scope);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("settings.json"), content)?;
+        Ok(())
+    }
+
+    fn setup_existing_config(&self, scope: &InitScope) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.config_path_for_scope(scope);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, EXISTING_CONFIG)?;
         Ok(())
     }
 
@@ -236,54 +252,106 @@ fn config_with_bash_rules() -> String {
 }
 
 // ============================================================
-// Exhaustive 23-pattern test
+// Exhaustive 46-pattern test
 // ============================================================
 //
-// |    |                   State                  |           Response          |               Result               |
-// | #  | settings.json | Bash perms | Hook exists | Scope   | Migrate? | Apply? | runok.yml   | settings.json change |
-// |----|---------------|------------|-------------|---------|----------|--------|-------------|----------------------|
-// |  1 | no            | N/A        | N/A         | user    | N/A      | N/A    | boilerplate | N/A                  |
-// |  2 | no            | N/A        | N/A         | project | N/A      | N/A    | boilerplate | N/A                  |
-// |  3 | yes           | no         | no          | user    | N/A      | yes    | boilerplate | hook added           |
-// |  4 | yes           | no         | no          | user    | N/A      | no     | none        | none                 |
-// |  5 | yes           | no         | yes         | user    | N/A      | N/A    | boilerplate | none                 |
-// |  6 | yes           | no         | no          | project | N/A      | N/A    | boilerplate | none                 |
-// |  7 | yes           | no         | yes         | project | N/A      | N/A    | boilerplate | none                 |
-// |  8 | yes           | yes        | no          | user    | yes      | yes    | with rules  | perms removed + hook |
-// |  9 | yes           | yes        | no          | user    | yes      | no     | none        | none                 |
-// | 10 | yes           | yes        | no          | user    | no       | yes    | boilerplate | hook added           |
-// | 11 | yes           | yes        | no          | user    | no       | no     | none        | none                 |
-// | 12 | yes           | yes        | yes         | user    | yes      | yes    | with rules  | perms removed        |
-// | 13 | yes           | yes        | yes         | user    | yes      | no     | none        | none                 |
-// | 14 | yes           | yes        | yes         | user    | no       | yes    | boilerplate | none                 |
-// | 15 | yes           | yes        | yes         | user    | no       | no     | none        | none                 |
-// | 16 | yes           | yes        | no          | project | yes      | yes    | with rules  | perms removed        |
-// | 17 | yes           | yes        | no          | project | yes      | no     | none        | none                 |
-// | 18 | yes           | yes        | no          | project | no       | yes    | boilerplate | none                 |
-// | 19 | yes           | yes        | no          | project | no       | no     | none        | none                 |
-// | 20 | yes           | yes        | yes         | project | yes      | yes    | with rules  | perms removed        |
-// | 21 | yes           | yes        | yes         | project | yes      | no     | none        | none                 |
-// | 22 | yes           | yes        | yes         | project | no       | yes    | boilerplate | none                 |
-// | 23 | yes           | yes        | yes         | project | no       | no     | none        | none                 |
+// 7 condition axes, grouped into State / Response / Result:
+//
+// |    |                          State                          |      Response      |               Result               |
+// | #  | settings.json | Bash perms | Hook exists | Scope   | E | Migrate? | Apply? | runok.yml   | settings.json change |
+// |----|---------------|------------|-------------|---------|---|----------|--------|-------------|----------------------|
+// |  1 | no            | N/A        | N/A         | user    | - | N/A      | N/A    | boilerplate | N/A                  |
+// |  2 | no            | N/A        | N/A         | user    | E | N/A      | N/A    | boilerplate | N/A                  |
+// |  3 | no            | N/A        | N/A         | project | - | N/A      | N/A    | boilerplate | N/A                  |
+// |  4 | no            | N/A        | N/A         | project | E | N/A      | N/A    | boilerplate | N/A                  |
+// |  5 | yes           | no         | no          | user    | - | N/A      | yes    | boilerplate | hook added           |
+// |  6 | yes           | no         | no          | user    | E | N/A      | yes    | boilerplate | hook added           |
+// |  7 | yes           | no         | no          | user    | - | N/A      | no     | none        | none                 |
+// |  8 | yes           | no         | no          | user    | E | N/A      | no     | preserved   | none                 |
+// |  9 | yes           | no         | yes         | user    | - | N/A      | N/A    | boilerplate | none                 |
+// | 10 | yes           | no         | yes         | user    | E | N/A      | N/A    | boilerplate | none                 |
+// | 11 | yes           | no         | no          | project | - | N/A      | N/A    | boilerplate | none                 |
+// | 12 | yes           | no         | no          | project | E | N/A      | N/A    | boilerplate | none                 |
+// | 13 | yes           | no         | yes         | project | - | N/A      | N/A    | boilerplate | none                 |
+// | 14 | yes           | no         | yes         | project | E | N/A      | N/A    | boilerplate | none                 |
+// | 15 | yes           | yes        | no          | user    | - | yes      | yes    | with rules  | perms removed + hook |
+// | 16 | yes           | yes        | no          | user    | E | yes      | yes    | with rules  | perms removed + hook |
+// | 17 | yes           | yes        | no          | user    | - | yes      | no     | none        | none                 |
+// | 18 | yes           | yes        | no          | user    | E | yes      | no     | preserved   | none                 |
+// | 19 | yes           | yes        | no          | user    | - | no       | yes    | boilerplate | hook added           |
+// | 20 | yes           | yes        | no          | user    | E | no       | yes    | boilerplate | hook added           |
+// | 21 | yes           | yes        | no          | user    | - | no       | no     | none        | none                 |
+// | 22 | yes           | yes        | no          | user    | E | no       | no     | preserved   | none                 |
+// | 23 | yes           | yes        | yes         | user    | - | yes      | yes    | with rules  | perms removed        |
+// | 24 | yes           | yes        | yes         | user    | E | yes      | yes    | with rules  | perms removed        |
+// | 25 | yes           | yes        | yes         | user    | - | yes      | no     | none        | none                 |
+// | 26 | yes           | yes        | yes         | user    | E | yes      | no     | preserved   | none                 |
+// | 27 | yes           | yes        | yes         | user    | - | no       | yes    | boilerplate | none                 |
+// | 28 | yes           | yes        | yes         | user    | E | no       | yes    | boilerplate | none                 |
+// | 29 | yes           | yes        | yes         | user    | - | no       | no     | none        | none                 |
+// | 30 | yes           | yes        | yes         | user    | E | no       | no     | preserved   | none                 |
+// | 31 | yes           | yes        | no          | project | - | yes      | yes    | with rules  | perms removed        |
+// | 32 | yes           | yes        | no          | project | E | yes      | yes    | with rules  | perms removed        |
+// | 33 | yes           | yes        | no          | project | - | yes      | no     | none        | none                 |
+// | 34 | yes           | yes        | no          | project | E | yes      | no     | preserved   | none                 |
+// | 35 | yes           | yes        | no          | project | - | no       | yes    | boilerplate | none                 |
+// | 36 | yes           | yes        | no          | project | E | no       | yes    | boilerplate | none                 |
+// | 37 | yes           | yes        | no          | project | - | no       | no     | none        | none                 |
+// | 38 | yes           | yes        | no          | project | E | no       | no     | preserved   | none                 |
+// | 39 | yes           | yes        | yes         | project | - | yes      | yes    | with rules  | perms removed        |
+// | 40 | yes           | yes        | yes         | project | E | yes      | yes    | with rules  | perms removed        |
+// | 41 | yes           | yes        | yes         | project | - | yes      | no     | none        | none                 |
+// | 42 | yes           | yes        | yes         | project | E | yes      | no     | preserved   | none                 |
+// | 43 | yes           | yes        | yes         | project | - | no       | yes    | boilerplate | none                 |
+// | 44 | yes           | yes        | yes         | project | E | no       | yes    | boilerplate | none                 |
+// | 45 | yes           | yes        | yes         | project | - | no       | no     | none        | none                 |
+// | 46 | yes           | yes        | yes         | project | E | no       | no     | preserved   | none                 |
+//
+// E column = existing runok.yml: "-" = no, "E" = yes (pre-seeded with EXISTING_CONFIG)
+// "preserved" in Result means the existing runok.yml is left unchanged (wizard does not touch it)
+// "none" in Result means runok.yml does not exist after the wizard
+
+/// Expected runok.yml content after the wizard runs.
+enum ExpectedConfig {
+    /// runok.yml is created/overwritten with the given content.
+    Content(&'static str),
+    /// runok.yml is created/overwritten with a computed String.
+    ContentOwned(String),
+    /// runok.yml does not exist (was not created, and none existed before).
+    None,
+    /// runok.yml is preserved as-is (wizard did not touch it).
+    Preserved,
+}
 
 /// Helper to assert the final state after running the wizard.
 fn assert_wizard_result(
     env: &InitTestEnv,
     scope: &InitScope,
-    expected_config: Option<&str>,
+    expected_config: &ExpectedConfig,
     expected_settings: Option<serde_json::Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = env.config_path_for_scope(scope);
     match expected_config {
-        Some(expected) => {
+        ExpectedConfig::Content(expected) => {
             let config = std::fs::read_to_string(&config_path)?;
-            assert_eq!(config, expected, "runok.yml content mismatch");
+            assert_eq!(config, *expected, "runok.yml content mismatch");
         }
-        None => {
+        ExpectedConfig::ContentOwned(expected) => {
+            let config = std::fs::read_to_string(&config_path)?;
+            assert_eq!(config, *expected, "runok.yml content mismatch");
+        }
+        ExpectedConfig::None => {
             assert!(
                 !config_path.exists(),
                 "runok.yml should not exist but was found at {}",
                 config_path.display()
+            );
+        }
+        ExpectedConfig::Preserved => {
+            let config = std::fs::read_to_string(&config_path)?;
+            assert_eq!(
+                config, EXISTING_CONFIG,
+                "runok.yml should be preserved but was modified"
             );
         }
     }
@@ -298,473 +366,824 @@ fn assert_wizard_result(
     Ok(())
 }
 
-// --- #1: no settings.json, user scope ---
+// --- #1: no settings, user, no existing config ---
 #[rstest]
-fn p01_no_settings_user_scope() -> Result<(), Box<dyn std::error::Error>> {
+fn p01_no_settings_user() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     let prompter = SequencePrompter::new(vec![]);
     env.run(Some(&InitScope::User), &prompter)?;
-
-    assert_wizard_result(&env, &InitScope::User, Some(BOILERPLATE), None)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        None,
+    )?;
     assert!(!env.user_claude_dir().join("settings.json").exists());
     Ok(())
 }
 
-// --- #2: no settings.json, project scope ---
+// --- #2: no settings, user, existing config ---
 #[rstest]
-fn p02_no_settings_project_scope() -> Result<(), Box<dyn std::error::Error>> {
+fn p02_no_settings_user_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        None,
+    )?;
+    Ok(())
+}
+
+// --- #3: no settings, project, no existing config ---
+#[rstest]
+fn p03_no_settings_project() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     let prompter = SequencePrompter::new(vec![]);
     env.run(Some(&InitScope::Project), &prompter)?;
-
-    assert_wizard_result(&env, &InitScope::Project, Some(BOILERPLATE), None)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        None,
+    )?;
     assert!(!env.project_claude_dir().join("settings.json").exists());
     Ok(())
 }
 
-// --- #3: settings exists, no bash, no hook, user scope, apply=yes ---
+// --- #4: no settings, project, existing config ---
 #[rstest]
-fn p03_no_bash_no_hook_user_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
+fn p04_no_settings_project_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        None,
+    )?;
+    Ok(())
+}
+
+// --- #5: no bash, no hook, user, apply=yes ---
+#[rstest]
+fn p05_no_bash_no_hook_user_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_NO_BASH_NO_HOOK)?;
-
-    // Apply? -> yes
     let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        Some(BOILERPLATE),
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)", "WebFetch"],
-                "deny": ["Write(/etc/passwd)"]
-            },
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
             "hooks": hook_json()
         })),
     )?;
     Ok(())
 }
 
-// --- #4: settings exists, no bash, no hook, user scope, apply=no ---
+// --- #6: no bash, no hook, user, apply=yes, existing config ---
 #[rstest]
-fn p04_no_bash_no_hook_user_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p06_no_bash_no_hook_user_apply_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_NO_BASH_NO_HOOK)?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
+            "hooks": hook_json()
+        })),
+    )?;
+    Ok(())
+}
 
-    // Apply? -> no
+// --- #7: no bash, no hook, user, apply=no ---
+#[rstest]
+fn p07_no_bash_no_hook_user_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, SETTINGS_NO_BASH_NO_HOOK)?;
     let prompter = SequencePrompter::new(vec![Response::Confirm(false)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        None,
+        &ExpectedConfig::None,
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)", "WebFetch"],
-                "deny": ["Write(/etc/passwd)"]
-            }
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] }
         })),
     )?;
     Ok(())
 }
 
-// --- #5: settings exists, no bash, hook exists, user scope ---
+// --- #8: no bash, no hook, user, apply=no, existing config ---
 #[rstest]
-fn p05_no_bash_hook_exists_user() -> Result<(), Box<dyn std::error::Error>> {
+fn p08_no_bash_no_hook_user_apply_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, SETTINGS_NO_BASH_NO_HOOK)?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Preserved,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] }
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #9: no bash, hook exists, user ---
+#[rstest]
+fn p09_no_bash_hook_exists_user() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, settings_no_bash_with_hook())?;
-
-    // No prompts expected (no changes to propose)
     let prompter = SequencePrompter::new(vec![]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        Some(BOILERPLATE),
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)", "WebFetch"],
-                "deny": ["Write(/etc/passwd)"]
-            },
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
             "hooks": hook_json()
         })),
     )?;
     Ok(())
 }
 
-// --- #6: settings exists, no bash, no hook, project scope ---
+// --- #10: no bash, hook exists, user, existing config ---
 #[rstest]
-fn p06_no_bash_no_hook_project() -> Result<(), Box<dyn std::error::Error>> {
+fn p10_no_bash_hook_exists_user_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_no_bash_with_hook())?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
+            "hooks": hook_json()
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #11: no bash, no hook, project ---
+#[rstest]
+fn p11_no_bash_no_hook_project() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::Project, SETTINGS_NO_BASH_NO_HOOK)?;
-
-    // No prompts expected (project scope never adds hook, no bash to migrate)
     let prompter = SequencePrompter::new(vec![]);
     env.run(Some(&InitScope::Project), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::Project,
-        Some(BOILERPLATE),
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)", "WebFetch"],
-                "deny": ["Write(/etc/passwd)"]
-            }
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] }
         })),
     )?;
     Ok(())
 }
 
-// --- #7: settings exists, no bash, hook exists, project scope ---
+// --- #12: no bash, no hook, project, existing config ---
 #[rstest]
-fn p07_no_bash_hook_exists_project() -> Result<(), Box<dyn std::error::Error>> {
+fn p12_no_bash_no_hook_project_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_NO_BASH_NO_HOOK)?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] }
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #13: no bash, hook exists, project ---
+#[rstest]
+fn p13_no_bash_hook_exists_project() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::Project, settings_no_bash_with_hook())?;
-
     let prompter = SequencePrompter::new(vec![]);
     env.run(Some(&InitScope::Project), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::Project,
-        Some(BOILERPLATE),
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)", "WebFetch"],
-                "deny": ["Write(/etc/passwd)"]
-            },
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
             "hooks": hook_json()
         })),
     )?;
     Ok(())
 }
 
-// --- #8: bash, no hook, user, migrate=yes, apply=yes ---
+// --- #14: no bash, hook exists, project, existing config ---
 #[rstest]
-fn p08_bash_no_hook_user_migrate_yes_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
+fn p14_no_bash_hook_exists_project_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_no_bash_with_hook())?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Read(/tmp)", "WebFetch"], "deny": ["Write(/etc/passwd)"] },
+            "hooks": hook_json()
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #15: bash, no hook, user, migrate=yes, apply=yes ---
+#[rstest]
+fn p15_bash_no_hook_user_mig_yes_app_yes() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> yes, Apply? -> yes
     let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        Some(&config_with_bash_rules()),
-        Some(serde_json::json!({
-            "permissions": {},
-            "hooks": hook_json()
-        })),
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
     )?;
     Ok(())
 }
 
-// --- #9: bash, no hook, user, migrate=yes, apply=no ---
+// --- #16: bash, no hook, user, migrate=yes, apply=yes, existing config ---
 #[rstest]
-fn p09_bash_no_hook_user_migrate_yes_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p16_bash_no_hook_user_mig_yes_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> yes, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        None,
-        Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
-        })),
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
     )?;
     Ok(())
 }
 
-// --- #10: bash, no hook, user, migrate=no, apply=yes ---
+// --- #17: bash, no hook, user, migrate=yes, apply=no ---
 #[rstest]
-fn p10_bash_no_hook_user_migrate_no_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
+fn p17_bash_no_hook_user_mig_yes_app_no() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> no, Apply? -> yes
-    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        Some(BOILERPLATE),
+        &ExpectedConfig::None,
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            },
-            "hooks": hook_json()
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
         })),
     )?;
     Ok(())
 }
 
-// --- #11: bash, no hook, user, migrate=no, apply=no ---
+// --- #18: bash, no hook, user, migrate=yes, apply=no, existing config ---
 #[rstest]
-fn p11_bash_no_hook_user_migrate_no_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p18_bash_no_hook_user_mig_yes_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
     env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> no, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        None,
+        &ExpectedConfig::Preserved,
         Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
         })),
     )?;
     Ok(())
 }
 
-// --- #12: bash, hook exists, user, migrate=yes, apply=yes ---
+// --- #19: bash, no hook, user, migrate=no, apply=yes ---
 #[rstest]
-fn p12_bash_hook_exists_user_migrate_yes_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
+fn p19_bash_no_hook_user_mig_no_app_yes() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
-
-    // Migrate? -> yes, Apply? -> yes
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
     assert_wizard_result(
         &env,
         &InitScope::User,
-        Some(&config_with_bash_rules()),
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {},
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] },
             "hooks": hook_json()
         })),
     )?;
     Ok(())
 }
 
-// --- #13: bash, hook exists, user, migrate=yes, apply=no ---
+// --- #20: bash, no hook, user, migrate=no, apply=yes, existing config ---
 #[rstest]
-fn p13_bash_hook_exists_user_migrate_yes_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p20_bash_no_hook_user_mig_no_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
-
-    // Migrate? -> yes, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
-    env.run(Some(&InitScope::User), &prompter)?;
-
-    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::User, None, Some(original))?;
-    Ok(())
-}
-
-// --- #14: bash, hook exists, user, migrate=no, apply=yes ---
-#[rstest]
-fn p14_bash_hook_exists_user_migrate_no_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
-
-    // Migrate? -> no, Apply? -> yes
+    env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::User)?;
     let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
     env.run(Some(&InitScope::User), &prompter)?;
-
-    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::User, Some(BOILERPLATE), Some(original))?;
-    Ok(())
-}
-
-// --- #15: bash, hook exists, user, migrate=no, apply=no ---
-#[rstest]
-fn p15_bash_hook_exists_user_migrate_no_apply_no() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
-
-    // Migrate? -> no, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
-    env.run(Some(&InitScope::User), &prompter)?;
-
-    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::User, None, Some(original))?;
-    Ok(())
-}
-
-// --- #16: bash, no hook, project, migrate=yes, apply=yes ---
-#[rstest]
-fn p16_bash_no_hook_project_migrate_yes_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> yes, Apply? -> yes
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
-    env.run(Some(&InitScope::Project), &prompter)?;
-
-    // Project scope: perms removed, no hook added
     assert_wizard_result(
         &env,
-        &InitScope::Project,
-        Some(&config_with_bash_rules()),
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
         Some(serde_json::json!({
-            "permissions": {}
-        })),
-    )?;
-    Ok(())
-}
-
-// --- #17: bash, no hook, project, migrate=yes, apply=no ---
-#[rstest]
-fn p17_bash_no_hook_project_migrate_yes_apply_no() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> yes, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
-    env.run(Some(&InitScope::Project), &prompter)?;
-
-    assert_wizard_result(
-        &env,
-        &InitScope::Project,
-        None,
-        Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
-        })),
-    )?;
-    Ok(())
-}
-
-// --- #18: bash, no hook, project, migrate=no, apply=yes ---
-#[rstest]
-fn p18_bash_no_hook_project_migrate_no_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> no, Apply? -> yes
-    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
-    env.run(Some(&InitScope::Project), &prompter)?;
-
-    // No migration, no hook -> only boilerplate, settings unchanged
-    assert_wizard_result(
-        &env,
-        &InitScope::Project,
-        Some(BOILERPLATE),
-        Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
-        })),
-    )?;
-    Ok(())
-}
-
-// --- #19: bash, no hook, project, migrate=no, apply=no ---
-#[rstest]
-fn p19_bash_no_hook_project_migrate_no_apply_no() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
-
-    // Migrate? -> no, Apply? -> no
-    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
-    env.run(Some(&InitScope::Project), &prompter)?;
-
-    assert_wizard_result(
-        &env,
-        &InitScope::Project,
-        None,
-        Some(serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(cargo test)", "Bash(cargo build)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
-        })),
-    )?;
-    Ok(())
-}
-
-// --- #20: bash, hook exists, project, migrate=yes, apply=yes ---
-#[rstest]
-fn p20_bash_hook_exists_project_migrate_yes_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
-
-    // Migrate? -> yes, Apply? -> yes
-    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
-    env.run(Some(&InitScope::Project), &prompter)?;
-
-    assert_wizard_result(
-        &env,
-        &InitScope::Project,
-        Some(&config_with_bash_rules()),
-        Some(serde_json::json!({
-            "permissions": {},
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] },
             "hooks": hook_json()
         })),
     )?;
     Ok(())
 }
 
-// --- #21: bash, hook exists, project, migrate=yes, apply=no ---
+// --- #21: bash, no hook, user, migrate=no, apply=no ---
 #[rstest]
-fn p21_bash_hook_exists_project_migrate_yes_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p21_bash_no_hook_user_mig_no_app_no() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::None,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
 
-    // Migrate? -> yes, Apply? -> no
+// --- #22: bash, no hook, user, migrate=no, apply=no, existing config ---
+#[rstest]
+fn p22_bash_no_hook_user_mig_no_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Preserved,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #23: bash, hook exists, user, migrate=yes, apply=yes ---
+#[rstest]
+fn p23_bash_hook_user_mig_yes_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
+    )?;
+    Ok(())
+}
+
+// --- #24: bash, hook exists, user, migrate=yes, apply=yes, existing config ---
+#[rstest]
+fn p24_bash_hook_user_mig_yes_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
+    )?;
+    Ok(())
+}
+
+// --- #25: bash, hook exists, user, migrate=yes, apply=no ---
+#[rstest]
+fn p25_bash_hook_user_mig_yes_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::None,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #26: bash, hook exists, user, migrate=yes, apply=no, existing config ---
+#[rstest]
+fn p26_bash_hook_user_mig_yes_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Preserved,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #27: bash, hook exists, user, migrate=no, apply=yes ---
+#[rstest]
+fn p27_bash_hook_user_mig_no_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #28: bash, hook exists, user, migrate=no, apply=yes, existing config ---
+#[rstest]
+fn p28_bash_hook_user_mig_no_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #29: bash, hook exists, user, migrate=no, apply=no ---
+#[rstest]
+fn p29_bash_hook_user_mig_no_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::None,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #30: bash, hook exists, user, migrate=no, apply=no, existing config ---
+#[rstest]
+fn p30_bash_hook_user_mig_no_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::User)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Preserved,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #31: bash, no hook, project, migrate=yes, apply=yes ---
+#[rstest]
+fn p31_bash_no_hook_project_mig_yes_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {} })),
+    )?;
+    Ok(())
+}
+
+// --- #32: bash, no hook, project, migrate=yes, apply=yes, existing config ---
+#[rstest]
+fn p32_bash_no_hook_project_mig_yes_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {} })),
+    )?;
+    Ok(())
+}
+
+// --- #33: bash, no hook, project, migrate=yes, apply=no ---
+#[rstest]
+fn p33_bash_no_hook_project_mig_yes_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
     let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
     env.run(Some(&InitScope::Project), &prompter)?;
-
-    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::Project, None, Some(original))?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::None,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
     Ok(())
 }
 
-// --- #22: bash, hook exists, project, migrate=no, apply=yes ---
+// --- #34: bash, no hook, project, migrate=yes, apply=no, existing config ---
 #[rstest]
-fn p22_bash_hook_exists_project_migrate_no_apply_yes() -> Result<(), Box<dyn std::error::Error>> {
+fn p34_bash_no_hook_project_mig_yes_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Preserved,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
 
-    // Migrate? -> no, Apply? -> yes
+// --- #35: bash, no hook, project, migrate=no, apply=yes ---
+#[rstest]
+fn p35_bash_no_hook_project_mig_no_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
     let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
     env.run(Some(&InitScope::Project), &prompter)?;
-
-    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::Project, Some(BOILERPLATE), Some(original))?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
     Ok(())
 }
 
-// --- #23: bash, hook exists, project, migrate=no, apply=no ---
+// --- #36: bash, no hook, project, migrate=no, apply=yes, existing config ---
 #[rstest]
-fn p23_bash_hook_exists_project_migrate_no_apply_no() -> Result<(), Box<dyn std::error::Error>> {
+fn p36_bash_no_hook_project_mig_no_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
 
-    // Migrate? -> no, Apply? -> no
+// --- #37: bash, no hook, project, migrate=no, apply=no ---
+#[rstest]
+fn p37_bash_no_hook_project_mig_no_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
     let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
     env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::None,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
 
+// --- #38: bash, no hook, project, migrate=no, apply=no, existing config ---
+#[rstest]
+fn p38_bash_no_hook_project_mig_no_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Preserved,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] }
+        })),
+    )?;
+    Ok(())
+}
+
+// --- #39: bash, hook exists, project, migrate=yes, apply=yes ---
+#[rstest]
+fn p39_bash_hook_project_mig_yes_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
+    )?;
+    Ok(())
+}
+
+// --- #40: bash, hook exists, project, migrate=yes, apply=yes, existing config ---
+#[rstest]
+fn p40_bash_hook_project_mig_yes_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::ContentOwned(config_with_bash_rules()),
+        Some(serde_json::json!({ "permissions": {}, "hooks": hook_json() })),
+    )?;
+    Ok(())
+}
+
+// --- #41: bash, hook exists, project, migrate=yes, apply=no ---
+#[rstest]
+fn p41_bash_hook_project_mig_yes_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
     let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
-    assert_wizard_result(&env, &InitScope::Project, None, Some(original))?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::None,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #42: bash, hook exists, project, migrate=yes, apply=no, existing config ---
+#[rstest]
+fn p42_bash_hook_project_mig_yes_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Preserved,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #43: bash, hook exists, project, migrate=no, apply=yes ---
+#[rstest]
+fn p43_bash_hook_project_mig_no_app_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #44: bash, hook exists, project, migrate=no, apply=yes, existing config ---
+#[rstest]
+fn p44_bash_hook_project_mig_no_app_yes_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(true)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Content(BOILERPLATE),
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #45: bash, hook exists, project, migrate=no, apply=no ---
+#[rstest]
+fn p45_bash_hook_project_mig_no_app_no() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::None,
+        Some(original),
+    )?;
+    Ok(())
+}
+
+// --- #46: bash, hook exists, project, migrate=no, apply=no, existing config ---
+#[rstest]
+fn p46_bash_hook_project_mig_no_app_no_existing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::Project, settings_bash_only_with_hook())?;
+    env.setup_existing_config(&InitScope::Project)?;
+    let prompter = SequencePrompter::new(vec![Response::Confirm(false), Response::Confirm(false)]);
+    env.run(Some(&InitScope::Project), &prompter)?;
+    let original: serde_json::Value = serde_json::from_str(settings_bash_only_with_hook())?;
+    assert_wizard_result(
+        &env,
+        &InitScope::Project,
+        &ExpectedConfig::Preserved,
+        Some(original),
+    )?;
     Ok(())
 }
 
