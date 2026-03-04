@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_project_scope_skips_migration_by_default() {
+    fn wizard_project_scope_skips_migration_creates_boilerplate() {
         let env = TestEnv::new();
         let project_claude = env.project_claude_dir();
         std::fs::create_dir_all(&project_claude).unwrap();
@@ -403,14 +403,29 @@ mod tests {
         )
         .unwrap();
 
-        // AutoYesPrompter: migration confirm default is false, so skipped
+        // AutoYesPrompter: migration default=false → No, apply default=true → Yes
+        // This creates boilerplate runok.yml without migration rules
         env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
-        // runok.yml not created when migration declined
-        assert!(
-            !env.cwd.join("runok.yml").exists(),
-            "runok.yml should not be created when user declined migration"
+        let config = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
+        assert_eq!(
+            config,
+            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
+        );
+
+        // settings.json unchanged (migration declined, no hook for project scope)
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(project_claude.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Bash(cargo test)"]
+                }
+            })
         );
     }
 

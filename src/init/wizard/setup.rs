@@ -105,62 +105,59 @@ pub(super) fn setup_scope(
                 has_hook_change = hook_preview.is_some();
             }
 
-            let has_any_change = has_rules || has_hook_change;
-            if has_any_change {
-                let config_path = config_dir.join("runok.yml");
-                let config_path_display = config_path.display();
+            let config_path = config_dir.join("runok.yml");
+            let config_path_display = config_path.display();
 
-                // Show all diffs together
-                if has_rules {
-                    eprintln!("\x1b[1mRemove Bash permissions from {settings_path_display}\x1b[0m");
-                    eprintln!();
+            // Show all diffs together
+            if has_rules {
+                eprintln!("\x1b[1mRemove Bash permissions from {settings_path_display}\x1b[0m");
+                eprintln!();
+                print_diff(
+                    &settings_path_display.to_string(),
+                    &original_content,
+                    &after_permissions,
+                );
+                eprintln!();
+            }
+
+            // Always show runok.yml creation/update diff
+            let config_content = config_gen::build_config_content(converted_rules.as_deref());
+            let existing_config = if config_path.exists() {
+                std::fs::read_to_string(&config_path)?
+            } else {
+                String::new()
+            };
+            let verb = if config_path.exists() {
+                "Update"
+            } else {
+                "Create"
+            };
+            eprintln!("\x1b[1m{verb} {config_path_display}\x1b[0m");
+            eprintln!();
+            print_diff(
+                &config_path_display.to_string(),
+                &existing_config,
+                &config_content,
+            );
+            eprintln!();
+
+            if has_hook_change {
+                let hook_preview = preview_register_hook(&after_permissions)?;
+                eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
+                eprintln!();
+                if let Some(ref after_hook) = hook_preview {
                     print_diff(
                         &settings_path_display.to_string(),
-                        &original_content,
                         &after_permissions,
+                        after_hook,
                     );
-                    eprintln!();
-
-                    let config_content =
-                        config_gen::build_config_content(converted_rules.as_deref());
-                    let existing_config = if config_path.exists() {
-                        std::fs::read_to_string(&config_path)?
-                    } else {
-                        String::new()
-                    };
-                    let verb = if config_path.exists() {
-                        "Update"
-                    } else {
-                        "Create"
-                    };
-                    eprintln!("\x1b[1m{verb} {config_path_display} with converted rules\x1b[0m");
-                    eprintln!();
-                    print_diff(
-                        &config_path_display.to_string(),
-                        &existing_config,
-                        &config_content,
-                    );
-                    eprintln!();
                 }
+                eprintln!();
+            }
 
-                if has_hook_change {
-                    let hook_preview = preview_register_hook(&after_permissions)?;
-                    eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
-                    eprintln!();
-                    if let Some(ref after_hook) = hook_preview {
-                        print_diff(
-                            &settings_path_display.to_string(),
-                            &after_permissions,
-                            after_hook,
-                        );
-                    }
-                    eprintln!();
-                }
-
-                approved = prompter.confirm("Apply these changes?", true)?;
-                if !approved {
-                    converted_rules = None;
-                }
+            approved = prompter.confirm("Apply these changes?", true)?;
+            if !approved {
+                converted_rules = None;
             }
         }
     }
