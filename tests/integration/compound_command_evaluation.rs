@@ -1005,7 +1005,7 @@ fn command_substitution_with_redirects_no_stack_overflow(
 }
 
 // ========================================
-// Command substitution nested in quoted strings
+// Command substitution in quoted strings and other constructs
 // ========================================
 
 #[rstest]
@@ -1050,22 +1050,6 @@ fn command_substitution_with_redirects_no_stack_overflow(
     "},
     assert_ask as ActionAssertion,
 )]
-fn command_substitution_in_quoted_string(
-    #[case] command: &str,
-    #[case] config_yaml: &str,
-    #[case] expected: ActionAssertion,
-    empty_context: EvalContext,
-) {
-    let config = parse_config(config_yaml).unwrap();
-    let result = evaluate_compound(&config, command, &empty_context).unwrap();
-    expected(&result.action);
-}
-
-// ========================================
-// Command substitution edge cases
-// ========================================
-
-#[rstest]
 #[case::single_quotes_no_substitution(
     "echo '$(rm -rf /)'",
     indoc! {"
@@ -1103,7 +1087,7 @@ fn command_substitution_in_quoted_string(
     "},
     assert_allow as ActionAssertion,
 )]
-fn command_substitution_edge_cases(
+fn command_substitution_in_strings(
     #[case] command: &str,
     #[case] config_yaml: &str,
     #[case] expected: ActionAssertion,
