@@ -54,13 +54,34 @@ pub(super) fn setup_scope(
             String::new()
         };
 
-        // Determine what changes are needed
+        // Determine what changes are available
         let (allow, deny) = claude_code::read_permissions(cd)?;
         let has_permissions = !allow.is_empty() || !deny.is_empty();
-
-        if has_permissions {
+        let has_migratable_rules = if has_permissions {
             let conversion = claude_code::convert_permissions(&allow, &deny);
-            if !conversion.rules.is_empty() {
+            !conversion.rules.is_empty()
+        } else {
+            false
+        };
+
+        // Check if hook registration would change anything
+        let would_add_hook = if hook_policy == HookPolicy::Register {
+            preview_register_hook(&original_content)?.is_some()
+        } else {
+            false
+        };
+
+        // Only show "Detected" and ask migration if there's something to do
+        if has_migratable_rules || would_add_hook {
+            let settings_path_display = settings_path.display();
+            eprintln!(
+                "\x1b[1mDetected Claude Code configuration in {settings_path_display}\x1b[0m"
+            );
+            eprintln!();
+
+            // Ask whether to migrate Bash permissions
+            if has_migratable_rules {
+                let conversion = claude_code::convert_permissions(&allow, &deny);
                 let should_migrate = prompter.confirm(
                     "Migrate Claude Code Bash permissions to runok rules?",
                     migration_default,
@@ -70,81 +91,76 @@ pub(super) fn setup_scope(
                     has_rules = true;
                 }
             }
-        }
 
-        // Build the preview (only compute hook if policy allows)
-        let after_permissions = if has_rules {
-            preview_remove_permissions(&original_content)?
-        } else {
-            original_content.clone()
-        };
+            // Build the preview
+            let after_permissions = if has_rules {
+                preview_remove_permissions(&original_content)?
+            } else {
+                original_content.clone()
+            };
 
-        if hook_policy == HookPolicy::Register {
-            let hook_preview = preview_register_hook(&after_permissions)?;
-            has_hook_change = hook_preview.is_some();
-        }
-
-        has_any_change = has_rules || has_hook_change;
-
-        if has_any_change {
-            let settings_path_display = settings_path.display();
-            let config_path = config_dir.join("runok.yml");
-            let config_path_display = config_path.display();
-
-            eprintln!(
-                "\x1b[1mDetected Claude Code configuration in {settings_path_display}\x1b[0m"
-            );
-            eprintln!();
-
-            // Show all diffs together
-            if has_rules {
-                eprintln!("\x1b[1mRemove Bash permissions from {settings_path_display}\x1b[0m");
-                eprintln!();
-                print_diff(
-                    &settings_path_display.to_string(),
-                    &original_content,
-                    &after_permissions,
-                );
-                eprintln!();
-
-                let config_content = config_gen::build_config_content(converted_rules.as_deref());
-                let existing_config = if config_path.exists() {
-                    std::fs::read_to_string(&config_path)?
-                } else {
-                    String::new()
-                };
-                let verb = if config_path.exists() {
-                    "Update"
-                } else {
-                    "Create"
-                };
-                eprintln!("\x1b[1m{verb} {config_path_display} with converted rules\x1b[0m");
-                eprintln!();
-                print_diff(
-                    &config_path_display.to_string(),
-                    &existing_config,
-                    &config_content,
-                );
-                eprintln!();
+            if hook_policy == HookPolicy::Register {
+                let hook_preview = preview_register_hook(&after_permissions)?;
+                has_hook_change = hook_preview.is_some();
             }
 
-            if has_hook_change {
-                let hook_preview = preview_register_hook(&after_permissions)?;
-                eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
-                eprintln!();
-                if let Some(ref after_hook) = hook_preview {
+            has_any_change = has_rules || has_hook_change;
+
+            if has_any_change {
+                let config_path = config_dir.join("runok.yml");
+                let config_path_display = config_path.display();
+
+                // Show all diffs together
+                if has_rules {
+                    eprintln!("\x1b[1mRemove Bash permissions from {settings_path_display}\x1b[0m");
+                    eprintln!();
                     print_diff(
                         &settings_path_display.to_string(),
+                        &original_content,
                         &after_permissions,
-                        after_hook,
                     );
-                }
-                eprintln!();
-            }
+                    eprintln!();
 
-            approved = prompter.confirm("Apply these changes?", true)?;
-            if !approved {
-                converted_rules = None;
+                    let config_content =
+                        config_gen::build_config_content(converted_rules.as_deref());
+                    let existing_config = if config_path.exists() {
+                        std::fs::read_to_string(&config_path)?
+                    } else {
+                        String::new()
+                    };
+                    let verb = if config_path.exists() {
+                        "Update"
+                    } else {
+                        "Create"
+                    };
+                    eprintln!("\x1b[1m{verb} {config_path_display} with converted rules\x1b[0m");
+                    eprintln!();
+                    print_diff(
+                        &config_path_display.to_string(),
+                        &existing_config,
+                        &config_content,
+                    );
+                    eprintln!();
+                }
+
+                if has_hook_change {
+                    let hook_preview = preview_register_hook(&after_permissions)?;
+                    eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
+                    eprintln!();
+                    if let Some(ref after_hook) = hook_preview {
+                        print_diff(
+                            &settings_path_display.to_string(),
+                            &after_permissions,
+                            after_hook,
+                        );
+                    }
+                    eprintln!();
+                }
+
+                approved = prompter.confirm("Apply these changes?", true)?;
+                if !approved {
+                    converted_rules = None;
+                }
             }
         }
     }
