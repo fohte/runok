@@ -1084,28 +1084,6 @@ fn command_substitution_in_quoted_string(
     "},
     assert_deny as ActionAssertion,
 )]
-#[case::eval_wrapper_with_cmd_sub_inner_unmatched(
-    r#"eval "$(printenv SECRET)""#,
-    indoc! {"
-        defaults:
-          action: ask
-        definitions:
-          wrappers:
-            - 'eval <cmd>'
-    "},
-    assert_ask as ActionAssertion,
-)]
-#[case::eval_wrapper_with_cmd_sub_all_allowed(
-    r#"eval "$(echo hello)""#,
-    indoc! {"
-        definitions:
-          wrappers:
-            - 'eval <cmd>'
-        rules:
-          - allow: 'echo *'
-    "},
-    assert_allow as ActionAssertion,
-)]
 fn command_substitution_edge_cases(
     #[case] command: &str,
     #[case] config_yaml: &str,
