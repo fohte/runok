@@ -7,39 +7,17 @@ const BOILERPLATE_TEMPLATE: &str = "\
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 ";
 
-/// Config filenames to check for existing configuration.
-const CONFIG_FILENAMES: &[&str] = &["runok.yml", "runok.yaml"];
-
 /// Return the boilerplate template string.
 #[cfg(test)]
 fn boilerplate() -> &'static str {
     BOILERPLATE_TEMPLATE
 }
 
-/// Check if a runok config file already exists in the given directory.
-///
-/// Checks for both `runok.yml` and `runok.yaml`.
-pub fn config_exists(dir: &Path) -> Option<std::path::PathBuf> {
-    CONFIG_FILENAMES
-        .iter()
-        .map(|name| dir.join(name))
-        .find(|path| path.exists())
-}
-
-/// Write a configuration file to the given path.
+/// Write a configuration file to the given directory.
 ///
 /// Creates parent directories if they don't exist.
-/// If `force` is false and a config file already exists in the directory,
-/// returns `InitError::ConfigExists`.
-pub fn write_config(
-    dir: &Path,
-    content: &str,
-    force: bool,
-) -> Result<std::path::PathBuf, InitError> {
-    if !force && let Some(existing) = config_exists(dir) {
-        return Err(InitError::ConfigExists(existing));
-    }
-
+/// Overwrites existing files.
+pub fn write_config(dir: &Path, content: &str) -> Result<std::path::PathBuf, InitError> {
     std::fs::create_dir_all(dir)?;
 
     let path = dir.join("runok.yml");
@@ -81,48 +59,20 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("subdir");
 
-        let path = write_config(&dir, "test content", false).unwrap();
+        let path = write_config(&dir, "test content").unwrap();
         assert_eq!(path, dir.join("runok.yml"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "test content");
     }
 
     #[rstest]
-    #[case::yml("runok.yml")]
-    #[case::yaml("runok.yaml")]
-    fn write_config_errors_on_existing_file(#[case] existing_name: &str) {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("project");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(existing_name), "existing").unwrap();
-
-        let result = write_config(&dir, "new content", false);
-        assert!(matches!(result, Err(InitError::ConfigExists(_))));
-    }
-
-    #[rstest]
-    fn write_config_force_overwrites() {
+    fn write_config_overwrites_existing() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("project");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("runok.yml"), "old content").unwrap();
 
-        let path = write_config(&dir, "new content", true).unwrap();
+        let path = write_config(&dir, "new content").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
-    }
-
-    #[rstest]
-    fn config_exists_returns_none_for_empty_dir() {
-        let tmp = TempDir::new().unwrap();
-        assert!(config_exists(tmp.path()).is_none());
-    }
-
-    #[rstest]
-    #[case::yml("runok.yml")]
-    #[case::yaml("runok.yaml")]
-    fn config_exists_detects_file(#[case] filename: &str) {
-        let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join(filename), "content").unwrap();
-        assert!(config_exists(tmp.path()).is_some());
     }
 
     #[rstest]

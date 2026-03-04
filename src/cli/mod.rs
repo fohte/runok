@@ -48,10 +48,6 @@ pub struct InitArgs {
     /// Accept all defaults without prompting
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
-
-    /// Overwrite existing configuration files
-    #[arg(long)]
-    pub force: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -170,31 +166,27 @@ mod tests {
     )]
     #[case::init_defaults(
         &["runok", "init"],
-        Commands::Init(InitArgs { scope: None, yes: false, force: false }),
+        Commands::Init(InitArgs { scope: None, yes: false }),
     )]
     #[case::init_with_scope_user(
         &["runok", "init", "--scope", "user"],
-        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: false, force: false }),
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: false }),
     )]
     #[case::init_with_scope_project(
         &["runok", "init", "--scope", "project"],
-        Commands::Init(InitArgs { scope: Some(InitScope::Project), yes: false, force: false }),
+        Commands::Init(InitArgs { scope: Some(InitScope::Project), yes: false }),
     )]
     #[case::init_with_yes(
         &["runok", "init", "-y"],
-        Commands::Init(InitArgs { scope: None, yes: true, force: false }),
+        Commands::Init(InitArgs { scope: None, yes: true }),
     )]
     #[case::init_with_yes_long(
         &["runok", "init", "--yes"],
-        Commands::Init(InitArgs { scope: None, yes: true, force: false }),
-    )]
-    #[case::init_with_force(
-        &["runok", "init", "--force"],
-        Commands::Init(InitArgs { scope: None, yes: false, force: true }),
+        Commands::Init(InitArgs { scope: None, yes: true }),
     )]
     #[case::init_all_flags(
-        &["runok", "init", "--scope", "user", "-y", "--force"],
-        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true, force: true }),
+        &["runok", "init", "--scope", "user", "-y"],
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);

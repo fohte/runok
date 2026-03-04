@@ -112,12 +112,10 @@ impl InitTestEnv {
         &self,
         scope: Option<&InitScope>,
         prompter: &dyn runok::init::prompt::Prompter,
-        force: bool,
     ) -> Result<(), runok::init::error::InitError> {
         run_wizard_with_paths(
             scope,
             prompter,
-            force,
             &self.cwd,
             &self.user_config_dir,
             &self.home,
@@ -137,7 +135,7 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter, false)?;
+    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
 
     let config = std::fs::read_to_string(env.user_config_path())?;
     assert_eq!(
@@ -185,7 +183,7 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
 fn project_flow_creates_config_in_cwd() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
 
-    env.run(Some(&InitScope::Project), &AutoYesPrompter, false)?;
+    env.run(Some(&InitScope::Project), &AutoYesPrompter)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
     assert_eq!(
@@ -207,7 +205,7 @@ fn project_flow_skips_migration_by_default() -> Result<(), Box<dyn std::error::E
     "#})?;
 
     // AutoYesPrompter returns default=false for migration confirm → skips migration
-    env.run(Some(&InitScope::Project), &AutoYesPrompter, false)?;
+    env.run(Some(&InitScope::Project), &AutoYesPrompter)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
     assert_eq!(
@@ -243,7 +241,7 @@ fn project_flow_migrates_when_opted_in() -> Result<(), Box<dyn std::error::Error
 
     // First confirm: "Migrate?" → yes, Second confirm: "Apply these changes?" → yes
     let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
-    env.run(Some(&InitScope::Project), &prompter, false)?;
+    env.run(Some(&InitScope::Project), &prompter)?;
 
     let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
     assert_eq!(
@@ -272,26 +270,11 @@ fn project_flow_migrates_when_opted_in() -> Result<(), Box<dyn std::error::Error
 }
 
 #[rstest]
-fn force_overwrites_existing_config() -> Result<(), Box<dyn std::error::Error>> {
-    let env = InitTestEnv::new()?;
-    std::fs::write(env.cwd.join("runok.yml"), "old content")?;
-
-    env.run(Some(&InitScope::Project), &AutoYesPrompter, true)?;
-
-    let config = std::fs::read_to_string(env.cwd.join("runok.yml"))?;
-    assert_eq!(
-        config,
-        "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
-    );
-    Ok(())
-}
-
-#[rstest]
 fn non_interactive_mode_selects_user_by_default() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
 
     // AutoYesPrompter select default is 0 = User
-    env.run(None, &AutoYesPrompter, false)?;
+    env.run(None, &AutoYesPrompter)?;
 
     assert!(env.user_config_path().exists());
     assert!(!env.cwd.join("runok.yml").exists());
@@ -369,8 +352,15 @@ fn batch_confirmation_with_mixed_permissions(
     let env = InitTestEnv::new()?;
     env.setup_user_claude_settings(mixed_permissions_settings())?;
 
-    let prompter = SequencePrompter::new(vec![Response::Confirm(accept)]);
-    env.run(Some(&InitScope::User), &prompter, false)?;
+    // First confirm: "Migrate?" → accept, Second confirm (if migration accepted): "Apply?" → accept
+    let responses = if accept {
+        vec![Response::Confirm(true), Response::Confirm(true)]
+    } else {
+        // Decline migration → hook-only change still shown → decline apply too
+        vec![Response::Confirm(false), Response::Confirm(false)]
+    };
+    let prompter = SequencePrompter::new(responses);
+    env.run(Some(&InitScope::User), &prompter)?;
 
     let config_path = env.user_config_path();
     match expected_config {
@@ -407,7 +397,7 @@ fn non_bash_permissions_only_preserves_all_and_adds_hook() -> Result<(), Box<dyn
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter, false)?;
+    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
 
     let config = std::fs::read_to_string(env.user_config_path())?;
     assert_eq!(
@@ -467,7 +457,7 @@ fn hook_already_registered_is_not_duplicated() -> Result<(), Box<dyn std::error:
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter, false)?;
+    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
 
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         env.user_claude_dir().join("settings.json"),
@@ -507,7 +497,7 @@ fn no_scope_select(
     let env = InitTestEnv::new()?;
 
     let prompter = SequencePrompter::new(vec![Response::Select(selection)]);
-    env.run(None, &prompter, false)?;
+    env.run(None, &prompter)?;
 
     assert_eq!(env.user_config_path().exists(), user_config_exists);
     assert_eq!(env.cwd.join("runok.yml").exists(), project_config_exists);

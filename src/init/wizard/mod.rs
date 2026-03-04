@@ -3,7 +3,7 @@ mod setup;
 
 use std::path::{Path, PathBuf};
 
-use setup::{HookPolicy, MigrationPolicy, ScopeResult, setup_scope};
+use setup::{HookPolicy, ScopeResult, setup_scope};
 
 use super::error::InitError;
 use super::prompt::{AutoYesPrompter, DialoguerPrompter, Prompter};
@@ -92,14 +92,8 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
 ///
 /// `scope`: optional scope from `--scope` flag
 /// `auto_yes`: whether `-y` was specified
-/// `force`: whether `--force` was specified
 /// `cwd`: current working directory
-pub fn run_wizard(
-    scope: Option<&InitScope>,
-    auto_yes: bool,
-    force: bool,
-    cwd: &Path,
-) -> Result<(), InitError> {
+pub fn run_wizard(scope: Option<&InitScope>, auto_yes: bool, cwd: &Path) -> Result<(), InitError> {
     let paths = resolve_paths()?;
     let prompter: Box<dyn Prompter> = if auto_yes {
         Box::new(AutoYesPrompter)
@@ -109,7 +103,6 @@ pub fn run_wizard(
     run_wizard_with_paths(
         scope,
         prompter.as_ref(),
-        force,
         cwd,
         &paths.user_config_dir,
         &paths.home_dir,
@@ -120,7 +113,6 @@ pub fn run_wizard(
 pub fn run_wizard_with_paths(
     scope: Option<&InitScope>,
     prompter: &dyn Prompter,
-    force: bool,
     cwd: &Path,
     user_config_dir: &Path,
     home_dir: &Path,
@@ -140,9 +132,8 @@ pub fn run_wizard_with_paths(
                 user_config_dir,
                 claude_dir_if_exists(&claude_dir),
                 prompter,
-                force,
                 HookPolicy::Register,
-                MigrationPolicy::Always,
+                true,
             )?;
             apply_scope_result(&mut summary, result, true);
         }
@@ -152,14 +143,12 @@ pub fn run_wizard_with_paths(
                 cwd,
                 claude_dir_if_exists(&claude_dir),
                 prompter,
-                force,
                 HookPolicy::Skip,
-                MigrationPolicy::Ask,
+                false,
             )?;
             apply_scope_result(&mut summary, result, false);
         }
         None => {
-            // No scope specified: ask user to choose
             let items = ["User (global)", "Project (local)"];
             let selection = prompter.select("Where do you want to set up runok?", &items, 0)?;
 
@@ -170,9 +159,8 @@ pub fn run_wizard_with_paths(
                         user_config_dir,
                         claude_dir_if_exists(&user_claude_dir),
                         prompter,
-                        force,
                         HookPolicy::Register,
-                        MigrationPolicy::Always,
+                        true,
                     )?;
                     apply_scope_result(&mut summary, result, true);
                 }
@@ -182,9 +170,8 @@ pub fn run_wizard_with_paths(
                         cwd,
                         claude_dir_if_exists(&project_claude_dir),
                         prompter,
-                        force,
                         HookPolicy::Skip,
-                        MigrationPolicy::Ask,
+                        false,
                     )?;
                     apply_scope_result(&mut summary, result, false);
                 }
@@ -300,16 +287,10 @@ mod tests {
             std::fs::write(dir.join("settings.json"), content).unwrap();
         }
 
-        fn run(
-            &self,
-            scope: Option<&InitScope>,
-            prompter: &dyn Prompter,
-            force: bool,
-        ) -> Result<(), InitError> {
+        fn run(&self, scope: Option<&InitScope>, prompter: &dyn Prompter) -> Result<(), InitError> {
             run_wizard_with_paths(
                 scope,
                 prompter,
-                force,
                 &self.cwd,
                 &self.user_config_dir,
                 &self.home,
@@ -331,8 +312,7 @@ mod tests {
     #[rstest]
     fn wizard_user_scope_creates_config() {
         let env = TestEnv::new();
-        env.run(Some(&InitScope::User), &AutoYesPrompter, false)
-            .unwrap();
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
         assert!(env.user_config_dir.join("runok.yml").exists());
     }
@@ -340,7 +320,7 @@ mod tests {
     #[rstest]
     fn wizard_project_scope_creates_config() {
         let env = TestEnv::new();
-        env.run(Some(&InitScope::Project), &AutoYesPrompter, false)
+        env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
         assert!(env.cwd.join("runok.yml").exists());
@@ -351,8 +331,7 @@ mod tests {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        env.run(Some(&InitScope::User), &AutoYesPrompter, false)
-            .unwrap();
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
         let config_content =
             std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
@@ -397,37 +376,11 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_force_overwrites_existing() {
-        let env = TestEnv::new();
-        std::fs::create_dir_all(&env.user_config_dir).unwrap();
-        std::fs::write(env.user_config_dir.join("runok.yml"), "old content").unwrap();
-
-        env.run(Some(&InitScope::User), &AutoYesPrompter, true)
-            .unwrap();
-
-        let content = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
-        assert_eq!(
-            content,
-            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
-        );
-    }
-
-    #[rstest]
-    fn wizard_user_scope_errors_on_existing_without_force() {
-        let env = TestEnv::new();
-        std::fs::create_dir_all(&env.user_config_dir).unwrap();
-        std::fs::write(env.user_config_dir.join("runok.yml"), "existing").unwrap();
-
-        let result = env.run(Some(&InitScope::User), &AutoYesPrompter, false);
-        assert!(matches!(result, Err(InitError::ConfigExists(_))));
-    }
-
-    #[rstest]
     fn wizard_no_scope_with_auto_yes_selects_user() {
         let env = TestEnv::new();
 
         // AutoYesPrompter select default is 0 = User
-        env.run(None, &AutoYesPrompter, false).unwrap();
+        env.run(None, &AutoYesPrompter).unwrap();
 
         assert!(env.user_config_dir.join("runok.yml").exists());
         assert!(!env.cwd.join("runok.yml").exists());
@@ -451,7 +404,7 @@ mod tests {
         .unwrap();
 
         // AutoYesPrompter: migration confirm default is false, so skipped
-        env.run(Some(&InitScope::Project), &AutoYesPrompter, false)
+        env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
         // Boilerplate only (no rules migrated)
@@ -482,8 +435,7 @@ mod tests {
         // Confirm(true) for migration ask, Confirm(true) for batch apply
         let prompter =
             SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
-        env.run(Some(&InitScope::Project), &prompter, false)
-            .unwrap();
+        env.run(Some(&InitScope::Project), &prompter).unwrap();
         prompter.assert_exhausted();
 
         let config_content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
@@ -518,7 +470,7 @@ mod tests {
         std::fs::create_dir_all(&project_claude).unwrap();
         std::fs::write(project_claude.join("settings.json"), "{}").unwrap();
 
-        env.run(Some(&InitScope::Project), &AutoYesPrompter, false)
+        env.run(Some(&InitScope::Project), &AutoYesPrompter)
             .unwrap();
 
         // No hook should be added even though .claude exists
@@ -527,17 +479,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(settings, serde_json::json!({}));
-    }
-
-    #[rstest]
-    fn wizard_no_scope_user_errors_on_existing_config() {
-        let env = TestEnv::new();
-        std::fs::create_dir_all(&env.user_config_dir).unwrap();
-        std::fs::write(env.user_config_dir.join("runok.yml"), "existing").unwrap();
-
-        // Select user scope (0), then setup_scope hits existing config
-        let result = env.run(None, &AutoYesPrompter, false);
-        assert!(matches!(result, Err(InitError::ConfigExists(_))));
     }
 
     // --- batch confirmation ---
@@ -582,9 +523,10 @@ mod tests {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        // Single confirm: accept all
-        let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
-        env.run(Some(&InitScope::User), &prompter, false).unwrap();
+        // Confirm(true) for migration ask, Confirm(true) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
         let config_content =
@@ -607,9 +549,10 @@ mod tests {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        // Single confirm: decline all
-        let prompter = SequencePrompter::new(vec![Response::Confirm(false)]);
-        env.run(Some(&InitScope::User), &prompter, false).unwrap();
+        // Confirm(true) for migration ask, Confirm(false) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
         assert!(
@@ -637,7 +580,7 @@ mod tests {
 
         // Select user (0)
         let prompter = SequencePrompter::new(vec![Response::Select(0)]);
-        env.run(None, &prompter, false).unwrap();
+        env.run(None, &prompter).unwrap();
         prompter.assert_exhausted();
 
         assert!(env.user_config_dir.join("runok.yml").exists());
@@ -650,7 +593,7 @@ mod tests {
 
         // Select project (1)
         let prompter = SequencePrompter::new(vec![Response::Select(1)]);
-        env.run(None, &prompter, false).unwrap();
+        env.run(None, &prompter).unwrap();
         prompter.assert_exhausted();
 
         assert!(!env.user_config_dir.join("runok.yml").exists());
@@ -666,8 +609,7 @@ mod tests {
         let claude_dir = env.user_claude_dir();
         std::fs::create_dir_all(&claude_dir).unwrap();
 
-        env.run(Some(&InitScope::User), &AutoYesPrompter, false)
-            .unwrap();
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
         // runok.yml should be created with boilerplate only (no rules)
         let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
@@ -709,8 +651,7 @@ mod tests {
             }
         "#});
 
-        env.run(Some(&InitScope::User), &AutoYesPrompter, false)
-            .unwrap();
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
         let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
         assert_eq!(
@@ -767,9 +708,10 @@ mod tests {
         "#});
 
         // Has Bash permissions but hook already registered.
-        // Still has_rules=true so has_any_change=true, needs 1 confirm.
-        let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
-        env.run(Some(&InitScope::User), &prompter, false).unwrap();
+        // Confirm(true) for migration, Confirm(true) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
         let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();

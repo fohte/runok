@@ -1,9 +1,5 @@
-use std::path::PathBuf;
-
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
-    #[error("configuration file already exists: {0}")]
-    ConfigExists(PathBuf),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json parse error: {0}")]
@@ -18,10 +14,6 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::config_exists(
-        InitError::ConfigExists(PathBuf::from("/home/user/.config/runok/runok.yml")),
-        "configuration file already exists: /home/user/.config/runok/runok.yml"
-    )]
     #[case::io_error(
         InitError::Io(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,

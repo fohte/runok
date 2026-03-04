@@ -55,26 +55,12 @@ fn init_project_scope_creates_config() {
 }
 
 #[rstest]
-fn init_project_scope_errors_on_existing_without_force() {
+fn init_project_scope_overwrites_existing() {
     let env = InitTestEnv::new();
-    // TestEnv already creates runok.yml
+    // TestEnv already creates runok.yml — should be overwritten
 
     env.command()
         .args(["init", "--scope", "project", "-y"])
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains(
-            "configuration file already exists",
-        ));
-}
-
-#[rstest]
-fn init_project_scope_force_overwrites() {
-    let env = InitTestEnv::new();
-    // TestEnv already creates runok.yml
-
-    env.command()
-        .args(["init", "--scope", "project", "-y", "--force"])
         .assert()
         .success()
         .stderr(predicates::str::contains("Project config created"));

@@ -77,7 +77,7 @@ fn run_init(args: &cli::InitArgs) -> ExitCode {
         cli::InitScope::User => runok::init::InitScope::User,
         cli::InitScope::Project => runok::init::InitScope::Project,
     });
-    match runok::init::run_wizard(scope.as_ref(), args.yes, args.force, &cwd) {
+    match runok::init::run_wizard(scope.as_ref(), args.yes, &cwd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("runok: {e}");

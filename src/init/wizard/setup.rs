@@ -25,27 +25,17 @@ pub(super) enum HookPolicy {
     Skip,
 }
 
-/// Whether to migrate Claude Code permissions to runok rules.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum MigrationPolicy {
-    /// Always migrate when Bash permissions exist (user scope).
-    Always,
-    /// Ask the user whether to migrate (project scope).
-    Ask,
-}
-
 /// Set up configuration for a given scope (user or project).
 ///
-/// For user scope: migrates permissions automatically and registers hook.
-/// For project scope: creates runok.yml template, optionally migrates
-/// permissions if the user opts in, and never registers a hook.
+/// `hook_policy` controls whether the runok hook is registered in settings.json.
+/// `migration_default` controls the default answer for the migration prompt
+/// (true for user scope, false for project scope).
 pub(super) fn setup_scope(
     config_dir: &Path,
     claude_dir: Option<&Path>,
     prompter: &dyn Prompter,
-    force: bool,
     hook_policy: HookPolicy,
-    migration_policy: MigrationPolicy,
+    migration_default: bool,
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
     let mut approved = false;
@@ -71,14 +61,10 @@ pub(super) fn setup_scope(
         if has_permissions {
             let conversion = claude_code::convert_permissions(&allow, &deny);
             if !conversion.rules.is_empty() {
-                // For project scope, ask whether to migrate
-                let should_migrate = match migration_policy {
-                    MigrationPolicy::Always => true,
-                    MigrationPolicy::Ask => prompter.confirm(
-                        "Migrate Claude Code Bash permissions to runok rules?",
-                        false,
-                    )?,
-                };
+                let should_migrate = prompter.confirm(
+                    "Migrate Claude Code Bash permissions to runok rules?",
+                    migration_default,
+                )?;
                 if should_migrate {
                     converted_rules = Some(conversion.rules.clone());
                     has_rules = true;
@@ -122,9 +108,23 @@ pub(super) fn setup_scope(
                 eprintln!();
 
                 let config_content = config_gen::build_config_content(converted_rules.as_deref());
-                eprintln!("\x1b[1mCreate {config_path_display} with converted rules\x1b[0m");
+                let existing_config = if config_path.exists() {
+                    std::fs::read_to_string(&config_path)?
+                } else {
+                    String::new()
+                };
+                let verb = if config_path.exists() {
+                    "Update"
+                } else {
+                    "Create"
+                };
+                eprintln!("\x1b[1m{verb} {config_path_display} with converted rules\x1b[0m");
                 eprintln!();
-                print_diff(&config_path_display.to_string(), "", &config_content);
+                print_diff(
+                    &config_path_display.to_string(),
+                    &existing_config,
+                    &config_content,
+                );
                 eprintln!();
             }
 
@@ -176,7 +176,7 @@ pub(super) fn setup_scope(
         None
     } else {
         let content = config_gen::build_config_content(converted_rules.as_deref());
-        Some(config_gen::write_config(config_dir, &content, force)?)
+        Some(config_gen::write_config(config_dir, &content)?)
     };
 
     Ok(ScopeResult {
