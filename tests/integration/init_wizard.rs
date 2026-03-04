@@ -257,57 +257,56 @@ fn config_with_bash_rules() -> String {
 //
 // 7 condition axes, grouped into State / Response / Result:
 //
-// |    |                          State                          |      Response      |               Result               |
-// | #  | settings.json | Bash perms | Hook exists | Scope   | E | Migrate? | Apply? | runok.yml   | settings.json change |
-// |----|---------------|------------|-------------|---------|---|----------|--------|-------------|----------------------|
-// |  1 | no            | N/A        | N/A         | user    | - | N/A      | N/A    | boilerplate | N/A                  |
-// |  2 | no            | N/A        | N/A         | user    | E | N/A      | N/A    | boilerplate | N/A                  |
-// |  3 | no            | N/A        | N/A         | project | - | N/A      | N/A    | boilerplate | N/A                  |
-// |  4 | no            | N/A        | N/A         | project | E | N/A      | N/A    | boilerplate | N/A                  |
-// |  5 | yes           | no         | no          | user    | - | N/A      | yes    | boilerplate | hook added           |
-// |  6 | yes           | no         | no          | user    | E | N/A      | yes    | boilerplate | hook added           |
-// |  7 | yes           | no         | no          | user    | - | N/A      | no     | none        | none                 |
-// |  8 | yes           | no         | no          | user    | E | N/A      | no     | preserved   | none                 |
-// |  9 | yes           | no         | yes         | user    | - | N/A      | N/A    | boilerplate | none                 |
-// | 10 | yes           | no         | yes         | user    | E | N/A      | N/A    | boilerplate | none                 |
-// | 11 | yes           | no         | no          | project | - | N/A      | N/A    | boilerplate | none                 |
-// | 12 | yes           | no         | no          | project | E | N/A      | N/A    | boilerplate | none                 |
-// | 13 | yes           | no         | yes         | project | - | N/A      | N/A    | boilerplate | none                 |
-// | 14 | yes           | no         | yes         | project | E | N/A      | N/A    | boilerplate | none                 |
-// | 15 | yes           | yes        | no          | user    | - | yes      | yes    | with rules  | perms removed + hook |
-// | 16 | yes           | yes        | no          | user    | E | yes      | yes    | with rules  | perms removed + hook |
-// | 17 | yes           | yes        | no          | user    | - | yes      | no     | none        | none                 |
-// | 18 | yes           | yes        | no          | user    | E | yes      | no     | preserved   | none                 |
-// | 19 | yes           | yes        | no          | user    | - | no       | yes    | boilerplate | hook added           |
-// | 20 | yes           | yes        | no          | user    | E | no       | yes    | boilerplate | hook added           |
-// | 21 | yes           | yes        | no          | user    | - | no       | no     | none        | none                 |
-// | 22 | yes           | yes        | no          | user    | E | no       | no     | preserved   | none                 |
-// | 23 | yes           | yes        | yes         | user    | - | yes      | yes    | with rules  | perms removed        |
-// | 24 | yes           | yes        | yes         | user    | E | yes      | yes    | with rules  | perms removed        |
-// | 25 | yes           | yes        | yes         | user    | - | yes      | no     | none        | none                 |
-// | 26 | yes           | yes        | yes         | user    | E | yes      | no     | preserved   | none                 |
-// | 27 | yes           | yes        | yes         | user    | - | no       | yes    | boilerplate | none                 |
-// | 28 | yes           | yes        | yes         | user    | E | no       | yes    | boilerplate | none                 |
-// | 29 | yes           | yes        | yes         | user    | - | no       | no     | none        | none                 |
-// | 30 | yes           | yes        | yes         | user    | E | no       | no     | preserved   | none                 |
-// | 31 | yes           | yes        | no          | project | - | yes      | yes    | with rules  | perms removed        |
-// | 32 | yes           | yes        | no          | project | E | yes      | yes    | with rules  | perms removed        |
-// | 33 | yes           | yes        | no          | project | - | yes      | no     | none        | none                 |
-// | 34 | yes           | yes        | no          | project | E | yes      | no     | preserved   | none                 |
-// | 35 | yes           | yes        | no          | project | - | no       | yes    | boilerplate | none                 |
-// | 36 | yes           | yes        | no          | project | E | no       | yes    | boilerplate | none                 |
-// | 37 | yes           | yes        | no          | project | - | no       | no     | none        | none                 |
-// | 38 | yes           | yes        | no          | project | E | no       | no     | preserved   | none                 |
-// | 39 | yes           | yes        | yes         | project | - | yes      | yes    | with rules  | perms removed        |
-// | 40 | yes           | yes        | yes         | project | E | yes      | yes    | with rules  | perms removed        |
-// | 41 | yes           | yes        | yes         | project | - | yes      | no     | none        | none                 |
-// | 42 | yes           | yes        | yes         | project | E | yes      | no     | preserved   | none                 |
-// | 43 | yes           | yes        | yes         | project | - | no       | yes    | boilerplate | none                 |
-// | 44 | yes           | yes        | yes         | project | E | no       | yes    | boilerplate | none                 |
-// | 45 | yes           | yes        | yes         | project | - | no       | no     | none        | none                 |
-// | 46 | yes           | yes        | yes         | project | E | no       | no     | preserved   | none                 |
+// |    |                              State                                   |      Response     |               Result               |
+// | #  | settings.json | Bash perms | Hook exists | Scope   | Existing config | Migrate? | Apply? | runok.yml   | settings.json change |
+// |----|---------------|------------|-------------|---------|-----------------|----------|--------|-------------|----------------------|
+// |  1 | no            | N/A        | N/A         | user    | no              | N/A      | N/A    | boilerplate | N/A                  |
+// |  2 | no            | N/A        | N/A         | user    | yes             | N/A      | N/A    | boilerplate | N/A                  |
+// |  3 | no            | N/A        | N/A         | project | no              | N/A      | N/A    | boilerplate | N/A                  |
+// |  4 | no            | N/A        | N/A         | project | yes             | N/A      | N/A    | boilerplate | N/A                  |
+// |  5 | yes           | no         | no          | user    | no              | N/A      | yes    | boilerplate | hook added           |
+// |  6 | yes           | no         | no          | user    | yes             | N/A      | yes    | boilerplate | hook added           |
+// |  7 | yes           | no         | no          | user    | no              | N/A      | no     | none        | none                 |
+// |  8 | yes           | no         | no          | user    | yes             | N/A      | no     | preserved   | none                 |
+// |  9 | yes           | no         | yes         | user    | no              | N/A      | N/A    | boilerplate | none                 |
+// | 10 | yes           | no         | yes         | user    | yes             | N/A      | N/A    | boilerplate | none                 |
+// | 11 | yes           | no         | no          | project | no              | N/A      | N/A    | boilerplate | none                 |
+// | 12 | yes           | no         | no          | project | yes             | N/A      | N/A    | boilerplate | none                 |
+// | 13 | yes           | no         | yes         | project | no              | N/A      | N/A    | boilerplate | none                 |
+// | 14 | yes           | no         | yes         | project | yes             | N/A      | N/A    | boilerplate | none                 |
+// | 15 | yes           | yes        | no          | user    | no              | yes      | yes    | with rules  | perms removed + hook |
+// | 16 | yes           | yes        | no          | user    | yes             | yes      | yes    | with rules  | perms removed + hook |
+// | 17 | yes           | yes        | no          | user    | no              | yes      | no     | none        | none                 |
+// | 18 | yes           | yes        | no          | user    | yes             | yes      | no     | preserved   | none                 |
+// | 19 | yes           | yes        | no          | user    | no              | no       | yes    | boilerplate | hook added           |
+// | 20 | yes           | yes        | no          | user    | yes             | no       | yes    | boilerplate | hook added           |
+// | 21 | yes           | yes        | no          | user    | no              | no       | no     | none        | none                 |
+// | 22 | yes           | yes        | no          | user    | yes             | no       | no     | preserved   | none                 |
+// | 23 | yes           | yes        | yes         | user    | no              | yes      | yes    | with rules  | perms removed        |
+// | 24 | yes           | yes        | yes         | user    | yes             | yes      | yes    | with rules  | perms removed        |
+// | 25 | yes           | yes        | yes         | user    | no              | yes      | no     | none        | none                 |
+// | 26 | yes           | yes        | yes         | user    | yes             | yes      | no     | preserved   | none                 |
+// | 27 | yes           | yes        | yes         | user    | no              | no       | yes    | boilerplate | none                 |
+// | 28 | yes           | yes        | yes         | user    | yes             | no       | yes    | boilerplate | none                 |
+// | 29 | yes           | yes        | yes         | user    | no              | no       | no     | none        | none                 |
+// | 30 | yes           | yes        | yes         | user    | yes             | no       | no     | preserved   | none                 |
+// | 31 | yes           | yes        | no          | project | no              | yes      | yes    | with rules  | perms removed        |
+// | 32 | yes           | yes        | no          | project | yes             | yes      | yes    | with rules  | perms removed        |
+// | 33 | yes           | yes        | no          | project | no              | yes      | no     | none        | none                 |
+// | 34 | yes           | yes        | no          | project | yes             | yes      | no     | preserved   | none                 |
+// | 35 | yes           | yes        | no          | project | no              | no       | yes    | boilerplate | none                 |
+// | 36 | yes           | yes        | no          | project | yes             | no       | yes    | boilerplate | none                 |
+// | 37 | yes           | yes        | no          | project | no              | no       | no     | none        | none                 |
+// | 38 | yes           | yes        | no          | project | yes             | no       | no     | preserved   | none                 |
+// | 39 | yes           | yes        | yes         | project | no              | yes      | yes    | with rules  | perms removed        |
+// | 40 | yes           | yes        | yes         | project | yes             | yes      | yes    | with rules  | perms removed        |
+// | 41 | yes           | yes        | yes         | project | no              | yes      | no     | none        | none                 |
+// | 42 | yes           | yes        | yes         | project | yes             | yes      | no     | preserved   | none                 |
+// | 43 | yes           | yes        | yes         | project | no              | no       | yes    | boilerplate | none                 |
+// | 44 | yes           | yes        | yes         | project | yes             | no       | yes    | boilerplate | none                 |
+// | 45 | yes           | yes        | yes         | project | no              | no       | no     | none        | none                 |
+// | 46 | yes           | yes        | yes         | project | yes             | no       | no     | preserved   | none                 |
 //
-// E column = existing runok.yml: "-" = no, "E" = yes (pre-seeded with EXISTING_CONFIG)
 // "preserved" in Result means the existing runok.yml is left unchanged (wizard does not touch it)
 // "none" in Result means runok.yml does not exist after the wizard
 
