@@ -26,6 +26,16 @@ impl SequencePrompter {
             responses: RefCell::new(responses),
         }
     }
+
+    fn assert_exhausted(&self) {
+        let remaining = self.responses.borrow();
+        assert!(
+            remaining.is_empty(),
+            "SequencePrompter has {} unconsumed responses: {:?}",
+            remaining.len(),
+            &*remaining,
+        );
+    }
 }
 
 impl Prompter for SequencePrompter {
@@ -135,7 +145,10 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
+    // Confirm(true) for migration, Confirm(true) for apply
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    prompter.assert_exhausted();
 
     let config = std::fs::read_to_string(env.user_config_path())?;
     assert_eq!(
@@ -361,6 +374,7 @@ fn batch_confirmation_with_mixed_permissions(
     };
     let prompter = SequencePrompter::new(responses);
     env.run(Some(&InitScope::User), &prompter)?;
+    prompter.assert_exhausted();
 
     let config_path = env.user_config_path();
     match expected_config {
@@ -397,7 +411,10 @@ fn non_bash_permissions_only_preserves_all_and_adds_hook() -> Result<(), Box<dyn
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
+    // No Bash permissions → no migration prompt, only apply prompt for hook
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    prompter.assert_exhausted();
 
     let config = std::fs::read_to_string(env.user_config_path())?;
     assert_eq!(
@@ -457,7 +474,11 @@ fn hook_already_registered_is_not_duplicated() -> Result<(), Box<dyn std::error:
         }
     "#})?;
 
-    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
+    // Confirm(true) for migration, Confirm(true) for apply
+    // (hook already exists so no hook confirm, but migration + apply = 2 confirms)
+    let prompter = SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+    env.run(Some(&InitScope::User), &prompter)?;
+    prompter.assert_exhausted();
 
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         env.user_claude_dir().join("settings.json"),
