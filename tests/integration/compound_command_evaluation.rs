@@ -1084,6 +1084,25 @@ fn command_substitution_in_quoted_string(
     "},
     assert_deny as ActionAssertion,
 )]
+#[case::docker_env_with_secret_cmd_sub(
+    r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'docker *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::git_commit_with_date_cmd_sub(
+    r#"git commit -m "$(date +%Y-%m-%d): release""#,
+    indoc! {"
+        rules:
+          - allow: 'git *'
+          - allow: 'date *'
+    "},
+    assert_allow as ActionAssertion,
+)]
 fn command_substitution_edge_cases(
     #[case] command: &str,
     #[case] config_yaml: &str,

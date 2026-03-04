@@ -196,6 +196,10 @@ fn check_allow_with_sandbox_info() {
 )]
 #[case::single_quotes_no_substitution("echo '$(rm -rf /tmp/data)'", "allow")]
 #[case::backtick_in_quotes_deny(r#"curl -u "user:`rm -rf /tmp/data`" https://example.com"#, "deny")]
+#[case::docker_env_with_unmatched_cmd_sub(
+    r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+    "ask"
+)]
 fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decision: &str) {
     let env = TestEnv::new(indoc! {"
         defaults:
@@ -203,6 +207,7 @@ fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decisi
         rules:
           - allow: 'echo *'
           - allow: 'curl *'
+          - allow: 'docker *'
           - deny: 'rm -rf *'
     "});
     let assert = env
