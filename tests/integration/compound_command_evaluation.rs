@@ -1042,9 +1042,11 @@ fn command_substitution_with_redirects_no_stack_overflow(
     indoc! {"
         defaults:
           action: ask
+        definitions:
+          wrappers:
+            - 'mise x|exec -- <cmd>'
         rules:
           - allow: 'curl *'
-          - allow: 'mise x|exec -- <cmd>'
     "},
     assert_ask as ActionAssertion,
 )]
