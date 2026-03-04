@@ -194,12 +194,17 @@ fn check_allow_with_sandbox_info() {
     r#"curl -u "user:$(printenv SECRET)" https://example.com"#,
     "ask"
 )]
+#[case::single_quotes_no_substitution("echo '$(rm -rf /tmp/data)'", "allow")]
+#[case::backtick_in_quotes_deny(r#"curl -u "user:`rm -rf /tmp/data`" https://example.com"#, "deny")]
+#[case::eval_cmd_sub_inner_unmatched(r#"eval "$(printenv SECRET)""#, "ask")]
 fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decision: &str) {
     let env = TestEnv::new(indoc! {"
         defaults:
           action: ask
         rules:
+          - allow: 'echo *'
           - allow: 'curl *'
+          - allow: 'eval <cmd>'
           - deny: 'rm -rf *'
     "});
     let assert = env

@@ -1058,3 +1058,56 @@ fn command_substitution_in_quoted_string(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Command substitution edge cases
+// ========================================
+
+#[rstest]
+#[case::single_quotes_no_substitution(
+    "echo '$(rm -rf /)'",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::backtick_in_double_quotes_deny(
+    r#"curl -u "user:`rm -rf /`" https://example.com"#,
+    indoc! {"
+        rules:
+          - allow: 'curl *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::eval_wrapper_with_cmd_sub_inner_unmatched(
+    r#"eval "$(printenv SECRET)""#,
+    indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'eval <cmd>'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::eval_wrapper_with_cmd_sub_all_allowed(
+    r#"eval "$(echo hello)""#,
+    indoc! {"
+        rules:
+          - allow: 'eval <cmd>'
+          - allow: 'echo *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn command_substitution_edge_cases(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
