@@ -1087,16 +1087,22 @@ fn command_substitution_in_quoted_string(
     indoc! {"
         defaults:
           action: ask
+        definitions:
+          wrappers:
+            - 'eval <cmd>'
         rules:
-          - allow: 'eval <cmd>'
+          - allow: 'eval *'
     "},
     assert_ask as ActionAssertion,
 )]
 #[case::eval_wrapper_with_cmd_sub_all_allowed(
     r#"eval "$(echo hello)""#,
     indoc! {"
+        definitions:
+          wrappers:
+            - 'eval <cmd>'
         rules:
-          - allow: 'eval <cmd>'
+          - allow: 'eval *'
           - allow: 'echo *'
     "},
     assert_allow as ActionAssertion,

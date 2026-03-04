@@ -201,10 +201,13 @@ fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decisi
     let env = TestEnv::new(indoc! {"
         defaults:
           action: ask
+        definitions:
+          wrappers:
+            - 'eval <cmd>'
         rules:
           - allow: 'echo *'
           - allow: 'curl *'
-          - allow: 'eval <cmd>'
+          - allow: 'eval *'
           - deny: 'rm -rf *'
     "});
     let assert = env
