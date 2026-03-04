@@ -188,6 +188,19 @@ fn check_allow_with_sandbox_info() {
 
 // --- Command substitution in quoted strings ---
 
+#[fixture]
+fn cmd_sub_env() -> TestEnv {
+    TestEnv::new(indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - allow: 'curl *'
+          - allow: 'docker *'
+          - deny: 'rm -rf *'
+    "})
+}
+
 #[rstest]
 #[case::cmd_sub_in_quotes_deny(r#"curl -u "user:$(rm -rf /tmp/data)" https://example.com"#, "deny")]
 #[case::cmd_sub_in_quotes_inner_unmatched_is_ask(
@@ -200,17 +213,12 @@ fn check_allow_with_sandbox_info() {
     r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
     "ask"
 )]
-fn check_cmd_sub_in_quoted_string(#[case] command: &str, #[case] expected_decision: &str) {
-    let env = TestEnv::new(indoc! {"
-        defaults:
-          action: ask
-        rules:
-          - allow: 'echo *'
-          - allow: 'curl *'
-          - allow: 'docker *'
-          - deny: 'rm -rf *'
-    "});
-    let assert = env
+fn check_cmd_sub_in_quoted_string(
+    cmd_sub_env: TestEnv,
+    #[case] command: &str,
+    #[case] expected_decision: &str,
+) {
+    let assert = cmd_sub_env
         .command()
         .args(["check", "--output-format", "json", "--"])
         .arg(command)
