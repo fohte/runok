@@ -26,6 +26,19 @@ pub fn parse_permission_entry(entry: &str) -> Option<(&str, &str)> {
     Some((tool, pattern))
 }
 
+/// Convert a Claude Code Bash pattern to a runok pattern.
+///
+/// Claude Code uses `:*` as a prefix-match operator (e.g. `npm install:*`
+/// matches any command starting with `npm install`). runok has no `:*`
+/// syntax, so we convert it to a space + glob: `npm install *`.
+fn convert_bash_pattern(pattern: &str) -> String {
+    if let Some(prefix) = pattern.strip_suffix(":*") {
+        format!("{prefix} *")
+    } else {
+        pattern.to_string()
+    }
+}
+
 /// Convert Claude Code permission entries to runok rule YAML lines.
 ///
 /// Processes both `allow` and `deny` entries. Entries that are not `Bash(...)`
@@ -36,7 +49,10 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
     for entry in allow_entries {
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
-                result.rules.push_str(&format!("  - allow: '{pattern}'\n"));
+                let converted = convert_bash_pattern(pattern);
+                result
+                    .rules
+                    .push_str(&format!("  - allow: '{converted}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -50,7 +66,8 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
     for entry in deny_entries {
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
-                result.rules.push_str(&format!("  - deny: '{pattern}'\n"));
+                let converted = convert_bash_pattern(pattern);
+                result.rules.push_str(&format!("  - deny: '{converted}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -261,6 +278,18 @@ mod tests {
         assert_eq!(parse_permission_entry(entry), expected);
     }
 
+    // --- convert_bash_pattern ---
+
+    #[rstest]
+    #[case::plain("git status", "git status")]
+    #[case::glob("npm install *", "npm install *")]
+    #[case::prefix_match("runok exec:*", "runok exec *")]
+    #[case::prefix_match_nested("npm run:*", "npm run *")]
+    #[case::colon_in_middle("foo:bar", "foo:bar")]
+    fn test_convert_bash_pattern(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(convert_bash_pattern(input), expected);
+    }
+
     // --- convert_permissions ---
 
     #[rstest]
@@ -278,6 +307,22 @@ mod tests {
             "  - allow: 'git status'\n  - allow: 'npm install *'\n  - deny: 'rm -rf /'\n"
         );
         assert!(result.skipped.is_empty());
+    }
+
+    #[rstest]
+    fn convert_permissions_converts_prefix_match() {
+        let allow = vec![
+            "Bash(runok exec:*)".to_string(),
+            "Bash(npm run:*)".to_string(),
+        ];
+        let deny = vec![];
+
+        let result = convert_permissions(&allow, &deny);
+
+        assert_eq!(
+            result.rules,
+            "  - allow: 'runok exec *'\n  - allow: 'npm run *'\n"
+        );
     }
 
     #[rstest]
