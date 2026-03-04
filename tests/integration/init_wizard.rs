@@ -8,13 +8,20 @@ use runok::init::error::InitError;
 use runok::init::prompt::{AutoYesPrompter, Prompter};
 use runok::init::{InitScope, run_wizard_with_paths};
 
+/// Queued response for SequencePrompter.
+#[derive(Debug)]
+enum Response {
+    Confirm(bool),
+    Select(usize),
+}
+
 /// Test prompter that returns pre-configured responses in sequence.
 struct SequencePrompter {
-    responses: RefCell<Vec<bool>>,
+    responses: RefCell<Vec<Response>>,
 }
 
 impl SequencePrompter {
-    fn new(responses: Vec<bool>) -> Self {
+    fn new(responses: Vec<Response>) -> Self {
         Self {
             responses: RefCell::new(responses),
         }
@@ -25,9 +32,22 @@ impl Prompter for SequencePrompter {
     fn confirm(&self, _message: &str, default: bool) -> Result<bool, InitError> {
         let mut responses = self.responses.borrow_mut();
         if responses.is_empty() {
-            Ok(default)
-        } else {
-            Ok(responses.remove(0))
+            return Ok(default);
+        }
+        match responses.remove(0) {
+            Response::Confirm(v) => Ok(v),
+            other => unreachable!("expected Confirm response, got {other:?}"),
+        }
+    }
+
+    fn select(&self, _message: &str, _items: &[&str], default: usize) -> Result<usize, InitError> {
+        let mut responses = self.responses.borrow_mut();
+        if responses.is_empty() {
+            return Ok(default);
+        }
+        match responses.remove(0) {
+            Response::Select(v) => Ok(v),
+            other => unreachable!("expected Select response, got {other:?}"),
         }
     }
 }
@@ -136,7 +156,6 @@ fn full_user_flow_with_claude_code_integration() -> Result<(), Box<dyn std::erro
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         env.user_claude_dir().join("settings.json"),
     )?)?;
-    // Non-Bash entries should be preserved
     assert_eq!(
         settings,
         serde_json::json!({
@@ -243,23 +262,19 @@ fn force_overwrites_existing_config() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[rstest]
-fn non_interactive_mode_uses_defaults() -> Result<(), Box<dyn std::error::Error>> {
+fn non_interactive_mode_selects_user_by_default() -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
 
-    // AutoYesPrompter: user scope (default yes), project scope (default no)
+    // AutoYesPrompter select default is 0 = User
     env.run(None, &AutoYesPrompter, false)?;
 
-    // User config should be created
     assert!(env.user_config_path().exists());
-
-    // Project config should NOT be created (default is No)
     assert!(!env.cwd.join("runok.yml").exists());
     Ok(())
 }
 
-// --- per-step confirmation with mixed Bash / non-Bash entries ---
+// --- batch confirmation with mixed Bash / non-Bash entries ---
 
-/// Settings with both Bash and non-Bash permission entries.
 fn mixed_permissions_settings() -> &'static str {
     indoc! {r#"
         {
@@ -299,7 +314,6 @@ fn config_with_rules() -> String {
     .to_string()
 }
 
-/// Original settings.json value (unchanged).
 fn original_settings() -> serde_json::Value {
     serde_json::json!({
         "permissions": {
@@ -307,6 +321,52 @@ fn original_settings() -> serde_json::Value {
             "deny": ["Bash(rm -rf /)", "Write(/etc/passwd)"]
         }
     })
+}
+
+#[rstest]
+#[case::accept_all(
+    true,
+    Some(config_with_rules()),
+    serde_json::json!({
+        "permissions": {
+            "allow": ["Read(/tmp)", "WebFetch"],
+            "deny": ["Write(/etc/passwd)"]
+        },
+        "hooks": hook_json()
+    }),
+)]
+#[case::decline_all(false, None, original_settings())]
+fn batch_confirmation_with_mixed_permissions(
+    #[case] accept: bool,
+    #[case] expected_config: Option<String>,
+    #[case] expected_settings: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_user_claude_settings(mixed_permissions_settings())?;
+
+    let prompter = SequencePrompter::new(vec![Response::Confirm(accept)]);
+    env.run(Some(&InitScope::User), &prompter, false)?;
+
+    let config_path = env.user_config_path();
+    match expected_config {
+        Some(expected) => {
+            let config = std::fs::read_to_string(&config_path)?;
+            assert_eq!(config, expected);
+        }
+        None => {
+            assert!(
+                !config_path.exists(),
+                "runok.yml should not exist when user declined"
+            );
+        }
+    }
+
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+        env.user_claude_dir().join("settings.json"),
+    )?)?;
+    assert_eq!(settings, expected_settings);
+
+    Ok(())
 }
 
 #[rstest]
@@ -409,85 +469,22 @@ fn hook_already_registered_is_not_duplicated() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// Responses: [remove_permissions, create_runok_yml, register_hook]
+// --- scope selection ---
+
 #[rstest]
-#[case::accept_all(
-    vec![true, true, true],
-    Some(config_with_rules()),
-    serde_json::json!({
-        "permissions": {
-            "allow": ["Read(/tmp)", "WebFetch"],
-            "deny": ["Write(/etc/passwd)"]
-        },
-        "hooks": hook_json()
-    }),
-)]
-#[case::decline_permissions_accept_rest(
-    vec![false, true, true],
-    Some(config_with_rules()),
-    serde_json::json!({
-        "permissions": {
-            "allow": ["Bash(git status)", "Read(/tmp)", "WebFetch"],
-            "deny": ["Bash(rm -rf /)", "Write(/etc/passwd)"]
-        },
-        "hooks": hook_json()
-    }),
-)]
-#[case::accept_permissions_decline_config(
-    vec![true, false, true],
-    None,
-    serde_json::json!({
-        "permissions": {
-            "allow": ["Read(/tmp)", "WebFetch"],
-            "deny": ["Write(/etc/passwd)"]
-        },
-        "hooks": hook_json()
-    }),
-)]
-#[case::accept_all_decline_hook(
-    vec![true, true, false],
-    Some(config_with_rules()),
-    serde_json::json!({
-        "permissions": {
-            "allow": ["Read(/tmp)", "WebFetch"],
-            "deny": ["Write(/etc/passwd)"]
-        }
-    }),
-)]
-#[case::decline_all(
-    vec![false, false, false],
-    None,
-    original_settings(),
-)]
-fn per_step_confirmation_with_mixed_permissions(
-    #[case] responses: Vec<bool>,
-    #[case] expected_config: Option<String>,
-    #[case] expected_settings: serde_json::Value,
+#[case::select_user(0, true, false)]
+#[case::select_project(1, false, true)]
+fn no_scope_select(
+    #[case] selection: usize,
+    #[case] user_config_exists: bool,
+    #[case] project_config_exists: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
-    env.setup_user_claude_settings(mixed_permissions_settings())?;
 
-    let prompter = SequencePrompter::new(responses);
-    env.run(Some(&InitScope::User), &prompter, false)?;
+    let prompter = SequencePrompter::new(vec![Response::Select(selection)]);
+    env.run(None, &prompter, false)?;
 
-    let config_path = env.user_config_path();
-    match expected_config {
-        Some(expected) => {
-            let config = std::fs::read_to_string(&config_path)?;
-            assert_eq!(config, expected);
-        }
-        None => {
-            assert!(
-                !config_path.exists(),
-                "runok.yml should not exist when user declined config creation"
-            );
-        }
-    }
-
-    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        env.user_claude_dir().join("settings.json"),
-    )?)?;
-    assert_eq!(settings, expected_settings);
-
+    assert_eq!(env.user_config_path().exists(), user_config_exists);
+    assert_eq!(env.cwd.join("runok.yml").exists(), project_config_exists);
     Ok(())
 }

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use setup::{ScopeResult, setup_scope};
 
-use super::config_gen;
 use super::error::InitError;
 use super::prompt::{AutoYesPrompter, DialoguerPrompter, Prompter};
 
@@ -89,31 +88,6 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
     summary.permissions_removed = result.permissions_removed;
 }
 
-/// Merge a scope result into the summary, accumulating fields.
-fn merge_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool) {
-    if is_user {
-        summary.user_config_created = result.config_path;
-    } else {
-        summary.project_config_created = result.config_path;
-    }
-    if result.hook_registered {
-        summary.hook_registered = true;
-    }
-    if let Some(rules) = result.converted_rules {
-        match summary.converted_rules {
-            Some(ref mut existing) => {
-                existing.push_str(&rules);
-            }
-            None => {
-                summary.converted_rules = Some(rules);
-            }
-        }
-    }
-    if result.permissions_removed {
-        summary.permissions_removed = true;
-    }
-}
-
 /// Run the init wizard.
 ///
 /// `scope`: optional scope from `--scope` flag
@@ -176,18 +150,14 @@ pub fn run_wizard_with_paths(
             apply_scope_result(&mut summary, result, false);
         }
         None => {
-            // No scope specified: setup user config, then optionally project config
-            let user_claude_dir = home_dir.join(".claude");
+            // No scope specified: ask user to choose
+            let items = ["User (global)", "Project (local)"];
+            let selection = prompter.select("Where do you want to set up runok?", &items, 0)?;
 
-            // User config
-            if config_gen::config_exists(user_config_dir).is_some() && !force {
-                eprintln!(
-                    "User config already exists at {}, skipping.",
-                    user_config_dir.display()
-                );
-            } else {
-                let should_setup = prompter.confirm("Set up user-level configuration?", true)?;
-                if should_setup {
+            match selection {
+                0 => {
+                    // User scope
+                    let user_claude_dir = home_dir.join(".claude");
                     let result = setup_scope(
                         user_config_dir,
                         claude_dir_if_exists(&user_claude_dir),
@@ -196,28 +166,16 @@ pub fn run_wizard_with_paths(
                     )?;
                     apply_scope_result(&mut summary, result, true);
                 }
-            }
-
-            // Project config
-            let should_project = prompter.confirm("Set up project-level configuration?", false)?;
-            if should_project {
-                let project_claude_dir = cwd.join(".claude");
-                match setup_scope(
-                    cwd,
-                    claude_dir_if_exists(&project_claude_dir),
-                    prompter,
-                    force,
-                ) {
-                    Ok(result) => {
-                        merge_scope_result(&mut summary, result, false);
-                    }
-                    Err(InitError::ConfigExists(path)) => {
-                        eprintln!(
-                            "Project config already exists at {}, skipping.",
-                            path.display()
-                        );
-                    }
-                    Err(e) => return Err(e),
+                _ => {
+                    // Project scope
+                    let project_claude_dir = cwd.join(".claude");
+                    let result = setup_scope(
+                        cwd,
+                        claude_dir_if_exists(&project_claude_dir),
+                        prompter,
+                        force,
+                    )?;
+                    apply_scope_result(&mut summary, result, false);
                 }
             }
         }
@@ -234,13 +192,20 @@ mod tests {
     use rstest::rstest;
     use tempfile::TempDir;
 
+    /// Queued response for SequencePrompter: either a confirm (bool) or select (usize).
+    #[derive(Debug)]
+    enum Response {
+        Confirm(bool),
+        Select(usize),
+    }
+
     /// Test prompter that returns pre-configured responses in sequence.
     struct SequencePrompter {
-        responses: std::cell::RefCell<Vec<bool>>,
+        responses: std::cell::RefCell<Vec<Response>>,
     }
 
     impl SequencePrompter {
-        fn new(responses: Vec<bool>) -> Self {
+        fn new(responses: Vec<Response>) -> Self {
             Self {
                 responses: std::cell::RefCell::new(responses),
             }
@@ -261,9 +226,27 @@ mod tests {
         fn confirm(&self, _message: &str, default: bool) -> Result<bool, InitError> {
             let mut responses = self.responses.borrow_mut();
             if responses.is_empty() {
-                Ok(default)
-            } else {
-                Ok(responses.remove(0))
+                return Ok(default);
+            }
+            match responses.remove(0) {
+                Response::Confirm(v) => Ok(v),
+                other => panic!("expected Confirm response, got {other:?}"),
+            }
+        }
+
+        fn select(
+            &self,
+            _message: &str,
+            _items: &[&str],
+            default: usize,
+        ) -> Result<usize, InitError> {
+            let mut responses = self.responses.borrow_mut();
+            if responses.is_empty() {
+                return Ok(default);
+            }
+            match responses.remove(0) {
+                Response::Select(v) => Ok(v),
+                other => panic!("expected Select response, got {other:?}"),
             }
         }
     }
@@ -429,14 +412,13 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_no_scope_with_auto_yes() {
+    fn wizard_no_scope_with_auto_yes_selects_user() {
         let env = TestEnv::new();
 
-        // auto_yes with no scope: user setup (default yes), project setup (default no)
+        // AutoYesPrompter select default is 0 = User
         env.run(None, &AutoYesPrompter, false).unwrap();
 
         assert!(env.user_config_dir.join("runok.yml").exists());
-        // Project config should NOT be created (default is No for project)
         assert!(!env.cwd.join("runok.yml").exists());
     }
 
@@ -474,21 +456,17 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_no_scope_skips_existing_user_config() {
+    fn wizard_no_scope_user_errors_on_existing_config() {
         let env = TestEnv::new();
-        // Create existing user config
         std::fs::create_dir_all(&env.user_config_dir).unwrap();
         std::fs::write(env.user_config_dir.join("runok.yml"), "existing").unwrap();
 
-        // auto_yes: user config skipped (exists), project config skipped (default no)
-        env.run(None, &AutoYesPrompter, false).unwrap();
-
-        // User config should not be overwritten
-        let content = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
-        assert_eq!(content, "existing");
+        // Select user scope (0), then setup_scope hits existing config
+        let result = env.run(None, &AutoYesPrompter, false);
+        assert!(matches!(result, Err(InitError::ConfigExists(_))));
     }
 
-    // --- per-step confirmation ---
+    // --- batch confirmation ---
 
     /// Helper: read and parse settings.json from a claude dir.
     fn read_settings(claude_dir: &Path) -> serde_json::Value {
@@ -525,100 +503,87 @@ mod tests {
         .to_string()
     }
 
-    /// Responses: [remove_permissions, create_runok_yml, register_hook]
     #[rstest]
-    #[case::decline_permissions_accept_rules_and_hook(
-        vec![false, true, true],
-        Some(config_with_rules()),
-        serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(git status)", "Read(/tmp)"],
-                "deny": ["Bash(rm -rf /)"]
-            },
-            "hooks": hook_json()
-        }),
-    )]
-    #[case::accept_permissions_decline_rules(
-        vec![true, false, true],
-        None,
-        serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)"]
-            },
-            "hooks": hook_json()
-        }),
-    )]
-    #[case::accept_all_decline_hook(
-        vec![true, true, false],
-        Some(config_with_rules()),
-        serde_json::json!({
-            "permissions": {
-                "allow": ["Read(/tmp)"]
-            }
-        }),
-    )]
-    #[case::decline_all(
-        vec![false, false, false],
-        None,
-        serde_json::json!({
-            "permissions": {
-                "allow": ["Bash(git status)", "Read(/tmp)"],
-                "deny": ["Bash(rm -rf /)"]
-            }
-        }),
-    )]
-    fn wizard_per_step_confirmation(
-        #[case] responses: Vec<bool>,
-        #[case] expected_config: Option<String>,
-        #[case] expected_settings: serde_json::Value,
-    ) {
+    fn wizard_batch_accept_applies_all_changes() {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        let prompter = SequencePrompter::new(responses);
+        // Single confirm: accept all
+        let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
         env.run(Some(&InitScope::User), &prompter, false).unwrap();
         prompter.assert_exhausted();
 
-        let config_path = env.user_config_dir.join("runok.yml");
-        match expected_config {
-            Some(expected) => {
-                let config_content = std::fs::read_to_string(&config_path).unwrap();
-                assert_eq!(config_content, expected);
-            }
-            None => {
-                assert!(
-                    !config_path.exists(),
-                    "runok.yml should not exist when user declined config creation"
-                );
-            }
-        }
+        let config_content =
+            std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
+        assert_eq!(config_content, config_with_rules());
 
-        assert_eq!(read_settings(&env.user_claude_dir()), expected_settings,);
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Read(/tmp)"]
+                },
+                "hooks": hook_json()
+            }),
+        );
     }
 
     #[rstest]
-    fn wizard_no_scope_decline_both_scopes() {
+    fn wizard_batch_decline_skips_all_changes() {
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(claude_settings_with_permissions());
+
+        // Single confirm: decline all
+        let prompter = SequencePrompter::new(vec![Response::Confirm(false)]);
+        env.run(Some(&InitScope::User), &prompter, false).unwrap();
+        prompter.assert_exhausted();
+
+        assert!(
+            !env.user_config_dir.join("runok.yml").exists(),
+            "runok.yml should not exist when user declined"
+        );
+
+        // settings.json unchanged
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Bash(git status)", "Read(/tmp)"],
+                    "deny": ["Bash(rm -rf /)"]
+                }
+            }),
+        );
+    }
+
+    // --- scope selection ---
+
+    #[rstest]
+    fn wizard_no_scope_select_user() {
         let env = TestEnv::new();
 
-        // "Set up user-level?" (no), "Set up project-level?" (no)
-        let prompter = SequencePrompter::new(vec![false, false]);
+        // Select user (0)
+        let prompter = SequencePrompter::new(vec![Response::Select(0)]);
         env.run(None, &prompter, false).unwrap();
+        prompter.assert_exhausted();
 
-        assert!(!env.user_config_dir.join("runok.yml").exists());
+        assert!(env.user_config_dir.join("runok.yml").exists());
         assert!(!env.cwd.join("runok.yml").exists());
     }
 
     #[rstest]
-    fn wizard_no_scope_decline_user_accept_project() {
+    fn wizard_no_scope_select_project() {
         let env = TestEnv::new();
 
-        // "Set up user-level?" (no), "Set up project-level?" (yes)
-        let prompter = SequencePrompter::new(vec![false, true]);
+        // Select project (1)
+        let prompter = SequencePrompter::new(vec![Response::Select(1)]);
         env.run(None, &prompter, false).unwrap();
+        prompter.assert_exhausted();
 
         assert!(!env.user_config_dir.join("runok.yml").exists());
         assert!(env.cwd.join("runok.yml").exists());
     }
+
+    // --- edge cases ---
 
     #[rstest]
     fn wizard_claude_dir_without_settings_json_registers_hook_only() {
@@ -638,12 +603,8 @@ mod tests {
         );
 
         // Hook should be registered in a newly created settings.json
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
-        )
-        .unwrap();
         assert_eq!(
-            settings,
+            read_settings(&claude_dir),
             serde_json::json!({
                 "hooks": {
                     "PreToolUse": [
@@ -677,20 +638,14 @@ mod tests {
         env.run(Some(&InitScope::User), &AutoYesPrompter, false)
             .unwrap();
 
-        // runok.yml should be boilerplate only (no rules converted since no Bash entries)
         let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
         assert_eq!(
             config,
             "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
         );
 
-        // settings.json should have all original permissions preserved + hook added
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
-        )
-        .unwrap();
         assert_eq!(
-            settings,
+            read_settings(&env.user_claude_dir()),
             serde_json::json!({
                 "permissions": {
                     "allow": ["Read(/tmp)", "WebFetch", "Skill"],
@@ -714,7 +669,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_hook_already_registered_skips_hook_step() {
+    fn wizard_hook_already_registered_no_prompt_needed() {
         let env = TestEnv::new();
         env.setup_user_claude_settings(indoc! {r#"
             {
@@ -737,9 +692,9 @@ mod tests {
             }
         "#});
 
-        // Only 2 steps: remove permissions + create runok.yml (hook step skipped)
-        // SequencePrompter with 2 responses for 2 steps
-        let prompter = SequencePrompter::new(vec![true, true]);
+        // Has Bash permissions but hook already registered.
+        // Still has_rules=true so has_any_change=true, needs 1 confirm.
+        let prompter = SequencePrompter::new(vec![Response::Confirm(true)]);
         env.run(Some(&InitScope::User), &prompter, false).unwrap();
         prompter.assert_exhausted();
 
@@ -755,13 +710,8 @@ mod tests {
             "}
         );
 
-        // settings.json: permissions removed, hook still there (not duplicated)
-        let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
-        )
-        .unwrap();
         assert_eq!(
-            settings,
+            read_settings(&env.user_claude_dir()),
             serde_json::json!({
                 "permissions": {},
                 "hooks": {
@@ -779,31 +729,5 @@ mod tests {
                 }
             })
         );
-    }
-
-    #[rstest]
-    fn wizard_no_scope_accept_both() {
-        let env = TestEnv::new();
-
-        let prompter = SequencePrompter::new(vec![true, true]);
-        env.run(None, &prompter, false).unwrap();
-
-        assert!(env.user_config_dir.join("runok.yml").exists());
-        assert!(env.cwd.join("runok.yml").exists());
-    }
-
-    #[rstest]
-    fn wizard_no_scope_accept_both_project_exists() {
-        let env = TestEnv::new();
-        std::fs::write(env.cwd.join("runok.yml"), "existing project config").unwrap();
-
-        let prompter = SequencePrompter::new(vec![true, true]);
-        env.run(None, &prompter, false).unwrap();
-
-        // User config should be created
-        assert!(env.user_config_dir.join("runok.yml").exists());
-        // Project config should be skipped (exists)
-        let content = std::fs::read_to_string(env.cwd.join("runok.yml")).unwrap();
-        assert_eq!(content, "existing project config");
     }
 }

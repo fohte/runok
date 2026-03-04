@@ -16,6 +16,10 @@ pub(super) struct ScopeResult {
 }
 
 /// Set up configuration for a given scope (user or project).
+///
+/// Shows all pending changes as a combined diff, then asks a single
+/// "Apply these changes?" confirmation.  On accept every change is
+/// applied; on decline none are.
 pub(super) fn setup_scope(
     config_dir: &Path,
     claude_dir: Option<&Path>,
@@ -23,9 +27,10 @@ pub(super) fn setup_scope(
     force: bool,
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
-    let mut hook_registered = false;
-    let mut permissions_removed = false;
-    let mut config_declined = false;
+    let mut approved = false;
+    let mut has_any_change = false;
+    let mut has_rules = false;
+    let mut has_hook_change = false;
 
     if let Some(cd) = claude_dir
         && cd.exists()
@@ -41,7 +46,6 @@ pub(super) fn setup_scope(
         // Determine what changes are needed
         let (allow, deny) = claude_code::read_permissions(cd)?;
         let has_permissions = !allow.is_empty() || !deny.is_empty();
-        let mut has_rules = false;
 
         if has_permissions {
             let conversion = claude_code::convert_permissions(&allow, &deny);
@@ -58,82 +62,76 @@ pub(super) fn setup_scope(
             original_content.clone()
         };
         let hook_preview = preview_register_hook(&after_permissions)?;
-        let has_hook_change = hook_preview.is_some();
+        has_hook_change = hook_preview.is_some();
+        has_any_change = has_rules || has_hook_change;
 
-        // ANSI codes for step headers
-        const BOLD: &str = "\x1b[1m";
-        const CYAN: &str = "\x1b[36m";
-        const RESET: &str = "\x1b[0m";
+        if has_any_change {
+            let settings_path_display = settings_path.display();
+            let config_path = config_dir.join("runok.yml");
+            let config_path_display = config_path.display();
 
-        let settings_path_display = settings_path.display();
-        let config_path = config_dir.join("runok.yml");
-        let config_path_display = config_path.display();
-
-        let mut step = 1;
-        let total_steps = usize::from(has_rules) * 2 + usize::from(has_hook_change);
-
-        if has_rules {
-            // Step: remove permissions from settings.json
-            eprintln!(
-                "{CYAN}[{step}/{total_steps}]{RESET} {BOLD}Remove Bash permissions from {settings_path_display}{RESET}"
-            );
-            eprintln!();
-            print_diff(
-                &settings_path_display.to_string(),
-                &original_content,
-                &after_permissions,
-            );
-            eprintln!();
-
-            let should_apply = prompter.confirm("Apply this change?", true)?;
-            if should_apply {
-                permissions_removed = claude_code::remove_permissions(cd)?;
-            }
-            step += 1;
-            eprintln!();
-
-            // Step: create runok.yml with converted rules
-            let config_content = config_gen::build_config_content(converted_rules.as_deref());
-
-            eprintln!(
-                "{CYAN}[{step}/{total_steps}]{RESET} {BOLD}Create {config_path_display} with converted rules{RESET}"
-            );
-            eprintln!();
-            print_diff(&config_path_display.to_string(), "", &config_content);
-            eprintln!();
-
-            let should_apply = prompter.confirm("Apply this change?", true)?;
-            if !should_apply {
-                // User declined: skip creating runok.yml entirely
-                converted_rules = None;
-                config_declined = true;
-            }
-            step += 1;
-            eprintln!();
-        }
-
-        if has_hook_change {
-            eprintln!(
-                "{CYAN}[{step}/{total_steps}]{RESET} {BOLD}Register runok hook in {settings_path_display}{RESET}"
-            );
-            eprintln!();
-            if let Some(ref after_hook) = hook_preview {
+            // Show all diffs together
+            if has_rules {
+                eprintln!("\x1b[1mRemove Bash permissions from {settings_path_display}\x1b[0m");
+                eprintln!();
                 print_diff(
                     &settings_path_display.to_string(),
+                    &original_content,
                     &after_permissions,
-                    after_hook,
                 );
-            }
-            eprintln!();
+                eprintln!();
 
-            let should_apply = prompter.confirm("Apply this change?", true)?;
-            if should_apply {
-                hook_registered = claude_code::register_hook(cd)?;
+                let config_content = config_gen::build_config_content(converted_rules.as_deref());
+                eprintln!("\x1b[1mCreate {config_path_display} with converted rules\x1b[0m");
+                eprintln!();
+                print_diff(&config_path_display.to_string(), "", &config_content);
+                eprintln!();
+            }
+
+            if has_hook_change {
+                eprintln!("\x1b[1mRegister runok hook in {settings_path_display}\x1b[0m");
+                eprintln!();
+                if let Some(ref after_hook) = hook_preview {
+                    print_diff(
+                        &settings_path_display.to_string(),
+                        &after_permissions,
+                        after_hook,
+                    );
+                }
+                eprintln!();
+            }
+
+            approved = prompter.confirm("Apply these changes?", true)?;
+            if !approved {
+                converted_rules = None;
             }
         }
     }
 
-    let config_path = if config_declined {
+    // Apply changes only when the user approved the batch
+    let permissions_removed = if approved && has_rules {
+        claude_dir
+            .map(claude_code::remove_permissions)
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let hook_registered = if approved && has_hook_change {
+        claude_dir
+            .map(claude_code::register_hook)
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    // Create config file:
+    // - If user approved changes with rules: config includes converted rules
+    // - If no Claude Code changes were needed: boilerplate config only
+    // - If user declined: no config created
+    let config_path = if has_any_change && !approved {
         None
     } else {
         let content = config_gen::build_config_content(converted_rules.as_deref());
