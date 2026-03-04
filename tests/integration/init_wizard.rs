@@ -239,33 +239,32 @@ fn config_with_bash_rules() -> String {
 // Exhaustive 23-pattern test
 // ============================================================
 //
-// Each pattern corresponds to one row in the pattern table:
-//
-// | # | settings.json | Bash perms | Hook exists | Scope   | Migration | Apply | runok.yml  | settings.json change   |
-// |---|---------------|------------|-------------|---------|-----------|-------|------------|------------------------|
-// |  1| no            | -          | -           | user    | -         | -     | boilerplate| -                      |
-// |  2| no            | -          | -           | project | -         | -     | boilerplate| -                      |
-// |  3| yes           | no         | no          | user    | -         | yes   | boilerplate| hook added             |
-// |  4| yes           | no         | no          | user    | -         | no    | none       | none                   |
-// |  5| yes           | no         | yes         | user    | -         | -     | boilerplate| none                   |
-// |  6| yes           | no         | no          | project | -         | -     | boilerplate| none                   |
-// |  7| yes           | no         | yes         | project | -         | -     | boilerplate| none                   |
-// |  8| yes           | yes        | no          | user    | yes       | yes   | with rules | perms removed + hook   |
-// |  9| yes           | yes        | no          | user    | yes       | no    | none       | none                   |
-// | 10| yes           | yes        | no          | user    | no        | yes   | boilerplate| hook added             |
-// | 11| yes           | yes        | no          | user    | no        | no    | none       | none                   |
-// | 12| yes           | yes        | yes         | user    | yes       | yes   | with rules | perms removed          |
-// | 13| yes           | yes        | yes         | user    | yes       | no    | none       | none                   |
-// | 14| yes           | yes        | yes         | user    | no        | yes   | boilerplate| none                   |
-// | 15| yes           | yes        | yes         | user    | no        | no    | none       | none                   |
-// | 16| yes           | yes        | no          | project | yes       | yes   | with rules | perms removed          |
-// | 17| yes           | yes        | no          | project | yes       | no    | none       | none                   |
-// | 18| yes           | yes        | no          | project | no        | yes   | boilerplate| none                   |
-// | 19| yes           | yes        | no          | project | no        | no    | none       | none                   |
-// | 20| yes           | yes        | yes         | project | yes       | yes   | with rules | perms removed          |
-// | 21| yes           | yes        | yes         | project | yes       | no    | none       | none                   |
-// | 22| yes           | yes        | yes         | project | no        | yes   | boilerplate| none                   |
-// | 23| yes           | yes        | yes         | project | no        | no    | none       | none                   |
+// |    |                   State                  |           Response          |               Result               |
+// | #  | settings.json | Bash perms | Hook exists | Scope   | Migrate? | Apply? | runok.yml   | settings.json change |
+// |----|---------------|------------|-------------|---------|----------|--------|-------------|----------------------|
+// |  1 | no            | N/A        | N/A         | user    | N/A      | N/A    | boilerplate | N/A                  |
+// |  2 | no            | N/A        | N/A         | project | N/A      | N/A    | boilerplate | N/A                  |
+// |  3 | yes           | no         | no          | user    | N/A      | yes    | boilerplate | hook added           |
+// |  4 | yes           | no         | no          | user    | N/A      | no     | none        | none                 |
+// |  5 | yes           | no         | yes         | user    | N/A      | N/A    | boilerplate | none                 |
+// |  6 | yes           | no         | no          | project | N/A      | N/A    | boilerplate | none                 |
+// |  7 | yes           | no         | yes         | project | N/A      | N/A    | boilerplate | none                 |
+// |  8 | yes           | yes        | no          | user    | yes      | yes    | with rules  | perms removed + hook |
+// |  9 | yes           | yes        | no          | user    | yes      | no     | none        | none                 |
+// | 10 | yes           | yes        | no          | user    | no       | yes    | boilerplate | hook added           |
+// | 11 | yes           | yes        | no          | user    | no       | no     | none        | none                 |
+// | 12 | yes           | yes        | yes         | user    | yes      | yes    | with rules  | perms removed        |
+// | 13 | yes           | yes        | yes         | user    | yes      | no     | none        | none                 |
+// | 14 | yes           | yes        | yes         | user    | no       | yes    | boilerplate | none                 |
+// | 15 | yes           | yes        | yes         | user    | no       | no     | none        | none                 |
+// | 16 | yes           | yes        | no          | project | yes      | yes    | with rules  | perms removed        |
+// | 17 | yes           | yes        | no          | project | yes      | no     | none        | none                 |
+// | 18 | yes           | yes        | no          | project | no       | yes    | boilerplate | none                 |
+// | 19 | yes           | yes        | no          | project | no       | no     | none        | none                 |
+// | 20 | yes           | yes        | yes         | project | yes      | yes    | with rules  | perms removed        |
+// | 21 | yes           | yes        | yes         | project | yes      | no     | none        | none                 |
+// | 22 | yes           | yes        | yes         | project | no       | yes    | boilerplate | none                 |
+// | 23 | yes           | yes        | yes         | project | no       | no     | none        | none                 |
 
 /// Helper to assert the final state after running the wizard.
 fn assert_wizard_result(
