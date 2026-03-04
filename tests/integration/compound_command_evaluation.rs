@@ -943,3 +943,63 @@ fn evaluate_command_splits_compound_before_matching(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Command substitution with redirects and pipes (stack overflow regression)
+// ========================================
+// These tests verify that commands containing command substitution ($())
+// combined with redirects (2>&1) and pipes do not cause infinite recursion.
+// The bug was that extract_commands returns the parent command with slightly
+// different whitespace (due to redirect stripping), causing the self-reference
+// filter to miss it and re-enter evaluate_command_inner indefinitely.
+
+#[rstest]
+#[case::cmd_sub_with_redirect_and_pipe(
+    "aws s3 ls --start-time $(date -d '1 hour ago') 2>&1 | jq '.data'",
+    indoc! {"
+        rules:
+          - allow: 'aws *'
+          - allow: 'date *'
+          - allow: 'jq *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::cmd_sub_with_redirect_deny_inner(
+    "echo $(rm -rf /tmp) 2>&1 | grep result",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'grep *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::cmd_sub_simple_with_redirect(
+    "echo $(date +%s) 2>&1",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'date *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::nested_cmd_sub_with_pipe(
+    "curl -H \"Authorization: $(cat token)\" https://api.example.com 2>&1 | jq .",
+    indoc! {"
+        rules:
+          - allow: 'curl *'
+          - allow: 'cat *'
+          - allow: 'jq *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn command_substitution_with_redirects_no_stack_overflow(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
