@@ -39,7 +39,6 @@ pub(super) fn setup_scope(
 ) -> Result<ScopeResult, InitError> {
     let mut converted_rules = None;
     let mut approved = false;
-    let mut has_any_change = false;
     let mut has_rules = false;
     let mut has_hook_change = false;
 
@@ -104,8 +103,7 @@ pub(super) fn setup_scope(
                 has_hook_change = hook_preview.is_some();
             }
 
-            has_any_change = has_rules || has_hook_change;
-
+            let has_any_change = has_rules || has_hook_change;
             if has_any_change {
                 let config_path = config_dir.join("runok.yml");
                 let config_path_display = config_path.display();
@@ -184,16 +182,11 @@ pub(super) fn setup_scope(
         false
     };
 
-    // Create config file:
-    // - If user approved changes with rules: config includes converted rules
-    // - If no Claude Code changes were needed: boilerplate config only
-    // - If user declined: no config created
-    let config_path = if has_any_change && !approved {
-        None
-    } else {
-        let content = config_gen::build_config_content(converted_rules.as_deref());
-        Some(config_gen::write_config(config_dir, &content)?)
-    };
+    // Always create config file.
+    // If user approved migration: config includes converted rules.
+    // Otherwise: boilerplate only.
+    let content = config_gen::build_config_content(converted_rules.as_deref());
+    let config_path = Some(config_gen::write_config(config_dir, &content)?);
 
     Ok(ScopeResult {
         config_path,

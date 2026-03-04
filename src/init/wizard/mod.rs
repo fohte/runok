@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[rstest]
-    fn wizard_batch_decline_skips_all_changes() {
+    fn wizard_batch_decline_skips_claude_changes_but_creates_config() {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
@@ -555,9 +555,11 @@ mod tests {
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
-        assert!(
-            !env.user_config_dir.join("runok.yml").exists(),
-            "runok.yml should not exist when user declined"
+        // runok.yml is always created (boilerplate without rules when declined)
+        let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
+        assert_eq!(
+            config,
+            "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
         );
 
         // settings.json unchanged

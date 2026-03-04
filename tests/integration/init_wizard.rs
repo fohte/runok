@@ -344,10 +344,14 @@ fn original_settings() -> serde_json::Value {
     })
 }
 
+fn boilerplate_config() -> String {
+    "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n".to_string()
+}
+
 #[rstest]
 #[case::accept_all(
     true,
-    Some(config_with_rules()),
+    config_with_rules(),
     serde_json::json!({
         "permissions": {
             "allow": ["Read(/tmp)", "WebFetch"],
@@ -356,10 +360,10 @@ fn original_settings() -> serde_json::Value {
         "hooks": hook_json()
     }),
 )]
-#[case::decline_all(false, None, original_settings())]
+#[case::decline_all(false, boilerplate_config(), original_settings())]
 fn batch_confirmation_with_mixed_permissions(
     #[case] accept: bool,
-    #[case] expected_config: Option<String>,
+    #[case] expected_config: String,
     #[case] expected_settings: serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
@@ -376,19 +380,9 @@ fn batch_confirmation_with_mixed_permissions(
     env.run(Some(&InitScope::User), &prompter)?;
     prompter.assert_exhausted();
 
-    let config_path = env.user_config_path();
-    match expected_config {
-        Some(expected) => {
-            let config = std::fs::read_to_string(&config_path)?;
-            assert_eq!(config, expected);
-        }
-        None => {
-            assert!(
-                !config_path.exists(),
-                "runok.yml should not exist when user declined"
-            );
-        }
-    }
+    // runok.yml is always created (boilerplate if declined, with rules if accepted)
+    let config = std::fs::read_to_string(env.user_config_path())?;
+    assert_eq!(config, expected_config);
 
     let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         env.user_claude_dir().join("settings.json"),
