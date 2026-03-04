@@ -336,7 +336,12 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                         "variable_assignment" => {
                             collect_substitutions_recursive(child, source, commands);
                         }
-                        _ => {}
+                        // Recurse into other child nodes (e.g. string,
+                        // concatenation) to find nested command_substitution
+                        // nodes (e.g. `curl -u "user:$(secret_cmd)" url`).
+                        _ => {
+                            collect_substitutions_recursive(child, source, commands);
+                        }
                     }
                 }
             }
@@ -764,6 +769,14 @@ mod tests {
     #[case::for_piped("for i in 1 2; do echo $i; done | grep 1", vec!["echo $i", "grep 1"])]
     #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
     #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
+    #[case::cmd_sub_in_quoted_string(
+        r#"curl -u "user:$(secret_cmd)" https://example.com"#,
+        vec!["secret_cmd", r#"curl -u "user:$(secret_cmd)" https://example.com"#],
+    )]
+    #[case::cmd_sub_in_concatenation(
+        "curl -H Authorization:$(cat token) url",
+        vec!["cat token", "curl -H Authorization:$(cat token) url"],
+    )]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
