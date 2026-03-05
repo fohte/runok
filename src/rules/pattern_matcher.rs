@@ -621,9 +621,31 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 fn literal_matches(pattern: &str, token: &str) -> bool {
     if pattern.contains('*') {
         glob_match(pattern, token)
+    } else if pattern.contains('\\') {
+        // Strip backslash escapes so that pattern `\;` matches command token `;`.
+        // The pattern lexer preserves backslash-escaped characters as-is (e.g. `\;`),
+        // while the command tokenizer resolves them (e.g. `\;` -> `;`).
+        let unescaped: String = unescape_backslashes(pattern);
+        unescaped == token
     } else {
         pattern == token
     }
+}
+
+/// Remove backslash escapes: `\;` -> `;`, `\\` -> `\`, etc.
+fn unescape_backslashes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Simple glob matching where `*` matches zero or more arbitrary characters.

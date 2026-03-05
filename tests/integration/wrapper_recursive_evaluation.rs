@@ -757,3 +757,35 @@ fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
     assert_eq!(result.action, Action::Allow);
     assert_eq!(result.sandbox_preset.as_deref(), Some("py_sandbox"));
 }
+
+// ========================================
+// find -exec/-execdir wrapper: flag alternation followed by <cmd>
+// placeholder is parsed correctly, enabling recursive evaluation
+// ========================================
+
+#[rstest]
+#[case::find_exec_rm_denied_semicolon("find . -exec rm -rf / \\;", assert_deny as ActionAssertion)]
+#[case::find_exec_rm_denied_plus("find . -exec rm -rf / +", assert_deny as ActionAssertion)]
+#[case::find_execdir_echo_allowed("find . -execdir echo hello +", assert_allow as ActionAssertion)]
+#[case::find_ok_rm_denied("find /tmp -ok rm -rf / \\;", assert_deny as ActionAssertion)]
+#[case::find_okdir_ls_allowed("find . -okdir ls -la +", assert_allow as ActionAssertion)]
+#[case::find_exec_unmatched_default("find . -exec hg status +", assert_default as ActionAssertion)]
+fn find_exec_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'find * -exec|-execdir|-ok|-okdir <cmd> \\;|+'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

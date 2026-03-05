@@ -357,6 +357,7 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         LexToken::Literal(s) if s == "]" => false,
         LexToken::Literal(s) if is_flag(s) => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
+        LexToken::Placeholder(_) => false,
         LexToken::Wildcard => inside_group || has_more_after,
         _ => true,
     }
@@ -496,17 +497,13 @@ mod tests {
         PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
         PatternToken::Wildcard,
     ])]
-    #[case::placeholder_value("cmd -o|--option <cmd>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-o".into(), "--option".into()],
-            value: Box::new(PatternToken::Placeholder("cmd".into())),
-        },
+    #[case::placeholder_not_consumed_as_flag_value("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::Alternation(vec!["-o".into(), "--option".into()]),
+        PatternToken::Placeholder("cmd".into()),
     ])]
     #[case::path_ref_value("cmd -c|--config <path:config>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-c".into(), "--config".into()],
-            value: Box::new(PatternToken::PathRef("config".into())),
-        },
+        PatternToken::Alternation(vec!["-c".into(), "--config".into()]),
+        PatternToken::PathRef("config".into()),
     ])]
     fn parse_flag_with_value(
         #[case] input: &str,
@@ -641,6 +638,18 @@ mod tests {
     #[case::path_ref("cat <path:sensitive>", "cat", vec![
         PatternToken::PathRef("sensitive".into()),
     ])]
+    #[case::flag_alternation_then_placeholder(
+        r"find * -exec|-execdir|-ok|-okdir <cmd> \;|+",
+        "find",
+        vec![
+            PatternToken::Wildcard,
+            PatternToken::Alternation(vec![
+                "-exec".into(), "-execdir".into(), "-ok".into(), "-okdir".into(),
+            ]),
+            PatternToken::Placeholder("cmd".into()),
+            PatternToken::Alternation(vec![r"\;".into(), "+".into()]),
+        ],
+    )]
     fn parse_placeholder(
         #[case] input: &str,
         #[case] expected_command: &str,
