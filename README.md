@@ -41,7 +41,7 @@ Do you want to proceed?
 ```
 
 ```sh
-# Claude chains commands with && -- same problem
+# Text-based parsing flags safe commands as suspicious
 ⏺ Bash(git log --oneline -5 && echo "---" && git status)
   ⎿  Running…
 
@@ -53,6 +53,57 @@ Do you want to proceed?
 ```
 
 runok parses commands with `tree-sitter-bash`, so comments, compound commands (`&&`, `|`, `;`), and wrapper commands (`sudo`, `bash -c`, `xargs`) are all handled correctly. Each sub-command is evaluated independently against your rules.
+
+And that's just the start. Claude Code's built-in permissions have other limitations too:
+
+**Denied commands give no explanation.** The agent has no idea why a command was blocked. With runok, deny rules include a message and a suggested fix -- the agent reads it and self-corrects:
+
+```yaml
+# runok.yml
+- deny: 'git push -f|--force *'
+  message: 'Force push is not allowed.'
+  fix_suggestion: 'git push --force-with-lease'
+```
+
+**Global flags break matching.** Claude sometimes adds flags like `-C` before the subcommand. `git -C /path commit` does not match `Bash(git commit *)`. runok handles this with optional groups and order-independent matching:
+
+```yaml
+# runok.yml
+- allow: 'git [-C *] commit *'
+# matches: git commit -m "fix"
+# matches: git -C /path/to/repo commit -m "fix"
+```
+
+**No recursive parsing of wrappers.** Claude Code does not inspect `sudo`, `bash -c`, or `$()`. runok recursively unwraps them to evaluate the inner command:
+
+```yaml
+# runok.yml
+definitions:
+  wrappers:
+    - 'sudo <cmd>'
+    - 'bash -c <cmd>'
+
+rules:
+  - deny: 'rm -rf /'
+# "sudo bash -c 'rm -rf /'" -> unwrap sudo -> unwrap bash -c -> deny
+```
+
+**JSON only, no comments.** `settings.json` cannot be annotated. runok uses YAML:
+
+```yaml
+# runok.yml
+rules:
+  # read-only git commands are always safe
+  - allow: 'git status'
+  - allow: 'git diff *'
+
+  # allow push, but not force push -- rewrites shared history
+  - deny: 'git push -f|--force *'
+    message: 'Use --force-with-lease instead.'
+  - ask: 'git push *'
+```
+
+See [Why runok?](https://runok.fohte.net/getting-started/why-runok/) for a full comparison table.
 
 ## Features
 
