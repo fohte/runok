@@ -41,6 +41,9 @@ impl TestEnv {
         let mut cmd = assert_cmd::cargo_bin_cmd!("runok");
         cmd.current_dir(&self.cwd);
         cmd.env("HOME", &self.home);
+        // Clear XDG dirs so config_dir() falls back to $HOME/.config
+        cmd.env_remove("XDG_CONFIG_HOME");
+        cmd.env_remove("XDG_CACHE_HOME");
         cmd
     }
 }
