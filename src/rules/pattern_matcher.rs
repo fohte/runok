@@ -619,22 +619,29 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 /// where `*` matches zero or more arbitrary characters. Otherwise, an
 /// exact string comparison is performed.
 fn literal_matches(pattern: &str, token: &str) -> bool {
-    if pattern.contains('*') {
-        glob_match(pattern, token)
-    } else if pattern.contains('\\') {
+    if pattern.contains('\\') {
         // Strip backslash escapes so that pattern `\;` matches command token `;`.
         // The pattern lexer preserves backslash-escaped characters as-is (e.g. `\;`),
         // while the command tokenizer resolves them (e.g. `\;` -> `;`).
-        let unescaped: String = unescape_backslashes(pattern);
-        unescaped == token
+        // Unescape first so that `\*` is treated as a literal `*`, not a glob.
+        let (unescaped, has_unescaped_glob) = unescape_backslashes(pattern);
+        if has_unescaped_glob {
+            glob_match(&unescaped, token)
+        } else {
+            unescaped == token
+        }
+    } else if pattern.contains('*') {
+        glob_match(pattern, token)
     } else {
         pattern == token
     }
 }
 
 /// Remove backslash escapes: `\;` -> `;`, `\\` -> `\`, etc.
-fn unescape_backslashes(s: &str) -> String {
+/// Returns the unescaped string and whether any unescaped `*` glob characters remain.
+fn unescape_backslashes(s: &str) -> (String, bool) {
     let mut result = String::with_capacity(s.len());
+    let mut has_unescaped_glob = false;
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
@@ -642,10 +649,13 @@ fn unescape_backslashes(s: &str) -> String {
                 result.push(next);
             }
         } else {
+            if ch == '*' {
+                has_unescaped_glob = true;
+            }
             result.push(ch);
         }
     }
-    result
+    (result, has_unescaped_glob)
 }
 
 /// Simple glob matching where `*` matches zero or more arbitrary characters.
@@ -1639,6 +1649,23 @@ mod tests {
             check_match(pattern_str, command_str, &empty_defs()),
             expected,
             "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === literal_matches: backslash escape ===
+
+    #[rstest]
+    #[case::backslash_semicolon(r"\;", ";", true)]
+    #[case::backslash_semicolon_no_match(r"\;", "x", false)]
+    #[case::backslash_star_literal(r"\*", "*", true)]
+    #[case::backslash_star_not_glob(r"\*", "foo", false)]
+    #[case::no_backslash("foo", "foo", true)]
+    #[case::plain_glob("fo*", "foobar", true)]
+    fn literal_matches_cases(#[case] pattern: &str, #[case] token: &str, #[case] expected: bool) {
+        assert_eq!(
+            literal_matches(pattern, token),
+            expected,
+            "literal_matches({pattern:?}, {token:?})",
         );
     }
 }
