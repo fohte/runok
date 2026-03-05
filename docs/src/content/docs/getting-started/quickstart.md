@@ -13,7 +13,15 @@ Follow the [Installation](/getting-started/installation/) guide to install runok
 
 ## 2. Create a configuration file
 
-Create `~/.config/runok/runok.yml` to set up global rules that apply to all projects:
+The easiest way to get started is with the interactive setup wizard:
+
+```sh
+runok init
+```
+
+This creates a `runok.yml` and, if you have Claude Code configured, offers to migrate your existing Bash permissions to runok rules and register the PreToolUse hook. See [`runok init`](/cli/init/) for details.
+
+Alternatively, create `~/.config/runok/runok.yml` manually:
 
 ```sh
 mkdir -p ~/.config/runok
@@ -70,5 +78,5 @@ The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-for
 ## Next steps
 
 - [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook.
-- [CLI Reference](/cli/overview/) -- Full reference for `runok check` and `runok exec`.
+- [CLI Reference](/cli/overview/) -- Full reference for `runok init`, `runok check`, and `runok exec`.
 - [Recipes](/recipes/overview/) -- Common configuration patterns and examples.

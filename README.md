@@ -81,7 +81,15 @@ Pre-built binaries are also available on [GitHub Releases](https://github.com/fo
 
 ### Configure
 
-Create `~/.config/runok/runok.yml`:
+The fastest way to get started is with the interactive setup wizard:
+
+```sh
+runok init
+```
+
+This creates a `runok.yml`, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
+
+You can also configure manually. Create `~/.config/runok/runok.yml`:
 
 ```yaml
 rules:
@@ -96,9 +104,7 @@ defaults:
   action: ask
 ```
 
-### Integrate with Claude Code
-
-Add runok as a PreToolUse hook in `.claude/settings.json`:
+And add runok as a PreToolUse hook in `.claude/settings.json`:
 
 ```json
 {
