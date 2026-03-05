@@ -187,8 +187,7 @@ fn build_pattern_tokens(
                 // alternation so that flag-with-value and order-independent
                 // matching work the same as for `-X|--request` style patterns.
                 if let Some(&(j, next)) = iter.peek() {
-                    if should_consume_as_value_strict(next, j + 1 < lex_tokens.len(), inside_group)
-                    {
+                    if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
                         let (_, next_token) = iter.next().ok_or(
                             PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                         )?;
@@ -360,21 +359,6 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         LexToken::Placeholder(_) => false,
         LexToken::Wildcard => inside_group || has_more_after,
         _ => true,
-    }
-}
-
-/// Like [`should_consume_as_value`], but stricter: also refuses to consume
-/// placeholder tokens as flag values. Used for bare flags (e.g. `-c`) where
-/// the flag is written without alternation syntax and the next token may be a
-/// wrapper placeholder (e.g. `<cmd>`) rather than a flag value.
-fn should_consume_as_value_strict(
-    next: &LexToken,
-    has_more_after: bool,
-    inside_group: bool,
-) -> bool {
-    match next {
-        LexToken::Placeholder(_) => false,
-        _ => should_consume_as_value(next, has_more_after, inside_group),
     }
 }
 
