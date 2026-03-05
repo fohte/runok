@@ -83,7 +83,7 @@ mod tests {
 
     #[rstest]
     fn build_config_content_with_rules() {
-        let rules = "  - allow: 'git status'\n  - deny: 'rm -rf /'\n";
+        let rules = concat!("  - allow: 'git status'\n", "  - deny: 'rm -rf /'\n",);
         let content = build_config_content(Some(rules));
         assert_eq!(
             content,

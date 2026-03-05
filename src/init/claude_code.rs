@@ -302,11 +302,13 @@ mod tests {
 
         let result = convert_permissions(&allow, &deny);
 
-        // Leading 2-space indent is significant (YAML list under `rules:` key),
-        // so indoc! auto-dedent cannot be used here.
         assert_eq!(
             result.rules,
-            "  - allow: 'git status'\n  - allow: 'npm install *'\n  - deny: 'rm -rf /'\n"
+            concat!(
+                "  - allow: 'git status'\n",
+                "  - allow: 'npm install *'\n",
+                "  - deny: 'rm -rf /'\n",
+            )
         );
         assert!(result.skipped.is_empty());
     }
@@ -323,7 +325,7 @@ mod tests {
 
         assert_eq!(
             result.rules,
-            "  - allow: 'runok exec *'\n  - allow: 'npm run *'\n"
+            concat!("  - allow: 'runok exec *'\n", "  - allow: 'npm run *'\n",)
         );
     }
 
