@@ -257,6 +257,21 @@ mod tests {
     }
 
     #[rstest]
+    fn preview_register_hook_returns_none_for_string_format() {
+        let input = indoc! {r#"
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        "runok check --input-format claude-code-hook"
+                    ]
+                }
+            }
+        "#};
+        let result = preview_register_hook(input).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
     fn preview_register_hook_empty_input() {
         let result = preview_register_hook("").unwrap().unwrap();
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();

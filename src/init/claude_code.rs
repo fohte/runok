@@ -119,11 +119,17 @@ pub fn read_permissions(claude_dir: &Path) -> Result<(Vec<String>, Vec<String>),
 
 /// Check whether a PreToolUse entry already contains the runok hook command.
 pub fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
+    // Plain string format: "runok check --input-format claude-code-hook"
+    if entry.as_str() == Some(command) {
+        return true;
+    }
     // Current format: {"matcher": "Bash", "hooks": [{"type": "command", "command": "runok check ..."}]}
+    // Also handles string hooks: {"hooks": ["runok check --input-format claude-code-hook"]}
     if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array())
-        && hooks
-            .iter()
-            .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+        && hooks.iter().any(|h| {
+            h.get("command").and_then(|c| c.as_str()) == Some(command)
+                || h.as_str() == Some(command)
+        })
     {
         return true;
     }
@@ -214,20 +220,15 @@ pub fn register_hook(claude_dir: &Path) -> Result<bool, InitError> {
     Ok(true)
 }
 
-/// Remove permissions.allow and permissions.deny from Claude Code settings.json.
+/// Remove Bash permission entries from a single settings file.
 ///
-/// Preserves other keys within the permissions object and other top-level keys.
-/// Remove only Bash permission entries from allow/deny arrays.
-///
-/// Non-Bash entries (e.g. `Read(...)`, `Skill`, `WebFetch`) are preserved.
-/// If an array becomes empty after filtering, the key is removed entirely.
-pub fn remove_permissions(claude_dir: &Path) -> Result<bool, InitError> {
-    let path = claude_dir.join("settings.json");
+/// Returns `true` if the file was modified.
+fn remove_permissions_from_file(path: &Path) -> Result<bool, InitError> {
     if !path.exists() {
         return Ok(false);
     }
 
-    let content = std::fs::read_to_string(&path)?;
+    let content = std::fs::read_to_string(path)?;
     let mut root: serde_json::Value = serde_json::from_str(&content)?;
 
     let mut modified = false;
@@ -253,10 +254,32 @@ pub fn remove_permissions(claude_dir: &Path) -> Result<bool, InitError> {
 
     if modified {
         let output = serde_json::to_string_pretty(&root)?;
-        std::fs::write(&path, output)?;
+        std::fs::write(path, output)?;
     }
 
     Ok(modified)
+}
+
+/// Remove permissions.allow and permissions.deny from Claude Code settings files.
+///
+/// Processes both `settings.json` and `settings.local.json`.
+/// Preserves other keys within the permissions object and other top-level keys.
+/// Remove only Bash permission entries from allow/deny arrays.
+///
+/// Non-Bash entries (e.g. `Read(...)`, `Skill`, `WebFetch`) are preserved.
+/// If an array becomes empty after filtering, the key is removed entirely.
+/// Returns `true` if either file was modified.
+pub fn remove_permissions(claude_dir: &Path) -> Result<bool, InitError> {
+    let mut any_modified = false;
+
+    for filename in &["settings.json", "settings.local.json"] {
+        let path = claude_dir.join(filename);
+        if remove_permissions_from_file(&path)? {
+            any_modified = true;
+        }
+    }
+
+    Ok(any_modified)
 }
 
 #[cfg(test)]
@@ -498,6 +521,29 @@ mod tests {
             }
         }
     "#})]
+    #[case::string_format(indoc! {r#"
+        {
+            "hooks": {
+                "PreToolUse": [
+                    "runok check --input-format claude-code-hook"
+                ]
+            }
+        }
+    "#})]
+    #[case::string_hooks_in_object(indoc! {r#"
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            "runok check --input-format claude-code-hook"
+                        ]
+                    }
+                ]
+            }
+        }
+    "#})]
     fn register_hook_skips_duplicate(#[case] existing: &str) {
         let tmp = TempDir::new().unwrap();
         let claude_dir = tmp.path().join(".claude");
@@ -658,5 +704,114 @@ mod tests {
 
         let modified = remove_permissions(&claude_dir).unwrap();
         assert!(!modified);
+    }
+
+    #[rstest]
+    fn remove_permissions_also_cleans_settings_local() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            indoc! {r#"
+                {
+                    "permissions": {
+                        "allow": ["Bash(git status)", "Read(/tmp)"],
+                        "deny": ["Bash(rm *)"]
+                    },
+                    "hooks": {}
+                }
+            "#},
+        )
+        .unwrap();
+
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            indoc! {r#"
+                {
+                    "permissions": {
+                        "allow": ["Bash(cargo test)"],
+                        "deny": ["Bash(sudo *)"]
+                    }
+                }
+            "#},
+        )
+        .unwrap();
+
+        let modified = remove_permissions(&claude_dir).unwrap();
+        assert!(modified);
+
+        // Verify settings.json: Bash entries removed, non-Bash preserved
+        let settings_content = std::fs::read_to_string(claude_dir.join("settings.json")).unwrap();
+        let settings_value: serde_json::Value = serde_json::from_str(&settings_content).unwrap();
+        assert_eq!(
+            settings_value,
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Read(/tmp)"]
+                },
+                "hooks": {}
+            })
+        );
+
+        // Verify settings.local.json: all Bash entries removed, keys dropped
+        let local_content =
+            std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let local_value: serde_json::Value = serde_json::from_str(&local_content).unwrap();
+        assert_eq!(
+            local_value,
+            serde_json::json!({
+                "permissions": {}
+            })
+        );
+    }
+
+    // --- entry_has_runok_hook ---
+
+    #[rstest]
+    #[case::current_format(
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+        }),
+        true,
+    )]
+    #[case::legacy_format(
+        serde_json::json!({
+            "type": "command",
+            "command": "runok check --input-format claude-code-hook"
+        }),
+        true,
+    )]
+    #[case::plain_string(
+        serde_json::json!("runok check --input-format claude-code-hook"),
+        true,
+    )]
+    #[case::string_hooks_in_object(
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": ["runok check --input-format claude-code-hook"]
+        }),
+        true,
+    )]
+    #[case::no_match_different_command(
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        }),
+        false,
+    )]
+    #[case::no_match_different_string(
+        serde_json::json!("some-other-command"),
+        false,
+    )]
+    #[case::no_match_empty_object(
+        serde_json::json!({}),
+        false,
+    )]
+    fn test_entry_has_runok_hook(#[case] entry: serde_json::Value, #[case] expected: bool) {
+        let command = "runok check --input-format claude-code-hook";
+        assert_eq!(entry_has_runok_hook(&entry, command), expected);
     }
 }
