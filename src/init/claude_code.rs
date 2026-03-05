@@ -50,9 +50,8 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
                 let converted = convert_bash_pattern(pattern);
-                result
-                    .rules
-                    .push_str(&format!("  - allow: '{converted}'\n"));
+                let escaped = converted.replace('\'', "''");
+                result.rules.push_str(&format!("  - allow: '{escaped}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -67,7 +66,8 @@ pub fn convert_permissions(allow_entries: &[String], deny_entries: &[String]) ->
         match parse_permission_entry(entry) {
             Some(("Bash", pattern)) => {
                 let converted = convert_bash_pattern(pattern);
-                result.rules.push_str(&format!("  - deny: '{converted}'\n"));
+                let escaped = converted.replace('\'', "''");
+                result.rules.push_str(&format!("  - deny: '{escaped}'\n"));
             }
             Some((tool, _)) => {
                 result.skipped.push(format!("{tool}(...)"));
@@ -302,6 +302,8 @@ mod tests {
 
         let result = convert_permissions(&allow, &deny);
 
+        // Leading 2-space indent is significant (YAML list under `rules:` key),
+        // so indoc! auto-dedent cannot be used here.
         assert_eq!(
             result.rules,
             "  - allow: 'git status'\n  - allow: 'npm install *'\n  - deny: 'rm -rf /'\n"
@@ -345,6 +347,16 @@ mod tests {
         let result = convert_permissions(&[], &[]);
         assert!(result.rules.is_empty());
         assert!(result.skipped.is_empty());
+    }
+
+    #[rstest]
+    fn convert_permissions_escapes_single_quotes() {
+        let allow = vec!["Bash(echo 'hello')".to_string()];
+        let deny = vec![];
+
+        let result = convert_permissions(&allow, &deny);
+
+        assert_eq!(result.rules, "  - allow: 'echo ''hello'''\n");
     }
 
     // --- read_permissions ---

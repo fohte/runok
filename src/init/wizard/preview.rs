@@ -146,7 +146,10 @@ mod tests {
 
     #[rstest]
     fn normalize_json_reformats_indentation() {
-        let input = "{\n   \"key\":   \"value\"\n}";
+        let input = indoc! {r#"
+            {
+               "key":   "value"
+            }"#};
         let result = normalize_json(input).unwrap();
         assert_eq!(
             result,
