@@ -5,3 +5,4 @@ mod cli;
 mod error_handling;
 mod exec;
 mod helpers;
+mod init;

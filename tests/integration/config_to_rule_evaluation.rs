@@ -939,3 +939,39 @@ fn quoted_glob_with_space(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Double-dash (--) positional matching
+// ========================================
+
+#[rstest]
+#[case::checkout_file_only(
+    "git checkout -- README.md",
+    assert_allow as ActionAssertion,
+)]
+#[case::checkout_file_only_with_c(
+    "git -C /tmp checkout -- README.md",
+    assert_allow as ActionAssertion,
+)]
+#[case::checkout_ref_then_double_dash_rejected(
+    "git checkout HEAD~1 -- README.md",
+    assert_default as ActionAssertion,
+)]
+#[case::checkout_ref_then_double_dash_with_c_rejected(
+    "git -C /tmp checkout HEAD~1 -- README.md",
+    assert_default as ActionAssertion,
+)]
+fn double_dash_positional_matching(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git [-C *] checkout -- *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

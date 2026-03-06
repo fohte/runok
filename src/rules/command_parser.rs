@@ -253,28 +253,48 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                     "do_group" | "command_substitution" => {
                         collect_commands(child, source, commands);
                     }
-                    _ => {}
+                    // Recurse into value list items (e.g. string nodes)
+                    // to find nested command substitutions like
+                    // `for i in "$(cmd)"; do ...`.
+                    _ => {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
                 }
             }
         }
-        // case_statement: recurse into each case_item (skip the match value)
+        // case_statement: recurse into each case_item, and search the match
+        // value for nested command substitutions (e.g. `case $(cmd) in ...`).
+        // The match value uses field name "value" and may be a
+        // command_substitution node directly.
         "case_statement" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                if child.kind() == "case_item" {
-                    collect_commands(child, source, commands);
+                match child.kind() {
+                    "case_item" => {
+                        collect_commands(child, source, commands);
+                    }
+                    "command_substitution" => {
+                        collect_commands(child, source, commands);
+                    }
+                    _ => {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
                 }
             }
         }
-        // case_item: skip pattern values (field name "value"), recurse into the rest
+        // case_item: recurse into body commands, and search pattern values
+        // for nested command substitutions (e.g. `case $x in "$(cmd)") ...`).
         "case_item" => {
             for i in 0..node.child_count() {
-                if node.field_name_for_child(i as u32) == Some("value") {
+                let Some(child) = node.child(i as u32) else {
+                    continue;
+                };
+                if !child.is_named() {
                     continue;
                 }
-                if let Some(child) = node.child(i as u32)
-                    && child.is_named()
-                {
+                if node.field_name_for_child(i as u32) == Some("value") {
+                    collect_substitutions_recursive(child, source, commands);
+                } else {
                     collect_commands(child, source, commands);
                 }
             }
@@ -336,7 +356,12 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                         "variable_assignment" => {
                             collect_substitutions_recursive(child, source, commands);
                         }
-                        _ => {}
+                        // Recurse into other child nodes (e.g. string,
+                        // concatenation) to find nested command_substitution
+                        // nodes (e.g. `curl -u "user:$(secret_cmd)" url`).
+                        _ => {
+                            collect_substitutions_recursive(child, source, commands);
+                        }
                     }
                 }
             }
@@ -365,15 +390,10 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 commands.push(text.to_string());
             }
         }
-        // Leaf command nodes — extract the source text, and also recurse
-        // into any command_substitution children to extract nested commands.
+        // Leaf command nodes — extract the source text, and recurse into
+        // all child nodes to find nested command substitutions.
         _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if child.kind() == "command_substitution" {
-                    collect_commands(child, source, commands);
-                }
-            }
+            collect_substitutions_recursive(node, source, commands);
             let text = &source[node.start_byte()..node.end_byte()];
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
@@ -735,6 +755,18 @@ mod tests {
     #[case::if_then("if true; then echo yes; fi", vec!["true", "echo yes"])]
     #[case::if_then_else("if true; then echo yes; else echo no; fi", vec!["true", "echo yes", "echo no"])]
     #[case::if_elif_else("if true; then echo a; elif false; then echo b; else echo c; fi", vec!["true", "echo a", "false", "echo b", "echo c"])]
+    #[case::for_quoted_cmd_sub_in_value(
+        r#"for i in "$(dangerous_cmd)"; do echo $i; done"#,
+        vec!["dangerous_cmd", "echo $i"],
+    )]
+    #[case::case_cmd_sub_in_match_value(
+        "case $(dangerous_cmd) in a) echo a;; esac",
+        vec!["dangerous_cmd", "echo a"],
+    )]
+    #[case::case_cmd_sub_in_pattern(
+        r#"case $x in "$(dangerous_cmd)") echo a;; esac"#,
+        vec!["dangerous_cmd", "echo a"],
+    )]
     #[case::case_statement("case $x in a) echo a;; b) echo b;; esac", vec!["echo a", "echo b"])]
     #[case::compound_statement("{ echo a; echo b; }", vec!["echo a", "echo b"])]
     #[case::function_def("f() { echo hello; }", vec!["echo hello"])]
@@ -764,6 +796,26 @@ mod tests {
     #[case::for_piped("for i in 1 2; do echo $i; done | grep 1", vec!["echo $i", "grep 1"])]
     #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
     #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
+    #[case::cmd_sub_in_quoted_string(
+        r#"curl -u "user:$(secret_cmd)" https://example.com"#,
+        vec!["secret_cmd", r#"curl -u "user:$(secret_cmd)" https://example.com"#],
+    )]
+    #[case::cmd_sub_in_concatenation(
+        "curl -H Authorization:$(cat token) url",
+        vec!["cat token", "curl -H Authorization:$(cat token) url"],
+    )]
+    #[case::cmd_sub_in_single_quotes(
+        "echo '$(dangerous_cmd)'",
+        vec!["echo '$(dangerous_cmd)'"],
+    )]
+    #[case::backtick_sub_in_quoted_string(
+        r#"curl -u "user:`secret_cmd`" https://example.com"#,
+        vec!["secret_cmd", r#"curl -u "user:`secret_cmd`" https://example.com"#],
+    )]
+    #[case::docker_env_with_cmd_sub(
+        r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+        vec!["cat /tmp/secret", r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#],
+    )]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);

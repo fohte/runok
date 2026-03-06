@@ -1,9 +1,9 @@
 ---
 title: runok
-description: A command allowlisting tool for AI coding agents and human developers.
+description: Smarter command permissions for AI coding agents.
 template: splash
 hero:
-  tagline: A command allowlisting tool for AI coding agents and human developers.
+  tagline: Smarter command permissions for AI coding agents.
   image:
     dark: ../../assets/logo-dark.svg
     light: ../../assets/logo-light.svg
@@ -33,6 +33,42 @@ import { CardGrid, Card, LinkCard } from '@astrojs/starlight/components'
     <h3>Sandbox Execution</h3>
     <p>Run allowed commands in a restricted environment with filesystem and network isolation.</p>
   </div>
+</div>
+
+<div class="why-section">
+
+## Why runok?
+
+Claude Code's built-in permissions use simple glob matching. This works for basic cases, but breaks down quickly.
+
+**Text-based parsing causes false positives.** Even when `git log` is in your allow list, Claude adds a comment and you get prompted:
+
+```
+⏺ Bash(# check logs
+      git log --oneline -5)
+
+Command contains newlines that could separate multiple commands
+```
+
+runok uses tree-sitter-bash to parse commands into an AST, so comments, compound commands, and other shell constructs are handled correctly.
+
+**Denied commands give no explanation.** The agent cannot learn why a command was blocked. With runok, deny rules include a message and a suggested fix:
+
+```yaml title="runok.yml"
+- deny: 'git push -f|--force *'
+  message: 'Force push is not allowed.'
+  fix_suggestion: 'git push --force-with-lease'
+```
+
+**Global flags break matching.** `git -C /path commit` does not match `git commit *`. runok supports [optional groups, alternation, and order-independent matching](/pattern-syntax/overview/):
+
+```yaml title="runok.yml"
+- allow: 'git [-C *] commit *'
+# matches both "git commit" and "git -C /path commit"
+```
+
+[Read the full comparison &rarr;](/getting-started/why-runok/)
+
 </div>
 
 <div class="demo-section">
@@ -69,7 +105,7 @@ $ runok exec "npm test"
   <Card title="Getting Started" icon="rocket">
     Install runok and set up your first configuration.
 
-    [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code](/getting-started/claude-code/)
+    [Why runok?](/getting-started/why-runok/) | [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code](/getting-started/claude-code/)
 
   </Card>
   <Card title="Configuration" icon="setting">
