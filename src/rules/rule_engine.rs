@@ -218,6 +218,14 @@ fn escalate_to_ask(action: Action) -> Action {
     }
 }
 
+/// Normalize whitespace in a command string for comparison purposes.
+/// Collapses runs of whitespace into a single space and trims leading/trailing whitespace.
+/// This prevents false negatives in self-reference detection when tree-sitter
+/// reconstructs command text with slightly different whitespace than the original input.
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn evaluate_command_inner(
     config: &Config,
     command: &str,
@@ -247,9 +255,10 @@ fn evaluate_command_inner(
     if let Ok(sub_commands) = extract_commands(command)
         && sub_commands.len() > 1
     {
+        let normalized_command = normalize_whitespace(command);
         let nested_subs: Vec<&String> = sub_commands
             .iter()
-            .filter(|sub| sub.as_str() != command)
+            .filter(|sub| normalize_whitespace(sub) != normalized_command)
             .collect();
         let had_self_reference = nested_subs.len() < sub_commands.len();
 
@@ -257,7 +266,7 @@ fn evaluate_command_inner(
             // Pure compound (no self-reference): evaluate all sub-commands and return.
             let mut merged: Option<EvalResult> = None;
             for sub in &nested_subs {
-                let result = evaluate_command_inner(config, sub, context, depth)?;
+                let result = evaluate_command_inner(config, sub, context, depth + 1)?;
                 let resolved_action = match resolve_default_action(result.action, config) {
                     Action::Default => Action::Ask(None),
                     other => other,
@@ -283,7 +292,7 @@ fn evaluate_command_inner(
         if !nested_subs.is_empty() {
             let mut nested_merged: Option<EvalResult> = None;
             for sub in &nested_subs {
-                let result = evaluate_command_inner(config, sub, context, depth)?;
+                let result = evaluate_command_inner(config, sub, context, depth + 1)?;
                 let resolved_action = match resolve_default_action(result.action, config) {
                     Action::Default => Action::Ask(None),
                     other => other,

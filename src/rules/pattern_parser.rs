@@ -355,7 +355,8 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         // `Literal("]")` rather than `CloseBracket`.  Prevent flags from
         // consuming this closing delimiter as a value.
         LexToken::Literal(s) if s == "]" => false,
-        LexToken::Literal(s) if is_flag(s) => false,
+        // Flags and the bare `--` separator must not be consumed as values.
+        LexToken::Literal(s) if is_flag(s) || s == "--" => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         LexToken::Wildcard => inside_group || has_more_after,
         _ => true,
@@ -378,8 +379,12 @@ fn should_consume_as_value_strict(
 }
 
 /// Check if a string looks like a flag (starts with `-`).
+///
+/// The bare double-dash `--` is excluded because it is a positional
+/// separator, not a flag.  Treating it as a flag would cause order-
+/// independent matching to ignore its position in the command.
 fn is_flag(s: &str) -> bool {
-    s.starts_with('-')
+    s.starts_with('-') && s != "--"
 }
 
 #[cfg(test)]
@@ -726,6 +731,38 @@ mod tests {
             debug.starts_with(expected_variant),
             "wrong error variant for {input:?}: expected {expected_variant}, got {debug}"
         );
+    }
+
+    // === Double-dash (--) parsed as Literal, not flag ===
+
+    #[rstest]
+    #[case::double_dash_with_wildcard("git checkout -- *", "git", vec![
+        PatternToken::Literal("checkout".into()),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::flag_before_double_dash("git --force -- *", "git", vec![
+        PatternToken::Alternation(vec!["--force".into()]),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::double_dash_with_optional("git [-C *] checkout -- *", "git", vec![
+        PatternToken::Optional(vec![
+            PatternToken::FlagWithValue {
+                aliases: vec!["-C".into()],
+                value: Box::new(PatternToken::Wildcard),
+            },
+        ]),
+        PatternToken::Literal("checkout".into()),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    fn parse_double_dash_as_literal(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
     }
 
     // === Multi-word alternation (parse_multi) ===
