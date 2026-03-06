@@ -165,10 +165,11 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            // Flag-only alternations (all elements start with `-`) use
-            // order-independent matching: scan the entire command token list
-            // for a matching flag, remove it, and continue with the rest.
-            if alts.iter().all(|a| a.starts_with('-')) {
+            // Flag-only alternations (all elements start with `-`, excluding
+            // the bare `--` separator) use order-independent matching: scan
+            // the entire command token list for a matching flag, remove it,
+            // and continue with the rest.
+            if alts.iter().all(|a| a.starts_with('-') && a != "--") {
                 for i in 0..cmd_tokens.len() {
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
@@ -1590,6 +1591,43 @@ mod tests {
         true
     )]
     fn literal_glob_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === Double-dash (--) positional matching ===
+
+    #[rstest]
+    #[case::double_dash_exact("git checkout -- *", "git checkout -- README.md", true)]
+    #[case::double_dash_multiple_files(
+        "git checkout -- *",
+        "git checkout -- README.md docs/index.md",
+        true
+    )]
+    #[case::double_dash_with_optional_c(
+        "git [-C *] checkout -- *",
+        "git checkout -- README.md",
+        true
+    )]
+    #[case::double_dash_with_optional_c_present(
+        "git [-C *] checkout -- *",
+        "git -C /tmp checkout -- README.md",
+        true
+    )]
+    #[case::double_dash_rejects_args_before(
+        "git [-C *] checkout -- *",
+        "git checkout HEAD~1 -- README.md",
+        false
+    )]
+    #[case::double_dash_rejects_no_separator("git checkout -- *", "git checkout HEAD~1", false)]
+    fn double_dash_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
         #[case] expected: bool,
