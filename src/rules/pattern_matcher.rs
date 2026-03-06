@@ -623,13 +623,9 @@ fn literal_matches(pattern: &str, token: &str) -> bool {
         // Strip backslash escapes so that pattern `\;` matches command token `;`.
         // The pattern lexer preserves backslash-escaped characters as-is (e.g. `\;`),
         // while the command tokenizer resolves them (e.g. `\;` -> `;`).
-        // Unescape first so that `\*` is treated as a literal `*`, not a glob.
-        let (unescaped, has_unescaped_glob) = unescape_backslashes(pattern);
-        if has_unescaped_glob {
-            glob_match(&unescaped, token)
-        } else {
-            unescaped == token
-        }
+        // Uses sentinel-based matching so that `\*` is treated as a literal `*`,
+        // not a glob, even when the same token also contains a bare `*`.
+        unescape_and_match(pattern, token)
     } else if pattern.contains('*') {
         glob_match(pattern, token)
     } else {
@@ -637,25 +633,101 @@ fn literal_matches(pattern: &str, token: &str) -> bool {
     }
 }
 
-/// Remove backslash escapes: `\;` -> `;`, `\\` -> `\`, etc.
-/// Returns the unescaped string and whether any unescaped `*` glob characters remain.
-fn unescape_backslashes(s: &str) -> (String, bool) {
-    let mut result = String::with_capacity(s.len());
+/// Remove backslash escapes and perform matching that correctly distinguishes
+/// escaped characters from glob wildcards.
+///
+/// `\;` → matches `;`, `\*` → matches literal `*` (not a glob), `\\` → matches `\`.
+///
+/// When the pattern contains both `\*` (literal) and bare `*` (glob), the
+/// escaped `*` characters are temporarily replaced with a sentinel (`\x00`)
+/// during glob expansion so they are not treated as wildcards.
+fn unescape_and_match(pattern: &str, token: &str) -> bool {
+    let mut unescaped = String::with_capacity(pattern.len());
     let mut has_unescaped_glob = false;
-    let mut chars = s.chars();
+    let mut has_escaped_star = false;
+    let mut chars = pattern.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             if let Some(next) = chars.next() {
-                result.push(next);
+                if next == '*' {
+                    // Use sentinel for escaped `*` so glob_match won't treat it
+                    // as a wildcard. We restore it after matching.
+                    unescaped.push('\x00');
+                    has_escaped_star = true;
+                } else {
+                    unescaped.push(next);
+                }
             }
         } else {
             if ch == '*' {
                 has_unescaped_glob = true;
             }
-            result.push(ch);
+            unescaped.push(ch);
         }
     }
-    (result, has_unescaped_glob)
+    if has_unescaped_glob {
+        // Perform glob matching. Escaped `*` characters are sentinels (`\x00`)
+        // and won't be split by glob_match. We need to also place the sentinel
+        // in the token for comparison purposes.
+        // Actually, the token is a real command string and won't contain `\x00`,
+        // but sentinels in the pattern's literal segments need to match `*` in
+        // the token. Replace sentinel back to `*` in the pattern parts that
+        // glob_match compares literally.
+        glob_match_with_sentinel(&unescaped, token)
+    } else {
+        // No glob — restore sentinels to `*` and do exact comparison.
+        if has_escaped_star {
+            let plain = unescaped.replace('\x00', "*");
+            plain == token
+        } else {
+            unescaped == token
+        }
+    }
+}
+
+/// Glob matching that treats `\x00` in pattern literal segments as a literal `*`.
+///
+/// Splits the pattern on `*` (the real glob wildcards). Each resulting segment
+/// may contain `\x00` which represents a literal `*` from `\*` in the original
+/// pattern. When comparing segments against the text, `\x00` matches `*`.
+fn glob_match_with_sentinel(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+
+    if parts.iter().all(|p| p.is_empty()) {
+        return true;
+    }
+
+    let mut pos = 0;
+
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        // Replace sentinel back to `*` for comparison against the actual text
+        let segment = part.replace('\x00', "*");
+        if i == 0 {
+            if !text.starts_with(&segment) {
+                return false;
+            }
+            pos = segment.len();
+        } else if i == parts.len() - 1 {
+            if !text[pos..].ends_with(&segment) {
+                return false;
+            }
+            pos = text.len();
+        } else {
+            match text[pos..].find(&*segment) {
+                Some(offset) => pos += offset + segment.len(),
+                None => return false,
+            }
+        }
+    }
+
+    if !pattern.ends_with('*') {
+        return pos == text.len();
+    }
+
+    true
 }
 
 /// Simple glob matching where `*` matches zero or more arbitrary characters.
@@ -1659,6 +1731,8 @@ mod tests {
     #[case::backslash_semicolon_no_match(r"\;", "x", false)]
     #[case::backslash_star_literal(r"\*", "*", true)]
     #[case::backslash_star_not_glob(r"\*", "foo", false)]
+    #[case::escaped_and_bare_glob(r"\*.*", "*.foo", true)]
+    #[case::escaped_and_bare_glob_no_match(r"\*.*", "foo.bar", false)]
     #[case::no_backslash("foo", "foo", true)]
     #[case::plain_glob("fo*", "foobar", true)]
     fn literal_matches_cases(#[case] pattern: &str, #[case] token: &str, #[case] expected: bool) {
