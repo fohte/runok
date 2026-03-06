@@ -5,9 +5,13 @@ sidebar:
   order: 1
 ---
 
-runok provides two main subcommands for evaluating and executing commands against your permission rules.
+runok provides subcommands for initializing configuration, evaluating commands, and executing them against your permission rules.
 
 ## Commands
+
+### [`runok init`](/cli/init/)
+
+Initialize runok configuration with an interactive setup wizard. Detects existing Claude Code Bash permissions and offers to migrate them to runok rules.
 
 ### [`runok check`](/cli/check/)
 

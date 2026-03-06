@@ -18,6 +18,10 @@ runok integrates with [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 
 If you haven't already, follow the [Quick Start](/getting-started/quickstart/) to install runok and create a `runok.yml`.
 
+:::tip
+[`runok init --scope user`](/cli/init/) can automate steps 1 and 2: it creates a `runok.yml`, migrates existing Claude Code Bash permissions, and registers the hook — all in one command.
+:::
+
 ## Step 2: Configure the PreToolUse hook
 
 Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
@@ -28,7 +32,12 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": ["runok check --input-format claude-code-hook"]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "runok check --input-format claude-code-hook"
+          }
+        ]
       }
     ]
   }
