@@ -150,17 +150,6 @@ fn match_tokens_core<'a>(
             }
         }
 
-        PatternToken::QuotedLiteral(s) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if s == cmd_tokens[0] {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
         PatternToken::Alternation(alts) => {
             if cmd_tokens.is_empty() {
                 return false;
@@ -424,20 +413,6 @@ fn extract_placeholder_all<'a>(
             Ok(())
         }
 
-        PatternToken::QuotedLiteral(s) => {
-            if !cmd_tokens.is_empty() && s == cmd_tokens[0] {
-                extract_placeholder_all(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captured,
-                    all_candidates,
-                )?;
-            }
-            Ok(())
-        }
-
         PatternToken::Alternation(alts) => {
             if !cmd_tokens.is_empty() && alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
                 extract_placeholder_all(
@@ -595,7 +570,7 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
                     return false;
                 }
             }
-            PatternToken::Literal(s) | PatternToken::QuotedLiteral(s) if s.starts_with('-') => {
+            PatternToken::Literal(s) if s.starts_with('-') => {
                 if cmd_tokens.contains(&s.as_str()) {
                     return false;
                 }
@@ -616,23 +591,66 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 
 /// Check if a pattern string matches a command token.
 ///
-/// If the pattern contains `*`, it is treated as a glob pattern
-/// where `*` matches zero or more arbitrary characters. Otherwise, an
-/// exact string comparison is performed.
+/// If the pattern contains an unescaped `*`, it is treated as a glob pattern
+/// where `*` matches zero or more arbitrary characters. `\*` is treated as
+/// a literal `*` character. Otherwise, an exact string comparison is performed.
 fn literal_matches(pattern: &str, token: &str) -> bool {
-    if pattern.contains('*') {
+    if has_unescaped_glob(pattern) {
         glob_match(pattern, token)
+    } else if pattern.contains('\\') {
+        // Pattern has escapes but no glob: compare after stripping backslashes
+        unescape(pattern) == token
     } else {
         pattern == token
     }
 }
 
-/// Simple glob matching where `*` matches zero or more arbitrary characters.
+/// Check if a pattern contains an unescaped `*` (i.e., a glob wildcard).
+fn has_unescaped_glob(pattern: &str) -> bool {
+    let mut escaped = false;
+    for c in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c == '*' {
+            return true;
+        }
+    }
+    false
+}
+
+/// Remove backslash escapes from a pattern string (e.g., `\*` -> `*`).
+fn unescape(pattern: &str) -> String {
+    let mut result = String::with_capacity(pattern.len());
+    let mut escaped = false;
+    for c in pattern.chars() {
+        if escaped {
+            result.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Simple glob matching where unescaped `*` matches zero or more arbitrary
+/// characters. `\*` is treated as a literal `*` character.
 ///
 /// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
 /// is supported.
 fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
+    // Split pattern on unescaped `*` into literal segments (with escapes removed).
+    let parts = split_on_unescaped_glob(pattern);
 
     // Single `*` (or only `*`s): match anything
     if parts.iter().all(|p| p.is_empty()) {
@@ -647,38 +665,84 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         }
         if i == 0 {
             // First part must match the beginning of the text
-            if !text.starts_with(part) {
+            if !text.starts_with(part.as_str()) {
                 return false;
             }
             pos = part.len();
         } else if i == parts.len() - 1 {
             // Last part must match the end of the text
-            if !text[pos..].ends_with(part) {
+            if !text[pos..].ends_with(part.as_str()) {
                 return false;
             }
             pos = text.len();
         } else {
             // Middle parts: find the next occurrence
-            match text[pos..].find(part) {
+            match text[pos..].find(part.as_str()) {
                 Some(offset) => pos += offset + part.len(),
                 None => return false,
             }
         }
     }
 
-    // If pattern doesn't end with `*`, we must have consumed the entire text
-    if !pattern.ends_with('*') {
+    // If pattern doesn't end with an unescaped `*`, we must have consumed the entire text
+    if !ends_with_unescaped_glob(pattern) {
         return pos == text.len();
     }
 
     true
 }
 
+/// Split a pattern on unescaped `*` characters, returning the segments
+/// with backslash escapes removed (e.g., `\*` becomes `*` in the segment).
+fn split_on_unescaped_glob(pattern: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+
+    for c in pattern.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c == '*' {
+            parts.push(std::mem::take(&mut current));
+            continue;
+        }
+        current.push(c);
+    }
+    parts.push(current);
+    parts
+}
+
+/// Check if a pattern ends with an unescaped `*`.
+fn ends_with_unescaped_glob(pattern: &str) -> bool {
+    let mut escaped = false;
+    let mut last_was_glob = false;
+    for c in pattern.chars() {
+        if escaped {
+            escaped = false;
+            last_was_glob = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            last_was_glob = false;
+            continue;
+        }
+        last_was_glob = c == '*';
+    }
+    last_was_glob
+}
+
 /// Check if a single pattern token matches a single command token.
 fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
     match token {
         PatternToken::Literal(s) => literal_matches(s, cmd_token),
-        PatternToken::QuotedLiteral(s) => s == cmd_token,
         PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
@@ -1639,13 +1703,17 @@ mod tests {
         );
     }
 
-    // === Quoted literal with `*` (no glob) ===
+    // === Quoted strings: `*` is glob, `\*` is literal ===
 
     #[rstest]
-    #[case::quoted_star_exact_match(r#"git commit -m "WIP*""#, "git commit -m WIP*", true)]
-    #[case::quoted_star_no_glob(r#"git commit -m "WIP*""#, "git commit -m WIPfoo", false)]
-    #[case::quoted_star_only(r#"cmd "*""#, "cmd *", true)]
-    #[case::quoted_star_only_no_glob(r#"cmd "*""#, "cmd hello", false)]
+    #[case::quoted_star_glob_matches(r#"git commit -m "WIP*""#, "git commit -m WIPfoo", true)]
+    #[case::quoted_star_glob_exact(r#"git commit -m "WIP*""#, "git commit -m WIP*", true)]
+    #[case::quoted_star_glob_no_match(r#"git commit -m "WIP*""#, "git commit -m DONE", false)]
+    #[case::quoted_star_only_glob(r#"cmd "*""#, "cmd hello", true)]
+    #[case::escaped_star_exact_match(r#"git commit -m "WIP\*""#, "git commit -m WIP*", true)]
+    #[case::escaped_star_no_glob(r#"git commit -m "WIP\*""#, "git commit -m WIPfoo", false)]
+    #[case::escaped_star_only(r#"cmd "\*""#, "cmd *", true)]
+    #[case::escaped_star_only_no_glob(r#"cmd "\*""#, "cmd hello", false)]
     fn quoted_literal_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

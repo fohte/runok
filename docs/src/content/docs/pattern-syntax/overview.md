@@ -21,7 +21,7 @@ Patterns are parsed exactly as written, with no hidden rewriting or implicit tra
 | [Optional group](/pattern-syntax/optional-groups/)                            | `[-f]`, `[-X POST]`             | Matches with or without the group                            |
 | [Flag with value](/pattern-syntax/matching-behavior/#flag-schema-inference)   | `-X\|--request POST`            | A flag-value pair matched in any order                       |
 | [Placeholder](/pattern-syntax/placeholders/)                                  | `<cmd>`, `<opts>`, `<path:...>` | Special tokens in `<...>` with various behaviors (see below) |
-| Quoted literal                                                                | `"WIP*"`, `'hello'`             | Exact match without glob expansion                           |
+| Quoted literal                                                                | `"hello world"`, `'hello'`      | Grouping only; `*` is still a glob, use `\*` for literal `*` |
 | [Multi-word alternation](/pattern-syntax/alternation/#multi-word-alternation) | `"npx prettier"\|prettier`      | Alternatives that include multi-word commands                |
 
 ### Placeholders

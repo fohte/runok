@@ -2,7 +2,7 @@ use super::{
     ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
 };
 
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
@@ -857,30 +857,74 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 }
 
 // ========================================
-// QuotedLiteral suppresses glob: "*" in YAML does not glob-expand
+// Quoted `*` acts as glob; `\*` is literal
 // ========================================
 
 #[rstest]
-#[case::exact_literal_star_matches(
+// `*` acts as glob
+#[case::quoted_star_glob_matches(
+    r#"git commit -m "WIP*""#,
+    "git commit -m 'WIP: fixup'",
+    assert_deny as ActionAssertion,
+)]
+#[case::quoted_star_glob_exact(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'WIP*'",
     assert_deny as ActionAssertion,
 )]
-#[case::glob_like_prefix_does_not_match(
-    "git commit -m 'WIP: fixup'",
-    assert_default as ActionAssertion,
-)]
-#[case::unrelated_does_not_match(
+#[case::quoted_star_glob_no_match(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'DONE: release'",
     assert_default as ActionAssertion,
 )]
-fn quoted_literal_suppresses_glob(
+// `\*` is literal
+#[case::escaped_star_exact_match(
+    r#"git commit -m "WIP\*""#,
+    "git commit -m 'WIP*'",
+    assert_deny as ActionAssertion,
+)]
+#[case::escaped_star_no_glob(
+    r#"git commit -m "WIP\*""#,
+    "git commit -m 'WIP: fixup'",
+    assert_default as ActionAssertion,
+)]
+fn quoted_and_escaped_star_matching(
+    #[case] pattern: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(&formatdoc! {r#"
+        rules:
+          - deny: '{pattern}'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Quoted glob with spaces (primary use case)
+// ========================================
+
+#[rstest]
+#[case::quoted_glob_with_space_matches(
+    "npx --package renovate -c 'renovate-config-validator foo.json'",
+    assert_allow as ActionAssertion,
+)]
+#[case::quoted_glob_with_space_no_match(
+    "npx --package renovate -c 'other-tool foo.json'",
+    assert_default as ActionAssertion,
+)]
+fn quoted_glob_with_space(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {r#"
         rules:
-          - deny: 'git commit -m "WIP*"'
+          - allow: "npx --package renovate -c 'renovate-config-validator *'"
     "#})
     .unwrap();
 

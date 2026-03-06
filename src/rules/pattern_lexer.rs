@@ -7,8 +7,6 @@ use super::PatternParseError;
 pub enum LexToken {
     /// A plain literal string (e.g. "git", "status", "-f")
     Literal(String),
-    /// A quoted literal string where `*` is not a glob wildcard (e.g. `"WIP*"`)
-    QuotedLiteral(String),
     /// A pipe-separated alternation (e.g. "-X|--request" -> ["-X", "--request"])
     Alternation(Vec<String>),
     /// The wildcard token `*`
@@ -59,7 +57,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                     let token = consume_alternation_continuation(&mut chars, first_words)?;
                     tokens.push(token);
                 } else {
-                    tokens.push(LexToken::QuotedLiteral(value));
+                    tokens.push(LexToken::Literal(value));
                 }
             }
 
@@ -212,6 +210,15 @@ fn consume_word(
         None => String::new(),
     };
     while let Some(&(_, c)) = chars.peek() {
+        if c == '\\' {
+            chars.next(); // consume backslash
+            word.push('\\');
+            if let Some(&(_, next)) = chars.peek() {
+                word.push(next);
+                chars.next();
+            }
+            continue;
+        }
         if is_word_boundary(c) || extra_stop == Some(c) {
             break;
         }
@@ -222,12 +229,21 @@ fn consume_word(
 }
 
 /// Consume characters until `end_char` is found. Returns `None` if input ends first.
+/// Backslash escapes are preserved in the output (e.g., `\*` stays as `\*`)
+/// so the matcher can distinguish escaped wildcards from glob wildcards.
 fn consume_until(
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     end_char: char,
 ) -> Option<String> {
     let mut s = String::new();
-    for (_, c) in chars.by_ref() {
+    while let Some((_, c)) = chars.next() {
+        if c == '\\' {
+            s.push('\\');
+            if let Some((_, next)) = chars.next() {
+                s.push(next);
+            }
+            continue;
+        }
         if c == end_char {
             return Some(s);
         }
@@ -498,15 +514,25 @@ mod tests {
     // === Quoted strings ===
 
     #[rstest]
-    #[case(r#"git commit -m "WIP*""#, vec![
+    #[case::double_quoted_glob(r#"git commit -m "WIP*""#, vec![
         LexToken::Literal("git".into()),
         LexToken::Literal("commit".into()),
         LexToken::Literal("-m".into()),
-        LexToken::QuotedLiteral("WIP*".into()),
+        LexToken::Literal("WIP*".into()),
     ])]
-    #[case("echo 'hello world'", vec![
+    #[case::single_quoted_with_space("echo 'hello world'", vec![
         LexToken::Literal("echo".into()),
-        LexToken::QuotedLiteral("hello world".into()),
+        LexToken::Literal("hello world".into()),
+    ])]
+    #[case::escaped_star_in_quotes(r#"git commit -m "WIP\*""#, vec![
+        LexToken::Literal("git".into()),
+        LexToken::Literal("commit".into()),
+        LexToken::Literal("-m".into()),
+        LexToken::Literal(r"WIP\*".into()),
+    ])]
+    #[case::escaped_star_unquoted(r"cmd WIP\*", vec![
+        LexToken::Literal("cmd".into()),
+        LexToken::Literal(r"WIP\*".into()),
     ])]
     fn tokenize_quoted(#[case] input: &str, #[case] expected: Vec<LexToken>) {
         assert_eq!(tokenize(input).unwrap(), expected);
