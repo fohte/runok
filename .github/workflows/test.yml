@@ -83,19 +83,15 @@ jobs:
         run: exit 1
 
   unit-test:
-<<<<<<< before updating
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
-=======
-    runs-on: ubuntu-latest
     env:
       SCCACHE_GHA_ENABLED: 'true'
       RUSTC_WRAPPER: 'sccache'
->>>>>>> after updating
 
     steps:
       - uses: actions/checkout@v6
