@@ -673,7 +673,7 @@ fn unescape_and_match(pattern: &str, token: &str) -> bool {
         // but sentinels in the pattern's literal segments need to match `*` in
         // the token. Replace sentinel back to `*` in the pattern parts that
         // glob_match compares literally.
-        glob_match_with_sentinel(&unescaped, token)
+        glob_match(&unescaped, token)
     } else {
         // No glob — restore sentinels to `*` and do exact comparison.
         if has_escaped_star {
@@ -685,55 +685,15 @@ fn unescape_and_match(pattern: &str, token: &str) -> bool {
     }
 }
 
-/// Glob matching that treats `\x00` in pattern literal segments as a literal `*`.
-///
-/// Splits the pattern on `*` (the real glob wildcards). Each resulting segment
-/// may contain `\x00` which represents a literal `*` from `\*` in the original
-/// pattern. When comparing segments against the text, `\x00` matches `*`.
-fn glob_match_with_sentinel(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-
-    if parts.iter().all(|p| p.is_empty()) {
-        return true;
-    }
-
-    let mut pos = 0;
-
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        // Replace sentinel back to `*` for comparison against the actual text
-        let segment = part.replace('\x00', "*");
-        if i == 0 {
-            if !text.starts_with(&segment) {
-                return false;
-            }
-            pos = segment.len();
-        } else if i == parts.len() - 1 {
-            if !text[pos..].ends_with(&segment) {
-                return false;
-            }
-            pos = text.len();
-        } else {
-            match text[pos..].find(&*segment) {
-                Some(offset) => pos += offset + segment.len(),
-                None => return false,
-            }
-        }
-    }
-
-    if !pattern.ends_with('*') {
-        return pos == text.len();
-    }
-
-    true
-}
-
 /// Simple glob matching where `*` matches zero or more arbitrary characters.
 ///
 /// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
 /// is supported.
+///
+/// When the pattern contains the sentinel character `\x00` (used by
+/// [`unescape_and_match`] for escaped `\*`), sentinels are restored to `*`
+/// in each literal segment before comparison so they match a literal `*` in
+/// the text rather than acting as a wildcard.
 fn glob_match(pattern: &str, text: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
 
@@ -742,28 +702,34 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         return true;
     }
 
+    let has_sentinel = pattern.contains('\x00');
     let mut pos = 0;
 
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
             continue;
         }
+        // Restore sentinel `\x00` back to `*` for literal comparison when needed.
+        let owned;
+        let segment: &str = if has_sentinel && part.contains('\x00') {
+            owned = part.replace('\x00', "*");
+            &owned
+        } else {
+            part
+        };
         if i == 0 {
-            // First part must match the beginning of the text
-            if !text.starts_with(part) {
+            if !text.starts_with(segment) {
                 return false;
             }
-            pos = part.len();
+            pos = segment.len();
         } else if i == parts.len() - 1 {
-            // Last part must match the end of the text
-            if !text[pos..].ends_with(part) {
+            if !text[pos..].ends_with(segment) {
                 return false;
             }
             pos = text.len();
         } else {
-            // Middle parts: find the next occurrence
-            match text[pos..].find(part) {
-                Some(offset) => pos += offset + part.len(),
+            match text[pos..].find(segment) {
+                Some(offset) => pos += offset + segment.len(),
                 None => return false,
             }
         }
