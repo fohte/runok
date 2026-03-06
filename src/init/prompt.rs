@@ -18,7 +18,7 @@ impl Prompter for DialoguerPrompter {
         let default_idx = if default { 0 } else { 1 };
         let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt(message)
-            .items(&items)
+            .items(items)
             .default(default_idx)
             .report(false)
             .interact()?;
