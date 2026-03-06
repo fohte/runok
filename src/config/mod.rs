@@ -1,5 +1,5 @@
 pub(crate) mod cache;
-mod dirs;
+pub mod dirs;
 mod error;
 pub(crate) mod git_client;
 mod loader;
