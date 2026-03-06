@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.2](https://github.com/fohte/runok/compare/v0.1.1...v0.1.2) (2026-03-06)
+
+
+### Features
+
+* **init:** add `runok init` subcommand ([#152](https://github.com/fohte/runok/issues/152)) ([176d9b6](https://github.com/fohte/runok/commit/176d9b6c12ccb0a987ed721b264dcb6971d42278))
+
+
+### Bug Fixes
+
+* evaluate command substitutions nested in quoted strings ([#151](https://github.com/fohte/runok/issues/151)) ([af784b6](https://github.com/fohte/runok/commit/af784b6c6e5325da97bf8e69465f1d4a59519a66))
+* resolve stack overflow in compound command evaluation with command substitutions ([#149](https://github.com/fohte/runok/issues/149)) ([97b46a7](https://github.com/fohte/runok/commit/97b46a7ae1903598f068cabbb3250ff3a2c3933a))
+* **rules:** stop flag alternation from consuming placeholder as flag value ([#154](https://github.com/fohte/runok/issues/154)) ([24a951a](https://github.com/fohte/runok/commit/24a951a00ef83adc4748b9e260dd2889b92edb81))
+* treat `--` as a positional literal instead of a flag ([#153](https://github.com/fohte/runok/issues/153)) ([c2f6d72](https://github.com/fohte/runok/commit/c2f6d726f2ca697b89e4ba993c5b36fd68a1f02e))
+
+
+### Dependencies
+
+* update rust crate dialoguer to v0.12.0 ([#158](https://github.com/fohte/runok/issues/158)) ([9e3cd2e](https://github.com/fohte/runok/commit/9e3cd2e44ed4b88bde8eff800fd96592339ef381))
+* update rust crate tempfile to v3.26.0 ([#147](https://github.com/fohte/runok/issues/147)) ([02fba8a](https://github.com/fohte/runok/commit/02fba8a6909cf363a1a4c52db5f0a60e1447353d))
+* update rust crate tree-sitter to v0.26.6 ([#156](https://github.com/fohte/runok/issues/156)) ([f44c9a6](https://github.com/fohte/runok/commit/f44c9a652e81121e50df8dd7de42dd5c758f2a25))
+
 ## [0.1.1](https://github.com/fohte/runok/compare/v0.1.0...v0.1.1) (2026-03-02)
 
 
