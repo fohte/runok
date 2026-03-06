@@ -81,6 +81,17 @@ Tokens that do not start with `-` are matched **in order**:
 | `git push origin main` | Matches        |
 | `git push main origin` | Does not match |
 
+## Backslash Escapes
+
+A backslash (`\`) in a pattern escapes the following character. During matching, the backslash is stripped and the remaining character is compared literally. This is useful for characters that have special meaning in shells, such as `;`:
+
+```yaml
+# \; in the pattern matches ; in the command
+- "find * -exec <cmd> \\;|+"
+```
+
+The shell resolves `\;` to `;` before runok sees the command, so the pattern's `\;` (after unescape) matches the command's `;`.
+
 ## Combined Short Flags
 
 Combined short flags like `-am` are **not** split into individual flags — they are matched as a single token, exactly as written:
