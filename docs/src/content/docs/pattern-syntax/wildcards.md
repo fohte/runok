@@ -94,9 +94,6 @@ Quotes (`"..."` or `'...'`) act as **grouping only** — they allow spaces insid
 
 # WIP* is a glob — matches WIPfoo, WIPbar, etc.
 - deny: 'git commit -m "WIP*"'
-
-# Use \* to match the literal asterisk
-- deny: 'git commit -m "WIP\*"'
 ```
 
 ## Related

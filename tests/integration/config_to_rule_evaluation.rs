@@ -861,51 +861,46 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 // ========================================
 
 #[rstest]
+// `*` acts as glob
 #[case::quoted_star_glob_matches(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'WIP: fixup'",
     assert_deny as ActionAssertion,
 )]
 #[case::quoted_star_glob_exact(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'WIP*'",
     assert_deny as ActionAssertion,
 )]
 #[case::quoted_star_glob_no_match(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'DONE: release'",
     assert_default as ActionAssertion,
 )]
-fn quoted_star_acts_as_glob(
-    #[case] command: &str,
-    #[case] expected: ActionAssertion,
-    empty_context: EvalContext,
-) {
-    let config = parse_config(indoc! {r#"
-        rules:
-          - deny: 'git commit -m "WIP*"'
-    "#})
-    .unwrap();
-
-    let result = evaluate_command(&config, command, &empty_context).unwrap();
-    expected(&result.action);
-}
-
-#[rstest]
+// `\*` is literal
 #[case::escaped_star_exact_match(
+    r#"git commit -m "WIP\*""#,
     "git commit -m 'WIP*'",
     assert_deny as ActionAssertion,
 )]
 #[case::escaped_star_no_glob(
+    r#"git commit -m "WIP\*""#,
     "git commit -m 'WIP: fixup'",
     assert_default as ActionAssertion,
 )]
-fn escaped_star_is_literal(
+fn quoted_and_escaped_star_matching(
+    #[case] pattern: &str,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let config = parse_config(indoc! {r#"
-        rules:
-          - deny: 'git commit -m "WIP\*"'
-    "#})
+    let config = parse_config(&format!(
+        indoc! {r#"
+            rules:
+              - deny: '{}'
+        "#},
+        pattern
+    ))
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
