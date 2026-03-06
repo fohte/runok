@@ -2,7 +2,7 @@ use super::{
     ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
 };
 
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
@@ -894,13 +894,10 @@ fn quoted_and_escaped_star_matching(
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let config = parse_config(&format!(
-        indoc! {r#"
-            rules:
-              - deny: '{}'
-        "#},
-        pattern
-    ))
+    let config = parse_config(&formatdoc! {r#"
+        rules:
+          - deny: '{pattern}'
+    "#})
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
