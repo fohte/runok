@@ -1,5 +1,6 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
+use serde_json::Value;
 
 use super::helpers::TestEnv;
 
@@ -184,4 +185,36 @@ fn check_allow_with_sandbox_info() {
     assert_eq!(json["decision"], "allow");
     assert!(json["sandbox"].is_object());
     assert_eq!(json["sandbox"]["preset"], "restricted");
+}
+
+// --- Wrapper with find -exec and <cmd> placeholder ---
+
+#[rstest]
+#[case::find_exec_deny(r#"{"command":"find . -exec rm -rf / \\;"}"#, "deny")]
+#[case::find_exec_plus_deny(r#"{"command":"find . -exec rm -rf / +"}"#, "deny")]
+#[case::find_execdir_allow(r#"{"command":"find . -execdir echo hello +"}"#, "allow")]
+#[case::find_ok_deny(r#"{"command":"find /tmp -ok rm -rf / \\;"}"#, "deny")]
+#[case::find_okdir_allow(r#"{"command":"find . -okdir ls -la +"}"#, "allow")]
+fn check_find_exec_wrapper(#[case] stdin_json: &str, #[case] expected_decision: &str) {
+    let env = TestEnv::new(indoc! {r#"
+        rules:
+          - deny: 'rm *'
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - "find * -exec|-execdir|-ok|-okdir <cmd> \\;|+"
+    "#});
+    let assert = env
+        .command()
+        .args(["check", "--output-format", "json"])
+        .write_stdin(stdin_json)
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(
+        json["decision"], expected_decision,
+        "stdin: {stdin_json}, full output: {json}"
+    );
 }
