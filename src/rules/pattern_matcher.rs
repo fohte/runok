@@ -620,10 +620,69 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
 /// where `*` matches zero or more arbitrary characters. Otherwise, an
 /// exact string comparison is performed.
 fn literal_matches(pattern: &str, token: &str) -> bool {
-    if pattern.contains('*') {
+    if pattern.contains('\\') {
+        // Strip backslash escapes so that pattern `\;` matches command token `;`.
+        // The pattern lexer preserves backslash-escaped characters as-is (e.g. `\;`),
+        // while the command tokenizer resolves them (e.g. `\;` -> `;`).
+        // Uses sentinel-based matching so that `\*` is treated as a literal `*`,
+        // not a glob, even when the same token also contains a bare `*`.
+        unescape_and_match(pattern, token)
+    } else if pattern.contains('*') {
         glob_match(pattern, token)
     } else {
         pattern == token
+    }
+}
+
+/// Remove backslash escapes and perform matching that correctly distinguishes
+/// escaped characters from glob wildcards.
+///
+/// `\;` → matches `;`, `\*` → matches literal `*` (not a glob), `\\` → matches `\`.
+///
+/// When the pattern contains both `\*` (literal) and bare `*` (glob), the
+/// escaped `*` characters are temporarily replaced with a sentinel (`\x00`)
+/// during glob expansion so they are not treated as wildcards.
+fn unescape_and_match(pattern: &str, token: &str) -> bool {
+    let mut unescaped = String::with_capacity(pattern.len());
+    let mut has_unescaped_glob = false;
+    let mut has_escaped_star = false;
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                if next == '*' {
+                    // Use sentinel for escaped `*` so glob_match won't treat it
+                    // as a wildcard. We restore it after matching.
+                    unescaped.push('\x00');
+                    has_escaped_star = true;
+                } else {
+                    unescaped.push(next);
+                }
+            }
+        } else {
+            if ch == '*' {
+                has_unescaped_glob = true;
+            }
+            unescaped.push(ch);
+        }
+    }
+    if has_unescaped_glob {
+        // Perform glob matching. Escaped `*` characters are sentinels (`\x00`)
+        // and won't be split by glob_match. We need to also place the sentinel
+        // in the token for comparison purposes.
+        // Actually, the token is a real command string and won't contain `\x00`,
+        // but sentinels in the pattern's literal segments need to match `*` in
+        // the token. Replace sentinel back to `*` in the pattern parts that
+        // glob_match compares literally.
+        glob_match(&unescaped, token)
+    } else {
+        // No glob — restore sentinels to `*` and do exact comparison.
+        if has_escaped_star {
+            let plain = unescaped.replace('\x00', "*");
+            plain == token
+        } else {
+            unescaped == token
+        }
     }
 }
 
@@ -631,6 +690,11 @@ fn literal_matches(pattern: &str, token: &str) -> bool {
 ///
 /// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
 /// is supported.
+///
+/// When the pattern contains the sentinel character `\x00` (used by
+/// [`unescape_and_match`] for escaped `\*`), sentinels are restored to `*`
+/// in each literal segment before comparison so they match a literal `*` in
+/// the text rather than acting as a wildcard.
 fn glob_match(pattern: &str, text: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
 
@@ -639,28 +703,34 @@ fn glob_match(pattern: &str, text: &str) -> bool {
         return true;
     }
 
+    let has_sentinel = pattern.contains('\x00');
     let mut pos = 0;
 
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
             continue;
         }
+        // Restore sentinel `\x00` back to `*` for literal comparison when needed.
+        let owned;
+        let segment: &str = if has_sentinel && part.contains('\x00') {
+            owned = part.replace('\x00', "*");
+            &owned
+        } else {
+            part
+        };
         if i == 0 {
-            // First part must match the beginning of the text
-            if !text.starts_with(part) {
+            if !text.starts_with(segment) {
                 return false;
             }
-            pos = part.len();
+            pos = segment.len();
         } else if i == parts.len() - 1 {
-            // Last part must match the end of the text
-            if !text[pos..].ends_with(part) {
+            if !text[pos..].ends_with(segment) {
                 return false;
             }
             pos = text.len();
         } else {
-            // Middle parts: find the next occurrence
-            match text[pos..].find(part) {
-                Some(offset) => pos += offset + part.len(),
+            match text[pos..].find(segment) {
+                Some(offset) => pos += offset + segment.len(),
                 None => return false,
             }
         }
@@ -1655,6 +1725,25 @@ mod tests {
             check_match(pattern_str, command_str, &empty_defs()),
             expected,
             "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === literal_matches: backslash escape ===
+
+    #[rstest]
+    #[case::backslash_semicolon(r"\;", ";", true)]
+    #[case::backslash_semicolon_no_match(r"\;", "x", false)]
+    #[case::backslash_star_literal(r"\*", "*", true)]
+    #[case::backslash_star_not_glob(r"\*", "foo", false)]
+    #[case::escaped_and_bare_glob(r"\*.*", "*.foo", true)]
+    #[case::escaped_and_bare_glob_no_match(r"\*.*", "foo.bar", false)]
+    #[case::no_backslash("foo", "foo", true)]
+    #[case::plain_glob("fo*", "foobar", true)]
+    fn literal_matches_cases(#[case] pattern: &str, #[case] token: &str, #[case] expected: bool) {
+        assert_eq!(
+            literal_matches(pattern, token),
+            expected,
+            "literal_matches({pattern:?}, {token:?})",
         );
     }
 }

@@ -187,8 +187,7 @@ fn build_pattern_tokens(
                 // alternation so that flag-with-value and order-independent
                 // matching work the same as for `-X|--request` style patterns.
                 if let Some(&(j, next)) = iter.peek() {
-                    if should_consume_as_value_strict(next, j + 1 < lex_tokens.len(), inside_group)
-                    {
+                    if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
                         let (_, next_token) = iter.next().ok_or(
                             PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                         )?;
@@ -358,23 +357,9 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         // Flags and the bare `--` separator must not be consumed as values.
         LexToken::Literal(s) if is_flag(s) || s == "--" => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
+        LexToken::Placeholder(_) => false,
         LexToken::Wildcard => inside_group || has_more_after,
         _ => true,
-    }
-}
-
-/// Like [`should_consume_as_value`], but stricter: also refuses to consume
-/// placeholder tokens as flag values. Used for bare flags (e.g. `-c`) where
-/// the flag is written without alternation syntax and the next token may be a
-/// wrapper placeholder (e.g. `<cmd>`) rather than a flag value.
-fn should_consume_as_value_strict(
-    next: &LexToken,
-    has_more_after: bool,
-    inside_group: bool,
-) -> bool {
-    match next {
-        LexToken::Placeholder(_) => false,
-        _ => should_consume_as_value(next, has_more_after, inside_group),
     }
 }
 
@@ -501,17 +486,13 @@ mod tests {
         PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
         PatternToken::Wildcard,
     ])]
-    #[case::placeholder_value("cmd -o|--option <cmd>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-o".into(), "--option".into()],
-            value: Box::new(PatternToken::Placeholder("cmd".into())),
-        },
+    #[case::placeholder_not_consumed_as_flag_value("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::Alternation(vec!["-o".into(), "--option".into()]),
+        PatternToken::Placeholder("cmd".into()),
     ])]
     #[case::path_ref_value("cmd -c|--config <path:config>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-c".into(), "--config".into()],
-            value: Box::new(PatternToken::PathRef("config".into())),
-        },
+        PatternToken::Alternation(vec!["-c".into(), "--config".into()]),
+        PatternToken::PathRef("config".into()),
     ])]
     fn parse_flag_with_value(
         #[case] input: &str,
@@ -646,6 +627,18 @@ mod tests {
     #[case::path_ref("cat <path:sensitive>", "cat", vec![
         PatternToken::PathRef("sensitive".into()),
     ])]
+    #[case::flag_alternation_then_placeholder(
+        r"find * -exec|-execdir|-ok|-okdir <cmd> \;|+",
+        "find",
+        vec![
+            PatternToken::Wildcard,
+            PatternToken::Alternation(vec![
+                "-exec".into(), "-execdir".into(), "-ok".into(), "-okdir".into(),
+            ]),
+            PatternToken::Placeholder("cmd".into()),
+            PatternToken::Alternation(vec![r"\;".into(), "+".into()]),
+        ],
+    )]
     fn parse_placeholder(
         #[case] input: &str,
         #[case] expected_command: &str,

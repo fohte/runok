@@ -161,7 +161,14 @@ definitions:
 
     # Handles: xargs [flags...] command [args...]
     - 'xargs <opts> <cmd>'
+
+    # Handles: find [args...] -exec|-execdir|-ok|-okdir command [args...] \;|+
+    - "find * -exec|-execdir|-ok|-okdir <cmd> \\;|+"
 ```
+
+:::note
+In the `find` wrapper example, `\\;` is a backslash-escaped semicolon in YAML. The pattern parser preserves the backslash (`\;`), and the matcher strips it during comparison so that it matches the shell-unescaped `;` in the actual command.
+:::
 
 ## Restrictions
 
