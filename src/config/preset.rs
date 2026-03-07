@@ -121,7 +121,12 @@ pub fn load_local_preset(reference: &str, base_dir: &Path) -> Result<Config, Con
     }
 
     let yaml = std::fs::read_to_string(&path)?;
-    let config = parse_config(&yaml)?;
+    let mut config = parse_config(&yaml)?;
+
+    // プリセット内のパスをプリセットファイルの親ディレクトリで解決する
+    let preset_base_dir = path.parent().unwrap_or(base_dir);
+    super::path_resolver::resolve_config_paths(&mut config, preset_base_dir)?;
+
     Ok(config)
 }
 
@@ -150,7 +155,13 @@ pub fn load_preset_with<G: GitClient>(
     let parsed = parse_preset_reference(reference)?;
     match parsed {
         PresetReference::Local(_) => load_local_preset(reference, base_dir),
-        _ => load_remote_preset(&parsed, reference, git_client, cache),
+        _ => {
+            let mut config = load_remote_preset(&parsed, reference, git_client, cache)?;
+            // リモートプリセット内のパスをキャッシュディレクトリで解決する
+            let cache_dir = cache.cache_dir(reference);
+            super::path_resolver::resolve_config_paths(&mut config, &cache_dir)?;
+            Ok(config)
+        }
     }
 }
 

@@ -81,9 +81,20 @@ impl DefaultConfigLoader {
             .find(|path| path.exists())
     }
 
-    fn find_and_parse(dir: &Path, filenames: &[&str]) -> Result<Option<Config>, ConfigError> {
+    /// 設定ファイルを読み込み、パースし、パスを base_dir で解決する。
+    /// マージ前に各設定ファイルの base_dir でパスを解決することで、
+    /// グローバル設定のパスがローカルの base_dir で再解決される問題を防ぐ。
+    fn find_parse_and_resolve(
+        dir: &Path,
+        filenames: &[&str],
+    ) -> Result<Option<Config>, ConfigError> {
         Self::find_config(dir, filenames)
-            .map(|p| Self::read_and_parse(&p))
+            .map(|p| {
+                let mut config = Self::read_and_parse(&p)?;
+                let base_dir = p.parent().unwrap_or(dir);
+                super::path_resolver::resolve_config_paths(&mut config, base_dir)?;
+                Ok(config)
+            })
             .transpose()
     }
 
@@ -95,10 +106,11 @@ impl DefaultConfigLoader {
 
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
+        // 各設定ファイルのパスをマージ前にそれぞれの base_dir で解決する
         let (global, global_local_override) = match &self.global_dir {
             Some(dir) => (
-                Self::find_and_parse(dir, CONFIG_FILENAMES)?,
-                Self::find_and_parse(dir, LOCAL_OVERRIDE_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?,
             ),
             None => (None, None),
         };
@@ -106,8 +118,8 @@ impl ConfigLoader for DefaultConfigLoader {
         let project_dir = self.find_project_dir(cwd);
         let (local, local_override) = match &project_dir {
             Some(dir) => (
-                Self::find_and_parse(dir, CONFIG_FILENAMES)?,
-                Self::find_and_parse(dir, LOCAL_OVERRIDE_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?,
             ),
             None => (None, None),
         };
@@ -424,7 +436,18 @@ mod tests {
         let defs = config.definitions.unwrap();
 
         let paths = defs.paths.unwrap();
-        assert_eq!(paths["sensitive"], vec![".env*", "~/.ssh/**"]);
+        // .env* はグローバル設定の base_dir で解決される
+        let global_env = format!("{}/.env*", env.global_dir.display());
+        // ~/ は HOME 環境変数で展開される
+        let sensitive = &paths["sensitive"];
+        assert_eq!(sensitive[0], global_env);
+        assert!(
+            !sensitive[1].starts_with("~/"),
+            "tilde should be expanded: {}",
+            sensitive[1]
+        );
+        assert!(sensitive[1].ends_with("/.ssh/**"));
+        // 絶対パスはそのまま
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
         assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);

@@ -72,7 +72,7 @@ impl SandboxPolicy {
     ) -> Result<Self, SandboxError> {
         let mut resolved_writable: Vec<PathBuf> = Vec::new();
         for path in &writable_roots {
-            let expanded = expand_tilde(path);
+            let expanded = crate::config::expand_tilde(path);
             let canonical = canonicalize_path(&expanded)?;
             resolved_writable.push(canonical);
         }
@@ -84,7 +84,7 @@ impl SandboxPolicy {
         // Only expand `~` to $HOME.
         let mut readonly_set: HashSet<PathBuf> = HashSet::new();
         for path in &read_only_subpaths {
-            let expanded = expand_tilde(path);
+            let expanded = crate::config::expand_tilde(path);
             readonly_set.insert(PathBuf::from(expanded));
         }
 
@@ -156,20 +156,6 @@ impl SandboxPolicy {
             network_allowed,
         })
     }
-}
-
-/// Expand `~` at the start of a path to the value of `$HOME`.
-fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    } else if path == "~"
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return home;
-    }
-    path.to_string()
 }
 
 /// Canonicalize a path, returning an error if the path does not exist or cannot be resolved.
@@ -1271,7 +1257,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // === expand_tilde ===
+    // === expand_tilde (path_resolver に統合済み) ===
 
     #[rstest]
     #[case::tilde_prefix("~/foo", true)]
@@ -1279,7 +1265,7 @@ mod tests {
     #[case::no_tilde("/tmp", false)]
     #[case::tilde_in_middle("/home/~user", false)]
     fn expand_tilde_cases(#[case] input: &str, #[case] should_expand: bool) {
-        let result = expand_tilde(input);
+        let result = crate::config::expand_tilde(input);
         if should_expand {
             assert!(
                 !result.starts_with('~'),
