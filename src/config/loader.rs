@@ -81,9 +81,9 @@ impl DefaultConfigLoader {
             .find(|path| path.exists())
     }
 
-    /// 設定ファイルを読み込み、パースし、パスを base_dir で解決する。
-    /// マージ前に各設定ファイルの base_dir でパスを解決することで、
-    /// グローバル設定のパスがローカルの base_dir で再解決される問題を防ぐ。
+    /// Read, parse, and resolve paths in a config file using its own base_dir.
+    /// Resolving paths before merging prevents global config paths from being
+    /// incorrectly re-resolved with the local base_dir.
     fn find_parse_and_resolve(
         dir: &Path,
         filenames: &[&str],
@@ -106,7 +106,7 @@ impl DefaultConfigLoader {
 
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
-        // 各設定ファイルのパスをマージ前にそれぞれの base_dir で解決する
+        // Resolve paths in each config file with its own base_dir before merging
         let (global, global_local_override) = match &self.global_dir {
             Some(dir) => (
                 Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?,
@@ -436,9 +436,9 @@ mod tests {
         let defs = config.definitions.unwrap();
 
         let paths = defs.paths.unwrap();
-        // .env* はグローバル設定の base_dir で解決される
+        // .env* is resolved relative to the global config's base_dir
         let global_env = format!("{}/.env*", env.global_dir.display());
-        // ~/ は HOME 環境変数で展開される
+        // ~/ is expanded using the HOME environment variable
         let sensitive = &paths["sensitive"];
         assert_eq!(sensitive[0], global_env);
         assert!(
@@ -447,7 +447,7 @@ mod tests {
             sensitive[1]
         );
         assert!(sensitive[1].ends_with("/.ssh/**"));
-        // 絶対パスはそのまま
+        // Absolute paths are kept as-is
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
         assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);

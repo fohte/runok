@@ -1,17 +1,17 @@
-//! 設定ファイル内のパス文字列を基準ディレクトリで解決するモジュール。
+//! Resolves path strings in config files against a base directory.
 //!
-//! パス文字列を 3 種類に分類し、それぞれ異なる方法で解決する:
-//! - 絶対パス (`/` で始まる): そのまま返す
-//! - ホームディレクトリパス (`~/` で始まる、または `~` 単体): `$HOME` で展開する
-//! - 相対パス (それ以外): base_dir で join して解決する
+//! Paths are classified into three categories, each resolved differently:
+//! - Absolute paths (starting with `/`): returned as-is
+//! - Home directory paths (starting with `~/` or bare `~`): expanded with `$HOME`
+//! - Relative paths (everything else): joined with base_dir
 //!
-//! glob パターンを含むパスに対しては `canonicalize()` を適用しない。
+//! Does not apply `canonicalize()` to paths containing glob patterns.
 
 use std::path::{Component, Path, PathBuf};
 
 use super::ConfigError;
 
-/// パス解決時のエラー。
+/// Error during path resolution.
 #[derive(Debug, thiserror::Error)]
 pub enum PathResolveError {
     #[error("cannot expand '~': HOME environment variable is not set")]
@@ -24,19 +24,19 @@ impl From<PathResolveError> for ConfigError {
     }
 }
 
-/// パス文字列を基準ディレクトリで解決する。
+/// Resolves a path string against a base directory.
 ///
-/// - 絶対パスはそのまま正規化して返す
-/// - `~/` で始まるパスは `$HOME` で展開して正規化する
-/// - 相対パスは `base_dir` と join して正規化する
+/// - Absolute paths are normalized and returned as-is
+/// - Paths starting with `~/` are expanded with `$HOME` and normalized
+/// - Relative paths are joined with `base_dir` and normalized
 ///
-/// 正規化は論理的に `.` と `..` を解消するのみで、ファイルシステムにアクセスしない。
-/// glob パターンを含むパスにも安全に適用できる。
+/// Normalization only resolves `.` and `..` logically without filesystem access.
+/// Safe to apply to paths containing glob patterns.
 pub fn resolve_path(path: &str, base_dir: &Path) -> Result<PathBuf, PathResolveError> {
     resolve_path_with(path, base_dir, get_home)
 }
 
-/// テスト用に HOME 取得関数を注入できるバージョン。
+/// Version that accepts an injectable HOME retrieval function for testing.
 fn resolve_path_with(
     path: &str,
     base_dir: &Path,
@@ -61,7 +61,7 @@ fn resolve_path_with(
     }
 }
 
-/// `.` と `..` を論理的に正規化する (ファイルシステム非依存)。
+/// Logically normalizes `.` and `..` components (filesystem-independent).
 fn normalize_logical(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -76,7 +76,7 @@ fn normalize_logical(path: &Path) -> PathBuf {
     result
 }
 
-/// Config 内の definitions.paths と definitions.sandbox の全パスを解決する。
+/// Resolves all paths in definitions.paths and definitions.sandbox within a Config.
 pub fn resolve_config_paths(
     config: &mut super::Config,
     base_dir: &Path,
@@ -85,7 +85,7 @@ pub fn resolve_config_paths(
         return Ok(());
     };
 
-    // definitions.paths の全パスを解決する
+    // Resolve all paths in definitions.paths
     if let Some(paths) = defs.paths.as_mut() {
         for values in paths.values_mut() {
             for value in values.iter_mut() {
@@ -94,7 +94,7 @@ pub fn resolve_config_paths(
         }
     }
 
-    // definitions.sandbox の fs.writable と fs.deny の全パスを解決する
+    // Resolve all paths in definitions.sandbox fs.writable and fs.deny
     if let Some(sandbox) = defs.sandbox.as_mut() {
         for preset in sandbox.values_mut() {
             if let Some(fs) = preset.fs.as_mut() {
@@ -119,8 +119,8 @@ fn get_home() -> Option<String> {
     std::env::var("HOME").ok().filter(|h| !h.is_empty())
 }
 
-/// `~` で始まるパスを `$HOME` で展開する。
-/// 設定ロード時にパス解決済みのパスに対しても安全に適用できる (冪等)。
+/// Expands paths starting with `~` using `$HOME`.
+/// Safe to apply to already-resolved paths (idempotent).
 pub fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -149,7 +149,7 @@ mod tests {
         resolve_path_with(path, base_dir, move || home_owned)
     }
 
-    // === パス分類と解決 ===
+    // === Path classification and resolution ===
 
     #[rstest]
     #[case::absolute_simple("/usr/bin", "/project", "/usr/bin")]
@@ -230,9 +230,9 @@ mod tests {
         let defs = config.definitions.unwrap();
         let paths = defs.paths.unwrap();
         let sensitive = &paths["sensitive"];
-        // 相対パスが base_dir で join される
+        // Relative path is joined with base_dir
         assert_eq!(sensitive[0], "/project/.env*");
-        // ~/ は HOME 環境変数で展開される
+        // ~/ is expanded using the HOME environment variable
         assert!(
             !sensitive[1].starts_with("~/"),
             "tilde should be expanded: {}",

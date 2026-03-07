@@ -1,4 +1,4 @@
-//! 異なる cwd からの実行でもパス解決結果が一貫することを検証する統合テスト。
+//! Integration tests verifying consistent path resolution regardless of cwd.
 
 use std::fs;
 
@@ -44,8 +44,8 @@ fn make_env() -> Result<PathResolutionEnv, Box<dyn std::error::Error>> {
     })
 }
 
-/// 異なる cwd からロードしても、definitions.paths の相対パスが
-/// 設定ファイルの親ディレクトリ基準で解決される。
+/// Relative paths in definitions.paths resolve relative to the config file's
+/// parent directory, regardless of cwd.
 #[rstest]
 #[case::from_project_root("")]
 #[case::from_src("src")]
@@ -67,7 +67,7 @@ fn paths_resolved_relative_to_config_file(
     let paths = defs.paths.ok_or("paths missing")?;
     let sensitive = &paths["sensitive"];
 
-    // 相対パスは設定ファイルの親ディレクトリ (project_dir) で解決される
+    // Relative paths are resolved against the config file's parent (project_dir)
     let expected_env = format!("{}/.env*", env.project_dir.display());
     let expected_creds = format!("{}/secrets/credentials.json", env.project_dir.display());
     assert_eq!(sensitive[0], expected_env, "cwd={}", cwd.display());
@@ -75,8 +75,8 @@ fn paths_resolved_relative_to_config_file(
     Ok(())
 }
 
-/// 異なる cwd からロードしても、sandbox の writable/deny パスが
-/// 設定ファイルの親ディレクトリ基準で解決される。
+/// Sandbox writable/deny paths resolve relative to the config file's
+/// parent directory, regardless of cwd.
 #[rstest]
 #[case::from_project_root("")]
 #[case::from_src("src")]
@@ -98,22 +98,22 @@ fn sandbox_paths_resolved_relative_to_config_file(
     let restricted = &sandbox["restricted"];
     let fs_policy = restricted.fs.as_ref().ok_or("fs policy missing")?;
 
-    // writable の相対パスが解決されている
+    // Relative writable path is resolved
     let writable = fs_policy.writable.as_ref().ok_or("writable missing")?;
     let expected_tmp = format!("{}/tmp", env.project_dir.display());
     assert_eq!(writable[0], expected_tmp, "cwd={}", cwd.display());
 
-    // deny の相対パスが解決されている
+    // Relative deny path is resolved
     let deny = fs_policy.deny.as_ref().ok_or("deny missing")?;
     let expected_deny_env = format!("{}/.env*", env.project_dir.display());
     assert_eq!(deny[0], expected_deny_env, "cwd={}", cwd.display());
-    // 絶対パスはそのまま
+    // Absolute paths remain unchanged
     assert_eq!(deny[1], "/etc/shadow", "cwd={}", cwd.display());
     Ok(())
 }
 
-/// グローバル設定とローカル設定で異なる base_dir が使われ、
-/// マージ前にパスが解決される。
+/// Global and local configs use different base_dir values;
+/// paths are resolved before merging.
 #[rstest]
 fn global_and_local_use_different_base_dirs() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
@@ -150,22 +150,22 @@ fn global_and_local_use_different_base_dirs() -> Result<(), Box<dyn std::error::
     let defs = config.definitions.ok_or("definitions missing")?;
     let paths = defs.paths.ok_or("paths missing")?;
 
-    // グローバル設定のパスはグローバルディレクトリ基準
+    // Global config paths resolve relative to the global directory
     let global = &paths["global_paths"];
     assert_eq!(
         global[0],
         format!("{}/global-data/**", global_dir.display())
     );
 
-    // ローカル設定のパスはプロジェクトディレクトリ基準
+    // Local config paths resolve relative to the project directory
     let local = &paths["local_paths"];
     assert_eq!(local[0], format!("{}/local-data/**", project_dir.display()));
     Ok(())
 }
 
-/// extends で読み込まれたプリセット内のパスが
-/// プリセットファイルの親ディレクトリで解決される。
-/// load_local_preset を直接呼んでパス解決を検証する。
+/// Paths inside a preset loaded via extends resolve relative to
+/// the preset file's parent directory.
+/// Calls load_local_preset directly to verify path resolution.
 #[rstest]
 fn preset_paths_resolved_relative_to_preset_file() -> Result<(), Box<dyn std::error::Error>> {
     use runok::config::load_local_preset;
@@ -185,13 +185,13 @@ fn preset_paths_resolved_relative_to_preset_file() -> Result<(), Box<dyn std::er
         "#},
     )?;
 
-    // load_local_preset は内部でパス解決を行う
+    // load_local_preset resolves paths internally
     let config = load_local_preset("./presets/base.yml", &project_dir)?;
 
     let defs = config.definitions.ok_or("definitions missing")?;
     let paths = defs.paths.ok_or("paths missing")?;
 
-    // プリセット内のパスはプリセットの親ディレクトリ (presets/) で解決される
+    // Preset paths resolve relative to the preset's parent directory (presets/)
     let preset_paths = &paths["preset_sensitive"];
     assert_eq!(
         preset_paths[0],
