@@ -14,7 +14,7 @@ runok searches for configuration files in two scopes:
 | Scope   | Path                               | Purpose                |
 | ------- | ---------------------------------- | ---------------------- |
 | Global  | `$XDG_CONFIG_HOME/runok/runok.yml` | User-wide defaults     |
-| Project | `./runok.yml` (working directory)  | Project-specific rules |
+| Project | `<project>/runok.yml`              | Project-specific rules |
 
 When `XDG_CONFIG_HOME` is not set, the global config directory defaults to `~/.config/runok/`. See [Environment Variables](/configuration/environment-variables/) for details.
 
@@ -23,7 +23,27 @@ In each scope, an optional **local override** file is also loaded:
 | Scope   | Override Path                            | Purpose                    |
 | ------- | ---------------------------------------- | -------------------------- |
 | Global  | `$XDG_CONFIG_HOME/runok/runok.local.yml` | Personal tweaks            |
-| Project | `./runok.local.yml` (working directory)  | Personal project overrides |
+| Project | `<project>/runok.local.yml`              | Personal project overrides |
+
+### Project Directory Discovery
+
+runok does **not** require you to run commands from the directory containing `runok.yml`. It automatically walks up from the current working directory, checking each ancestor for a configuration file (`runok.yml`, `runok.yaml`, `runok.local.yml`, or `runok.local.yaml`). The first directory that contains any of these files is used as the project configuration directory.
+
+The traversal stops at the user's home directory (`$HOME`). Configuration files placed directly in `$HOME` (e.g. `~/runok.yml`) are **not** loaded as project configuration — use the [global configuration](#configuration-file-locations) instead.
+
+For example, given this directory structure:
+
+```
+~/projects/myapp/
+├── runok.yml          ← project config found here
+├── runok.local.yml
+└── src/
+    └── lib/           ← you run `runok check` here
+```
+
+Running `runok check` from `~/projects/myapp/src/lib/` loads `~/projects/myapp/runok.yml` and `~/projects/myapp/runok.local.yml`.
+
+If multiple ancestor directories contain configuration files, the **nearest** ancestor (closest to the current working directory) wins.
 
 :::tip
 Use `.local.yml` files for personal preferences. Add `runok.local.yml` to your global gitignore (`~/.config/git/ignore`) to keep them out of version control across all repositories.

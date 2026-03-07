@@ -10,6 +10,7 @@ pub trait ConfigLoader {
 /// Default implementation that reads from the filesystem.
 pub struct DefaultConfigLoader {
     global_dir: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
 }
 
 impl Default for DefaultConfigLoader {
@@ -27,14 +28,47 @@ const LOCAL_OVERRIDE_FILENAMES: &[&str] = &["runok.local.yml", "runok.local.yaml
 impl DefaultConfigLoader {
     pub fn new() -> Self {
         let global_dir = super::dirs::config_dir().map(|dir| dir.join("runok"));
-        Self { global_dir }
+        let home_dir = super::dirs::home_dir();
+        Self {
+            global_dir,
+            home_dir,
+        }
     }
 
     /// Create a loader with an explicit global config directory (for testing).
     pub fn with_global_dir(dir: PathBuf) -> Self {
         Self {
             global_dir: Some(dir),
+            home_dir: super::dirs::home_dir(),
         }
+    }
+
+    /// Create a loader with explicit global and home directories (for testing).
+    #[cfg(test)]
+    fn with_dirs(global_dir: PathBuf, home_dir: PathBuf) -> Self {
+        Self {
+            global_dir: Some(global_dir),
+            home_dir: Some(home_dir),
+        }
+    }
+
+    /// Walk up from `start` looking for a directory that contains a config file
+    /// (`runok.yml`, `runok.yaml`, `runok.local.yml`, or `runok.local.yaml`).
+    /// Stop before reaching `home_dir` (i.e. `~/runok.yml` is ignored).
+    fn find_project_dir(&self, start: &Path) -> Option<PathBuf> {
+        for ancestor in start.ancestors() {
+            if let Some(home) = &self.home_dir
+                && ancestor == home
+            {
+                break;
+            }
+            if Self::find_config(ancestor, CONFIG_FILENAMES).is_some()
+                || Self::find_config(ancestor, LOCAL_OVERRIDE_FILENAMES).is_some()
+            {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+        None
     }
 
     /// Find the first existing file from `filenames` inside `dir`.
@@ -67,8 +101,14 @@ impl ConfigLoader for DefaultConfigLoader {
             None => (None, None),
         };
 
-        let local = Self::find_and_parse(cwd, CONFIG_FILENAMES)?;
-        let local_override = Self::find_and_parse(cwd, LOCAL_OVERRIDE_FILENAMES)?;
+        let project_dir = self.find_project_dir(cwd);
+        let (local, local_override) = match &project_dir {
+            Some(dir) => (
+                Self::find_and_parse(dir, CONFIG_FILENAMES)?,
+                Self::find_and_parse(dir, LOCAL_OVERRIDE_FILENAMES)?,
+            ),
+            None => (None, None),
+        };
 
         // Merge priority: global < global local override < project < project local override
         let mut config = global
@@ -94,19 +134,23 @@ mod tests {
     struct TestEnv {
         _tmp: TempDir,
         global_dir: PathBuf,
+        home_dir: PathBuf,
         cwd: PathBuf,
     }
 
     impl TestEnv {
         fn new() -> Self {
             let tmp = TempDir::new().unwrap();
+            let home_dir = tmp.path().join("home");
             let global_dir = tmp.path().join("global");
-            let cwd = tmp.path().join("project");
+            let cwd = home_dir.join("project");
+            fs::create_dir_all(&home_dir).unwrap();
             fs::create_dir_all(&global_dir).unwrap();
             fs::create_dir_all(&cwd).unwrap();
             Self {
                 _tmp: tmp,
                 global_dir,
+                home_dir,
                 cwd,
             }
         }
@@ -120,7 +164,7 @@ mod tests {
         }
 
         fn loader(&self) -> DefaultConfigLoader {
-            DefaultConfigLoader::with_global_dir(self.global_dir.clone())
+            DefaultConfigLoader::with_dirs(self.global_dir.clone(), self.home_dir.clone())
         }
 
         fn load(&self) -> Result<Config, ConfigError> {
@@ -128,7 +172,10 @@ mod tests {
         }
 
         fn loader_without_global(&self) -> DefaultConfigLoader {
-            DefaultConfigLoader { global_dir: None }
+            DefaultConfigLoader {
+                global_dir: None,
+                home_dir: Some(self.home_dir.clone()),
+            }
         }
 
         fn load_without_global(&self) -> Result<Config, ConfigError> {
@@ -579,5 +626,116 @@ mod tests {
 
         let result = env.load_without_global();
         assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
+    }
+
+    // -- Ancestor directory traversal tests --
+
+    #[test]
+    fn load_finds_config_in_parent_directory() {
+        let env = TestEnv::new();
+        // Config is in the project dir (parent of subdirectory)
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        // cwd is a subdirectory
+        let subdir = env.cwd.join("src").join("lib");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Deny)
+        );
+    }
+
+    #[test]
+    fn load_finds_config_and_local_override_in_parent() {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+        let subdir = env.cwd.join("src");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Allow)
+        );
+    }
+
+    #[test]
+    fn load_stops_at_home_dir() {
+        let env = TestEnv::new();
+        // Place config in home dir — should be ignored
+        fs::write(
+            env.home_dir.join("runok.yml"),
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        )
+        .unwrap();
+        let subdir = env.home_dir.join("projects").join("myapp");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn load_nearest_config_wins() {
+        let env = TestEnv::new();
+        // Outer config at project level
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        // Inner config in subproject
+        let inner = env.cwd.join("packages").join("sub");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(
+            inner.join("runok.yml"),
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        )
+        .unwrap();
+
+        let config = env.loader_without_global().load(&inner).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Allow)
+        );
+    }
+
+    #[test]
+    fn load_no_config_in_ancestor_returns_default() {
+        let env = TestEnv::new();
+        // No config files anywhere
+        let subdir = env.cwd.join("deep").join("path");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(config, Config::default());
     }
 }
