@@ -62,9 +62,11 @@ impl DefaultConfigLoader {
             {
                 break;
             }
-            if Self::find_config(ancestor, CONFIG_FILENAMES).is_some()
-                || Self::find_config(ancestor, LOCAL_OVERRIDE_FILENAMES).is_some()
-            {
+            let has_config = CONFIG_FILENAMES
+                .iter()
+                .chain(LOCAL_OVERRIDE_FILENAMES)
+                .any(|name| ancestor.join(name).exists());
+            if has_config {
                 return Some(ancestor.to_path_buf());
             }
         }

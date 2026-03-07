@@ -66,8 +66,8 @@ Configuration layers are merged bottom-to-top, with later layers taking higher p
 | -------- | ---------------------- | ---------------------------------------- |
 | 1 (low)  | Global config          | `$XDG_CONFIG_HOME/runok/runok.yml`       |
 | 2        | Global local override  | `$XDG_CONFIG_HOME/runok/runok.local.yml` |
-| 3        | Project config         | `./runok.yml`                            |
-| 4 (high) | Project local override | `./runok.local.yml`                      |
+| 3        | Project config         | `<project>/runok.yml`                    |
+| 4 (high) | Project local override | `<project>/runok.local.yml`              |
 
 After merging all four layers, the resulting configuration is validated.
 
