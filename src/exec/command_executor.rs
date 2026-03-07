@@ -1257,7 +1257,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // === expand_tilde (now integrated into path_resolver) ===
+    // === expand_tilde ===
 
     #[rstest]
     #[case::tilde_prefix("~/foo", true)]

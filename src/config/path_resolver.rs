@@ -77,6 +77,9 @@ fn normalize_logical(path: &Path) -> PathBuf {
 }
 
 /// Resolves all paths in definitions.paths and definitions.sandbox within a Config.
+///
+/// `<path:name>` references in sandbox deny lists are skipped because they are
+/// expanded later by `validate()` / `expand_sandbox_path_refs()`.
 pub fn resolve_config_paths(
     config: &mut super::Config,
     base_dir: &Path,
@@ -85,34 +88,41 @@ pub fn resolve_config_paths(
         return Ok(());
     };
 
-    // Resolve all paths in definitions.paths
+    let resolve_vec = |paths: &mut Vec<String>| -> Result<(), PathResolveError> {
+        for path in paths.iter_mut() {
+            if is_path_ref(path) {
+                continue;
+            }
+            *path = resolve_path(path, base_dir)?.to_string_lossy().to_string();
+        }
+        Ok(())
+    };
+
     if let Some(paths) = defs.paths.as_mut() {
         for values in paths.values_mut() {
-            for value in values.iter_mut() {
-                *value = resolve_path(value, base_dir)?.to_string_lossy().to_string();
-            }
+            resolve_vec(values)?;
         }
     }
 
-    // Resolve all paths in definitions.sandbox fs.writable and fs.deny
     if let Some(sandbox) = defs.sandbox.as_mut() {
         for preset in sandbox.values_mut() {
             if let Some(fs) = preset.fs.as_mut() {
                 if let Some(writable) = fs.writable.as_mut() {
-                    for path in writable.iter_mut() {
-                        *path = resolve_path(path, base_dir)?.to_string_lossy().to_string();
-                    }
+                    resolve_vec(writable)?;
                 }
                 if let Some(deny) = fs.deny.as_mut() {
-                    for path in deny.iter_mut() {
-                        *path = resolve_path(path, base_dir)?.to_string_lossy().to_string();
-                    }
+                    resolve_vec(deny)?;
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Returns true if the string is a `<path:name>` reference.
+fn is_path_ref(s: &str) -> bool {
+    s.starts_with("<path:") && s.ends_with('>')
 }
 
 fn get_home() -> Option<String> {
@@ -259,5 +269,45 @@ mod tests {
             "deny .env* should be resolved: {}",
             deny[0]
         );
+    }
+
+    #[test]
+    fn resolve_config_paths_preserves_path_refs() {
+        use crate::config::{Config, Definitions, FsPolicy, SandboxPreset};
+        use std::collections::HashMap;
+
+        let mut config = Config {
+            definitions: Some(Definitions {
+                paths: Some(HashMap::from([(
+                    "sensitive".to_string(),
+                    vec![".env*".to_string()],
+                )])),
+                sandbox: Some(HashMap::from([(
+                    "restricted".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            writable: None,
+                            deny: Some(vec!["<path:sensitive>".to_string(), ".secret".to_string()]),
+                        }),
+                        network: None,
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+
+        let base_dir = Path::new("/project");
+        resolve_config_paths(&mut config, base_dir).unwrap();
+
+        let defs = config.definitions.unwrap();
+        let sandbox = defs.sandbox.unwrap();
+        let restricted = &sandbox["restricted"];
+        let deny = restricted.fs.as_ref().unwrap().deny.as_ref().unwrap();
+
+        // <path:name> references must be preserved as-is
+        assert_eq!(deny[0], "<path:sensitive>");
+        // Regular paths are still resolved
+        assert_eq!(deny[1], "/project/.secret");
     }
 }
