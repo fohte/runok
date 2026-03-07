@@ -32,7 +32,6 @@ rules:
   # Shell builtins and basic utilities
   - allow: 'basename *'
   - allow: 'cd *'
-  - allow: 'command *'
   - allow: 'cp *'
   - allow: 'dirname *'
   - allow: 'echo *'
@@ -137,7 +136,9 @@ definitions:
     - 'sudo <cmd>'
     - 'bash -c <cmd>'
     - 'sh -c <cmd>'
+    - 'command <cmd>'
     - 'xargs <cmd>'
+    - 'find * -exec|-execdir|-ok|-okdir <cmd> \;|+'
 ```
 
 ## How It Works
@@ -190,10 +191,16 @@ wrappers:
   - 'sudo <cmd>'
   - 'bash -c <cmd>'
   - 'sh -c <cmd>'
+  - 'command <cmd>'
   - 'xargs <cmd>'
+  - 'find * -exec|-execdir|-ok|-okdir <cmd> \;|+'
 ```
 
 When a command is wrapped (e.g., `sudo rm -rf /`), runok unwraps it and evaluates the inner command (`rm -rf /`) against your rules. The [`<cmd>` placeholder](/pattern-syntax/placeholders/#command-cmd) captures the inner command.
+
+`command` is a POSIX shell builtin that executes its argument as a command. Without a wrapper definition, `allow: 'command *'` would bypass all rules. As a wrapper, `command rm -rf /` evaluates the inner command `rm -rf /` against your rules.
+
+`find -exec` and similar flags (`-execdir`, `-ok`, `-okdir`) run arbitrary commands on found files. The wrapper pattern extracts the inner command for rule evaluation, so `find . -exec rm -rf {} \;` evaluates `rm -rf {}` against your rules.
 
 ## Variations
 
