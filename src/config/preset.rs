@@ -981,25 +981,44 @@ mod tests {
     // === determine_preset_base_dir tests ===
 
     #[rstest]
-    #[case::github_no_path("github:org/repo@v1", None)]
-    #[case::github_with_simple_path("github:org/repo/readonly@v1", None)]
-    #[case::github_with_nested_path("github:org/repo/presets/readonly@v1", Some("presets"))]
-    fn preset_base_dir_for_github_shorthand(
-        tmp: TempDir,
-        #[case] reference: &str,
-        #[case] subdir: Option<&str>,
-    ) {
+    fn preset_base_dir_github_no_path(tmp: TempDir) {
+        let ref_str = "github:org/repo@v1";
         let cache = PresetCache::with_config(
             tmp.path().to_path_buf(),
             std::time::Duration::from_secs(3600),
         );
-        let cache_dir = cache.cache_dir(reference);
-        let result = determine_preset_base_dir(reference, tmp.path(), &cache);
+        // No path → returns the repo root (cache dir itself)
+        assert_eq!(
+            determine_preset_base_dir(ref_str, tmp.path(), &cache),
+            cache.cache_dir(ref_str),
+        );
+    }
 
-        let expected = match subdir {
-            Some(s) => cache_dir.join(s),
-            None => cache_dir,
-        };
-        assert_eq!(result, expected);
+    #[rstest]
+    fn preset_base_dir_github_simple_path(tmp: TempDir) {
+        let ref_str = "github:org/repo/readonly@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        // Path "readonly" has no parent dir → returns the repo root
+        assert_eq!(
+            determine_preset_base_dir(ref_str, tmp.path(), &cache),
+            cache.cache_dir(ref_str),
+        );
+    }
+
+    #[rstest]
+    fn preset_base_dir_github_nested_path(tmp: TempDir) {
+        let ref_str = "github:org/repo/presets/readonly@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        // Path "presets/readonly" → parent is "presets" → cache_dir/presets
+        assert_eq!(
+            determine_preset_base_dir(ref_str, tmp.path(), &cache),
+            cache.cache_dir(ref_str).join("presets"),
+        );
     }
 }
