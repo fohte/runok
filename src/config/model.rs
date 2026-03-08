@@ -17,6 +17,80 @@ pub struct Config {
     pub rules: Option<Vec<RuleEntry>>,
     /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
     pub definitions: Option<Definitions>,
+    /// Audit log settings.
+    pub audit: Option<AuditConfig>,
+}
+
+/// Audit log configuration.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct AuditConfig {
+    /// Whether audit logging is enabled (default: true).
+    pub enabled: Option<bool>,
+    /// Directory path for audit log files (default: ~/.local/share/runok/).
+    pub path: Option<String>,
+    /// Log rotation settings.
+    pub rotation: Option<RotationConfig>,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            path: None,
+            rotation: None,
+        }
+    }
+}
+
+impl AuditConfig {
+    /// Returns whether audit logging is enabled, defaulting to true.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    /// Returns the audit log directory path, defaulting to the XDG data
+    /// directory.
+    pub fn resolved_path(&self) -> String {
+        self.path.clone().unwrap_or_else(|| {
+            if let Ok(data_home) = std::env::var("XDG_DATA_HOME")
+                && !data_home.is_empty()
+            {
+                return format!("{data_home}/runok/");
+            }
+            std::env::var("HOME")
+                .map(|h| format!("{h}/.local/share/runok/"))
+                .unwrap_or_else(|_| ".local/share/runok/".to_string())
+        })
+    }
+
+    /// Returns the rotation config, using defaults for any unset fields.
+    pub fn resolved_rotation(&self) -> RotationConfig {
+        self.rotation.clone().unwrap_or_default()
+    }
+}
+
+/// Log rotation configuration.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct RotationConfig {
+    /// Number of days to retain log files (default: 7).
+    pub retention_days: Option<u32>,
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: Some(7),
+        }
+    }
+}
+
+impl RotationConfig {
+    /// Returns the retention period in days, defaulting to 7.
+    pub fn resolved_retention_days(&self) -> u32 {
+        self.retention_days.unwrap_or(7)
+    }
 }
 
 /// Default settings applied when no rule matches a command.
@@ -328,12 +402,15 @@ impl Config {
     ///   (sandbox presets have interdependent fields like fs.writable and
     ///   fs.deny that must stay consistent; partial merging could create
     ///   contradictory constraints.)
+    /// - audit: override (local wins at merge level; loader enforces
+    ///   global-only by stripping audit from project/local layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
             defaults: Self::merge_defaults(self.defaults, other.defaults),
             rules: Self::merge_vecs(self.rules, other.rules),
             definitions: Self::merge_definitions(self.definitions, other.definitions),
+            audit: Self::merge_audit(self.audit, other.audit),
         }
     }
 
@@ -404,6 +481,33 @@ impl Config {
                 Some(b)
             }
             (b, o) => b.or(o),
+        }
+    }
+
+    fn merge_audit(base: Option<AuditConfig>, over: Option<AuditConfig>) -> Option<AuditConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(AuditConfig {
+                enabled: o.enabled.or(b.enabled),
+                path: o.path.or(b.path),
+                rotation: Self::merge_rotation(b.rotation, o.rotation),
+            }),
+        }
+    }
+
+    fn merge_rotation(
+        base: Option<RotationConfig>,
+        over: Option<RotationConfig>,
+    ) -> Option<RotationConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(RotationConfig {
+                retention_days: o.retention_days.or(b.retention_days),
+            }),
         }
     }
 }
@@ -509,6 +613,7 @@ mod tests {
         assert_eq!(config.defaults, None);
         assert_eq!(config.rules, None);
         assert_eq!(config.definitions, None);
+        assert_eq!(config.audit, None);
     }
 
     #[test]
@@ -970,6 +1075,7 @@ mod tests {
                 sandbox: None,
             }]),
             definitions: None,
+            audit: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -990,6 +1096,7 @@ mod tests {
                 sandbox: None,
             }]),
             definitions: None,
+            audit: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1231,6 +1338,7 @@ mod tests {
                 },
             ]),
             definitions: None,
+            audit: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
@@ -1554,6 +1662,202 @@ mod tests {
         };
         let result = base.merge(over);
         assert_eq!(result.extends.unwrap(), vec!["./base.yml", "./local.yml"]);
+    }
+
+    // === AuditConfig ===
+
+    #[test]
+    fn audit_config_default() {
+        let config = AuditConfig::default();
+        assert_eq!(config.enabled, Some(true));
+        assert_eq!(config.path, None);
+        assert_eq!(config.rotation, None);
+    }
+
+    #[rstest]
+    #[case::enabled(Some(true), true)]
+    #[case::disabled(Some(false), false)]
+    #[case::default_when_none(None, true)]
+    fn audit_config_is_enabled(#[case] enabled: Option<bool>, #[case] expected: bool) {
+        let config = AuditConfig {
+            enabled,
+            path: None,
+            rotation: None,
+        };
+        assert_eq!(config.is_enabled(), expected);
+    }
+
+    #[test]
+    fn audit_config_resolved_path_custom() {
+        let config = AuditConfig {
+            enabled: None,
+            path: Some("/custom/path/".to_string()),
+            rotation: None,
+        };
+        assert_eq!(config.resolved_path(), "/custom/path/");
+    }
+
+    #[test]
+    fn rotation_config_default() {
+        let config = RotationConfig::default();
+        assert_eq!(config.retention_days, Some(7));
+    }
+
+    #[rstest]
+    #[case::custom(Some(30), 30)]
+    #[case::default_when_none(None, 7)]
+    fn rotation_config_resolved_retention_days(
+        #[case] retention_days: Option<u32>,
+        #[case] expected: u32,
+    ) {
+        let config = RotationConfig { retention_days };
+        assert_eq!(config.resolved_retention_days(), expected);
+    }
+
+    // === AuditConfig parsing ===
+
+    #[test]
+    fn parse_audit_full() {
+        let config = parse_config(indoc! {"
+            audit:
+              enabled: false
+              path: /tmp/audit/
+              rotation:
+                retention_days: 30
+        "})
+        .unwrap();
+        let audit = config.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/tmp/audit/"));
+        let rotation = audit.rotation.unwrap();
+        assert_eq!(rotation.retention_days, Some(30));
+    }
+
+    #[test]
+    fn parse_audit_partial() {
+        let config = parse_config(indoc! {"
+            audit:
+              enabled: true
+        "})
+        .unwrap();
+        let audit = config.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path, None);
+        assert_eq!(audit.rotation, None);
+    }
+
+    #[test]
+    fn parse_audit_absent_returns_none() {
+        let config = parse_config(indoc! {"
+            defaults:
+              action: allow
+        "})
+        .unwrap();
+        assert_eq!(config.audit, None);
+    }
+
+    // === Merge: audit ===
+
+    #[test]
+    fn merge_audit_both_none() {
+        let base = Config::default();
+        let over = Config::default();
+        let result = base.merge(over);
+        assert_eq!(result.audit, None);
+    }
+
+    #[test]
+    fn merge_audit_base_preserved() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(false),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(14),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config::default();
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
+    }
+
+    #[test]
+    fn merge_audit_override_only() {
+        let base = Config::default();
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/over/".to_string()),
+                rotation: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/over/"));
+        assert_eq!(audit.rotation, None);
+    }
+
+    #[test]
+    fn merge_audit_override_wins() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(7),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(false),
+                path: None,
+                rotation: Some(RotationConfig {
+                    retention_days: Some(30),
+                }),
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
+
+    #[test]
+    fn merge_audit_partial_override_preserves_base_fields() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(14),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: None,
+                path: None,
+                rotation: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
     }
 
     // === Config::validate ===
