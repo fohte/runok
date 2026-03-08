@@ -163,6 +163,11 @@ mod tests {
         TempDir::new().unwrap()
     }
 
+    #[fixture]
+    fn cache(tmp: TempDir) -> PresetCache {
+        PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600))
+    }
+
     #[rstest]
     #[case::same_input("github:org/repo@v1", "github:org/repo@v1")]
     fn cache_key_is_deterministic(#[case] ref1: &str, #[case] ref2: &str) {
@@ -184,8 +189,7 @@ mod tests {
     }
 
     #[rstest]
-    fn miss_when_no_cache_dir(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn miss_when_no_cache_dir(cache: PresetCache) {
         assert!(matches!(
             cache.check("github:org/repo@v1", false),
             CacheStatus::Miss
@@ -193,8 +197,7 @@ mod tests {
     }
 
     #[rstest]
-    fn hit_when_fresh_cache(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn hit_when_fresh_cache(cache: PresetCache) {
         let dir = cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -217,8 +220,7 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_when_ttl_exceeded(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn stale_when_ttl_exceeded(cache: PresetCache) {
         let dir = cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -237,8 +239,7 @@ mod tests {
     }
 
     #[rstest]
-    fn immutable_never_stale(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn immutable_never_stale(cache: PresetCache) {
         let dir = cache.cache_dir("github:org/repo@abc123");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -257,8 +258,7 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_when_no_metadata(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn stale_when_no_metadata(cache: PresetCache) {
         let dir = cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
         // No metadata.json written
@@ -270,8 +270,7 @@ mod tests {
     }
 
     #[rstest]
-    fn lock_path_is_beside_cache_dir(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn lock_path_is_beside_cache_dir(cache: PresetCache) {
         let reference = "github:org/repo@v1";
         let cache_dir = cache.cache_dir(reference);
         let lock_path = cache.lock_path(reference);
@@ -286,8 +285,7 @@ mod tests {
     }
 
     #[rstest]
-    fn acquire_lock_creates_file(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn acquire_lock_creates_file(cache: PresetCache) {
         let reference = "github:org/repo@v1";
         let lock_path = cache.lock_path(reference);
 
@@ -297,8 +295,7 @@ mod tests {
     }
 
     #[rstest]
-    fn lock_is_released_on_drop(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn lock_is_released_on_drop(cache: PresetCache) {
         let reference = "github:org/repo@v1";
 
         {
