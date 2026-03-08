@@ -225,7 +225,20 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            if !match_single_token(inner, cmd_tokens[0], definitions) {
+            // Flag-only negations (inner pattern elements all start with `-`,
+            // excluding bare `--`) use order-independent matching: reject if
+            // any token in the entire command matches the negated pattern.
+            if is_flag_only_negation(inner) {
+                if cmd_tokens
+                    .iter()
+                    .any(|t| match_single_token(inner, t, definitions))
+                {
+                    return false;
+                }
+                // No token matched the negation; consume one positional token
+                // and continue matching the rest of the pattern.
+                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+            } else if !match_single_token(inner, cmd_tokens[0], definitions) {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -487,7 +500,25 @@ fn extract_placeholder_all<'a>(
         }
 
         PatternToken::Negation(inner) => {
-            if !cmd_tokens.is_empty() && !match_single_token(inner, cmd_tokens[0], definitions) {
+            if cmd_tokens.is_empty() {
+                return Ok(());
+            }
+            if is_flag_only_negation(inner) {
+                // Order-independent: reject if any token matches the negation
+                if !cmd_tokens
+                    .iter()
+                    .any(|t| match_single_token(inner, t, definitions))
+                {
+                    extract_placeholder_all(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captured,
+                        all_candidates,
+                    )?;
+                }
+            } else if !match_single_token(inner, cmd_tokens[0], definitions) {
                 extract_placeholder_all(
                     rest,
                     &cmd_tokens[1..],
@@ -807,6 +838,16 @@ fn resolve_paths<'a>(name: &str, definitions: &'a Definitions) -> &'a [String] {
         .unwrap_or(&[])
 }
 
+/// Check if a negation's inner pattern is flag-only (all alternatives start
+/// with `-` and none is the bare `--` separator).
+fn is_flag_only_negation(inner: &PatternToken) -> bool {
+    match inner {
+        PatternToken::Literal(s) => s.starts_with('-') && s != "--",
+        PatternToken::Alternation(alts) => alts.iter().all(|a| a.starts_with('-') && a != "--"),
+        _ => false,
+    }
+}
+
 /// Remove elements at the given indices from a slice, returning a new Vec.
 fn remove_indices<'a>(tokens: &[&'a str], indices: &[usize]) -> Vec<&'a str> {
     tokens
@@ -944,6 +985,20 @@ mod tests {
     #[case::negation_rejects("kubectl !describe *", "kubectl describe pods", false)]
     #[case::negation_alternation("kubectl !describe|get|list *", "kubectl delete pods", true)]
     #[case::negation_alternation_reject("kubectl !describe|get|list *", "kubectl get pods", false)]
+    // Flag-only negation: order-independent matching
+    #[case::flag_negation_rejects_at_end("find !-delete *", "find . -delete", false)]
+    #[case::flag_negation_rejects_at_start("find !-delete *", "find -delete .", false)]
+    #[case::flag_negation_allows_no_flag("find !-delete *", "find . -name foo", true)]
+    #[case::flag_negation_alt_rejects(
+        "find !-delete|-fprint|-fls *",
+        "find . -type f -delete",
+        false
+    )]
+    #[case::flag_negation_alt_allows(
+        "find !-delete|-fprint|-fls *",
+        "find . -type f -name foo",
+        true
+    )]
     fn negation_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
