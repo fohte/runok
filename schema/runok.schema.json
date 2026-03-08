@@ -45,6 +45,17 @@
           "type": "null"
         }
       ]
+    },
+    "audit": {
+      "description": "Audit log configuration.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -315,6 +326,52 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "AuditConfig": {
+      "description": "Audit log configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether audit logging is enabled (default: true).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Base directory for audit log files (default: ~/.local/share/runok/).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rotation": {
+          "description": "Log rotation settings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RotationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RotationConfig": {
+      "description": "Log rotation settings.",
+      "type": "object",
+      "properties": {
+        "retention_days": {
+          "description": "Number of days to retain log files (default: 7).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     }

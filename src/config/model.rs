@@ -17,6 +17,8 @@ pub struct Config {
     pub rules: Option<Vec<RuleEntry>>,
     /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
     pub definitions: Option<Definitions>,
+    /// Audit log configuration.
+    pub audit: Option<AuditConfig>,
 }
 
 /// Default settings applied when no rule matches a command.
@@ -334,6 +336,7 @@ impl Config {
             defaults: Self::merge_defaults(self.defaults, other.defaults),
             rules: Self::merge_vecs(self.rules, other.rules),
             definitions: Self::merge_definitions(self.definitions, other.definitions),
+            audit: other.audit.or(self.audit),
         }
     }
 
@@ -486,6 +489,77 @@ pub fn print_config_schema() -> Result<(), serde_json::Error> {
     let json = serde_json::to_string_pretty(&schema)?;
     println!("{json}");
     Ok(())
+}
+
+/// Audit log configuration.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct AuditConfig {
+    /// Whether audit logging is enabled (default: true).
+    pub enabled: Option<bool>,
+    /// Base directory for audit log files (default: ~/.local/share/runok/).
+    pub path: Option<String>,
+    /// Log rotation settings.
+    pub rotation: Option<RotationConfig>,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            path: None,
+            rotation: None,
+        }
+    }
+}
+
+impl AuditConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    pub fn base_dir(&self) -> std::path::PathBuf {
+        match &self.path {
+            Some(p) => {
+                if let Some(rest) = p.strip_prefix("~/") {
+                    if let Some(home) = home_dir() {
+                        home.join(rest)
+                    } else {
+                        std::path::PathBuf::from(p)
+                    }
+                } else {
+                    std::path::PathBuf::from(p)
+                }
+            }
+            None => default_audit_dir(),
+        }
+    }
+
+    pub fn retention_days(&self) -> u32 {
+        self.rotation
+            .as_ref()
+            .and_then(|r| r.retention_days)
+            .unwrap_or(7)
+    }
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+fn default_audit_dir() -> std::path::PathBuf {
+    match home_dir() {
+        Some(home) => home.join(".local/share/runok"),
+        None => std::path::PathBuf::from(".local/share/runok"),
+    }
+}
+
+/// Log rotation settings.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct RotationConfig {
+    /// Number of days to retain log files (default: 7).
+    pub retention_days: Option<u32>,
 }
 
 /// Parse a YAML string into a `Config`.
@@ -970,6 +1044,7 @@ mod tests {
                 sandbox: None,
             }]),
             definitions: None,
+            audit: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -990,6 +1065,7 @@ mod tests {
                 sandbox: None,
             }]),
             definitions: None,
+            audit: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1188,6 +1264,7 @@ mod tests {
         let mut config = Config {
             extends: None,
             defaults: None,
+            audit: None,
             rules: Some(vec![
                 // Error 1: no action set
                 RuleEntry {
