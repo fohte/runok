@@ -90,6 +90,17 @@ impl ConfigLoader for DefaultConfigLoader {
             .map(|p| Self::read_and_parse(&p))
             .transpose()?;
 
+        // Audit settings are global-only; strip them from project/local layers
+        // before merging so they cannot override the global config.
+        let local = local.map(|mut c| {
+            c.audit = None;
+            c
+        });
+        let local_override = local_override.map(|mut c| {
+            c.audit = None;
+            c
+        });
+
         let mut config = global
             .unwrap_or_default()
             .merge(local.unwrap_or_default())

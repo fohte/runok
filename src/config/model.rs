@@ -402,7 +402,8 @@ impl Config {
     ///   (sandbox presets have interdependent fields like fs.writable and
     ///   fs.deny that must stay consistent; partial merging could create
     ///   contradictory constraints.)
-    /// - audit: global-only (project/local overrides are ignored)
+    /// - audit: override (local wins at merge level; loader enforces
+    ///   global-only by stripping audit from project/local layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
@@ -483,10 +484,31 @@ impl Config {
         }
     }
 
-    /// Audit config is global-only: the base (global) value is always preserved
-    /// and project/local overrides are ignored.
-    fn merge_audit(base: Option<AuditConfig>, _over: Option<AuditConfig>) -> Option<AuditConfig> {
-        base
+    fn merge_audit(base: Option<AuditConfig>, over: Option<AuditConfig>) -> Option<AuditConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(AuditConfig {
+                enabled: o.enabled.or(b.enabled),
+                path: o.path.or(b.path),
+                rotation: Self::merge_rotation(b.rotation, o.rotation),
+            }),
+        }
+    }
+
+    fn merge_rotation(
+        base: Option<RotationConfig>,
+        over: Option<RotationConfig>,
+    ) -> Option<RotationConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(RotationConfig {
+                retention_days: o.retention_days.or(b.retention_days),
+            }),
+        }
     }
 }
 
@@ -1765,7 +1787,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_audit_override_ignored_when_no_base() {
+    fn merge_audit_override_only() {
         let base = Config::default();
         let over = Config {
             audit: Some(AuditConfig {
@@ -1776,11 +1798,14 @@ mod tests {
             ..Config::default()
         };
         let result = base.merge(over);
-        assert_eq!(result.audit, None);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/over/"));
+        assert_eq!(audit.rotation, None);
     }
 
     #[test]
-    fn merge_audit_override_ignored_when_base_exists() {
+    fn merge_audit_override_wins() {
         let base = Config {
             audit: Some(AuditConfig {
                 enabled: Some(true),
@@ -1794,7 +1819,7 @@ mod tests {
         let over = Config {
             audit: Some(AuditConfig {
                 enabled: Some(false),
-                path: Some("/over/".to_string()),
+                path: None,
                 rotation: Some(RotationConfig {
                     retention_days: Some(30),
                 }),
@@ -1803,9 +1828,36 @@ mod tests {
         };
         let result = base.merge(over);
         let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
+
+    #[test]
+    fn merge_audit_partial_override_preserves_base_fields() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(14),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: None,
+                path: None,
+                rotation: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
         assert_eq!(audit.enabled, Some(true));
         assert_eq!(audit.path.as_deref(), Some("/base/"));
-        assert_eq!(audit.rotation.unwrap().retention_days, Some(7));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
     }
 
     // === Config::validate ===
