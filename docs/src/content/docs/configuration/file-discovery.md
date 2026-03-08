@@ -129,6 +129,26 @@ definitions:
       - ~/.aws/credentials
 ```
 
+## Path Resolution
+
+Relative paths in `definitions.paths`, `definitions.sandbox.*.fs.writable`, and `definitions.sandbox.*.fs.deny` are resolved relative to the **parent directory of the configuration file** that defines them. This ensures consistent behavior regardless of the current working directory when running `runok exec`.
+
+Paths are classified into three types:
+
+| Path type      | Example          | Resolution                                     |
+| -------------- | ---------------- | ---------------------------------------------- |
+| Absolute path  | `/etc/shadow`    | Used as-is                                     |
+| Home directory | `~/.ssh/**`      | `~` expanded to `$HOME`                        |
+| Relative path  | `.env*`, `./tmp` | Joined with the config file's parent directory |
+
+Path resolution happens **before merging**, so each configuration file's relative paths are resolved using its own parent directory. For example:
+
+- Paths in `~/.config/runok/runok.yml` are resolved relative to `~/.config/runok/`
+- Paths in `<project>/runok.yml` are resolved relative to `<project>/`
+- Paths in a preset loaded via `extends` are resolved relative to the preset file's directory
+
+`.` and `..` components are normalized logically without filesystem access, so glob patterns (e.g. `*.env*`, `**/.git`) are preserved correctly.
+
 ## Validation
 
 After merging, runok validates the final configuration:
