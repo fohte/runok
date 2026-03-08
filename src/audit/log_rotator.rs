@@ -52,7 +52,7 @@ impl LogRotator {
 }
 
 /// Extracts the date from a log filename like `audit-2026-02-25.jsonl`.
-fn parse_log_date(filename: &str) -> Option<NaiveDate> {
+pub(super) fn parse_log_date(filename: &str) -> Option<NaiveDate> {
     let date_str = filename
         .strip_prefix(LOG_FILE_PREFIX)?
         .strip_suffix(LOG_FILE_SUFFIX)?;
