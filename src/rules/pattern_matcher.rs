@@ -225,20 +225,17 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            // Flag-only negations (inner pattern elements all start with `-`,
-            // excluding bare `--`) use order-independent matching: reject if
-            // any token in the entire command matches the negated pattern.
-            if is_flag_only_negation(inner) {
-                if cmd_tokens
+            // Flag-only negations (all inner elements start with `-`, excluding
+            // bare `--`) use order-independent matching: scan the entire command
+            // token list. Other negations check only the positional token.
+            let negation_passed = if is_flag_only_negation(inner) {
+                !cmd_tokens
                     .iter()
                     .any(|t| match_single_token(inner, t, definitions))
-                {
-                    return false;
-                }
-                // No token matched the negation; consume one positional token
-                // and continue matching the rest of the pattern.
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else if !match_single_token(inner, cmd_tokens[0], definitions) {
+            } else {
+                !match_single_token(inner, cmd_tokens[0], definitions)
+            };
+            if negation_passed {
                 match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
             } else {
                 false
@@ -503,22 +500,14 @@ fn extract_placeholder_all<'a>(
             if cmd_tokens.is_empty() {
                 return Ok(());
             }
-            if is_flag_only_negation(inner) {
-                // Order-independent: reject if any token matches the negation
-                if !cmd_tokens
+            let negation_passed = if is_flag_only_negation(inner) {
+                !cmd_tokens
                     .iter()
                     .any(|t| match_single_token(inner, t, definitions))
-                {
-                    extract_placeholder_all(
-                        rest,
-                        &cmd_tokens[1..],
-                        definitions,
-                        steps,
-                        captured,
-                        all_candidates,
-                    )?;
-                }
-            } else if !match_single_token(inner, cmd_tokens[0], definitions) {
+            } else {
+                !match_single_token(inner, cmd_tokens[0], definitions)
+            };
+            if negation_passed {
                 extract_placeholder_all(
                     rest,
                     &cmd_tokens[1..],
