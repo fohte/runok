@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use runok::config::{ConfigError, PresetError, load_local_preset, parse_config};
 use runok::rules::rule_engine::{Action, evaluate_command};
 
@@ -97,6 +97,14 @@ fn make_preset_repo_env() -> Result<PresetRepoEnv, Box<dyn std::error::Error>> {
     })
 }
 
+/// Fixture providing a simulated preset repository environment.
+/// Delegates to `make_preset_repo_env` which returns `Result`;
+/// test infrastructure failures abort the process.
+#[fixture]
+fn preset_repo_env() -> PresetRepoEnv {
+    make_preset_repo_env().unwrap_or_else(|_| std::process::abort())
+}
+
 // ========================================
 // Single path-based preset: readonly-unix rules
 // ========================================
@@ -110,12 +118,13 @@ fn make_preset_repo_env() -> Result<PresetRepoEnv, Box<dyn std::error::Error>> {
 #[case::rm_not_allowed("rm -rf /", assert_default as ActionAssertion)]
 #[case::curl_not_allowed("curl https://example.com", assert_default as ActionAssertion)]
 fn single_path_preset_readonly_unix(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
-    let config = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
+    let config =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
@@ -133,12 +142,13 @@ fn single_path_preset_readonly_unix(
 #[case::git_commit_not_allowed("git commit -m 'test'", assert_default as ActionAssertion)]
 #[case::git_push_not_allowed("git push origin main", assert_default as ActionAssertion)]
 fn single_path_preset_readonly_git(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
-    let config = load_local_preset("./presets/readonly-git.yml", &env.project_dir).unwrap();
+    let config =
+        load_local_preset("./presets/readonly-git.yml", &preset_repo_env.project_dir).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
@@ -154,13 +164,15 @@ fn single_path_preset_readonly_git(
 #[case::ls_from_unix("ls -la", assert_allow as ActionAssertion)]
 #[case::rm_not_in_any("rm -rf /", assert_default as ActionAssertion)]
 fn multiple_path_presets_all_rules_merged(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
-    let unix_config = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
-    let git_config = load_local_preset("./presets/readonly-git.yml", &env.project_dir).unwrap();
+    let unix_config =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
+    let git_config =
+        load_local_preset("./presets/readonly-git.yml", &preset_repo_env.project_dir).unwrap();
     let merged = unix_config.merge(git_config);
 
     let result = evaluate_command(&merged, command, &empty_context).unwrap();
@@ -177,12 +189,13 @@ fn multiple_path_presets_all_rules_merged(
 #[case::find_no_delete("find . -name '*.log'", assert_allow as ActionAssertion)]
 #[case::find_delete_excluded("find -delete .", assert_default as ActionAssertion)]
 fn path_preset_negation_patterns(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
-    let config = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
+    let config =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
@@ -192,9 +205,9 @@ fn path_preset_negation_patterns(
 // ========================================
 
 #[rstest]
-fn nonexistent_path_preset_produces_error() {
-    let env = make_preset_repo_env().unwrap();
-    let err = load_local_preset("./presets/nonexistent.yml", &env.project_dir).unwrap_err();
+fn nonexistent_path_preset_produces_error(preset_repo_env: PresetRepoEnv) {
+    let err =
+        load_local_preset("./presets/nonexistent.yml", &preset_repo_env.project_dir).unwrap_err();
 
     match err {
         ConfigError::Preset(PresetError::LocalNotFound(path)) => {
@@ -212,9 +225,9 @@ fn nonexistent_path_preset_produces_error() {
 // ========================================
 
 #[rstest]
-fn definitions_preset_loads_wrappers() {
-    let env = make_preset_repo_env().unwrap();
-    let config = load_local_preset("./presets/definitions.yml", &env.project_dir).unwrap();
+fn definitions_preset_loads_wrappers(preset_repo_env: PresetRepoEnv) {
+    let config =
+        load_local_preset("./presets/definitions.yml", &preset_repo_env.project_dir).unwrap();
     let defs = config.definitions.as_ref().unwrap();
     let wrappers = defs.wrappers.as_ref().unwrap();
     assert_eq!(wrappers.len(), 3);
@@ -232,16 +245,19 @@ fn definitions_preset_loads_wrappers() {
 #[case::git_log_via_base("git log --oneline", assert_allow as ActionAssertion)]
 #[case::rm_not_via_base("rm -rf /", assert_default as ActionAssertion)]
 fn base_preset_aggregates_all_via_local_extends(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
     // base.yml has extends but load_local_preset does not resolve them.
     // Manually load and merge to simulate full resolution.
-    let definitions = load_local_preset("./presets/definitions.yml", &env.project_dir).unwrap();
-    let readonly_unix = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
-    let readonly_git = load_local_preset("./presets/readonly-git.yml", &env.project_dir).unwrap();
+    let definitions =
+        load_local_preset("./presets/definitions.yml", &preset_repo_env.project_dir).unwrap();
+    let readonly_unix =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
+    let readonly_git =
+        load_local_preset("./presets/readonly-git.yml", &preset_repo_env.project_dir).unwrap();
     let merged = definitions.merge(readonly_unix).merge(readonly_git);
 
     let result = evaluate_command(&merged, command, &empty_context).unwrap();
@@ -257,13 +273,15 @@ fn base_preset_aggregates_all_via_local_extends(
 #[case::bash_c_rm_not_allowed(r#"bash -c "rm -rf /""#, assert_default as ActionAssertion)]
 #[case::sudo_cat_allowed("sudo cat /etc/shadow", assert_allow as ActionAssertion)]
 fn wrappers_evaluate_inner_commands(
+    preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
-    let env = make_preset_repo_env().unwrap();
-    let definitions = load_local_preset("./presets/definitions.yml", &env.project_dir).unwrap();
-    let readonly_unix = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
+    let definitions =
+        load_local_preset("./presets/definitions.yml", &preset_repo_env.project_dir).unwrap();
+    let readonly_unix =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
     let merged = definitions.merge(readonly_unix);
 
     let result = evaluate_command(&merged, command, &empty_context).unwrap();
@@ -275,9 +293,9 @@ fn wrappers_evaluate_inner_commands(
 // ========================================
 
 #[rstest]
-fn user_deny_overrides_preset_allow(empty_context: EvalContext) {
-    let env = make_preset_repo_env().unwrap();
-    let preset = load_local_preset("./presets/readonly-unix.yml", &env.project_dir).unwrap();
+fn user_deny_overrides_preset_allow(preset_repo_env: PresetRepoEnv, empty_context: EvalContext) {
+    let preset =
+        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
     let user_config = parse_config(indoc! {"
         rules:
           - deny: 'cat /etc/shadow'
