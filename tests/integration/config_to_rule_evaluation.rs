@@ -923,3 +923,35 @@ fn double_dash_positional_matching(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Flag-only negation: order-independent matching
+// ========================================
+
+#[rstest]
+#[case::flag_negation_rejects_at_any_position(
+    "find . -delete",
+    assert_default as ActionAssertion,
+)]
+#[case::flag_negation_rejects_alt_at_any_position(
+    "find . -type f -fprint output.txt",
+    assert_default as ActionAssertion,
+)]
+#[case::flag_negation_allows_safe_command(
+    "find . -name foo -type f",
+    assert_allow as ActionAssertion,
+)]
+fn flag_negation_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'find !-delete|-fprint|-fprint0|-fprintf|-fls *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

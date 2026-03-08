@@ -66,7 +66,21 @@ Flags (tokens starting with `-`) in patterns are matched **regardless of their p
 | `git push origin --force main` | Matches |
 | `git push origin main --force` | Matches |
 
-This applies to both standalone flags ([alternation](/pattern-syntax/alternation/)) and [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
+This applies to standalone flags ([alternation](/pattern-syntax/alternation/)), [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference), and flag-only [negations](/pattern-syntax/alternation/#negation). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
+
+### Flag-only Negation
+
+Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found:
+
+```yaml
+- allow: 'find !-delete|-fprint|-fls *'
+```
+
+| Command                    | Result         |
+| -------------------------- | -------------- |
+| `find . -name foo -type f` | Matches        |
+| `find . -delete`           | Does not match |
+| `find -fprint output .`    | Does not match |
 
 ### Non-flag Tokens are Position-dependent
 
