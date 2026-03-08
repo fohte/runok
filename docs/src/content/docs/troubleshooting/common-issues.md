@@ -93,29 +93,6 @@ Look for the `[verbose] No rules matched` message to confirm, then check the fol
 warning: Failed to update preset 'github:org/repo', using cached version
 ```
 
-## Mutable preset reference warnings
-
-**Symptom:** Warning message about mutable preset references appears on every run.
-
-```
-warning: Mutable preset reference 'github:org/repo@main'
-  Consider pinning to a commit SHA for reproducibility
-```
-
-**Cause:** The `extends` field uses a branch name, tag, or version without pinning to a specific commit. This is risky because the upstream content can change unexpectedly.
-
-**Solution:** Pin to a commit SHA:
-
-```yaml
-# Before
-extends:
-  - 'github:org/repo@main'
-
-# After
-extends:
-  - 'github:org/repo@a1b2c3d4e5f6'
-```
-
 ## Sandbox errors
 
 **Symptom:** Commands fail with sandbox-related error messages.
