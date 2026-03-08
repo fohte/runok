@@ -1,6 +1,8 @@
 mod error;
+pub mod filter;
 mod log_rotator;
 mod model;
+pub mod reader;
 mod writer;
 
 pub use error::*;

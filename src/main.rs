@@ -5,9 +5,11 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{CheckRoute, Cli, Commands, route_check};
+use cli::{AuditArgs, CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
-use runok::config::{ConfigLoader, DefaultConfigLoader};
+use runok::audit::filter::{AuditFilter, TimeSpec};
+use runok::audit::reader::AuditReader;
+use runok::config::{ActionKind, ConfigLoader, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
 use runok::exec::command_executor::LinuxSandboxExecutor;
 #[cfg(target_os = "macos")]
@@ -63,11 +65,16 @@ fn main() -> ExitCode {
 fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
     let loader = DefaultConfigLoader::new();
 
+    if let Commands::Audit(args) = command {
+        return run_audit(args, cwd);
+    }
+
     // Exit code for config errors depends on the subcommand:
     // exec → 1 (general error), check → 2 (input/internal error)
     let config_error_exit_code = match &command {
         Commands::Exec(_) => 1,
         Commands::Check(_) => 2,
+        Commands::Audit(_) => unreachable!("handled above"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
     };
@@ -125,9 +132,94 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
                 }
             }
         }
+        Commands::Audit(_) => unreachable!("handled above"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
     }
+}
+
+fn run_audit(args: AuditArgs, cwd: &std::path::Path) -> i32 {
+    let loader = DefaultConfigLoader::new();
+    let config = match loader.load(cwd) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("runok: config error: {e}");
+            return 1;
+        }
+    };
+
+    let audit_config = config.audit.unwrap_or_default();
+    let log_dir = PathBuf::from(audit_config.resolved_path());
+
+    let mut filter = AuditFilter::new();
+    filter.limit = args.limit;
+
+    if let Some(action_str) = &args.action {
+        match action_str.as_str() {
+            "allow" => filter.action = Some(ActionKind::Allow),
+            "deny" => filter.action = Some(ActionKind::Deny),
+            "ask" => filter.action = Some(ActionKind::Ask),
+            other => {
+                eprintln!("runok: invalid action filter '{other}': expected allow, deny, or ask");
+                return 1;
+            }
+        }
+    }
+
+    if let Some(since_str) = &args.since {
+        match TimeSpec::parse(since_str) {
+            Ok(ts) => filter.since = Some(ts),
+            Err(e) => {
+                eprintln!("runok: {e}");
+                return 1;
+            }
+        }
+    }
+
+    if let Some(until_str) = &args.until {
+        match TimeSpec::parse(until_str) {
+            Ok(ts) => filter.until = Some(ts),
+            Err(e) => {
+                eprintln!("runok: {e}");
+                return 1;
+            }
+        }
+    }
+
+    filter.command_pattern = args.command;
+
+    let reader = AuditReader::new(log_dir);
+    let entries = match reader.read(&filter) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("runok: failed to read audit log: {e}");
+            return 1;
+        }
+    };
+
+    if args.json {
+        for entry in &entries {
+            match serde_json::to_string(entry) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("runok: serialization error: {e}");
+                    return 1;
+                }
+            }
+        }
+    } else {
+        for entry in &entries {
+            let action_str = match &entry.action {
+                runok::audit::SerializableAction::Allow => "allow",
+                runok::audit::SerializableAction::Deny { .. } => "deny",
+                runok::audit::SerializableAction::Ask { .. } => "ask",
+                runok::audit::SerializableAction::Default => "default",
+            };
+            println!("{} [{}] {}", entry.timestamp, action_str, entry.command);
+        }
+    }
+
+    0
 }
 
 #[cfg(test)]
