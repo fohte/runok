@@ -3,6 +3,7 @@ mod config_to_rule_evaluation;
 mod init_wizard;
 mod optional_notation_and_path_ref;
 mod path_resolution;
+mod remote_preset_with_path;
 mod when_clause_rules;
 mod wrapper_recursive_evaluation;
 
