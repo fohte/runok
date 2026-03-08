@@ -111,7 +111,10 @@ fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
 
     // Validate path: must not be empty, must not contain traversal sequences or absolute paths
     if let Some(p) = preset_path
-        && (p.is_empty() || p.starts_with('/') || p.split('/').any(|seg| seg == ".." || seg == "."))
+        && (p.is_empty()
+            || p.starts_with('/')
+            || p.split('/')
+                .any(|seg| seg.is_empty() || seg == ".." || seg == "."))
     {
         return Err(PresetError::InvalidReference(format!(
             "invalid GitHub shorthand: invalid path in 'github:{rest}'"
@@ -627,6 +630,7 @@ mod tests {
     #[case::path_traversal_no_ref("github:org/repo/../secret", "invalid path")]
     #[case::absolute_path("github:org/repo//etc/passwd@v1", "invalid path")]
     #[case::dot_segment("github:org/repo/./foo@v1", "invalid path")]
+    #[case::trailing_slash("github:org/repo/foo/bar/@v1", "invalid path")]
     fn parse_reference_errors(#[case] input: &str, #[case] expected_msg: &str) {
         let err = parse_preset_reference(input).unwrap_err();
         assert!(
