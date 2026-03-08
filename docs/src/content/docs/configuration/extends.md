@@ -76,10 +76,6 @@ runok distinguishes between mutable and immutable references for caching:
 
 Mutable references (tags, branches) are cached for 24 hours by default. Immutable references (commit SHAs) are cached permanently. See [Environment Variables](/configuration/environment-variables/) for how to configure the cache TTL.
 
-:::caution
-runok warns when you use mutable references (tags, branches, or default branch) because they can change over time. For reproducible builds, prefer pinning to a specific commit SHA.
-:::
-
 ## Resolution Order
 
 When a config file specifies `extends`, runok resolves presets using depth-first traversal:
