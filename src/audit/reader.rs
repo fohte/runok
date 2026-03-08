@@ -2,9 +2,10 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 
 use super::filter::AuditFilter;
+use super::log_rotator::parse_log_date;
 use super::model::{AuditEntry, SerializableAction};
 use crate::config::ActionKind;
 
@@ -80,14 +81,14 @@ impl AuditReader {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let file_name = match path.file_stem().and_then(|s| s.to_str()) {
+            let file_name = match path.file_name().and_then(|s| s.to_str()) {
                 Some(name) => name,
                 None => continue,
             };
 
-            // Files are named YYYY-MM-DD.jsonl; skip files entirely before the since date
+            // Files are named audit-YYYY-MM-DD.jsonl; skip files entirely before the since date
             if let Some(since_dt) = since
-                && let Ok(file_date) = NaiveDate::parse_from_str(file_name, "%Y-%m-%d")
+                && let Some(file_date) = parse_log_date(file_name)
                 && file_date < since_dt.date_naive()
             {
                 continue;
@@ -282,7 +283,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let filter = AuditFilter::new();
@@ -316,7 +317,7 @@ mod tests {
                 SerializableAction::Ask { message: None },
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let mut filter = AuditFilter::new();
@@ -346,7 +347,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let mut filter = AuditFilter::new();
@@ -372,7 +373,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -398,7 +399,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -432,7 +433,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let now = "2026-02-25T16:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -457,7 +458,7 @@ mod tests {
                 )
             })
             .collect();
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let mut filter = AuditFilter::new();
@@ -481,7 +482,7 @@ mod tests {
             {{invalid json
             {valid_json}
         "};
-        let path = temp_log_dir.path().join("2026-02-25.jsonl");
+        let path = temp_log_dir.path().join("audit-2026-02-25.jsonl");
         fs::write(path, content).unwrap();
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
@@ -503,8 +504,8 @@ mod tests {
             "echo day2",
             SerializableAction::Allow,
         )];
-        write_jsonl(temp_log_dir.path(), "2026-02-24.jsonl", &entries_day1);
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries_day2);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-24.jsonl", &entries_day1);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries_day2);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let filter = AuditFilter::new();
@@ -527,8 +528,8 @@ mod tests {
             "echo new",
             SerializableAction::Allow,
         )];
-        write_jsonl(temp_log_dir.path(), "2026-02-20.jsonl", &entries_old);
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries_new);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-20.jsonl", &entries_old);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries_new);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -550,7 +551,7 @@ mod tests {
                 SerializableAction::Allow,
             ),
         ];
-        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
         let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -576,7 +577,7 @@ mod tests {
 
             {valid_json}
         "};
-        let path = temp_log_dir.path().join("2026-02-25.jsonl");
+        let path = temp_log_dir.path().join("audit-2026-02-25.jsonl");
         fs::write(path, content).unwrap();
 
         let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
