@@ -47,7 +47,8 @@ impl TimeSpec {
     }
 
     fn try_parse_relative(s: &str) -> Option<Result<Self, String>> {
-        let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
+        let (idx, _) = s.char_indices().next_back()?;
+        let (num_str, unit) = s.split_at(idx);
         match unit {
             "m" | "h" | "d" => {}
             _ => return None,
@@ -75,7 +76,7 @@ impl TimeSpec {
 }
 
 /// Filter criteria for audit log queries.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AuditFilter {
     /// Filter by action kind.
     pub action: Option<ActionKind>,
@@ -89,12 +90,21 @@ pub struct AuditFilter {
     pub limit: usize,
 }
 
+impl Default for AuditFilter {
+    fn default() -> Self {
+        Self {
+            action: None,
+            since: None,
+            until: None,
+            command_pattern: None,
+            limit: 50,
+        }
+    }
+}
+
 impl AuditFilter {
     pub fn new() -> Self {
-        Self {
-            limit: 50,
-            ..Default::default()
-        }
+        Self::default()
     }
 }
 
@@ -135,26 +145,22 @@ mod tests {
     #[case::invalid("abc")]
     #[case::no_unit("30")]
     #[case::bad_unit("30x")]
+    #[case::multibyte_suffix("30\u{00e9}")]
     fn parse_invalid(#[case] input: &str) {
         assert!(TimeSpec::parse(input).is_err());
     }
 
     #[rstest]
-    fn resolve_relative() {
+    #[case::relative(
+        TimeSpec::Relative(Duration::from_secs(3600)),
+        "2026-02-25T11:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+    )]
+    #[case::absolute(
+        TimeSpec::Absolute("2026-02-25T10:30:00Z".parse::<DateTime<Utc>>().unwrap()),
+        "2026-02-25T10:30:00Z".parse::<DateTime<Utc>>().unwrap(),
+    )]
+    fn resolve(#[case] ts: TimeSpec, #[case] expected: DateTime<Utc>) {
         let now = "2026-02-25T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ts = TimeSpec::Relative(Duration::from_secs(3600));
-        let resolved = ts.resolve(now);
-        assert_eq!(
-            resolved,
-            "2026-02-25T11:00:00Z".parse::<DateTime<Utc>>().unwrap()
-        );
-    }
-
-    #[rstest]
-    fn resolve_absolute() {
-        let now = "2026-02-25T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let expected = "2026-02-25T10:30:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ts = TimeSpec::Absolute(expected);
         assert_eq!(ts.resolve(now), expected);
     }
 

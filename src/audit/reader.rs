@@ -51,11 +51,13 @@ impl AuditReader {
             )?;
         }
 
-        // Sort by timestamp descending (newest first)
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-        // Apply limit
-        entries.truncate(filter.limit);
+        // Partial sort: find the top `limit` entries without sorting everything
+        let cmp = |a: &AuditEntry, b: &AuditEntry| b.timestamp.cmp(&a.timestamp);
+        if entries.len() > filter.limit {
+            entries.select_nth_unstable_by(filter.limit, cmp);
+            entries.truncate(filter.limit);
+        }
+        entries.sort_by(cmp);
 
         Ok(entries)
     }
@@ -159,17 +161,22 @@ impl AuditReader {
         until: Option<DateTime<Utc>>,
         command_pattern: &Option<String>,
     ) -> bool {
-        // Check timestamp filters
-        if let Ok(ts) = entry.timestamp.parse::<DateTime<Utc>>() {
-            if let Some(since_dt) = since
-                && ts < since_dt
-            {
-                return false;
-            }
-            if let Some(until_dt) = until
-                && ts > until_dt
-            {
-                return false;
+        // Check timestamp filters; malformed timestamps cannot satisfy time filters
+        if since.is_some() || until.is_some() {
+            match entry.timestamp.parse::<DateTime<Utc>>() {
+                Ok(ts) => {
+                    if let Some(since_dt) = since
+                        && ts < since_dt
+                    {
+                        return false;
+                    }
+                    if let Some(until_dt) = until
+                        && ts > until_dt
+                    {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
             }
         }
 
@@ -531,6 +538,28 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].command, "echo new");
+    }
+
+    #[rstest]
+    fn malformed_timestamp_excluded_by_time_filter(temp_log_dir: TempDir) {
+        let entries = vec![
+            make_entry("not-a-timestamp", "echo bad", SerializableAction::Allow),
+            make_entry(
+                "2026-02-25T12:00:00Z",
+                "echo good",
+                SerializableAction::Allow,
+            ),
+        ];
+        write_jsonl(temp_log_dir.path(), "2026-02-25.jsonl", &entries);
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut filter = AuditFilter::new();
+        filter.since = Some(TimeSpec::Absolute("2026-02-25T00:00:00Z".parse().unwrap()));
+        let result = reader.read_with_now(&filter, now).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].command, "echo good");
     }
 
     #[rstest]
