@@ -109,12 +109,12 @@ fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
         )));
     }
 
-    // Validate that path is not empty when a trailing slash is present (e.g. "owner/repo/")
+    // Validate path: must not be empty, must not contain traversal sequences or absolute paths
     if let Some(p) = preset_path
-        && p.is_empty()
+        && (p.is_empty() || p.starts_with('/') || p.split('/').any(|seg| seg == ".." || seg == "."))
     {
         return Err(PresetError::InvalidReference(format!(
-            "invalid GitHub shorthand: path must not be empty after 'owner/repo/' in 'github:{rest}'"
+            "invalid GitHub shorthand: invalid path in 'github:{rest}'"
         )));
     }
 
@@ -622,7 +622,11 @@ mod tests {
     #[case::empty_owner("github:/repo", "owner and repo must not be empty")]
     #[case::empty_repo("github:org/", "owner and repo must not be empty")]
     #[case::empty_version("github:org/repo@", "version must not be empty")]
-    #[case::empty_path_with_version("github:org/repo/@v1", "path must not be empty")]
+    #[case::empty_path_with_version("github:org/repo/@v1", "invalid path")]
+    #[case::path_traversal("github:org/repo/../../etc/passwd@v1", "invalid path")]
+    #[case::path_traversal_no_ref("github:org/repo/../secret", "invalid path")]
+    #[case::absolute_path("github:org/repo//etc/passwd@v1", "invalid path")]
+    #[case::dot_segment("github:org/repo/./foo@v1", "invalid path")]
     fn parse_reference_errors(#[case] input: &str, #[case] expected_msg: &str) {
         let err = parse_preset_reference(input).unwrap_err();
         assert!(
