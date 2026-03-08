@@ -746,37 +746,37 @@ mod tests {
     }
 
     #[rstest]
-    fn read_preset_from_dir_with_path_reads_yml(tmp: TempDir) {
-        let preset_dir = tmp.path().join("presets");
-        std::fs::create_dir_all(&preset_dir).unwrap();
-        std::fs::write(
-            preset_dir.join("readonly.yml"),
+    #[case::yml("presets/readonly.yml", "presets/readonly", "allow", "cat *")]
+    #[case::yaml("my-preset.yaml", "my-preset", "deny", "rm *")]
+    fn read_preset_from_dir_with_path(
+        tmp: TempDir,
+        #[case] file_path: &str,
+        #[case] preset_path: &str,
+        #[case] rule_kind: &str,
+        #[case] rule_value: &str,
+    ) {
+        let full_path = tmp.path().join(file_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let yaml = format!(
             indoc! {"
                 rules:
-                  - allow: 'cat *'
+                  - {kind}: '{value}'
             "},
-        )
-        .unwrap();
+            kind = rule_kind,
+            value = rule_value,
+        );
+        std::fs::write(&full_path, yaml).unwrap();
 
-        let config = read_preset_from_dir(tmp.path(), Some("presets/readonly")).unwrap();
+        let config = read_preset_from_dir(tmp.path(), Some(preset_path)).unwrap();
         let rules = config.rules.unwrap();
-        assert_eq!(rules[0].allow.as_deref(), Some("cat *"));
-    }
-
-    #[rstest]
-    fn read_preset_from_dir_with_path_reads_yaml(tmp: TempDir) {
-        std::fs::write(
-            tmp.path().join("my-preset.yaml"),
-            indoc! {"
-                rules:
-                  - deny: 'rm *'
-            "},
-        )
-        .unwrap();
-
-        let config = read_preset_from_dir(tmp.path(), Some("my-preset")).unwrap();
-        let rules = config.rules.unwrap();
-        assert_eq!(rules[0].deny.as_deref(), Some("rm *"));
+        let actual = match rule_kind {
+            "allow" => rules[0].allow.as_deref(),
+            "deny" => rules[0].deny.as_deref(),
+            _ => panic!("unexpected rule kind: {rule_kind}"),
+        };
+        assert_eq!(actual, Some(rule_value));
     }
 
     #[rstest]

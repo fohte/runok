@@ -9,7 +9,7 @@ use serde::Deserialize;
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Config {
     /// List of configuration files to inherit from. Supports local paths and
-    /// remote Git repositories (`github:<owner>/<repo>@<ref>`).
+    /// remote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).
     pub extends: Option<Vec<String>>,
     /// Default settings applied when no rule matches.
     pub defaults: Option<Defaults>,

@@ -981,16 +981,13 @@ mod tests {
     // === determine_preset_base_dir tests ===
 
     #[rstest]
-    #[case::github_no_path("github:org/repo@v1", "github:org/repo@v1")]
-    #[case::github_with_simple_path("github:org/repo/readonly@v1", "github:org/repo/readonly@v1")]
-    #[case::github_with_nested_path(
-        "github:org/repo/presets/readonly@v1",
-        "github:org/repo/presets/readonly@v1"
-    )]
+    #[case::github_no_path("github:org/repo@v1", None)]
+    #[case::github_with_simple_path("github:org/repo/readonly@v1", None)]
+    #[case::github_with_nested_path("github:org/repo/presets/readonly@v1", Some("presets"))]
     fn preset_base_dir_for_github_shorthand(
         tmp: TempDir,
         #[case] reference: &str,
-        #[case] _label: &str,
+        #[case] subdir: Option<&str>,
     ) {
         let cache = PresetCache::with_config(
             tmp.path().to_path_buf(),
@@ -999,19 +996,10 @@ mod tests {
         let cache_dir = cache.cache_dir(reference);
         let result = determine_preset_base_dir(reference, tmp.path(), &cache);
 
-        let parsed = parse_preset_reference(reference).unwrap();
-        match parsed {
-            PresetReference::GitHub { path: Some(p), .. } => {
-                let expected = match Path::new(&p).parent() {
-                    Some(parent) if !parent.as_os_str().is_empty() => cache_dir.join(parent),
-                    _ => cache_dir,
-                };
-                assert_eq!(result, expected);
-            }
-            PresetReference::GitHub { path: None, .. } => {
-                assert_eq!(result, cache_dir);
-            }
-            _ => panic!("unexpected reference type"),
-        }
+        let expected = match subdir {
+            Some(s) => cache_dir.join(s),
+            None => cache_dir,
+        };
+        assert_eq!(result, expected);
     }
 }

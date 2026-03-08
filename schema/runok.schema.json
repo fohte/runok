@@ -27,7 +27,7 @@
       ]
     },
     "extends": {
-      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>@<ref>`).",
+      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).",
       "type": [
         "array",
         "null"
