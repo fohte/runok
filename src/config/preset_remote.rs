@@ -42,11 +42,6 @@ impl GitHubVersion {
         matches!(self, Self::CommitSha(_))
     }
 
-    /// Whether this is a mutable reference that should trigger a warning.
-    pub fn is_mutable(&self) -> bool {
-        !self.is_immutable()
-    }
-
     /// Convert to a git ref string for `--branch` or `checkout`.
     pub fn as_git_ref(&self) -> Option<&str> {
         match self {
@@ -263,23 +258,6 @@ fn resolve_git_params(reference: &PresetReference) -> GitParams {
     }
 }
 
-/// Emit a warning to stderr if the reference is mutable.
-fn emit_mutable_warning(reference: &PresetReference, original: &str) {
-    let is_mutable = match reference {
-        PresetReference::GitHub { version, .. } => version.is_mutable(),
-        PresetReference::GitUrl { git_ref, .. } => {
-            git_ref.as_deref().is_none_or(|r| !is_commit_sha(r))
-        }
-        PresetReference::Local(_) => false,
-    };
-    if is_mutable {
-        eprintln!(
-            "warning: Mutable preset reference '{original}'\n  \
-             Consider pinning to a commit SHA for reproducibility"
-        );
-    }
-}
-
 /// Read a preset config file from a directory.
 ///
 /// When `preset_path` is `None`, reads `runok.yml` (or `runok.yaml`) from the root.
@@ -356,8 +334,6 @@ pub fn load_remote_preset<G: GitClient>(
     git_client: &G,
     cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
-    emit_mutable_warning(reference, original_reference);
-
     let params = resolve_git_params(reference);
     let cache_dir = cache.cache_dir(original_reference);
     let preset_path = preset_path_from_reference(reference);
@@ -651,19 +627,6 @@ mod tests {
     #[case::empty("", false)]
     fn commit_sha_detection(#[case] input: &str, #[case] expected: bool) {
         assert_eq!(is_commit_sha(input), expected);
-    }
-
-    // === GitHubVersion mutability ===
-
-    #[rstest]
-    #[case::sha_immutable(
-        GitHubVersion::CommitSha("abc1234def567890abc1234def567890abc12345".into()),
-        false
-    )]
-    #[case::tag_mutable(GitHubVersion::Tag("v1.0.0".into()), true)]
-    #[case::latest_mutable(GitHubVersion::Latest, true)]
-    fn version_mutability(#[case] version: GitHubVersion, #[case] expected_mutable: bool) {
-        assert_eq!(version.is_mutable(), expected_mutable);
     }
 
     // === GitHub shorthand → git URL conversion ===
