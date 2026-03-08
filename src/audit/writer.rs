@@ -1,5 +1,6 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use fs2::FileExt;
 
@@ -28,15 +29,19 @@ impl AuditWriter {
 
         let base_dir = self.config.base_dir();
         std::fs::create_dir_all(&base_dir)?;
+        // Restrict directory to owner-only access since logs may contain
+        // sensitive arguments (API keys, tokens passed on command line).
+        std::fs::set_permissions(&base_dir, Permissions::from_mode(0o700))?;
 
         let log_path = self.rotator.current_log_path(&base_dir);
 
         let file = OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(0o600)
             .open(&log_path)?;
 
-        file.lock_exclusive().map_err(|_| AuditError::LockTimeout)?;
+        file.lock_exclusive()?;
         let result = write_entry(&file, entry);
         // Always unlock, even on write failure
         let _ = file.unlock();

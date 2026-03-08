@@ -525,7 +525,10 @@ impl AuditConfig {
                     if let Some(home) = home_dir() {
                         home.join(rest)
                     } else {
-                        std::path::PathBuf::from(p)
+                        // Using the path literally would create a directory
+                        // named `~`, which is not intended. Fall back to the
+                        // default audit directory as a safe alternative.
+                        default_audit_dir()
                     }
                 } else {
                     std::path::PathBuf::from(p)
@@ -550,7 +553,9 @@ fn home_dir() -> Option<std::path::PathBuf> {
 fn default_audit_dir() -> std::path::PathBuf {
     match home_dir() {
         Some(home) => home.join(".local/share/runok"),
-        None => std::path::PathBuf::from(".local/share/runok"),
+        // Writing to a relative path could be surprising for the user.
+        // Fall back to a temporary directory if HOME is not set.
+        None => std::env::temp_dir().join("runok/audit"),
     }
 }
 
