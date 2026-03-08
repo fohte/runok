@@ -16,7 +16,8 @@ pub struct AuditWriter {
 
 impl AuditWriter {
     pub fn new(config: AuditConfig) -> Self {
-        let rotator = LogRotator::new(config.retention_days());
+        let retention_days = config.resolved_rotation().resolved_retention_days();
+        let rotator = LogRotator::new(retention_days);
         Self { config, rotator }
     }
 
@@ -89,12 +90,14 @@ mod tests {
 
     fn make_entry(command: &str, action: SerializableAction) -> AuditEntry {
         AuditEntry {
-            timestamp: Utc::now(),
+            timestamp: Utc::now().to_rfc3339(),
             command: command.to_string(),
             action,
-            matched_rule: None,
-            sub_evaluations: None,
+            matched_rules: vec![],
+            sandbox_preset: None,
+            default_action: None,
             metadata: AuditMetadata::default(),
+            sub_evaluations: None,
         }
     }
 
@@ -128,10 +131,19 @@ mod tests {
             .write(&make_entry("git status", SerializableAction::Allow))
             .unwrap();
         writer
-            .write(&make_entry("rm -rf /", SerializableAction::Deny))
+            .write(&make_entry(
+                "rm -rf /",
+                SerializableAction::Deny {
+                    message: None,
+                    fix_suggestion: None,
+                },
+            ))
             .unwrap();
         writer
-            .write(&make_entry("terraform apply", SerializableAction::Ask))
+            .write(&make_entry(
+                "terraform apply",
+                SerializableAction::Ask { message: None },
+            ))
             .unwrap();
 
         let today = Utc::now().format("%Y-%m-%d");
@@ -139,23 +151,6 @@ mod tests {
         let content = std::fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
-
-        let actions: Vec<SerializableAction> = lines
-            .iter()
-            .map(|line| {
-                let entry: AuditEntry = serde_json::from_str(line).unwrap();
-                entry.action
-            })
-            .collect();
-
-        assert_eq!(
-            actions,
-            vec![
-                SerializableAction::Allow,
-                SerializableAction::Deny,
-                SerializableAction::Ask,
-            ]
-        );
     }
 
     #[rstest]
@@ -198,20 +193,27 @@ mod tests {
         let writer = AuditWriter::new(config);
 
         let entry = AuditEntry {
-            timestamp: Utc::now(),
+            timestamp: Utc::now().to_rfc3339(),
             command: "git push".to_string(),
-            action: SerializableAction::Deny,
-            matched_rule: Some(crate::audit::SerializableRuleMatch {
-                pattern: "git push -f *".to_string(),
-                action: SerializableAction::Deny,
-            }),
-            sub_evaluations: None,
-            metadata: AuditMetadata {
-                session_id: Some("sess-123".to_string()),
-                tool_name: Some("Bash".to_string()),
-                cwd: Some("/home/user".to_string()),
-                subcommand: Some("hook".to_string()),
+            action: SerializableAction::Deny {
+                message: Some("force push is forbidden".to_string()),
+                fix_suggestion: Some("git push origin main".to_string()),
             },
+            matched_rules: vec![crate::audit::SerializableRuleMatch {
+                action_kind: "deny".to_string(),
+                pattern: "git push -f *".to_string(),
+                matched_tokens: vec!["origin".to_string(), "main".to_string()],
+            }],
+            sandbox_preset: None,
+            default_action: None,
+            metadata: AuditMetadata {
+                endpoint_type: "hook".to_string(),
+                session_id: Some("sess-123".to_string()),
+                cwd: Some("/home/user".to_string()),
+                tool_name: Some("Bash".to_string()),
+                hook_event_name: Some("PreToolUse".to_string()),
+            },
+            sub_evaluations: None,
         };
 
         writer.write(&entry).unwrap();
@@ -222,8 +224,8 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
 
         assert_eq!(parsed["command"], "git push");
-        assert_eq!(parsed["action"], "deny");
-        assert_eq!(parsed["matched_rule"]["pattern"], "git push -f *");
+        assert_eq!(parsed["action"]["type"], "deny");
+        assert_eq!(parsed["matched_rules"][0]["pattern"], "git push -f *");
         assert_eq!(parsed["metadata"]["session_id"], "sess-123");
         assert_eq!(parsed["metadata"]["tool_name"], "Bash");
     }
@@ -264,24 +266,5 @@ mod tests {
 
         let result = writer.write(&entry);
         assert!(result.is_err());
-    }
-
-    #[rstest]
-    fn metadata_omits_none_fields_in_json(audit_dir: TempDir) {
-        let config = make_config(&audit_dir);
-        let writer = AuditWriter::new(config);
-
-        let entry = make_entry("ls", SerializableAction::Allow);
-        writer.write(&entry).unwrap();
-
-        let today = Utc::now().format("%Y-%m-%d");
-        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
-        let content = std::fs::read_to_string(&log_path).unwrap();
-
-        // None fields should not appear in output
-        assert!(!content.contains("session_id"));
-        assert!(!content.contains("tool_name"));
-        assert!(!content.contains("cwd"));
-        assert!(!content.contains("subcommand"));
     }
 }

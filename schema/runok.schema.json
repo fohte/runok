@@ -47,7 +47,7 @@
       ]
     },
     "audit": {
-      "description": "Audit log configuration.",
+      "description": "Audit log settings.",
       "anyOf": [
         {
           "$ref": "#/$defs/AuditConfig"
@@ -341,7 +341,7 @@
           ]
         },
         "path": {
-          "description": "Base directory for audit log files (default: ~/.local/share/runok/).",
+          "description": "Directory path for audit log files (default: ~/.local/share/runok/).",
           "type": [
             "string",
             "null"
@@ -361,7 +361,7 @@
       }
     },
     "RotationConfig": {
-      "description": "Log rotation settings.",
+      "description": "Log rotation configuration.",
       "type": "object",
       "properties": {
         "retention_days": {
