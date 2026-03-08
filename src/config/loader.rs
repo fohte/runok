@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use super::{Config, ConfigError, parse_config};
+use super::cache::PresetCache;
+use super::{Config, ConfigError, parse_config, resolve_extends};
 
 /// Trait for loading and merging configuration files.
 pub trait ConfigLoader {
@@ -73,45 +74,54 @@ impl DefaultConfigLoader {
     }
 }
 
+/// Strip audit settings from a config, emitting a warning.
+/// Audit settings can only be configured in the global config.
+fn strip_audit(mut config: Config, source: &str) -> Config {
+    if config.audit.is_some() {
+        eprintln!(
+            "warning: 'audit' section in {source} is ignored \
+             (audit settings can only be configured in the global config)"
+        );
+        config.audit = None;
+    }
+    config
+}
+
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
+        let cache = PresetCache::from_env().unwrap_or_else(|_| {
+            PresetCache::with_config(
+                cwd.join(".cache").join("runok"),
+                std::time::Duration::from_secs(3600),
+            )
+        });
+
         let global = self
             .global_config_path
             .as_ref()
             .filter(|p| p.exists())
-            .map(|p| Self::read_and_parse(p))
+            .map(|p| {
+                let config = Self::read_and_parse(p)?;
+                let base_dir = p.parent().unwrap_or(Path::new("."));
+                resolve_extends(config, base_dir, &p.to_string_lossy(), &cache)
+            })
             .transpose()?;
 
         let local = Self::local_config_path(cwd)
-            .map(|p| Self::read_and_parse(&p))
+            .map(|p| -> Result<Config, ConfigError> {
+                let config = Self::read_and_parse(&p)?;
+                let resolved = resolve_extends(config, cwd, &p.to_string_lossy(), &cache)?;
+                Ok(strip_audit(resolved, "project config"))
+            })
             .transpose()?;
 
         let local_override = Self::local_override_config_path(cwd)
-            .map(|p| Self::read_and_parse(&p))
+            .map(|p| -> Result<Config, ConfigError> {
+                let config = Self::read_and_parse(&p)?;
+                let resolved = resolve_extends(config, cwd, &p.to_string_lossy(), &cache)?;
+                Ok(strip_audit(resolved, "local override config"))
+            })
             .transpose()?;
-
-        // Audit settings are global-only; strip them from project/local layers
-        // before merging so they cannot override the global config.
-        let local = local.map(|mut c| {
-            if c.audit.is_some() {
-                eprintln!(
-                    "warning: 'audit' section in project config is ignored \
-                     (audit settings can only be configured in the global config)"
-                );
-                c.audit = None;
-            }
-            c
-        });
-        let local_override = local_override.map(|mut c| {
-            if c.audit.is_some() {
-                eprintln!(
-                    "warning: 'audit' section in local override config is ignored \
-                     (audit settings can only be configured in the global config)"
-                );
-                c.audit = None;
-            }
-            c
-        });
 
         let mut config = global
             .unwrap_or_default()
@@ -525,6 +535,48 @@ mod tests {
         assert_eq!(audit.enabled, Some(true));
         assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
         assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
+
+    #[test]
+    fn load_audit_stripped_from_extended_project_config() {
+        let env = TestEnv::new();
+        env.write_global(indoc! {"
+            audit:
+              enabled: true
+              path: /global/audit/
+        "});
+        // Preset file referenced by project config contains audit settings
+        fs::write(
+            env.cwd.join("preset.yml"),
+            indoc! {"
+                audit:
+                  enabled: false
+                  path: /preset/audit/
+                rules:
+                  - allow: 'echo preset'
+            "},
+        )
+        .unwrap();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                extends:
+                  - ./preset.yml
+                rules:
+                  - allow: 'echo local'
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // Audit from the extended preset is stripped; global audit is preserved
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        // Rules from the preset are still merged
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("echo preset"));
+        assert_eq!(rules[1].allow.as_deref(), Some("echo local"));
     }
 
     #[test]
