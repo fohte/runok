@@ -699,6 +699,24 @@ mod tests {
 
     // === load_remote_preset tests ===
 
+    /// Bundles a `TempDir` with a `PresetCache` so the temporary directory
+    /// lives as long as the cache (preventing premature cleanup).
+    struct CacheFixture {
+        cache: PresetCache,
+        // Held to keep the temporary directory alive for the test's lifetime.
+        _tmp: TempDir,
+    }
+
+    #[fixture]
+    fn cache_fixture() -> CacheFixture {
+        let tmp = TempDir::new().unwrap();
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        CacheFixture { cache, _tmp: tmp }
+    }
+
     #[fixture]
     fn tmp() -> TempDir {
         TempDir::new().unwrap()
@@ -710,11 +728,8 @@ mod tests {
     }
 
     #[rstest]
-    fn clone_miss_calls_clone_with_branch(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn clone_miss_calls_clone_with_branch(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -724,7 +739,7 @@ mod tests {
 
         // Mock clone doesn't create files, so read_preset_from_dir will fail.
         // We verify clone was called with correct --branch.
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_with_branch = calls.iter().any(|c| {
@@ -813,11 +828,8 @@ mod tests {
     }
 
     #[rstest]
-    fn cache_hit_skips_clone(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn cache_hit_skips_clone(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -841,7 +853,7 @@ mod tests {
         let mock = MockGitClient::new();
         // No clone/fetch results queued — should not be called
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
@@ -851,11 +863,8 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_cache_fetch_success(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_fetch_success(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -881,18 +890,15 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
     }
 
     #[rstest]
-    fn stale_cache_fetch_failure_uses_old_cache(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_fetch_failure_uses_old_cache(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -919,18 +925,15 @@ mod tests {
             message: "network error".to_string(),
         }));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("old cached rule"));
     }
 
     #[rstest]
-    fn clone_failure_no_cache_returns_error(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn clone_failure_no_cache_returns_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -940,7 +943,7 @@ mod tests {
             message: "authentication failed".to_string(),
         }));
 
-        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { reference, .. }) => {
@@ -951,11 +954,8 @@ mod tests {
     }
 
     #[rstest]
-    fn commit_sha_triggers_fetch_and_checkout_after_clone(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn commit_sha_triggers_fetch_and_checkout_after_clone(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let sha = "abc1234def567890abc1234def567890abc12345";
         let reference_str = &format!("github:org/repo@{sha}");
         let parsed = parse_preset_reference(reference_str).unwrap();
@@ -967,7 +967,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -994,11 +994,8 @@ mod tests {
     }
 
     #[rstest]
-    fn git_url_commit_sha_fetches_then_checkouts(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn git_url_commit_sha_fetches_then_checkouts(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let sha = "abc1234def567890abc1234def567890abc12345";
         let reference_str = &format!("https://github.com/org/repo.git@{sha}");
         let parsed = parse_preset_reference(reference_str).unwrap();
@@ -1009,7 +1006,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -1030,11 +1027,8 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_cache_latest_checkouts_fetch_head(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_latest_checkouts_fetch_head(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -1060,7 +1054,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
@@ -1076,16 +1070,9 @@ mod tests {
         );
     }
 
-    fn make_cache(tmp: &TempDir) -> PresetCache {
-        PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        )
-    }
-
     #[rstest]
-    fn lock_acquired_for_cache_miss(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn lock_acquired_for_cache_miss(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -1095,15 +1082,15 @@ mod tests {
 
         // Cache miss triggers clone (which won't create runok.yml, so it errors).
         // The important thing: the lock file should exist after the call.
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let lock_path = cache.lock_path(reference_str);
         assert!(lock_path.exists(), "lock file should be created");
     }
 
     #[rstest]
-    fn lock_acquired_for_stale_cache(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn lock_acquired_for_stale_cache(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -1129,15 +1116,15 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let _config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let lock_path = cache.lock_path(reference_str);
         assert!(lock_path.exists(), "lock file should be created");
     }
 
     #[rstest]
-    fn cache_hit_skips_lock(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn cache_hit_skips_lock(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -1160,7 +1147,7 @@ mod tests {
 
         let mock = MockGitClient::new();
 
-        let _config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let lock_path = cache.lock_path(reference_str);
         assert!(
@@ -1170,8 +1157,8 @@ mod tests {
     }
 
     #[rstest]
-    fn missing_runok_yml_returns_error(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn missing_runok_yml_returns_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -1180,7 +1167,7 @@ mod tests {
         mock.on_clone(Ok(()));
         mock.on_rev_parse(Ok("abc123".to_string()));
 
-        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { message, .. }) => {

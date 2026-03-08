@@ -158,13 +158,24 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
+    /// Bundles a `TempDir` with a `PresetCache` so the temporary directory
+    /// lives as long as the cache (preventing premature cleanup).
+    struct CacheFixture {
+        cache: PresetCache,
+        // Held to keep the temporary directory alive for the test's lifetime.
+        _tmp: TempDir,
+    }
+
+    #[fixture]
+    fn cache_fixture() -> CacheFixture {
+        let tmp = TempDir::new().unwrap();
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        CacheFixture { cache, _tmp: tmp }
+    }
+
     #[fixture]
     fn tmp() -> TempDir {
         TempDir::new().unwrap()
-    }
-
-    fn make_cache(tmp: &TempDir) -> PresetCache {
-        PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600))
     }
 
     #[rstest]
@@ -188,18 +199,16 @@ mod tests {
     }
 
     #[rstest]
-    fn miss_when_no_cache_dir(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn miss_when_no_cache_dir(cache_fixture: CacheFixture) {
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Miss
         ));
     }
 
     #[rstest]
-    fn hit_when_fresh_cache(tmp: TempDir) {
-        let cache = make_cache(&tmp);
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn hit_when_fresh_cache(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
         let now = SystemTime::now()
@@ -215,15 +224,14 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Hit(_)
         ));
     }
 
     #[rstest]
-    fn stale_when_ttl_exceeded(tmp: TempDir) {
-        let cache = make_cache(&tmp);
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn stale_when_ttl_exceeded(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
         let metadata = CacheMetadata {
@@ -235,15 +243,14 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Stale(_)
         ));
     }
 
     #[rstest]
-    fn immutable_never_stale(tmp: TempDir) {
-        let cache = make_cache(&tmp);
-        let dir = cache.cache_dir("github:org/repo@abc123");
+    fn immutable_never_stale(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@abc123");
         std::fs::create_dir_all(&dir).unwrap();
 
         let metadata = CacheMetadata {
@@ -255,30 +262,28 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@abc123", true),
+            cache_fixture.cache.check("github:org/repo@abc123", true),
             CacheStatus::Hit(_)
         ));
     }
 
     #[rstest]
-    fn stale_when_no_metadata(tmp: TempDir) {
-        let cache = make_cache(&tmp);
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn stale_when_no_metadata(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
         // No metadata.json written
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Stale(_)
         ));
     }
 
     #[rstest]
-    fn lock_path_is_beside_cache_dir(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn lock_path_is_beside_cache_dir(cache_fixture: CacheFixture) {
         let reference = "github:org/repo@v1";
-        let cache_dir = cache.cache_dir(reference);
-        let lock_path = cache.lock_path(reference);
+        let cache_dir = cache_fixture.cache.cache_dir(reference);
+        let lock_path = cache_fixture.cache.lock_path(reference);
 
         // Lock file should be in the same parent as the cache dir
         assert_eq!(lock_path.parent(), cache_dir.parent());
@@ -290,27 +295,25 @@ mod tests {
     }
 
     #[rstest]
-    fn acquire_lock_creates_file(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn acquire_lock_creates_file(cache_fixture: CacheFixture) {
         let reference = "github:org/repo@v1";
-        let lock_path = cache.lock_path(reference);
+        let lock_path = cache_fixture.cache.lock_path(reference);
 
         assert!(!lock_path.exists());
-        let _lock = cache.acquire_lock(reference).unwrap();
+        let _lock = cache_fixture.cache.acquire_lock(reference).unwrap();
         assert!(lock_path.exists());
     }
 
     #[rstest]
-    fn lock_is_released_on_drop(tmp: TempDir) {
-        let cache = make_cache(&tmp);
+    fn lock_is_released_on_drop(cache_fixture: CacheFixture) {
         let reference = "github:org/repo@v1";
 
         {
-            let _lock = cache.acquire_lock(reference).unwrap();
+            let _lock = cache_fixture.cache.acquire_lock(reference).unwrap();
             // Lock is held here
         }
         // After drop, another lock should be acquirable immediately
-        let _lock2 = cache.acquire_lock(reference).unwrap();
+        let _lock2 = cache_fixture.cache.acquire_lock(reference).unwrap();
     }
 
     #[rstest]
