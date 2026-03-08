@@ -314,10 +314,22 @@ fn determine_preset_base_dir(
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| parent_base_dir.to_path_buf())
         }
+        Ok(PresetReference::GitHub {
+            path: Some(preset_path),
+            ..
+        }) => {
+            // For GitHub shorthand with a path (e.g., github:org/repo/presets/readonly@v1),
+            // the base directory must be the parent of the preset file within the cloned repo
+            // so that relative extends resolve correctly from the preset's location.
+            let cache_dir = cache.cache_dir(reference);
+            let preset_file = Path::new(&preset_path);
+            match preset_file.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => cache_dir.join(parent),
+                _ => cache_dir,
+            }
+        }
         _ => {
-            // For remote presets, use the cache directory where the repo was cloned.
-            // This ensures the preset's own relative extends (e.g., ./sub/rules.yml)
-            // are resolved within the cloned repository, not the parent config's directory.
+            // For remote presets without a path, use the cache directory (repo root).
             cache.cache_dir(reference)
         }
     }
@@ -963,6 +975,43 @@ mod tests {
                 assert_eq!(parts.len(), 3);
             }
             other => panic!("expected CircularReference, got: {other:?}"),
+        }
+    }
+
+    // === determine_preset_base_dir tests ===
+
+    #[rstest]
+    #[case::github_no_path("github:org/repo@v1", "github:org/repo@v1")]
+    #[case::github_with_simple_path("github:org/repo/readonly@v1", "github:org/repo/readonly@v1")]
+    #[case::github_with_nested_path(
+        "github:org/repo/presets/readonly@v1",
+        "github:org/repo/presets/readonly@v1"
+    )]
+    fn preset_base_dir_for_github_shorthand(
+        tmp: TempDir,
+        #[case] reference: &str,
+        #[case] _label: &str,
+    ) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let cache_dir = cache.cache_dir(reference);
+        let result = determine_preset_base_dir(reference, tmp.path(), &cache);
+
+        let parsed = parse_preset_reference(reference).unwrap();
+        match parsed {
+            PresetReference::GitHub { path: Some(p), .. } => {
+                let expected = match Path::new(&p).parent() {
+                    Some(parent) if !parent.as_os_str().is_empty() => cache_dir.join(parent),
+                    _ => cache_dir,
+                };
+                assert_eq!(result, expected);
+            }
+            PresetReference::GitHub { path: None, .. } => {
+                assert_eq!(result, cache_dir);
+            }
+            _ => panic!("unexpected reference type"),
         }
     }
 }
