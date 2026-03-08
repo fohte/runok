@@ -627,6 +627,12 @@ fn home_dir() -> Option<std::path::PathBuf> {
 }
 
 fn default_audit_dir() -> std::path::PathBuf {
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        let data_home = std::path::PathBuf::from(data_home);
+        if !data_home.as_os_str().is_empty() {
+            return data_home.join("runok");
+        }
+    }
     match home_dir() {
         Some(home) => home.join(".local/share/runok"),
         // Writing to a relative path could be surprising for the user.
