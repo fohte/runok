@@ -1119,6 +1119,226 @@ mod tests {
         );
     }
 
+    // === Path-based remote preset tests ===
+
+    fn write_preset_file(dir: &Path, path: &str, content: &str) {
+        let full_path = dir.join(format!("{path}.yml"));
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full_path, content).unwrap();
+    }
+
+    #[rstest]
+    fn path_based_preset_loads_correct_file(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Simulate a cloned repo with path-based preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'cat *'
+                  - allow: 'ls *'
+            "},
+        );
+        // Also write runok.yml to verify it is NOT loaded
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        // Should load readonly-unix.yml, not runok.yml
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("cat *"));
+        assert_eq!(rules[1].allow.as_deref(), Some("ls *"));
+    }
+
+    #[rstest]
+    fn path_based_preset_with_version(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-git@v2.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-git",
+            indoc! {"
+                rules:
+                  - allow: 'git status *'
+                  - allow: 'git log *'
+                  - allow: 'git diff *'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].allow.as_deref(), Some("git status *"));
+    }
+
+    #[rstest]
+    fn multiple_path_presets_from_same_repo(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+
+        // First preset: readonly-unix
+        let ref1 = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed1 = parse_preset_reference(ref1).unwrap();
+        let cache_dir1 = cache.cache_dir(ref1);
+        std::fs::create_dir_all(&cache_dir1).unwrap();
+        write_preset_file(
+            &cache_dir1,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'cat *'
+            "},
+        );
+        let metadata1 = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: ref1.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir1, &metadata1).unwrap();
+
+        // Second preset: readonly-git
+        let ref2 = "github:fohte/runok-presets/readonly-git@v1";
+        let parsed2 = parse_preset_reference(ref2).unwrap();
+        let cache_dir2 = cache.cache_dir(ref2);
+        std::fs::create_dir_all(&cache_dir2).unwrap();
+        write_preset_file(
+            &cache_dir2,
+            "readonly-git",
+            indoc! {"
+                rules:
+                  - allow: 'git status *'
+            "},
+        );
+        let metadata2 = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: ref2.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir2, &metadata2).unwrap();
+
+        let mock = MockGitClient::new();
+        let config1 = load_remote_preset(&parsed1, ref1, &mock, cache).unwrap();
+        let config2 = load_remote_preset(&parsed2, ref2, &mock, cache).unwrap();
+        let merged = config1.merge(config2);
+
+        let rules = merged.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("cat *"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status *"));
+    }
+
+    #[rstest]
+    fn nonexistent_path_preset_returns_descriptive_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/nonexistent@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Create cache dir but without the expected preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::GitClone { message, .. }) => {
+                assert_eq!(
+                    message,
+                    "preset file 'nonexistent.yml' (or 'nonexistent.yaml') not found in preset repository"
+                );
+            }
+            other => panic!("expected GitClone error, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn path_based_preset_stale_cache_fetches_then_reads_path(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Create a stale cache with the preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'head *'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("abc123".to_string()));
+
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        // Verify fetch was called (stale cache update)
+        let calls = mock.calls.borrow();
+        let has_fetch = calls
+            .iter()
+            .any(|c| matches!(c, crate::config::git_client::mock::GitCall::Fetch));
+        assert!(has_fetch, "expected fetch for stale cache");
+
+        // Verify the path-based file was loaded
+        let rules = config.rules.unwrap();
+        assert_eq!(rules[0].allow.as_deref(), Some("head *"));
+    }
+
     #[rstest]
     fn missing_runok_yml_returns_error(cache_fixture: CacheFixture) {
         let cache = &cache_fixture.cache;
