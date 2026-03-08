@@ -1,6 +1,8 @@
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::PresetError;
@@ -110,6 +112,33 @@ impl PresetCache {
     pub fn read_metadata(metadata_path: &Path) -> Option<CacheMetadata> {
         let content = std::fs::read_to_string(metadata_path).ok()?;
         serde_json::from_str(&content).ok()
+    }
+
+    /// Return the lock file path for a given reference.
+    ///
+    /// The lock file is placed alongside the cache directory (not inside it)
+    /// so it exists before the cache directory is created by `git clone`.
+    pub fn lock_path(&self, reference: &str) -> PathBuf {
+        self.cache_root
+            .join(format!("{}.lock", Self::cache_key(reference)))
+    }
+
+    /// Acquire an exclusive file lock for the given reference.
+    ///
+    /// Creates the lock file and parent directories if they don't exist.
+    /// Blocks until the lock is acquired. The returned `File` holds the lock;
+    /// dropping it releases the lock.
+    pub fn acquire_lock(&self, reference: &str) -> Result<File, PresetError> {
+        let lock_path = self.lock_path(reference);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PresetError::Cache(format!("failed to create lock directory: {e}")))?;
+        }
+        let file = File::create(&lock_path)
+            .map_err(|e| PresetError::Cache(format!("failed to create lock file: {e}")))?;
+        file.lock_exclusive()
+            .map_err(|e| PresetError::Cache(format!("failed to acquire lock: {e}")))?;
+        Ok(file)
     }
 
     /// Write metadata to a `metadata.json` file inside `cache_dir`.
@@ -238,6 +267,46 @@ mod tests {
             cache.check("github:org/repo@v1", false),
             CacheStatus::Stale(_)
         ));
+    }
+
+    #[rstest]
+    fn lock_path_is_beside_cache_dir(tmp: TempDir) {
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        let reference = "github:org/repo@v1";
+        let cache_dir = cache.cache_dir(reference);
+        let lock_path = cache.lock_path(reference);
+
+        // Lock file should be in the same parent as the cache dir
+        assert_eq!(lock_path.parent(), cache_dir.parent());
+        // Lock file name = cache_key + ".lock"
+        assert_eq!(
+            lock_path.file_name().unwrap().to_str().unwrap(),
+            format!("{}.lock", PresetCache::cache_key(reference))
+        );
+    }
+
+    #[rstest]
+    fn acquire_lock_creates_file(tmp: TempDir) {
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        let reference = "github:org/repo@v1";
+        let lock_path = cache.lock_path(reference);
+
+        assert!(!lock_path.exists());
+        let _lock = cache.acquire_lock(reference).unwrap();
+        assert!(lock_path.exists());
+    }
+
+    #[rstest]
+    fn lock_is_released_on_drop(tmp: TempDir) {
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        let reference = "github:org/repo@v1";
+
+        {
+            let _lock = cache.acquire_lock(reference).unwrap();
+            // Lock is held here
+        }
+        // After drop, another lock should be acquirable immediately
+        let _lock2 = cache.acquire_lock(reference).unwrap();
     }
 
     #[rstest]

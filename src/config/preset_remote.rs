@@ -364,16 +364,28 @@ pub fn load_remote_preset<G: GitClient>(
 
     match cache.check(original_reference, params.is_immutable) {
         CacheStatus::Hit(dir) => read_preset_from_dir(&dir, preset_path),
-        CacheStatus::Stale(dir) => {
-            handle_stale_cache(git_client, &dir, &params, original_reference, preset_path)
+        CacheStatus::Stale(_) | CacheStatus::Miss => {
+            // Acquire an exclusive lock to prevent concurrent git operations
+            // on the same cache directory.
+            let _lock = cache.acquire_lock(original_reference)?;
+
+            // Re-check cache status after acquiring the lock, because another
+            // process may have updated it while we were waiting.
+            match cache.check(original_reference, params.is_immutable) {
+                CacheStatus::Hit(dir) => read_preset_from_dir(&dir, preset_path),
+                CacheStatus::Stale(dir) => {
+                    handle_stale_cache(git_client, &dir, &params, original_reference, preset_path)
+                }
+                CacheStatus::Miss => handle_cache_miss(
+                    git_client,
+                    &cache_dir,
+                    &params,
+                    original_reference,
+                    preset_path,
+                ),
+            }
+            // _lock is dropped here, releasing the file lock
         }
-        CacheStatus::Miss => handle_cache_miss(
-            git_client,
-            &cache_dir,
-            &params,
-            original_reference,
-            preset_path,
-        ),
     }
 }
 
@@ -1058,6 +1070,101 @@ mod tests {
         assert!(
             has_checkout_fetch_head,
             "expected checkout with FETCH_HEAD for Latest reference"
+        );
+    }
+
+    #[rstest]
+    fn lock_acquired_for_cache_miss(tmp: TempDir) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_clone(Ok(()));
+        mock.on_rev_parse(Ok("abc123".to_string()));
+
+        // Cache miss triggers clone (which won't create runok.yml, so it errors).
+        // The important thing: the lock file should exist after the call.
+        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+
+        let lock_path = cache.lock_path(reference_str);
+        assert!(lock_path.exists(), "lock file should be created");
+    }
+
+    #[rstest]
+    fn lock_acquired_for_stale_cache(tmp: TempDir) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a stale cache (fetched_at = 0)
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'cargo test'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("def456".to_string()));
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+
+        let lock_path = cache.lock_path(reference_str);
+        assert!(lock_path.exists(), "lock file should be created");
+    }
+
+    #[rstest]
+    fn cache_hit_skips_lock(tmp: TempDir) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a fresh cache
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+
+        let lock_path = cache.lock_path(reference_str);
+        assert!(
+            !lock_path.exists(),
+            "lock file should not be created for cache hit"
         );
     }
 
