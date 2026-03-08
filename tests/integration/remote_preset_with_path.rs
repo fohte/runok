@@ -115,6 +115,8 @@ fn preset_repo_env() -> PresetRepoEnv {
 #[case::grep_allowed("grep -r pattern .", assert_allow as ActionAssertion)]
 #[case::find_allowed("find . -name '*.txt'", assert_allow as ActionAssertion)]
 #[case::sed_readonly_allowed("sed s/foo/bar/ file.txt", assert_allow as ActionAssertion)]
+#[case::sed_inplace_excluded("sed -i s/foo/bar/ file.txt", assert_default as ActionAssertion)]
+#[case::find_delete_excluded("find -delete .", assert_default as ActionAssertion)]
 #[case::rm_not_allowed("rm -rf /", assert_default as ActionAssertion)]
 #[case::curl_not_allowed("curl https://example.com", assert_default as ActionAssertion)]
 fn single_path_preset_readonly_unix(
@@ -176,27 +178,6 @@ fn multiple_path_presets_all_rules_merged(
     let merged = unix_config.merge(git_config);
 
     let result = evaluate_command(&merged, command, &empty_context).unwrap();
-    expected(&result.action);
-}
-
-// ========================================
-// Negation patterns in path-based presets
-// ========================================
-
-#[rstest]
-#[case::sed_readonly("sed s/foo/bar/ file.txt", assert_allow as ActionAssertion)]
-#[case::sed_inplace_excluded("sed -i s/foo/bar/ file.txt", assert_default as ActionAssertion)]
-#[case::find_no_delete("find . -name '*.log'", assert_allow as ActionAssertion)]
-#[case::find_delete_excluded("find -delete .", assert_default as ActionAssertion)]
-fn path_preset_negation_patterns(
-    preset_repo_env: PresetRepoEnv,
-    #[case] command: &str,
-    #[case] expected: ActionAssertion,
-    empty_context: EvalContext,
-) {
-    let config =
-        load_local_preset("./presets/readonly-unix.yml", &preset_repo_env.project_dir).unwrap();
-    let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
 
