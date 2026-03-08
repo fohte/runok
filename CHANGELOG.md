@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.3](https://github.com/fohte/runok/compare/v0.1.2...v0.1.3) (2026-03-08)
+
+
+### Features
+
+* **config:** resolve relative paths based on config file parent directory ([#166](https://github.com/fohte/runok/issues/166)) ([ee1a7c3](https://github.com/fohte/runok/commit/ee1a7c33042631b28b651af34ad1aa63af414a5d))
+* **preset:** add file-based locking for concurrent preset cache access ([#168](https://github.com/fohte/runok/issues/168)) ([27c31f4](https://github.com/fohte/runok/commit/27c31f46fba8adc4fe015b61264aef8a62ec6dc0))
+* **preset:** support path specification in GitHub shorthand references ([#167](https://github.com/fohte/runok/issues/167)) ([eff4b56](https://github.com/fohte/runok/commit/eff4b56fdb28ae717811edbc551abace11fb2b81))
+
+
+### Bug Fixes
+
+* **config:** traverse ancestor directories to find project config ([#165](https://github.com/fohte/runok/issues/165)) ([a49f916](https://github.com/fohte/runok/commit/a49f916bb2c49c9b6efdaa71ada36b663b03f5ab))
+* **preset:** remove unnecessary mutable reference warning ([#169](https://github.com/fohte/runok/issues/169)) ([c1d9d3c](https://github.com/fohte/runok/commit/c1d9d3cee1bb729400e567324118a7b0bfc0d950))
+* **rules:** apply order-independent matching to flag-only negation patterns ([#171](https://github.com/fohte/runok/issues/171)) ([9c43c91](https://github.com/fohte/runok/commit/9c43c91fbc6e8a5196fe5d15b33121afa3f4d483))
+
+
+### Dependencies
+
+* update rust crate serde-saphyr to v0.0.21 ([#162](https://github.com/fohte/runok/issues/162)) ([56c0827](https://github.com/fohte/runok/commit/56c0827f97900583b89a5b2f162f0fa87eacfd5f))
+
 ## [0.1.2](https://github.com/fohte/runok/compare/v0.1.1...v0.1.2) (2026-03-06)
 
 
