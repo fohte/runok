@@ -568,8 +568,14 @@ impl AuditConfig {
     pub fn base_dir(&self) -> std::path::PathBuf {
         match &self.path {
             Some(p) => {
-                if p == "~" {
-                    home_dir().unwrap_or_else(default_audit_dir)
+                // Bare "~" would resolve to $HOME itself, causing
+                // set_permissions(0o700) to restrict the home directory.
+                // Treat it the same as "~/" by appending the default subpath.
+                if p == "~" || p == "~/" {
+                    match home_dir() {
+                        Some(home) => home.join(".local/share/runok"),
+                        None => default_audit_dir(),
+                    }
                 } else if let Some(rest) = p.strip_prefix("~/") {
                     if let Some(home) = home_dir() {
                         home.join(rest)
