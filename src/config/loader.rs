@@ -93,11 +93,23 @@ impl ConfigLoader for DefaultConfigLoader {
         // Audit settings are global-only; strip them from project/local layers
         // before merging so they cannot override the global config.
         let local = local.map(|mut c| {
-            c.audit = None;
+            if c.audit.is_some() {
+                eprintln!(
+                    "warning: 'audit' section in project config is ignored \
+                     (audit settings can only be configured in the global config)"
+                );
+                c.audit = None;
+            }
             c
         });
         let local_override = local_override.map(|mut c| {
-            c.audit = None;
+            if c.audit.is_some() {
+                eprintln!(
+                    "warning: 'audit' section in local override config is ignored \
+                     (audit settings can only be configured in the global config)"
+                );
+                c.audit = None;
+            }
             c
         });
 
