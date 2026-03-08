@@ -37,9 +37,12 @@ extends:
   - github:example-org/example-presets@v1.0.0
   - github:example-org/security-rules@main
   - github:example-org/security-rules # uses default branch
+  - github:example-org/runok-presets/readonly-unix@v1 # specific file in repo
 ```
 
-Format: `github:<owner>/<repo>@<ref>`
+Format: `github:<owner>/<repo>[/<path>][@<ref>]`
+
+The optional `/<path>` specifies a preset file within the repository (without `.yml`/`.yaml` extension). When omitted, runok reads `runok.yml` (or `runok.yaml`) from the repository root. When provided, runok reads `<path>.yml` (or `<path>.yaml`).
 
 The `@<ref>` part is optional and can be:
 
@@ -47,8 +50,6 @@ The `@<ref>` part is optional and can be:
 - A branch name (e.g., `main`)
 - A full commit SHA (40-character hex string)
 - Omitted to use the repository's default branch
-
-The referenced repository must contain a `runok.yml` (or `runok.yaml`) at the root.
 
 ### Git URL
 

@@ -10,10 +10,12 @@ use super::{Config, ConfigError, PresetError, parse_config};
 pub enum PresetReference {
     /// Local file path (relative, absolute, or `~/`-prefixed).
     Local(PathBuf),
-    /// GitHub shorthand (`github:owner/repo[@version]`).
+    /// GitHub shorthand (`github:owner/repo[/path][@version]`).
     GitHub {
         owner: String,
         repo: String,
+        /// Optional path within the repository to a preset file (without extension).
+        path: Option<String>,
         version: GitHubVersion,
     },
     /// Generic git URL (HTTPS or SSH), optionally with a ref.
@@ -79,22 +81,43 @@ pub fn parse_preset_reference(reference: &str) -> Result<PresetReference, Preset
     }
 }
 
-/// Parse `owner/repo[@version]` from a GitHub shorthand.
+/// Parse `owner/repo[/path][@version]` from a GitHub shorthand.
+///
+/// The path portion starts after `owner/repo/` and extends until `@` or end of string.
+/// GitHub repository names cannot contain `/`, so there is no ambiguity.
 fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
     let (path_part, version_part) = match rest.split_once('@') {
         Some((path, version)) => (path, Some(version)),
         None => (rest, None),
     };
 
-    let (owner, repo) = path_part.split_once('/').ok_or_else(|| {
+    let (owner, after_owner) = path_part.split_once('/').ok_or_else(|| {
         PresetError::InvalidReference(format!(
             "invalid GitHub shorthand: expected 'github:owner/repo', got 'github:{rest}'"
         ))
     })?;
 
+    // Split repo from optional path: "repo/path/to/preset" → ("repo", Some("path/to/preset"))
+    let (repo, preset_path) = match after_owner.split_once('/') {
+        Some((repo, path)) => (repo, Some(path)),
+        None => (after_owner, None),
+    };
+
     if owner.is_empty() || repo.is_empty() {
         return Err(PresetError::InvalidReference(format!(
             "invalid GitHub shorthand: owner and repo must not be empty in 'github:{rest}'"
+        )));
+    }
+
+    // Validate path: must not be empty, must not contain traversal sequences or absolute paths
+    if let Some(p) = preset_path
+        && (p.is_empty()
+            || p.starts_with('/')
+            || p.split('/')
+                .any(|seg| seg.is_empty() || seg == ".." || seg == "."))
+    {
+        return Err(PresetError::InvalidReference(format!(
+            "invalid GitHub shorthand: invalid path in 'github:{rest}'"
         )));
     }
 
@@ -112,6 +135,7 @@ fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
     Ok(PresetReference::GitHub {
         owner: owner.to_string(),
         repo: repo.to_string(),
+        path: preset_path.map(String::from),
         version,
     })
 }
@@ -209,6 +233,7 @@ fn resolve_git_params(reference: &PresetReference) -> GitParams {
             owner,
             repo,
             version,
+            ..
         } => {
             let url = format!("https://github.com/{owner}/{repo}.git");
             let git_ref = version.as_git_ref().map(String::from);
@@ -255,10 +280,23 @@ fn emit_mutable_warning(reference: &PresetReference, original: &str) {
     }
 }
 
-/// Read `runok.yml` (or `runok.yaml`) from a directory and parse it as `Config`.
-fn read_preset_from_dir(dir: &Path) -> Result<Config, ConfigError> {
-    let yml = dir.join("runok.yml");
-    let yaml = dir.join("runok.yaml");
+/// Read a preset config file from a directory.
+///
+/// When `preset_path` is `None`, reads `runok.yml` (or `runok.yaml`) from the root.
+/// When `preset_path` is `Some("foo/bar")`, reads `foo/bar.yml` (or `foo/bar.yaml`).
+fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config, ConfigError> {
+    let (yml, yaml, not_found_msg) = match preset_path {
+        Some(p) => (
+            dir.join(format!("{p}.yml")),
+            dir.join(format!("{p}.yaml")),
+            format!("preset file '{p}.yml' (or '{p}.yaml') not found in preset repository"),
+        ),
+        None => (
+            dir.join("runok.yml"),
+            dir.join("runok.yaml"),
+            "runok.yml not found in preset repository".to_string(),
+        ),
+    };
 
     let path = if yml.exists() {
         yml
@@ -267,7 +305,7 @@ fn read_preset_from_dir(dir: &Path) -> Result<Config, ConfigError> {
     } else {
         return Err(PresetError::GitClone {
             reference: dir.display().to_string(),
-            message: "runok.yml not found in preset repository".to_string(),
+            message: not_found_msg,
         }
         .into());
     };
@@ -297,6 +335,14 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+/// Extract the preset path from a reference (only GitHub shorthand supports this).
+fn preset_path_from_reference(reference: &PresetReference) -> Option<&str> {
+    match reference {
+        PresetReference::GitHub { path, .. } => path.as_deref(),
+        _ => None,
+    }
+}
+
 /// Load a remote preset (GitHub shorthand or git URL) with caching.
 ///
 /// Flow:
@@ -314,13 +360,20 @@ pub fn load_remote_preset<G: GitClient>(
 
     let params = resolve_git_params(reference);
     let cache_dir = cache.cache_dir(original_reference);
+    let preset_path = preset_path_from_reference(reference);
 
     match cache.check(original_reference, params.is_immutable) {
-        CacheStatus::Hit(dir) => read_preset_from_dir(&dir),
+        CacheStatus::Hit(dir) => read_preset_from_dir(&dir, preset_path),
         CacheStatus::Stale(dir) => {
-            handle_stale_cache(git_client, &dir, &params, original_reference)
+            handle_stale_cache(git_client, &dir, &params, original_reference, preset_path)
         }
-        CacheStatus::Miss => handle_cache_miss(git_client, &cache_dir, &params, original_reference),
+        CacheStatus::Miss => handle_cache_miss(
+            git_client,
+            &cache_dir,
+            &params,
+            original_reference,
+            preset_path,
+        ),
     }
 }
 
@@ -329,6 +382,7 @@ fn handle_stale_cache<G: GitClient>(
     dir: &Path,
     params: &GitParams,
     original_reference: &str,
+    preset_path: Option<&str>,
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
@@ -342,7 +396,7 @@ fn handle_stale_cache<G: GitClient>(
                     "warning: checkout failed for '{original_reference}': {e}, \
                      using cached version"
                 );
-                return read_preset_from_dir(dir);
+                return read_preset_from_dir(dir, preset_path);
             }
 
             // Update metadata only after successful fetch + checkout
@@ -355,14 +409,14 @@ fn handle_stale_cache<G: GitClient>(
             };
             let _ = PresetCache::write_metadata(dir, &metadata);
 
-            read_preset_from_dir(dir)
+            read_preset_from_dir(dir, preset_path)
         }
         Err(_) => {
             // Fetch failed: use stale cache with a warning
             eprintln!(
                 "warning: Failed to update preset '{original_reference}', using cached version"
             );
-            read_preset_from_dir(dir)
+            read_preset_from_dir(dir, preset_path)
         }
     }
 }
@@ -372,6 +426,7 @@ fn handle_cache_miss<G: GitClient>(
     cache_dir: &Path,
     params: &GitParams,
     original_reference: &str,
+    preset_path: Option<&str>,
 ) -> Result<Config, ConfigError> {
     // Create parent directory only; let git clone create the target directory itself.
     // Creating cache_dir first would cause `git clone` to fail with
@@ -418,7 +473,7 @@ fn handle_cache_miss<G: GitClient>(
     };
     let _ = PresetCache::write_metadata(cache_dir, &metadata);
 
-    read_preset_from_dir(cache_dir)
+    read_preset_from_dir(cache_dir, preset_path)
 }
 
 #[cfg(test)]
@@ -437,6 +492,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Latest,
         }
     )]
@@ -445,6 +501,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Tag("v1.0.0".into()),
         }
     )]
@@ -453,6 +510,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::CommitSha(
                 "abc1234def567890abc1234def567890abc12345".into()
             ),
@@ -463,7 +521,37 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Tag("main".into()),
+        }
+    )]
+    #[case::github_with_path(
+        "github:org/repo/presets/readonly",
+        PresetReference::GitHub {
+            owner: "org".into(),
+            repo: "repo".into(),
+            path: Some("presets/readonly".into()),
+            version: GitHubVersion::Latest,
+        }
+    )]
+    #[case::github_with_path_and_tag(
+        "github:fohte/runok-presets/readonly-unix@v1",
+        PresetReference::GitHub {
+            owner: "fohte".into(),
+            repo: "runok-presets".into(),
+            path: Some("readonly-unix".into()),
+            version: GitHubVersion::Tag("v1".into()),
+        }
+    )]
+    #[case::github_with_nested_path_and_sha(
+        "github:org/repo/path/to/preset@abc1234def567890abc1234def567890abc12345",
+        PresetReference::GitHub {
+            owner: "org".into(),
+            repo: "repo".into(),
+            path: Some("path/to/preset".into()),
+            version: GitHubVersion::CommitSha(
+                "abc1234def567890abc1234def567890abc12345".into()
+            ),
         }
     )]
     #[case::https_url_no_ref(
@@ -537,6 +625,12 @@ mod tests {
     #[case::empty_owner("github:/repo", "owner and repo must not be empty")]
     #[case::empty_repo("github:org/", "owner and repo must not be empty")]
     #[case::empty_version("github:org/repo@", "version must not be empty")]
+    #[case::empty_path_with_version("github:org/repo/@v1", "invalid path")]
+    #[case::path_traversal("github:org/repo/../../etc/passwd@v1", "invalid path")]
+    #[case::path_traversal_no_ref("github:org/repo/../secret", "invalid path")]
+    #[case::absolute_path("github:org/repo//etc/passwd@v1", "invalid path")]
+    #[case::dot_segment("github:org/repo/./foo@v1", "invalid path")]
+    #[case::trailing_slash("github:org/repo/foo/bar/@v1", "invalid path")]
     fn parse_reference_errors(#[case] input: &str, #[case] expected_msg: &str) {
         let err = parse_preset_reference(input).unwrap_err();
         assert!(
@@ -581,6 +675,7 @@ mod tests {
         let reference = PresetReference::GitHub {
             owner: owner.to_string(),
             repo: repo.to_string(),
+            path: None,
             version: GitHubVersion::Latest,
         };
         let params = resolve_git_params(&reference);
@@ -633,7 +728,7 @@ mod tests {
             "},
         );
 
-        let config = read_preset_from_dir(tmp.path()).unwrap();
+        let config = read_preset_from_dir(tmp.path(), None).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("git status"));
     }
@@ -649,9 +744,57 @@ mod tests {
         )
         .unwrap();
 
-        let config = read_preset_from_dir(tmp.path()).unwrap();
+        let config = read_preset_from_dir(tmp.path(), None).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
+    }
+
+    #[rstest]
+    #[case::yml("presets/readonly.yml", "presets/readonly", "allow", "cat *")]
+    #[case::yaml("my-preset.yaml", "my-preset", "deny", "rm *")]
+    fn read_preset_from_dir_with_path(
+        tmp: TempDir,
+        #[case] file_path: &str,
+        #[case] preset_path: &str,
+        #[case] rule_kind: &str,
+        #[case] rule_value: &str,
+    ) {
+        let full_path = tmp.path().join(file_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let yaml = format!(
+            indoc! {"
+                rules:
+                  - {kind}: '{value}'
+            "},
+            kind = rule_kind,
+            value = rule_value,
+        );
+        std::fs::write(&full_path, yaml).unwrap();
+
+        let config = read_preset_from_dir(tmp.path(), Some(preset_path)).unwrap();
+        let rules = config.rules.unwrap();
+        let actual = match rule_kind {
+            "allow" => rules[0].allow.as_deref(),
+            "deny" => rules[0].deny.as_deref(),
+            _ => panic!("unexpected rule kind: {rule_kind}"),
+        };
+        assert_eq!(actual, Some(rule_value));
+    }
+
+    #[rstest]
+    fn read_preset_from_dir_with_path_not_found(tmp: TempDir) {
+        let err = read_preset_from_dir(tmp.path(), Some("nonexistent")).unwrap_err();
+        match err {
+            ConfigError::Preset(PresetError::GitClone { message, .. }) => {
+                assert_eq!(
+                    message,
+                    "preset file 'nonexistent.yml' (or 'nonexistent.yaml') not found in preset repository"
+                );
+            }
+            other => panic!("expected GitClone error, got: {other:?}"),
+        }
     }
 
     #[rstest]

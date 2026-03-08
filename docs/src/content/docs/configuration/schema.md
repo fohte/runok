@@ -47,6 +47,7 @@ List of configuration files to inherit from. Supports local paths and remote Git
 extends:
   - ./base.yml
   - github:example-org/example-presets@v1.0.0
+  - github:example-org/runok-presets/readonly-unix@v1
 ```
 
 See [Extends (Presets)](/configuration/extends/) for full details on local paths, GitHub shorthand, and Git URLs.
