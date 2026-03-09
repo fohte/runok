@@ -8,6 +8,7 @@ pub mod path_resolver;
 mod preset;
 pub(crate) mod preset_remote;
 
+pub use cache::PresetCache;
 pub use error::*;
 pub use loader::*;
 pub use model::*;
