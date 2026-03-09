@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
@@ -118,13 +118,21 @@ fn parent_rules_override_child_rules(
 ) {
     fs::write(
         env.project_dir.join("child.yml"),
-        format!("rules:\n  - {}", child_rule),
+        formatdoc! {"
+            rules:
+              - {child_rule}
+        "},
     )
     .unwrap();
 
     fs::write(
         env.project_dir.join("runok.yml"),
-        format!("extends:\n  - ./child.yml\nrules:\n  - {}", parent_rule),
+        formatdoc! {"
+            extends:
+              - ./child.yml
+            rules:
+              - {parent_rule}
+        "},
     )
     .unwrap();
 
