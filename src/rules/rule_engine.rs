@@ -525,13 +525,9 @@ fn try_unwrap_wrapper(
                     Some(prev) => {
                         let prev_matched = !prev.matched_rules.is_empty();
                         let cand_matched = !candidate_result.matched_rules.is_empty();
-                        if cand_matched && !prev_matched {
-                            candidate_result
-                        } else if !cand_matched && prev_matched {
-                            prev
-                        } else if action_priority(&candidate_result.action)
-                            > action_priority(&prev.action)
-                        {
+                        let prev_prio = action_priority(&prev.action);
+                        let cand_prio = action_priority(&candidate_result.action);
+                        if (cand_matched, cand_prio) > (prev_matched, prev_prio) {
                             candidate_result
                         } else {
                             prev
@@ -598,7 +594,7 @@ pub fn default_action(config: &Config) -> Action {
     match config.defaults.as_ref().and_then(|d| d.action) {
         Some(ActionKind::Allow) => Action::Allow,
         Some(ActionKind::Deny) => Action::Deny(DenyResponse {
-            message: Some("command denied by default policy".to_string()),
+            message: None,
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
