@@ -65,14 +65,13 @@ And that's just the start. Claude Code's built-in permissions have other limitat
   fix_suggestion: 'git push --force-with-lease'
 ```
 
-**Global flags break matching.** Claude sometimes adds flags like `-C` before the subcommand. `git -C /path commit` does not match `Bash(git commit *)`. runok's order-independent matching automatically skips boolean flags, and optional groups handle value-flags:
+**Global flags break matching.** Claude sometimes adds flags like `-C` before the subcommand. `git -C /path commit` does not match `Bash(git commit *)`. runok handles this with optional groups and order-independent matching:
 
 ```yaml
 # runok.yml
 - allow: 'git [-C *] commit *'
 # matches: git commit -m "fix"
 # matches: git -C /path/to/repo commit -m "fix"
-# matches: git -v commit -m "fix"  (boolean flag skipped automatically)
 ```
 
 **No recursive parsing of wrappers.** Claude Code does not inspect `sudo`, `bash -c`, or `$()`. runok recursively unwraps them to evaluate the inner command:
