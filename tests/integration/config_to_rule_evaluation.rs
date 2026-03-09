@@ -955,3 +955,48 @@ fn flag_negation_order_independent(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Flag-only negation with `=`-joined tokens
+// ========================================
+
+#[rstest]
+#[case::equals_form_rejected(
+    "rg --pre=pdftotext pattern",
+    assert_default as ActionAssertion,
+)]
+#[case::space_form_rejected(
+    "rg --pre pdftotext pattern",
+    assert_default as ActionAssertion,
+)]
+#[case::different_flag_equals_allowed(
+    "rg --color=always pattern",
+    assert_allow as ActionAssertion,
+)]
+#[case::no_flag_allowed(
+    "rg pattern file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::alt_negation_equals_rejected(
+    "sort --output=result.txt file.txt",
+    assert_default as ActionAssertion,
+)]
+#[case::alt_negation_equals_different_flag_allowed(
+    "sort --reverse file.txt",
+    assert_allow as ActionAssertion,
+)]
+fn flag_negation_equals_form(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'rg !--pre *'
+          - allow: 'sort !-o|--output|--compress-program *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

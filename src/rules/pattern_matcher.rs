@@ -231,7 +231,7 @@ fn match_tokens_core<'a>(
             let negation_passed = if is_flag_only_negation(inner) {
                 !cmd_tokens
                     .iter()
-                    .any(|t| match_single_token(inner, t, definitions))
+                    .any(|t| match_flag_token_with_equals(inner, t, definitions))
             } else {
                 !match_single_token(inner, cmd_tokens[0], definitions)
             };
@@ -503,7 +503,7 @@ fn extract_placeholder_all<'a>(
             let negation_passed = if is_flag_only_negation(inner) {
                 !cmd_tokens
                     .iter()
-                    .any(|t| match_single_token(inner, t, definitions))
+                    .any(|t| match_flag_token_with_equals(inner, t, definitions))
             } else {
                 !match_single_token(inner, cmd_tokens[0], definitions)
             };
@@ -837,6 +837,29 @@ fn is_flag_only_negation(inner: &PatternToken) -> bool {
     }
 }
 
+/// Like [`match_single_token`] but also matches the flag portion of
+/// `=`-joined command tokens (e.g. `--pre=pdftotext` matches pattern `--pre`).
+/// This is used for flag-only negation so that `\!--pre` correctly rejects
+/// `--pre=value` in addition to the space-separated `--pre value` form.
+fn match_flag_token_with_equals(
+    pattern: &PatternToken,
+    cmd_token: &str,
+    definitions: &Definitions,
+) -> bool {
+    if match_single_token(pattern, cmd_token, definitions) {
+        return true;
+    }
+    // If the command token contains `=` and the flag part starts with `-`,
+    // try matching only the flag portion before `=`.
+    if let Some(eq_pos) = cmd_token.find('=') {
+        let flag_part = &cmd_token[..eq_pos];
+        if flag_part.starts_with('-') {
+            return match_single_token(pattern, flag_part, definitions);
+        }
+    }
+    false
+}
+
 /// Remove elements at the given indices from a slice, returning a new Vec.
 fn remove_indices<'a>(tokens: &[&'a str], indices: &[usize]) -> Vec<&'a str> {
     tokens
@@ -986,6 +1009,23 @@ mod tests {
     #[case::flag_negation_alt_allows(
         "find !-delete|-fprint|-fls *",
         "find . -type f -name foo",
+        true
+    )]
+    // Flag-only negation with `=`-joined tokens
+    #[case::flag_negation_rejects_equals_form("rg !--pre *", "rg --pre=pdftotext pattern", false)]
+    #[case::flag_negation_allows_different_flag_equals(
+        "rg !--pre *",
+        "rg --color=always pattern",
+        true
+    )]
+    #[case::flag_negation_alt_rejects_equals_form(
+        "sort !-o|--output|--compress-program *",
+        "sort --output=result.txt file.txt",
+        false
+    )]
+    #[case::flag_negation_alt_allows_equals_different_flag(
+        "sort !-o|--output|--compress-program *",
+        "sort --reverse=true file.txt",
         true
     )]
     fn negation_matching(
