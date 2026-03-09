@@ -146,10 +146,13 @@ fn parent_rules_override_child_rules(
     assert_action(&result.action);
 }
 
-/// Multiple extends merge rules from all referenced files.
+/// Multiple extends merge rules from all referenced files regardless of order.
 /// Each extends entry contributes its rules to the final config.
 #[rstest]
+#[case::base_then_extra(&["./base.yml", "./extra.yml"])]
+#[case::extra_then_base(&["./extra.yml", "./base.yml"])]
 fn multiple_extends_rules_are_merged(
+    #[case] extends_order: &[&str],
     env: ExtendsTestEnv,
     empty_context: runok::rules::rule_engine::EvalContext,
 ) {
@@ -171,12 +174,17 @@ fn multiple_extends_rules_are_merged(
     )
     .unwrap();
 
+    let extends_yaml = extends_order
+        .iter()
+        .map(|s| format!("  - {s}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     fs::write(
         env.project_dir.join("runok.yml"),
-        indoc! {"
+        formatdoc! {"
             extends:
-              - ./base.yml
-              - ./extra.yml
+            {extends_yaml}
         "},
     )
     .unwrap();
@@ -187,7 +195,7 @@ fn multiple_extends_rules_are_merged(
     let resolved =
         resolve_extends(parent_config, &env.project_dir, "runok.yml", &env.cache).unwrap();
 
-    // Rules from both extends entries are available
+    // Rules from both extends entries are available regardless of order
     let echo_result = evaluate_command(&resolved, "echo hello", &empty_context).unwrap();
     assert_allow(&echo_result.action);
 
