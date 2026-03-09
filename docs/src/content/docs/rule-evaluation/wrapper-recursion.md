@@ -59,7 +59,7 @@ Command: `sudo bash -c "rm -rf /"`
 
 **Step 2: Depth 1 — Evaluate `bash -c "rm -rf /"`**
 
-- Direct rules: no match → `default`
+- Direct rules: no match → resolved to `defaults.action`
 - `bash -c <cmd>` matches → wrapped command: `rm -rf /`
 - Recurse into wrapped command (depth 2)
 
@@ -71,7 +71,7 @@ Command: `sudo bash -c "rm -rf /"`
 
 **Unwinding:**
 
-- Depth 1: merge `default` with `deny` → **deny** wins
+- Depth 1: merge `defaults.action` with `deny` → **deny** wins
 - Depth 0: merge `allow` with `deny` → **deny** wins
 
 Final result: **deny**. The dangerous wrapped command is blocked even though `sudo *` is allowed.
@@ -110,4 +110,4 @@ When a wrapper pattern uses placeholders like `<opts>`, the placeholder consumes
 
 ## Default action resolution
 
-When the wrapped command does not match any rule, the `Action::Default` is resolved to the configured [`defaults.action`](/configuration/schema/#defaultsaction) **before** merging with the outer command's direct match result. This ensures that unmatched wrapped commands are not silently ignored.
+When the wrapped command does not match any rule, its action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `ask` if unconfigured). This ensures that unmatched wrapped commands participate in the merge at their effective restriction level, rather than being silently ignored.
