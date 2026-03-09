@@ -149,7 +149,7 @@ fn run_audit(args: AuditArgs, cwd: &std::path::Path) -> i32 {
     };
 
     let audit_config = config.audit.unwrap_or_default();
-    let log_dir = PathBuf::from(audit_config.resolved_path());
+    let log_dir = audit_config.base_dir();
 
     let mut filter = AuditFilter::new();
     filter.limit = args.limit;
