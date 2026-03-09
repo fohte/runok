@@ -5,6 +5,7 @@
 //! and path-variable expansion via [`Definitions`].
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use crate::config::Definitions;
@@ -20,8 +21,7 @@ const MAX_MATCH_STEPS: usize = 10_000;
 /// list.  Used by the Literal matcher to identify value-flag tokens whose
 /// values should also be skipped when searching for the first positional
 /// argument in `cmd_tokens`.
-fn collect_value_flag_aliases(tokens: &[PatternToken]) -> Vec<&str> {
-    let mut aliases = Vec::new();
+fn collect_value_flag_aliases<'a>(tokens: &'a [PatternToken], aliases: &mut HashSet<&'a str>) {
     for token in tokens {
         if let PatternToken::FlagWithValue {
             aliases: flag_aliases,
@@ -29,25 +29,24 @@ fn collect_value_flag_aliases(tokens: &[PatternToken]) -> Vec<&str> {
         } = token
         {
             for a in flag_aliases {
-                aliases.push(a.as_str());
+                aliases.insert(a.as_str());
             }
         }
         if let PatternToken::Optional(inner) = token {
-            aliases.extend(collect_value_flag_aliases(inner));
+            collect_value_flag_aliases(inner, aliases);
         }
     }
-    aliases
 }
 
 /// Find the index of the first positional (non-flag) token in `cmd_tokens`,
 /// skipping over flag tokens and their associated values based on
 /// `value_flag_aliases`.  Returns `None` if no positional token is found.
-fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &[&str]) -> Option<usize> {
+fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &HashSet<&str>) -> Option<usize> {
     let mut i = 0;
     while i < cmd_tokens.len() {
         let t = cmd_tokens[i];
         if t.starts_with('-') && t != "--" {
-            if value_flag_aliases.contains(&t) && i + 1 < cmd_tokens.len() {
+            if value_flag_aliases.contains(t) && i + 1 < cmd_tokens.len() {
                 i += 2;
             } else {
                 i += 1;
@@ -246,7 +245,8 @@ fn match_tokens_core<'a>(
             // positional argument.  Only the matched positional token is
             // removed; skipped flag tokens are kept for later FlagWithValue
             // or flag-only Alternation matching.
-            let value_aliases = collect_value_flag_aliases(rest);
+            let mut value_aliases = HashSet::new();
+            collect_value_flag_aliases(rest, &mut value_aliases);
             let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
                 return false;
             };
