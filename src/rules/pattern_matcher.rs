@@ -96,12 +96,14 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
     for skip in skip_range {
         let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
         if match_tokens_core(
             &pattern.tokens,
             &cmd_tokens[skip..],
             definitions,
             &steps,
             None,
+            &after_dd,
         ) {
             return true;
         }
@@ -124,6 +126,7 @@ pub fn matches_with_captures(
     let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
     for skip in skip_range {
         let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
         let mut captures = Vec::new();
         if match_tokens_core(
             &pattern.tokens,
@@ -131,6 +134,7 @@ pub fn matches_with_captures(
             definitions,
             &steps,
             Some(&mut captures),
+            &after_dd,
         ) {
             return Some(captures.into_iter().map(|s| s.to_string()).collect());
         }
@@ -145,12 +149,17 @@ pub fn matches_with_captures(
 ///
 /// `steps` tracks the total number of recursive calls to prevent exponential
 /// blowup from patterns with multiple consecutive wildcards.
+///
+/// `after_double_dash` is set to `true` once a `--` literal has been matched.
+/// After `--`, all tokens (including those starting with `-`) are treated as
+/// positional arguments, disabling the flag-skipping logic in Literal matching.
 fn match_tokens_core<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
     definitions: &Definitions,
     steps: &Cell<usize>,
     mut captures: Option<&mut Vec<&'a str>>,
+    after_double_dash: &Cell<bool>,
 ) -> bool {
     let count = steps.get() + 1;
     steps.set(count);
@@ -170,12 +179,25 @@ fn match_tokens_core<'a>(
                 if let Some(ref mut caps) = captures {
                     let saved_len = caps.len();
                     caps.extend_from_slice(&cmd_tokens[..skip]);
-                    if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, Some(*caps))
-                    {
+                    if match_tokens_core(
+                        rest,
+                        &cmd_tokens[skip..],
+                        definitions,
+                        steps,
+                        Some(*caps),
+                        after_double_dash,
+                    ) {
                         return true;
                     }
                     caps.truncate(saved_len);
-                } else if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, None) {
+                } else if match_tokens_core(
+                    rest,
+                    &cmd_tokens[skip..],
+                    definitions,
+                    steps,
+                    None,
+                    after_double_dash,
+                ) {
                     return true;
                 }
             }
@@ -186,12 +208,36 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            // Flag-like literals (e.g. `-m` from parse_multi) remain
+            // After `--`, all tokens are positional — no flag skipping.
+            // Also, flag-like literals (e.g. `-m` from parse_multi) remain
             // positional to avoid mismatches with value-flag arguments.
             let is_flag_literal = s.starts_with('-') && s.as_str() != "--";
-            if is_flag_literal {
+            if after_double_dash.get() || is_flag_literal {
                 if literal_matches(s, cmd_tokens[0]) {
-                    return match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures);
+                    return match_tokens_core(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    );
+                }
+                return false;
+            }
+            // When matching `--`, set the after_double_dash flag so that
+            // subsequent Literal matches do not skip flag-like tokens.
+            if s.as_str() == "--" {
+                if cmd_tokens[0] == "--" {
+                    after_double_dash.set(true);
+                    return match_tokens_core(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    );
                 }
                 return false;
             }
@@ -206,7 +252,14 @@ fn match_tokens_core<'a>(
             };
             if literal_matches(s, cmd_tokens[pos]) {
                 let remaining = remove_indices(cmd_tokens, &[pos]);
-                match_tokens_core(rest, &remaining, definitions, steps, captures)
+                match_tokens_core(
+                    rest,
+                    &remaining,
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                )
             } else {
                 false
             }
@@ -217,7 +270,14 @@ fn match_tokens_core<'a>(
                 return false;
             }
             if s == cmd_tokens[0] {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+                match_tokens_core(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                )
             } else {
                 false
             }
@@ -237,19 +297,39 @@ fn match_tokens_core<'a>(
                         let remaining = remove_indices(cmd_tokens, &[i]);
                         if let Some(ref mut caps) = captures {
                             let saved_len = caps.len();
-                            if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
-                            {
+                            if match_tokens_core(
+                                rest,
+                                &remaining,
+                                definitions,
+                                steps,
+                                Some(*caps),
+                                after_double_dash,
+                            ) {
                                 return true;
                             }
                             caps.truncate(saved_len);
-                        } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
+                        } else if match_tokens_core(
+                            rest,
+                            &remaining,
+                            definitions,
+                            steps,
+                            None,
+                            after_double_dash,
+                        ) {
                             return true;
                         }
                     }
                 }
                 false
             } else if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+                match_tokens_core(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                )
             } else {
                 false
             }
@@ -271,11 +351,25 @@ fn match_tokens_core<'a>(
                         if matches!(value.as_ref(), PatternToken::Wildcard) {
                             caps.push(cmd_tokens[i + 1]);
                         }
-                        if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps)) {
+                        if match_tokens_core(
+                            rest,
+                            &remaining,
+                            definitions,
+                            steps,
+                            Some(*caps),
+                            after_double_dash,
+                        ) {
                             return true;
                         }
                         caps.truncate(saved_len);
-                    } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
+                    } else if match_tokens_core(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        None,
+                        after_double_dash,
+                    ) {
                         return true;
                     }
                 }
@@ -298,7 +392,14 @@ fn match_tokens_core<'a>(
                 !match_single_token(inner, cmd_tokens[0], definitions)
             };
             if negation_passed {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+                match_tokens_core(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                )
             } else {
                 false
             }
@@ -314,17 +415,38 @@ fn match_tokens_core<'a>(
                 .collect();
             if let Some(ref mut caps) = captures {
                 let saved_len = caps.len();
-                if match_tokens_core(&combined, cmd_tokens, definitions, steps, Some(*caps)) {
+                if match_tokens_core(
+                    &combined,
+                    cmd_tokens,
+                    definitions,
+                    steps,
+                    Some(*caps),
+                    after_double_dash,
+                ) {
                     return true;
                 }
                 caps.truncate(saved_len);
-            } else if match_tokens_core(&combined, cmd_tokens, definitions, steps, None) {
+            } else if match_tokens_core(
+                &combined,
+                cmd_tokens,
+                definitions,
+                steps,
+                None,
+                after_double_dash,
+            ) {
                 return true;
             }
             // Try matching without the optional tokens (skip the Optional entirely),
             // but verify that the optional's flags are actually absent from the command
             if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_core(rest, cmd_tokens, definitions, steps, captures);
+                return match_tokens_core(
+                    rest,
+                    cmd_tokens,
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                );
             }
             false
         }
@@ -336,7 +458,14 @@ fn match_tokens_core<'a>(
             let paths = resolve_paths(name, definitions);
             let normalized_cmd = normalize_path(cmd_tokens[0]);
             if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+                match_tokens_core(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    after_double_dash,
+                )
             } else {
                 false
             }
@@ -349,19 +478,40 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+            match_tokens_core(
+                rest,
+                &cmd_tokens[1..],
+                definitions,
+                steps,
+                captures,
+                after_double_dash,
+            )
         }
 
         PatternToken::Opts => {
             // <opts> in non-wrapper context: consume flag-like tokens
             let skip = consume_opts(cmd_tokens);
-            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
+            match_tokens_core(
+                rest,
+                &cmd_tokens[skip..],
+                definitions,
+                steps,
+                captures,
+                after_double_dash,
+            )
         }
 
         PatternToken::Vars => {
             // <vars> in non-wrapper context: consume KEY=VALUE tokens
             let skip = consume_vars(cmd_tokens);
-            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
+            match_tokens_core(
+                rest,
+                &cmd_tokens[skip..],
+                definitions,
+                steps,
+                captures,
+                after_double_dash,
+            )
         }
     }
 }
@@ -1025,6 +1175,7 @@ mod tests {
     #[case::double_dash_at_correct_position("cmd foo -- bar", "cmd foo -- bar", true)]
     #[case::literal_mismatch_still_fails("gh api -X GET *", "gh -X GET issues /", false)]
     #[case::flag_literal_remains_positional("cmd -v status", "cmd status -v", false)]
+    #[case::flag_after_double_dash_is_positional("cmd -- status *", "cmd -- -v status foo", false)]
     fn order_independent_literal_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
