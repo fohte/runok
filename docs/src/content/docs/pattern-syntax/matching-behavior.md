@@ -82,6 +82,18 @@ Negation patterns where all alternatives start with `-` also use order-independe
 | `find . -delete`           | Does not match |
 | `find -fprint output .`    | Does not match |
 
+This also works with `=`-joined flags. For example, `!--pre` rejects both `--pre value` (space-separated) and `--pre=value` (`=`-joined):
+
+```yaml
+- allow: 'rg !--pre *'
+```
+
+| Command                  | Result         |
+| ------------------------ | -------------- |
+| `rg pattern file.txt`    | Matches        |
+| `rg --pre pdftotext pat` | Does not match |
+| `rg --pre=pdftotext pat` | Does not match |
+
 ### Positional Arguments Skip Over Flags
 
 Non-flag literal tokens (positional arguments) also benefit from order-independent matching. When matching a literal, the matcher skips over any leading flag tokens in the command to find the first positional argument. This means flags can appear before positional arguments without breaking the match:
