@@ -112,7 +112,11 @@ impl Endpoint for ExecAdapter {
                 Ok(exit_code)
             }
             Action::Deny(deny_response) => {
-                eprintln!("runok: denied: {}", deny_response.matched_rule);
+                if deny_response.matched_rule.is_empty() {
+                    eprintln!("runok: command denied by default policy");
+                } else {
+                    eprintln!("runok: denied: {}", deny_response.matched_rule);
+                }
                 if let Some(ref message) = deny_response.message {
                     eprintln!("  reason: {}", message);
                 }

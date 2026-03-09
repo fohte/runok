@@ -598,7 +598,7 @@ pub fn default_action(config: &Config) -> Action {
     match config.defaults.as_ref().and_then(|d| d.action) {
         Some(ActionKind::Allow) => Action::Allow,
         Some(ActionKind::Deny) => Action::Deny(DenyResponse {
-            message: None,
+            message: Some("command denied by default policy".to_string()),
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
