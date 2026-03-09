@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use super::cache::PresetCache;
+use super::preset::resolve_extends;
 use super::{Config, ConfigError, parse_config};
 
 /// Trait for loading and merging configuration files.
@@ -81,8 +83,8 @@ impl DefaultConfigLoader {
             .find(|path| path.exists())
     }
 
-    /// Read, parse, and resolve paths in a config file using its own base_dir.
-    /// Resolving paths before merging prevents global config paths from being
+    /// Read, parse, resolve paths, and resolve extends in a config file using its own base_dir.
+    /// Resolving paths and extends before merging prevents global config paths from being
     /// incorrectly re-resolved with the local base_dir.
     fn find_parse_and_resolve(
         dir: &Path,
@@ -93,6 +95,14 @@ impl DefaultConfigLoader {
                 let mut config = Self::read_and_parse(&p)?;
                 let base_dir = p.parent().unwrap_or(dir);
                 super::path_resolver::resolve_config_paths(&mut config, base_dir)?;
+                if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
+                    let source_name = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("runok.yml");
+                    let cache = PresetCache::from_env()?;
+                    config = resolve_extends(config, base_dir, source_name, &cache)?;
+                }
                 Ok(config)
             })
             .transpose()

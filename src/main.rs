@@ -7,7 +7,7 @@ use clap::Parser;
 
 use cli::{CheckRoute, Cli, Commands, route_check};
 use runok::adapter::{self, RunOptions};
-use runok::config::{ConfigLoader, DefaultConfigLoader, PresetCache, resolve_extends};
+use runok::config::{ConfigLoader, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
 use runok::exec::command_executor::LinuxSandboxExecutor;
 #[cfg(target_os = "macos")]
@@ -107,25 +107,6 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
             eprintln!("runok: config error: {e}");
             return config_error_exit_code;
         }
-    };
-
-    let config = if config.extends.is_some() {
-        let cache = match PresetCache::from_env() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("runok: config error: {e}");
-                return config_error_exit_code;
-            }
-        };
-        match resolve_extends(config, cwd, "runok.yml", &cache) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("runok: config error: {e}");
-                return config_error_exit_code;
-            }
-        }
-    } else {
-        config
     };
 
     match command {
