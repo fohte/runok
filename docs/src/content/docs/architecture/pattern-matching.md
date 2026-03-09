@@ -104,26 +104,26 @@ A step counter (`MAX_MATCH_STEPS = 10,000`) prevents exponential blowup on patho
 
 ### Matching rules by token type
 
-| Pattern token   | Matching behavior                                                                                                                                            |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Literal`       | Exact string match at current position                                                                                                                       |
-| `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                             |
-| `Alternation`   | Matches if the command token equals any alternative                                                                                                          |
-| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. **Order-independent**: the flag can appear anywhere in the command   |
-| `Negation`      | Matches if the command token does **not** equal the value. Flag-only negations (all alternatives start with `-`) are **order-independent**: scans all tokens |
-| `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                      |
-| `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                  |
-| `PathRef`       | Expands `definitions.paths` entries and matches against them                                                                                                 |
+| Pattern token   | Matching behavior                                                                                                                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Literal`       | Skips leading flag tokens to find the first positional argument and matches against it. **Order-independent** relative to flags; positional order among non-flag tokens is preserved. After `--`, matches at the current position with no skipping |
+| `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                                                                                                                   |
+| `Alternation`   | Flag-only alternations (all alternatives start with `-`) scan the entire token list (**order-independent**). Non-flag alternations skip leading flags like `Literal`. After `--`, matches at the current position                                  |
+| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. **Order-independent**: the flag can appear anywhere in the command                                                                                         |
+| `Negation`      | Matches if the command token does **not** equal the value. Flag-only negations (all alternatives start with `-`) are **order-independent**: scans all tokens                                                                                       |
+| `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                                                                                                            |
+| `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                                                                                                        |
+| `PathRef`       | Expands `definitions.paths` entries and matches against them                                                                                                                                                                                       |
 
-### Order-independent flag matching
+### Order-independent matching
 
-A critical feature: flags with values are matched **regardless of their position** in the command. This means:
+Several token types use order-independent matching so that flag placement does not affect rule evaluation:
 
-```yaml
-- deny: 'curl -X POST *'
-```
+- **`FlagWithValue`**: Scans the entire token list for the flag regardless of position. `curl -X POST *` matches both `curl -X POST url` and `curl url -X POST`.
+- **`Literal`** and non-flag **`Alternation`**: Skip over leading flag tokens (and their values for known value-flags) to find the first positional argument. `gh api -X GET *` matches `gh -X GET api /repos` because `api` is found after skipping `-X GET`. Positional order among non-flag tokens is still preserved.
+- **Flag-only `Alternation`** and **flag-only `Negation`**: Scan all tokens for a matching flag, independent of position.
 
-matches both `curl -X POST https://example.com` and `curl https://example.com -X POST`, because `FlagWithValue` scans the full token list rather than requiring positional alignment.
+The bare `--` separator disables flag-skipping for subsequent `Literal` and `Alternation` matches, preserving the POSIX end-of-options semantics.
 
 ### Wrapper command matching
 
