@@ -1209,6 +1209,8 @@ mod tests {
     #[case::literal_mismatch_still_fails("gh api -X GET *", "gh -X GET issues /", false)]
     #[case::flag_literal_remains_positional("cmd -v status", "cmd status -v", false)]
     #[case::flag_after_double_dash_is_positional("cmd -- status *", "cmd -- -v status foo", false)]
+    #[case::flag_not_consumed_means_no_match("rm /tmp/*", "rm -rf /tmp/foo", false)]
+    #[case::flag_skip_leaves_flag_unconsumed("rm file", "rm -f file", false)]
     fn order_independent_literal_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
