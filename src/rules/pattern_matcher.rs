@@ -325,17 +325,42 @@ fn match_tokens_core<'a>(
                     }
                 }
                 false
-            } else if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
-                match_tokens_core(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captures,
-                    after_double_dash,
-                )
+            } else if after_double_dash.get() {
+                // After `--`, match positionally (no flag skipping)
+                if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
+                    match_tokens_core(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    )
+                } else {
+                    false
+                }
             } else {
-                false
+                // Order-independent matching: skip over leading flag tokens
+                // to find the first positional argument, consistent with
+                // Literal matching.
+                let mut value_aliases = HashSet::new();
+                collect_value_flag_aliases(rest, &mut value_aliases);
+                let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                    return false;
+                };
+                if alts.iter().any(|a| literal_matches(a, cmd_tokens[pos])) {
+                    let remaining = remove_indices(cmd_tokens, &[pos]);
+                    match_tokens_core(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    )
+                } else {
+                    false
+                }
             }
         }
 
@@ -1205,6 +1230,13 @@ mod tests {
     #[case::second_alt("git push main|master", "git push master", true)]
     #[case::no_alt_match("git push main|master", "git push develop", false)]
     #[case::subcommand_alt("kubectl describe|get|list *", "kubectl get pods", true)]
+    #[case::non_flag_alt_skips_flags("git push main|master *", "git push -v main origin", true)]
+    #[case::non_flag_alt_skips_flags_second(
+        "git push main|master *",
+        "git push -v master origin",
+        true
+    )]
+    #[case::non_flag_alt_after_double_dash_no_skip("cmd -- main|master", "cmd -- -v main", false)]
     fn alternation_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

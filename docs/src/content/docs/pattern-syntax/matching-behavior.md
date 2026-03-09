@@ -96,7 +96,7 @@ This also works with `=`-joined flags. For example, `!--pre` rejects both `--pre
 
 ### Positional Arguments Skip Over Flags
 
-Non-flag literal tokens (positional arguments) also benefit from order-independent matching. When matching a literal, the matcher skips over any leading flag tokens in the command to find the first positional argument. This means flags can appear before positional arguments without breaking the match:
+Non-flag positional tokens — both literals and [alternations](/pattern-syntax/alternation/) — also benefit from order-independent matching. When matching a positional token, the matcher skips over any leading flag tokens in the command to find the first positional argument. This means flags can appear before positional arguments without breaking the match:
 
 ```yaml
 - allow: 'gh api -X GET *'

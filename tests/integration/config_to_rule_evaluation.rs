@@ -1016,6 +1016,38 @@ fn double_dash_remains_positional(
     expected(&result.action);
 }
 
+#[rstest]
+#[case::non_flag_alt_skips_flags(
+    "git push -v main origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_second_variant(
+    "git push -v master origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_no_flag(
+    "git push main origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_mismatch(
+    "git push -v develop origin",
+    assert_default as ActionAssertion,
+)]
+fn alternation_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git push main|master *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
 // ========================================
 // Flag-only negation with `=`-joined tokens
 // ========================================
