@@ -100,10 +100,6 @@ impl ClaudeCodeHookAdapter {
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("ask", message.clone(), updated)
             }
-            Action::Default => {
-                // run() dispatches Default to handle_no_match, but handle safely.
-                ("allow", None, None)
-            }
         };
 
         Ok(Self::build_output(decision, reason, updated_input))

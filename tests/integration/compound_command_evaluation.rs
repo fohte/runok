@@ -1,6 +1,4 @@
-use super::{
-    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
-};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -568,17 +566,17 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
 }
 
 // ========================================
-// defaults.action absent: compound backward compatibility
+// defaults.action absent: unmatched sub-commands resolve to Ask
 // ========================================
 
 #[rstest]
-#[case::no_defaults_unmatched_merged_with_allow(
+#[case::no_defaults_unmatched_wins_over_allow(
     "echo hello && unknown_cmd",
     indoc! {"
         rules:
           - allow: 'echo *'
     "},
-    assert_allow as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 #[case::no_defaults_all_unmatched(
     "unknown_a && unknown_b",
@@ -586,7 +584,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
         rules:
           - allow: 'echo *'
     "},
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 #[case::no_defaults_all_matched(
     "echo hello && echo world",
@@ -596,7 +594,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
     "},
     assert_allow as ActionAssertion,
 )]
-fn defaults_action_absent_compound_backward_compat(
+fn defaults_action_absent_compound_unmatched_asks(
     #[case] command: &str,
     #[case] config_yaml: &str,
     #[case] expected: ActionAssertion,
@@ -787,7 +785,7 @@ fn empty_rules_compound_returns_default(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_compound(&config, "echo hello && ls", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -1088,6 +1086,60 @@ fn command_substitution_with_redirects_no_stack_overflow(
     assert_allow as ActionAssertion,
 )]
 fn command_substitution_in_strings(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Security: command substitution must not bypass rule controls
+// ========================================
+// Regression test for the bug where a command substitution containing an
+// allowed command (e.g. `echo test`) caused the *entire* compound to be
+// evaluated as Allow, even when the outer command had no matching rule.
+
+#[rstest]
+#[case::gh_pr_edit_with_allowed_cmd_sub(
+    r#"gh pr edit 10 --body "$(echo test)""#,
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::unmatched_outer_with_allowed_inner_chain(
+    "echo test && gh pr edit 10",
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::unmatched_outer_with_allowed_inner_defaults_deny(
+    r#"gh pr edit 10 --body "$(echo test)""#,
+    indoc! {"
+        defaults:
+          action: deny
+        rules:
+          - allow: 'echo *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::all_matched_cmd_sub_is_still_allowed(
+    r#"gh pr edit 10 --body "$(echo test)""#,
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'gh *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn command_substitution_must_not_bypass_rules(
     #[case] command: &str,
     #[case] config_yaml: &str,
     #[case] expected: ActionAssertion,

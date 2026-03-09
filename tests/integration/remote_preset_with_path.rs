@@ -15,7 +15,7 @@ use rstest::{fixture, rstest};
 use runok::config::{ConfigError, PresetError, load_local_preset, parse_config};
 use runok::rules::rule_engine::{Action, evaluate_command};
 
-use super::{ActionAssertion, assert_allow, assert_default, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, empty_context};
 use runok::rules::rule_engine::EvalContext;
 
 /// Simulated preset repository with multiple path-based preset files.
@@ -115,10 +115,10 @@ fn preset_repo_env() -> PresetRepoEnv {
 #[case::grep_allowed("grep -r pattern .", assert_allow as ActionAssertion)]
 #[case::find_allowed("find . -name '*.txt'", assert_allow as ActionAssertion)]
 #[case::sed_readonly_allowed("sed s/foo/bar/ file.txt", assert_allow as ActionAssertion)]
-#[case::sed_inplace_excluded("sed -i s/foo/bar/ file.txt", assert_default as ActionAssertion)]
-#[case::find_delete_excluded("find -delete .", assert_default as ActionAssertion)]
-#[case::rm_not_allowed("rm -rf /", assert_default as ActionAssertion)]
-#[case::curl_not_allowed("curl https://example.com", assert_default as ActionAssertion)]
+#[case::sed_inplace_excluded("sed -i s/foo/bar/ file.txt", assert_ask as ActionAssertion)]
+#[case::find_delete_excluded("find -delete .", assert_ask as ActionAssertion)]
+#[case::rm_not_allowed("rm -rf /", assert_ask as ActionAssertion)]
+#[case::curl_not_allowed("curl https://example.com", assert_ask as ActionAssertion)]
 fn single_path_preset_readonly_unix(
     preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
@@ -140,9 +140,9 @@ fn single_path_preset_readonly_unix(
 #[case::git_log_allowed("git log --oneline", assert_allow as ActionAssertion)]
 #[case::git_diff_allowed("git diff HEAD~1", assert_allow as ActionAssertion)]
 #[case::git_branch_allowed("git branch", assert_allow as ActionAssertion)]
-#[case::git_add_not_allowed("git add .", assert_default as ActionAssertion)]
-#[case::git_commit_not_allowed("git commit -m 'test'", assert_default as ActionAssertion)]
-#[case::git_push_not_allowed("git push origin main", assert_default as ActionAssertion)]
+#[case::git_add_not_allowed("git add .", assert_ask as ActionAssertion)]
+#[case::git_commit_not_allowed("git commit -m 'test'", assert_ask as ActionAssertion)]
+#[case::git_push_not_allowed("git push origin main", assert_ask as ActionAssertion)]
 fn single_path_preset_readonly_git(
     preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
@@ -164,7 +164,7 @@ fn single_path_preset_readonly_git(
 #[case::git_status_from_git("git status", assert_allow as ActionAssertion)]
 #[case::git_diff_from_git("git diff HEAD", assert_allow as ActionAssertion)]
 #[case::ls_from_unix("ls -la", assert_allow as ActionAssertion)]
-#[case::rm_not_in_any("rm -rf /", assert_default as ActionAssertion)]
+#[case::rm_not_in_any("rm -rf /", assert_ask as ActionAssertion)]
 fn multiple_path_presets_all_rules_merged(
     preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
@@ -224,7 +224,7 @@ fn definitions_preset_loads_wrappers(preset_repo_env: PresetRepoEnv) {
 #[rstest]
 #[case::cat_via_base("cat /etc/hosts", assert_allow as ActionAssertion)]
 #[case::git_log_via_base("git log --oneline", assert_allow as ActionAssertion)]
-#[case::rm_not_via_base("rm -rf /", assert_default as ActionAssertion)]
+#[case::rm_not_via_base("rm -rf /", assert_ask as ActionAssertion)]
 fn base_preset_aggregates_all_via_local_extends(
     preset_repo_env: PresetRepoEnv,
     #[case] command: &str,
@@ -251,7 +251,7 @@ fn base_preset_aggregates_all_via_local_extends(
 
 #[rstest]
 #[case::bash_c_cat_allowed(r#"bash -c "cat /etc/hosts""#, assert_allow as ActionAssertion)]
-#[case::bash_c_rm_not_allowed(r#"bash -c "rm -rf /""#, assert_default as ActionAssertion)]
+#[case::bash_c_rm_not_allowed(r#"bash -c "rm -rf /""#, assert_ask as ActionAssertion)]
 #[case::sudo_cat_allowed("sudo cat /etc/shadow", assert_allow as ActionAssertion)]
 fn wrappers_evaluate_inner_commands(
     preset_repo_env: PresetRepoEnv,
