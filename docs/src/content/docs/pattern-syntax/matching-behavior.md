@@ -82,6 +82,18 @@ Negation patterns where all alternatives start with `-` also use order-independe
 | `find . -delete`           | Does not match |
 | `find -fprint output .`    | Does not match |
 
+This also works with `=`-joined flags. For example, `!--pre` rejects both `--pre value` (space-separated) and `--pre=value` (`=`-joined):
+
+```yaml
+- allow: 'rg !--pre *'
+```
+
+| Command                  | Result         |
+| ------------------------ | -------------- |
+| `rg pattern file.txt`    | Matches        |
+| `rg --pre pdftotext pat` | Does not match |
+| `rg --pre=pdftotext pat` | Does not match |
+
 ### Non-flag Tokens are Position-dependent
 
 Tokens that do not start with `-` are matched **in order**:
