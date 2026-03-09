@@ -16,6 +16,49 @@ use crate::rules::pattern_parser::{CommandPattern, Pattern, PatternToken};
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
 const MAX_MATCH_STEPS: usize = 10_000;
 
+/// Collect all flag aliases from `FlagWithValue` tokens in the pattern token
+/// list.  Used by the Literal matcher to identify value-flag tokens whose
+/// values should also be skipped when searching for the first positional
+/// argument in `cmd_tokens`.
+fn collect_value_flag_aliases(tokens: &[PatternToken]) -> Vec<&str> {
+    let mut aliases = Vec::new();
+    for token in tokens {
+        if let PatternToken::FlagWithValue {
+            aliases: flag_aliases,
+            ..
+        } = token
+        {
+            for a in flag_aliases {
+                aliases.push(a.as_str());
+            }
+        }
+        if let PatternToken::Optional(inner) = token {
+            aliases.extend(collect_value_flag_aliases(inner));
+        }
+    }
+    aliases
+}
+
+/// Find the index of the first positional (non-flag) token in `cmd_tokens`,
+/// skipping over flag tokens and their associated values based on
+/// `value_flag_aliases`.  Returns `None` if no positional token is found.
+fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &[&str]) -> Option<usize> {
+    let mut i = 0;
+    while i < cmd_tokens.len() {
+        let t = cmd_tokens[i];
+        if t.starts_with('-') && t != "--" {
+            if value_flag_aliases.contains(&t) && i + 1 < cmd_tokens.len() {
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Compute the range of command-name token counts to try when matching.
 ///
 /// For a wildcard command pattern, the command name may span 1..=N tokens,
@@ -143,8 +186,27 @@ fn match_tokens_core<'a>(
             if cmd_tokens.is_empty() {
                 return false;
             }
-            if literal_matches(s, cmd_tokens[0]) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+            // Flag-like literals (e.g. `-m` from parse_multi) remain
+            // positional to avoid mismatches with value-flag arguments.
+            let is_flag_literal = s.starts_with('-') && s.as_str() != "--";
+            if is_flag_literal {
+                if literal_matches(s, cmd_tokens[0]) {
+                    return match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures);
+                }
+                return false;
+            }
+            // Order-independent matching: skip over leading flag tokens
+            // (and their values for known value-flags) to find the first
+            // positional argument.  Only the matched positional token is
+            // removed; skipped flag tokens are kept for later FlagWithValue
+            // or flag-only Alternation matching.
+            let value_aliases = collect_value_flag_aliases(rest);
+            let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                return false;
+            };
+            if literal_matches(s, cmd_tokens[pos]) {
+                let remaining = remove_indices(cmd_tokens, &[pos]);
+                match_tokens_core(rest, &remaining, definitions, steps, captures)
             } else {
                 false
             }
@@ -920,6 +982,35 @@ mod tests {
         assert_eq!(
             check_match(pattern_str, command_str, &empty_defs()),
             expected
+        );
+    }
+
+    // ========================================
+    // Order-independent literal matching
+    // ========================================
+
+    #[rstest]
+    #[case::flag_before_literal("gh api -X GET *", "gh -X GET api /", true)]
+    #[case::literal_at_normal_position("gh api -X GET *", "gh api -X GET /", true)]
+    #[case::multiple_flags_before_literal("gh api -X GET *", "gh -X GET -v api /", true)]
+    #[case::extra_flag_not_in_pattern_no_match(
+        "git remote add origin",
+        "git -v remote add origin",
+        false
+    )]
+    #[case::double_dash_stays_positional("cmd foo -- bar", "cmd -- foo bar", false)]
+    #[case::double_dash_at_correct_position("cmd foo -- bar", "cmd foo -- bar", true)]
+    #[case::literal_mismatch_still_fails("gh api -X GET *", "gh -X GET issues /", false)]
+    #[case::flag_literal_remains_positional("cmd -v status", "cmd status -v", false)]
+    fn order_independent_literal_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
         );
     }
 

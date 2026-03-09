@@ -955,3 +955,63 @@ fn flag_negation_order_independent(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Order-independent literal matching
+// ========================================
+
+#[rstest]
+#[case::flag_before_literal(
+    "gh -X GET api /repos",
+    assert_allow as ActionAssertion,
+)]
+#[case::literal_at_normal_position(
+    "gh api -X GET /repos",
+    assert_allow as ActionAssertion,
+)]
+#[case::flag_after_literal(
+    "gh api /repos -X GET",
+    assert_allow as ActionAssertion,
+)]
+#[case::literal_mismatch(
+    "gh -X GET issues /repos",
+    assert_default as ActionAssertion,
+)]
+fn literal_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'gh api -X GET *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::double_dash_correct_position(
+    "cmd foo -- bar",
+    assert_allow as ActionAssertion,
+)]
+#[case::double_dash_wrong_position(
+    "cmd -- foo bar",
+    assert_default as ActionAssertion,
+)]
+fn double_dash_remains_positional(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'cmd foo -- bar'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
