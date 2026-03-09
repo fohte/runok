@@ -175,6 +175,7 @@ fn match_tokens_core<'a>(
         PatternToken::Wildcard => {
             // Wildcard matches zero or more tokens (greedy with backtracking)
             for skip in 0..=cmd_tokens.len() {
+                let saved_dd = after_double_dash.get();
                 if let Some(ref mut caps) = captures {
                     let saved_len = caps.len();
                     caps.extend_from_slice(&cmd_tokens[..skip]);
@@ -199,6 +200,7 @@ fn match_tokens_core<'a>(
                 ) {
                     return true;
                 }
+                after_double_dash.set(saved_dd);
             }
             false
         }
@@ -295,6 +297,7 @@ fn match_tokens_core<'a>(
                 for i in 0..cmd_tokens.len() {
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
+                        let saved_dd = after_double_dash.get();
                         if let Some(ref mut caps) = captures {
                             let saved_len = caps.len();
                             if match_tokens_core(
@@ -318,6 +321,7 @@ fn match_tokens_core<'a>(
                         ) {
                             return true;
                         }
+                        after_double_dash.set(saved_dd);
                     }
                 }
                 false
@@ -345,6 +349,7 @@ fn match_tokens_core<'a>(
                 {
                     // Remove the flag and its value, continue matching
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
+                    let saved_dd = after_double_dash.get();
                     if let Some(ref mut caps) = captures {
                         let saved_len = caps.len();
                         // Capture the flag value when it matches a wildcard
@@ -372,6 +377,7 @@ fn match_tokens_core<'a>(
                     ) {
                         return true;
                     }
+                    after_double_dash.set(saved_dd);
                 }
             }
             false
@@ -413,6 +419,7 @@ fn match_tokens_core<'a>(
                 .cloned()
                 .chain(rest.iter().cloned())
                 .collect();
+            let saved_dd = after_double_dash.get();
             if let Some(ref mut caps) = captures {
                 let saved_len = caps.len();
                 if match_tokens_core(
@@ -436,6 +443,7 @@ fn match_tokens_core<'a>(
             ) {
                 return true;
             }
+            after_double_dash.set(saved_dd);
             // Try matching without the optional tokens (skip the Optional entirely),
             // but verify that the optional's flags are actually absent from the command
             if optional_flags_absent(inner_tokens, cmd_tokens) {
