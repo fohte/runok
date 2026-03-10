@@ -49,6 +49,47 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
 - **`"matcher": "Bash"`** -- Only triggers the hook for Bash tool calls. Other tools (file edits, web searches, etc.) are not affected.
 - **`"hooks"`** -- The command(s) to run. Claude Code pipes the tool invocation as JSON to stdin. `runok check --input-format claude-code-hook` parses this JSON format and returns the evaluation result.
 
+:::caution[Avoid multiple Bash-matching hooks]
+If your `PreToolUse` array contains other entries that also match `Bash` (entries with `"matcher": "Bash"` or no `matcher` field), runok's sandbox may not work. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), commands that should be sandboxed could run without any restrictions.
+
+If you have other PreToolUse hooks that need to run on Bash commands, merge them into a single entry so that only one hook matches `Bash`. For example, wrap both commands in a shell script:
+
+```bash
+#!/usr/bin/env bash
+# ~/.claude/hooks/pre-tool-use.bash
+set -euo pipefail
+
+input="$(cat)"
+
+# Run the other hook (side effects only; stdout is discarded)
+echo "$input" | other-hook >/dev/null
+
+# Run runok (its stdout becomes the hook response)
+echo "$input" | runok check --input-format claude-code-hook
+```
+
+Then register the single wrapper script in `settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre-tool-use.bash"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+:::
+
 ## Step 3: Verify the integration
 
 Start a Claude Code session in your project directory. Ask Claude to run a command that your rules cover:
