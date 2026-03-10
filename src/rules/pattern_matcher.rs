@@ -1520,6 +1520,21 @@ mod tests {
         "run --verbose echo hello",
         vec![vec!["--verbose", "echo", "hello"]],
     )]
+    #[case::positional_negation_before_cmd(
+        "run !exec <cmd>",
+        "run start echo hello",
+        vec![vec!["echo", "hello"]],
+    )]
+    #[case::positional_negation_empty_tokens(
+        "run !exec <cmd>",
+        "run",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::flag_negation_empty_tokens_before_cmd(
+        "run !--dry-run <cmd>",
+        "run",
+        Vec::<Vec<&str>>::new(),
+    )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
