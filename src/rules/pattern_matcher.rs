@@ -496,6 +496,7 @@ fn extract_placeholder_all<'a>(
 
         PatternToken::FlagWithValue { aliases, value } => {
             for i in 0..cmd_tokens.len() {
+                // Case 1: space-separated flag and value
                 if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
                     && i + 1 < cmd_tokens.len()
                     && match_single_token(value, cmd_tokens[i + 1], definitions)
@@ -509,6 +510,26 @@ fn extract_placeholder_all<'a>(
                         captured,
                         all_candidates,
                     )?;
+                }
+
+                // Case 2: `=`-joined flag and value
+                if let Some(eq_pos) = cmd_tokens[i].find('=') {
+                    let flag_part = &cmd_tokens[i][..eq_pos];
+                    let value_part = &cmd_tokens[i][eq_pos + 1..];
+                    if flag_part.starts_with('-')
+                        && aliases.iter().any(|a| a.as_str() == flag_part)
+                        && match_single_token(value, value_part, definitions)
+                    {
+                        let remaining = remove_indices(cmd_tokens, &[i]);
+                        extract_placeholder_all(
+                            rest,
+                            &remaining,
+                            definitions,
+                            steps,
+                            captured,
+                            all_candidates,
+                        )?;
+                    }
                 }
             }
             Ok(())
@@ -1636,6 +1657,17 @@ mod tests {
         let result = check_extract(
             "run -m|--mode debug <cmd>",
             "run -m debug echo hello",
+            &empty_defs,
+        );
+        assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
+    }
+
+    #[rstest]
+    fn extract_placeholder_with_flag_with_value_equals_joined(empty_defs: Definitions) {
+        // FlagWithValue token before <cmd> with `=`-joined flag
+        let result = check_extract(
+            "run -m|--mode debug <cmd>",
+            "run -m=debug echo hello",
             &empty_defs,
         );
         assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
