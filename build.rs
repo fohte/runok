@@ -27,7 +27,14 @@ fn main() {
     // non-existent paths causes Cargo to re-run the build script every time.
     if std::path::Path::new(".git").is_dir() {
         println!("cargo::rerun-if-changed=.git/HEAD");
-        println!("cargo::rerun-if-changed=.git/refs/heads");
+        // Watch the specific ref file that HEAD points to (e.g. .git/refs/heads/main)
+        // so that new commits (which rewrite the file content) trigger a rebuild.
+        // Watching the directory alone doesn't detect content changes within files.
+        if let Ok(head) = std::fs::read_to_string(".git/HEAD")
+            && let Some(ref_path) = head.trim().strip_prefix("ref: ")
+        {
+            println!("cargo::rerun-if-changed=.git/{ref_path}");
+        }
         println!("cargo::rerun-if-changed=.git/refs/tags");
         println!("cargo::rerun-if-changed=.git/packed-refs");
     }
