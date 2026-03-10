@@ -1569,6 +1569,16 @@ mod tests {
         "run exec echo hello",
         Vec::<Vec<&str>>::new(),
     )]
+    #[case::flag_like_literal_bash_c(
+        "bash -c <cmd>",
+        "bash -c 'rm -rf /'",
+        vec![vec!["rm -rf /"]],
+    )]
+    #[case::flag_like_literal_before_cmd(
+        "run -v <cmd>",
+        "run -v echo hello",
+        vec![vec!["echo", "hello"]],
+    )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
@@ -1581,20 +1591,6 @@ mod tests {
             .map(|v| v.into_iter().map(|s| s.to_string()).collect())
             .collect();
         assert_eq!(result, expected);
-    }
-
-    #[rstest]
-    fn extract_placeholder_bash_c(empty_defs: Definitions) {
-        // First test: flag-like literal -c before <cmd>
-        let result = check_extract("bash -c <cmd>", "bash -c 'rm -rf /'", &empty_defs);
-        assert_eq!(result, vec![vec!["rm -rf /".to_string()]]);
-    }
-
-    #[rstest]
-    fn extract_placeholder_flag_like_literal(empty_defs: Definitions) {
-        // Simpler test: flag-like literal before non-cmd placeholder
-        let result = check_extract("run -v <cmd>", "run -v echo hello", &empty_defs);
-        assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
     }
 
     #[rstest]
