@@ -22,9 +22,13 @@ fn main() {
     println!("cargo::rustc-env=RUNOK_VERSION={version}");
     println!("cargo::rerun-if-env-changed=RUNOK_NIGHTLY_VERSION");
     println!("cargo::rerun-if-env-changed=CARGO_PKG_VERSION");
-    println!("cargo::rerun-if-changed=.git/HEAD");
-    println!("cargo::rerun-if-changed=.git/refs/tags");
-    println!("cargo::rerun-if-changed=.git/packed-refs");
+    // Only watch git paths when .git exists; otherwise Cargo re-runs the
+    // build script on every build because the watched paths don't exist.
+    if std::path::Path::new(".git").exists() {
+        println!("cargo::rerun-if-changed=.git/HEAD");
+        println!("cargo::rerun-if-changed=.git/refs/tags");
+        println!("cargo::rerun-if-changed=.git/packed-refs");
+    }
 }
 
 /// If we're in a git repo and HEAD is not a release-tagged commit,
