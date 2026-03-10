@@ -1193,7 +1193,11 @@ proptest! {
             format!("  - {action}: '{pattern}'")
         }).collect();
 
-        let yaml_original = format!("rules:\n{}", rule_lines.join("\n"));
+        let rules = rule_lines.join("\n");
+        let yaml_original = indoc::formatdoc! {"
+            rules:
+            {rules}"
+        };
 
         let mut reordered_lines = rule_lines.clone();
         if reverse {
@@ -1202,7 +1206,11 @@ proptest! {
             let first = reordered_lines.remove(0);
             reordered_lines.push(first);
         }
-        let yaml_reordered = format!("rules:\n{}", reordered_lines.join("\n"));
+        let reordered_rules = reordered_lines.join("\n");
+        let yaml_reordered = indoc::formatdoc! {"
+            rules:
+            {reordered_rules}"
+        };
 
         let config_orig = parse_config(&yaml_original);
         let config_reord = parse_config(&yaml_reordered);
