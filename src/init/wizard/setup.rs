@@ -44,6 +44,7 @@ pub(super) fn setup_scope(
     let mut detected_claude_config = false;
     let mut has_rules = false;
     let mut has_hook_change = false;
+    let mut detected_conflict_count: usize = 0;
 
     if let Some(cd) = claude_dir
         && cd.exists()
@@ -165,9 +166,9 @@ pub(super) fn setup_scope(
             // Show warning about conflicting hooks before the confirmation prompt
             // so the user can make an informed decision.
             if hook_policy == HookPolicy::Register {
-                let count = count_conflicting_hooks_in_json(&after_hook_content)?;
-                if count > 0 {
-                    print_conflicting_hooks_warning(count);
+                detected_conflict_count = count_conflicting_hooks_in_json(&after_hook_content)?;
+                if detected_conflict_count > 0 {
+                    print_conflicting_hooks_warning(detected_conflict_count);
                     eprintln!();
                 }
             }
@@ -190,7 +191,7 @@ pub(super) fn setup_scope(
         }
         count
     } else {
-        0
+        detected_conflict_count
     };
 
     // Apply changes only when the user approved the batch
