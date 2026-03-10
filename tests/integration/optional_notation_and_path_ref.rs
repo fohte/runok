@@ -1,6 +1,4 @@
-use super::{
-    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
-};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -15,7 +13,7 @@ use runok::rules::rule_engine::{EvalContext, evaluate_command};
 #[case::without_flag("curl https://example.com", assert_allow as ActionAssertion)]
 #[case::with_short_flag("curl -X GET https://example.com", assert_allow as ActionAssertion)]
 #[case::with_long_flag("curl --request GET https://example.com", assert_allow as ActionAssertion)]
-#[case::with_wrong_value("curl -X POST https://example.com", assert_default as ActionAssertion)]
+#[case::with_wrong_value("curl -X POST https://example.com", assert_ask as ActionAssertion)]
 fn optional_flag_with_value(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -85,8 +83,8 @@ fn optional_boolean_flag(
 #[case::env_local("cat .envrc", assert_deny as ActionAssertion)]
 #[case::etc_passwd("cat /etc/passwd", assert_deny as ActionAssertion)]
 #[case::etc_shadow("cat /etc/shadow", assert_deny as ActionAssertion)]
-#[case::safe_file("cat /tmp/safe.txt", assert_default as ActionAssertion)]
-#[case::readme("cat README.md", assert_default as ActionAssertion)]
+#[case::safe_file("cat /tmp/safe.txt", assert_ask as ActionAssertion)]
+#[case::readme("cat README.md", assert_ask as ActionAssertion)]
 fn path_ref_matches_defined_paths(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -116,7 +114,7 @@ fn path_ref_matches_defined_paths(
 #[rstest]
 #[case::log_read_denied("cat /var/log/syslog", assert_deny as ActionAssertion)]
 #[case::config_read_denied("cat /etc/config.yml", assert_deny as ActionAssertion)]
-#[case::safe_allowed("cat /tmp/notes.txt", assert_default as ActionAssertion)]
+#[case::safe_allowed("cat /tmp/notes.txt", assert_ask as ActionAssertion)]
 fn multiple_path_groups(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -171,8 +169,8 @@ fn optional_flag_in_deny_rule(
 #[rstest]
 #[case::sensitive_no_flag("rm .env", assert_deny as ActionAssertion)]
 #[case::sensitive_with_flag("rm -f .envrc", assert_deny as ActionAssertion)]
-#[case::safe_no_flag("rm temp.txt", assert_default as ActionAssertion)]
-#[case::safe_with_flag("rm -f temp.txt", assert_default as ActionAssertion)]
+#[case::safe_no_flag("rm temp.txt", assert_ask as ActionAssertion)]
+#[case::safe_with_flag("rm -f temp.txt", assert_ask as ActionAssertion)]
 fn optional_flag_with_path_ref(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -201,7 +199,7 @@ fn optional_flag_with_path_ref(
 #[case::post("curl -X POST https://api.com", assert_deny as ActionAssertion)]
 #[case::put("curl -X PUT https://api.com", assert_deny as ActionAssertion)]
 #[case::patch("curl -X PATCH https://api.com", assert_deny as ActionAssertion)]
-#[case::get("curl -X GET https://api.com", assert_default as ActionAssertion)]
+#[case::get("curl -X GET https://api.com", assert_ask as ActionAssertion)]
 fn alternation_matches_any_variant(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -224,7 +222,7 @@ fn alternation_matches_any_variant(
 #[rstest]
 #[case::post_denied("curl -X POST https://api.com", assert_ask as ActionAssertion)]
 #[case::delete_denied("curl -X DELETE https://api.com", assert_ask as ActionAssertion)]
-#[case::get_not_matched("curl -X GET https://api.com", assert_default as ActionAssertion)]
+#[case::get_not_matched("curl -X GET https://api.com", assert_ask as ActionAssertion)]
 fn negation_matches_everything_except(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -263,7 +261,7 @@ fn negation_matches_everything_except(
 )]
 #[case::unrelated_path_not_matched(
     "cat /tmp/safe.txt",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn path_normalization_resolves_traversal(
     #[case] command: &str,
@@ -333,8 +331,8 @@ fn flag_with_value_position_independence(
 #[case::cat_sensitive_denied("cat .env", assert_deny as ActionAssertion)]
 #[case::less_sensitive_denied("less /etc/passwd", assert_deny as ActionAssertion)]
 #[case::head_sensitive_denied("head .envrc", assert_deny as ActionAssertion)]
-#[case::cat_safe_default("cat README.md", assert_default as ActionAssertion)]
-#[case::vim_sensitive_default("vim .env", assert_default as ActionAssertion)]
+#[case::cat_safe_default("cat README.md", assert_ask as ActionAssertion)]
+#[case::vim_sensitive_default("vim .env", assert_ask as ActionAssertion)]
 fn path_ref_with_alternation_command(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -363,8 +361,8 @@ fn path_ref_with_alternation_command(
 #[rstest]
 #[case::force_push_main_denied("git push --force main", assert_deny as ActionAssertion)]
 #[case::force_push_master_denied("git push -f master", assert_deny as ActionAssertion)]
-#[case::force_push_develop_default("git push --force develop", assert_default as ActionAssertion)]
-#[case::normal_push_main_default("git push main", assert_default as ActionAssertion)]
+#[case::force_push_develop_default("git push --force develop", assert_ask as ActionAssertion)]
+#[case::normal_push_main_default("git push main", assert_ask as ActionAssertion)]
 fn optional_flag_with_negation(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

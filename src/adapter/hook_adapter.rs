@@ -61,7 +61,11 @@ pub struct ClaudeCodeHookAdapter {
 /// Build a combined reason string from a `DenyResponse`, including
 /// the matched rule, optional message, and optional fix suggestion.
 fn build_deny_reason(deny: &DenyResponse) -> String {
-    let mut reason = format!("denied: {}", deny.matched_rule);
+    let mut reason = if deny.matched_rule.is_empty() {
+        "command denied by default policy".to_string()
+    } else {
+        format!("denied: {}", deny.matched_rule)
+    };
     if let Some(ref message) = deny.message {
         reason.push_str(&format!(" ({})", message));
     }
@@ -99,10 +103,6 @@ impl ClaudeCodeHookAdapter {
                 // command, so we need to wrap it with the sandbox just like allow.
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("ask", message.clone(), updated)
-            }
-            Action::Default => {
-                // run() dispatches Default to handle_no_match, but handle safely.
-                ("allow", None, None)
             }
         };
 

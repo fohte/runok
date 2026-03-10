@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
 
 #[rstest]
 #[case::env_matches_deny("prod", assert_deny as ActionAssertion)]
-#[case::env_does_not_match_default("dev", assert_default as ActionAssertion)]
+#[case::env_does_not_match_default("dev", assert_ask as ActionAssertion)]
 fn env_variable_controls_rule_application(
     #[case] aws_profile: &str,
     #[case] expected: ActionAssertion,
@@ -61,7 +61,7 @@ fn env_variable_with_has_macro_handles_missing_key(empty_context: EvalContext) {
 
     // With has() guard, missing key is handled gracefully
     let result = evaluate_command(&config, "aws s3 ls", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -112,9 +112,9 @@ fn when_satisfied_deny_wins_over_allow() {
 
 #[rstest]
 #[case::short_flag_post_denied("curl -X POST https://example.com", assert_deny as ActionAssertion)]
-#[case::short_flag_get_default("curl -X GET https://example.com", assert_default as ActionAssertion)]
+#[case::short_flag_get_default("curl -X GET https://example.com", assert_ask as ActionAssertion)]
 #[case::long_flag_post_denied("curl --request POST https://example.com", assert_deny as ActionAssertion)]
-#[case::long_flag_get_default("curl --request GET https://example.com", assert_default as ActionAssertion)]
+#[case::long_flag_get_default("curl --request GET https://example.com", assert_ask as ActionAssertion)]
 fn flag_condition_with_flag_with_value_pattern(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -140,7 +140,7 @@ fn flag_condition_with_flag_with_value_pattern(
 
 #[rstest]
 #[case::prod_url_denied("curl https://prod.example.com/api", assert_deny as ActionAssertion)]
-#[case::dev_url_default("curl https://dev.example.com/api", assert_default as ActionAssertion)]
+#[case::dev_url_default("curl https://dev.example.com/api", assert_ask as ActionAssertion)]
 fn argument_condition_controls_rule(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -163,7 +163,7 @@ fn argument_condition_controls_rule(
 
 #[rstest]
 #[case::sensitive_path_denied("cat /etc/passwd", assert_deny as ActionAssertion)]
-#[case::safe_path_default("cat /tmp/safe.txt", assert_default as ActionAssertion)]
+#[case::safe_path_default("cat /tmp/safe.txt", assert_ask as ActionAssertion)]
 fn paths_in_when_clause(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -261,7 +261,7 @@ fn when_clause_with_logical_and() {
         cwd: PathBuf::from("/tmp"),
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -379,7 +379,7 @@ fn all_when_false_returns_default(empty_context: EvalContext) {
 
     // No matching env -> all when clauses false -> no rules match -> Default
     let result = evaluate_command(&config, "deploy app", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -416,7 +416,7 @@ fn empty_args_size_guard(
 
 #[rstest]
 #[case::with_no_verify("git commit --no-verify", assert_deny as ActionAssertion)]
-#[case::without_no_verify("git commit -m hello", assert_default as ActionAssertion)]
+#[case::without_no_verify("git commit -m hello", assert_ask as ActionAssertion)]
 fn hyphenated_flag_name_in_cel(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -442,8 +442,8 @@ fn hyphenated_flag_name_in_cel(
 
 #[rstest]
 #[case::sensitive_in_prod_denied("cat .env", "prod", assert_deny as ActionAssertion)]
-#[case::sensitive_in_dev_default("cat .env", "dev", assert_default as ActionAssertion)]
-#[case::safe_in_prod_default("cat README.md", "prod", assert_default as ActionAssertion)]
+#[case::sensitive_in_dev_default("cat .env", "dev", assert_ask as ActionAssertion)]
+#[case::safe_in_prod_default("cat README.md", "prod", assert_ask as ActionAssertion)]
 fn when_clause_with_path_ref(
     #[case] command: &str,
     #[case] env_value: &str,
