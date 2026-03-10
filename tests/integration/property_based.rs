@@ -239,6 +239,90 @@ fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String
 // Command generation strategies
 // ========================================
 
+/// Generates a (pattern, command, is_allow) triple where the pattern is
+/// guaranteed to match the command. Uses diverse pattern syntax: wildcard,
+/// literal, flag negation (absent), optional flag, alternation.
+/// `is_allow` determines whether the rule should be "allow" or "deny".
+///
+/// `cmd_id` is embedded in the command name to ensure uniqueness across
+/// multiple sub-commands in a compound.
+fn arb_matching_rule_and_command(cmd_id: usize) -> impl Strategy<Value = (String, String, bool)> {
+    let cmd_prefix = format!("cmd{cmd_id}x");
+    (
+        // Random suffix to make command name unique per generation
+        "[a-z]{2,4}",
+        prop_oneof![
+            // Wildcard: {cmd} * matches any args
+            3 => proptest::collection::vec(arb_safe_positional(), 0..=3)
+                .prop_map(|tokens| ("wildcard".to_string(), tokens)),
+            // Literal: {cmd} {lit} matches exactly
+            2 => arb_safe_positional()
+                .prop_map(|lit| ("literal".to_string(), vec![lit])),
+            // Flag negation (absent): {cmd} !{flag} * matches when flag is NOT present
+            2 => proptest::collection::vec(arb_safe_positional(), 1..=3)
+                .prop_map(|pos| ("flag_neg".to_string(), pos)),
+            // Optional flag: {cmd} [{flag}] * matches with or without
+            2 => (arb_flag(), proptest::collection::vec(arb_safe_positional(), 0..=2))
+                .prop_map(|(flag, mut pos)| {
+                    pos.insert(0, flag);
+                    ("optional".to_string(), pos)
+                }),
+            // Alternation: {cmd} {a|b} * matches when head is in set
+            2 => (
+                proptest::collection::vec(arb_safe_positional(), 2..=3),
+                proptest::collection::vec(arb_safe_positional(), 0..=2),
+            )
+                .prop_map(|(alts, suffix)| {
+                    let mut tokens = vec![alts[0].clone()];
+                    tokens.extend(suffix);
+                    ("alternation".to_string(), {
+                        // Store alternation set as first element with | separator,
+                        // then actual tokens
+                        let mut v = vec![alts.join("|")];
+                        v.extend(tokens);
+                        v
+                    })
+                }),
+        ],
+        proptest::bool::ANY,
+    )
+        .prop_map(move |(suffix, (variant, tokens), is_allow)| {
+            let cmd_name = format!("{cmd_prefix}{suffix}");
+            match variant.as_str() {
+                "wildcard" => {
+                    let pattern = format!("{cmd_name} *");
+                    let command = build_command(&cmd_name, &tokens);
+                    (pattern, command, is_allow)
+                }
+                "literal" => {
+                    let pattern = format!("{cmd_name} {}", tokens[0]);
+                    let command = build_command(&cmd_name, std::slice::from_ref(&tokens[0]));
+                    (pattern, command, is_allow)
+                }
+                "flag_neg" => {
+                    // Use a flag that does NOT appear in the positional tokens
+                    let pattern = format!("{cmd_name} !--zzunused *");
+                    let command = build_command(&cmd_name, &tokens);
+                    (pattern, command, is_allow)
+                }
+                "optional" => {
+                    let flag = &tokens[0];
+                    let pattern = format!("{cmd_name} [{flag}] *");
+                    let command = build_command(&cmd_name, &tokens);
+                    (pattern, command, is_allow)
+                }
+                "alternation" => {
+                    let alt_set = &tokens[0]; // "a|b|c"
+                    let cmd_tokens = &tokens[1..]; // actual command tokens
+                    let pattern = format!("{cmd_name} {alt_set} *");
+                    let command = build_command(&cmd_name, cmd_tokens);
+                    (pattern, command, is_allow)
+                }
+                _ => unreachable!(),
+            }
+        })
+}
+
 fn arb_simple_command() -> impl Strategy<Value = String> {
     prop_oneof![
         // Normal command
@@ -378,15 +462,6 @@ fn action_variant(action: &Action) -> &'static str {
         Action::Allow => "Allow",
         Action::Deny(_) => "Deny",
         Action::Ask(_) => "Ask",
-    }
-}
-
-/// Numeric priority matching the production merge_actions logic: Deny > Ask > Allow
-fn action_priority(action: &Action) -> u8 {
-    match action {
-        Action::Allow => 0,
-        Action::Ask(_) => 1,
-        Action::Deny(_) => 2,
     }
 }
 
@@ -1142,81 +1217,75 @@ proptest! {
         );
     }
 
-    /// The compound action must equal the highest-priority action among its
-    /// sub-commands (Deny > Ask > Allow). This validates the "Explicit Deny
-    /// Wins" aggregation rule end-to-end with randomly generated compounds.
+    /// Compound evaluation with pattern-matching correctness verification.
+    /// Each sub-command has a known-matching rule with a known action (allow/deny).
+    /// Verifies:
+    /// 1. Each sub-command individually evaluates to the expected action
+    /// 2. Compound result follows "Deny wins" aggregation
     #[test]
-    fn prop_compound_action_is_max_of_subcommands(
-        compound in arb_compound_command(),
+    fn prop_compound_match_correctness(
+        pair0 in arb_matching_rule_and_command(0),
+        pair1 in arb_matching_rule_and_command(1),
+        pair2 in arb_matching_rule_and_command(2),
+        operators in proptest::collection::vec(arb_operator(), 2..=2),
     ) {
-        let yaml = indoc::indoc! {"
+        let pairs = [&pair0, &pair1, &pair2];
+
+        // Build YAML config from the generated rules
+        let rule_lines: Vec<String> = pairs.iter().map(|(pattern, _, is_allow)| {
+            let action = if *is_allow { "allow" } else { "deny" };
+            let escaped = pattern.replace('\'', "''");
+            format!("  - {action}: '{escaped}'")
+        }).collect();
+        let rules = rule_lines.join("\n");
+        let yaml = indoc::formatdoc! {"
             rules:
-              - allow: 'git *'
-              - allow: 'curl *'
-              - allow: 'echo *'
-              - allow: 'npm *'
-              - allow: 'ls *'
-              - deny: 'rm *'
-        "};
-        let config = parse_config(yaml).unwrap();
+            {rules}"
+        };
+        let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        let result = evaluate_compound(&config, &compound, &ctx).unwrap();
-
-        // Derive the expected action from sub-command details
-        let max_sub_action = result.sub_command_details.iter()
-            .map(|d| action_priority(&d.action))
-            .max()
-            .unwrap_or(0);
-        let compound_priority = action_priority(&result.action);
-
-        let msg = format!(
-            "compound action should be max of sub-actions: compound={:?} \
-             result={} sub_actions={:?}",
-            compound,
-            action_variant(&result.action),
-            result.sub_command_details.iter()
-                .map(|d| format!("{}={}", d.command, action_variant(&d.action)))
-                .collect::<Vec<_>>()
+        // Build compound command
+        let compound = format!(
+            "{} {} {} {} {}",
+            pair0.1, operators[0], pair1.1, operators[1], pair2.1
         );
-        prop_assert_eq!(compound_priority, max_sub_action, "{}", msg);
-    }
 
-    /// Each sub-command action reported by evaluate_compound must match what
-    /// evaluate_command returns for the same command and config. This ensures
-    /// compound evaluation doesn't alter individual command evaluation logic.
-    #[test]
-    fn prop_compound_subcmd_matches_individual_eval(
-        compound in arb_compound_command(),
-    ) {
-        let yaml = indoc::indoc! {"
-            rules:
-              - allow: 'git *'
-              - allow: 'curl *'
-              - allow: 'echo *'
-              - allow: 'npm *'
-              - allow: 'ls *'
-              - deny: 'rm *'
-        "};
-        let config = parse_config(yaml).unwrap();
-        let ctx = empty_context();
+        // Verify each sub-command individually
+        for (pattern, cmd, is_allow) in &pairs {
+            let individual = evaluate_command(&config, cmd, &ctx).unwrap();
+            if *is_allow {
+                let msg = format!(
+                    "pattern {:?} should allow command {:?}, got {}",
+                    pattern, cmd, action_variant(&individual.action)
+                );
+                prop_assert_eq!(individual.action, Action::Allow, "{}", msg);
+            } else {
+                let msg = format!(
+                    "pattern {:?} should deny command {:?}, got {}",
+                    pattern, cmd, action_variant(&individual.action)
+                );
+                prop_assert!(matches!(individual.action, Action::Deny(_)), "{}", msg);
+            }
+        }
 
+        // Verify compound aggregation
         let result = evaluate_compound(&config, &compound, &ctx).unwrap();
-
-        for detail in &result.sub_command_details {
-            let individual = evaluate_command(&config, &detail.command, &ctx).unwrap();
+        let any_deny = pairs.iter().any(|(_, _, is_allow)| !is_allow);
+        if any_deny {
             let msg = format!(
-                "sub-command {:?} action mismatch: compound reported {} but \
-                 individual eval returned {}",
-                detail.command,
-                action_variant(&detail.action),
-                action_variant(&individual.action),
+                "compound should Deny (at least one sub-command denied): compound={:?} \
+                 sub_results={:?}",
+                compound,
+                pairs.iter().map(|(p, c, a)| format!("{}->{}={}", p, c, a)).collect::<Vec<_>>()
             );
-            prop_assert_eq!(
-                action_variant(&detail.action),
-                action_variant(&individual.action),
-                "{}", msg
+            prop_assert!(matches!(result.action, Action::Deny(_)), "{}", msg);
+        } else {
+            let msg = format!(
+                "compound should Allow (all sub-commands allowed): compound={:?}",
+                compound,
             );
+            prop_assert_eq!(result.action, Action::Allow, "{}", msg);
         }
     }
 }
