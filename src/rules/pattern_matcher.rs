@@ -40,6 +40,41 @@ fn prepare_wildcard_iteration<'a>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Flag normalization
+// ---------------------------------------------------------------------------
+
+/// Split an `=`-joined flag token (e.g. `--flag=value`) into its flag and
+/// value parts. Returns `None` if the token does not contain `=` or the
+/// portion before `=` does not start with `-`.
+fn split_flag_equals(token: &str) -> Option<(&str, &str)> {
+    let eq_pos = token.find('=')?;
+    let flag_part = &token[..eq_pos];
+    if flag_part.starts_with('-') {
+        Some((flag_part, &token[eq_pos + 1..]))
+    } else {
+        None
+    }
+}
+
+/// Check if any of the `aliases` match a command token, considering both
+/// the token itself and the flag portion of an `=`-joined token.
+fn flag_aliases_match_token(aliases: &[String], cmd_token: &str) -> bool {
+    if aliases.iter().any(|a| a.as_str() == cmd_token) {
+        return true;
+    }
+    if let Some((flag_part, _)) = split_flag_equals(cmd_token)
+        && aliases.iter().any(|a| a.as_str() == flag_part)
+    {
+        return true;
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /// Check whether `pattern` matches `command`.
 ///
 /// Path references (`<path:name>`) are expanded using `definitions.paths`.
@@ -53,13 +88,16 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
     for skip in skip_range {
         let steps = Cell::new(0usize);
-        if match_tokens_core(
+        if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
             definitions,
             &steps,
             None,
-        ) {
+            None,
+        )
+        .unwrap_or(false)
+        {
             return true;
         }
     }
@@ -82,258 +120,20 @@ pub fn matches_with_captures(
     for skip in skip_range {
         let steps = Cell::new(0usize);
         let mut captures = Vec::new();
-        if match_tokens_core(
+        if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
             definitions,
             &steps,
             Some(&mut captures),
-        ) {
+            None,
+        )
+        .unwrap_or(false)
+        {
             return Some(captures.into_iter().map(|s| s.to_string()).collect());
         }
     }
     None
-}
-
-/// Core recursive matcher operating on `&[&str]` slices.
-///
-/// When `captures` is `Some`, wildcard-matched tokens are recorded.
-/// When `None`, only a boolean match result is produced.
-///
-/// `steps` tracks the total number of recursive calls to prevent exponential
-/// blowup from patterns with multiple consecutive wildcards.
-fn match_tokens_core<'a>(
-    pattern_tokens: &[PatternToken],
-    cmd_tokens: &[&'a str],
-    definitions: &Definitions,
-    steps: &Cell<usize>,
-    mut captures: Option<&mut Vec<&'a str>>,
-) -> bool {
-    let count = steps.get() + 1;
-    steps.set(count);
-    if count > MAX_MATCH_STEPS {
-        return false;
-    }
-
-    // Base case: both exhausted
-    let Some((first, rest)) = pattern_tokens.split_first() else {
-        return cmd_tokens.is_empty();
-    };
-
-    match first {
-        PatternToken::Wildcard => {
-            // Wildcard matches zero or more tokens (greedy with backtracking)
-            for skip in 0..=cmd_tokens.len() {
-                if let Some(ref mut caps) = captures {
-                    let saved_len = caps.len();
-                    caps.extend_from_slice(&cmd_tokens[..skip]);
-                    if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, Some(*caps))
-                    {
-                        return true;
-                    }
-                    caps.truncate(saved_len);
-                } else if match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, None) {
-                    return true;
-                }
-            }
-            false
-        }
-
-        PatternToken::Literal(s) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if literal_matches(s, cmd_tokens[0]) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::QuotedLiteral(s) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            if s == cmd_tokens[0] {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Alternation(alts) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            // Flag-only alternations (all elements start with `-`, excluding
-            // the bare `--` separator) use order-independent matching: scan
-            // the entire command token list for a matching flag, remove it,
-            // and continue with the rest.
-            if alts.iter().all(|a| a.starts_with('-') && a != "--") {
-                for i in 0..cmd_tokens.len() {
-                    if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
-                        let remaining = remove_indices(cmd_tokens, &[i]);
-                        if let Some(ref mut caps) = captures {
-                            let saved_len = caps.len();
-                            if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
-                            {
-                                return true;
-                            }
-                            caps.truncate(saved_len);
-                        } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
-                            return true;
-                        }
-                    }
-                }
-                false
-            } else if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::FlagWithValue { aliases, value } => {
-            // Search for the flag anywhere in the remaining command tokens
-            // (order-independent matching)
-            for i in 0..cmd_tokens.len() {
-                // Case 1: space-separated flag and value (e.g. `--sort value`)
-                if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
-                    && i + 1 < cmd_tokens.len()
-                    && match_single_token(value, cmd_tokens[i + 1], definitions)
-                {
-                    // Remove the flag and its value, continue matching
-                    let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    if let Some(ref mut caps) = captures {
-                        let saved_len = caps.len();
-                        // Capture the flag value when it matches a wildcard
-                        if matches!(value.as_ref(), PatternToken::Wildcard) {
-                            caps.push(cmd_tokens[i + 1]);
-                        }
-                        if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps)) {
-                            return true;
-                        }
-                        caps.truncate(saved_len);
-                    } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
-                        return true;
-                    }
-                }
-
-                // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
-                if let Some(eq_pos) = cmd_tokens[i].find('=') {
-                    let flag_part = &cmd_tokens[i][..eq_pos];
-                    let value_part = &cmd_tokens[i][eq_pos + 1..];
-                    if flag_part.starts_with('-')
-                        && aliases.iter().any(|a| a.as_str() == flag_part)
-                        && match_single_token(value, value_part, definitions)
-                    {
-                        let remaining = remove_indices(cmd_tokens, &[i]);
-                        if let Some(ref mut caps) = captures {
-                            let saved_len = caps.len();
-                            if matches!(value.as_ref(), PatternToken::Wildcard) {
-                                caps.push(value_part);
-                            }
-                            if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
-                            {
-                                return true;
-                            }
-                            caps.truncate(saved_len);
-                        } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-
-        PatternToken::Negation(inner) => {
-            if is_flag_only_negation(inner) {
-                // Flag-only negations scan the entire command token list for
-                // the forbidden flag (order-independent). When no tokens remain
-                // the flag is trivially absent, so the negation passes.
-                let negation_passed = !cmd_tokens
-                    .iter()
-                    .any(|t| match_flag_token_with_equals(inner, t, definitions));
-                if negation_passed {
-                    // Flag-only negations do not consume a positional token.
-                    match_tokens_core(rest, cmd_tokens, definitions, steps, captures)
-                } else {
-                    false
-                }
-            } else {
-                if cmd_tokens.is_empty() {
-                    return false;
-                }
-                let negation_passed = !match_single_token(inner, cmd_tokens[0], definitions);
-                if negation_passed {
-                    match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-                } else {
-                    false
-                }
-            }
-        }
-
-        PatternToken::Optional(inner_tokens) => {
-            // Try matching with the optional tokens present by chaining them
-            // with the remaining pattern tokens
-            let combined: Vec<PatternToken> = inner_tokens
-                .iter()
-                .cloned()
-                .chain(rest.iter().cloned())
-                .collect();
-            if let Some(ref mut caps) = captures {
-                let saved_len = caps.len();
-                if match_tokens_core(&combined, cmd_tokens, definitions, steps, Some(*caps)) {
-                    return true;
-                }
-                caps.truncate(saved_len);
-            } else if match_tokens_core(&combined, cmd_tokens, definitions, steps, None) {
-                return true;
-            }
-            // Try matching without the optional tokens (skip the Optional entirely),
-            // but verify that the optional's flags are actually absent from the command
-            if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_tokens_core(rest, cmd_tokens, definitions, steps, captures);
-            }
-            false
-        }
-
-        PatternToken::PathRef(name) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            let paths = resolve_paths(name, definitions);
-            let normalized_cmd = normalize_path(cmd_tokens[0]);
-            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
-            }
-        }
-
-        PatternToken::Placeholder(_) => {
-            // Placeholder matches a single token (wrapper placeholders are
-            // handled by the rule engine at a higher level; here we just
-            // consume one token)
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-        }
-
-        PatternToken::Opts => {
-            // <opts> in non-wrapper context: consume flag-like tokens
-            let skip = consume_opts(cmd_tokens);
-            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
-        }
-
-        PatternToken::Vars => {
-            // <vars> in non-wrapper context: consume KEY=VALUE tokens
-            let skip = consume_vars(cmd_tokens);
-            match_tokens_core(rest, &cmd_tokens[skip..], definitions, steps, captures)
-        }
-    }
 }
 
 /// Try to match a wrapper pattern against a command and extract all possible
@@ -358,13 +158,13 @@ pub fn extract_placeholder(
     for skip in skip_range {
         let steps = Cell::new(0usize);
         let mut captured = Vec::new();
-        extract_placeholder_all(
+        match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
             definitions,
             &steps,
-            &mut captured,
-            &mut all_candidates,
+            None,
+            Some((&mut captured, &mut all_candidates)),
         )?;
     }
     Ok(all_candidates
@@ -373,253 +173,391 @@ pub fn extract_placeholder(
         .collect())
 }
 
-/// Collects all possible `<cmd>` captures from a wrapper pattern match.
+// ---------------------------------------------------------------------------
+// Unified match engine
+// ---------------------------------------------------------------------------
+
+/// Unified recursive matching engine.
 ///
-/// Explores all valid alignments of pattern tokens against command tokens and
-/// pushes each successful capture into `all_candidates`, ordered from shortest
-/// to longest capture (since wildcards iterate from skip=0 upward). Only
-/// `<cmd>` placeholders contribute to the captured tokens; other placeholder
-/// names consume tokens without capturing. Empty captures (when the pattern
-/// has no `<cmd>` or `<cmd>` would capture nothing) are excluded by requiring
-/// at least one token for `<cmd>`.
-fn extract_placeholder_all<'a>(
+/// When `extract` is `None`, performs boolean matching (returns `Ok(true)` on
+/// success). When `captures` is `Some`, wildcard-matched tokens are recorded.
+///
+/// When `extract` is `Some`, performs wrapper placeholder extraction. The
+/// first element is the current captured tokens, the second is the collection
+/// of all candidates. In this mode the function always returns `Ok(false)` on
+/// success (candidates are collected into `all_candidates`).
+///
+/// Returns `Err` if the pattern contains unsupported tokens for the current mode.
+fn match_engine<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
     definitions: &Definitions,
     steps: &Cell<usize>,
-    captured: &mut Vec<&'a str>,
-    all_candidates: &mut Vec<Vec<&'a str>>,
-) -> Result<(), RuleError> {
+    mut captures: Option<&mut Vec<&'a str>>,
+    mut extract: Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
+) -> Result<bool, RuleError> {
     let count = steps.get() + 1;
     steps.set(count);
     if count > MAX_MATCH_STEPS {
-        return Ok(());
+        return Ok(false);
     }
 
+    let is_extract = extract.is_some();
+
+    // Base case: pattern exhausted
     let Some((first, rest)) = pattern_tokens.split_first() else {
-        // Only record a candidate when all command tokens have been consumed
-        // AND at least one token was captured by a <cmd> placeholder. Patterns
-        // without <cmd> (or where <cmd> matched nothing) produce empty captures
-        // that are not useful to the caller.
-        if cmd_tokens.is_empty() && !captured.is_empty() {
-            all_candidates.push(captured.clone());
+        if let Some((captured, all_candidates)) = extract {
+            if cmd_tokens.is_empty() && !captured.is_empty() {
+                all_candidates.push(captured.clone());
+            }
+            return Ok(false);
         }
-        return Ok(());
+        return Ok(cmd_tokens.is_empty());
     };
 
     match first {
-        PatternToken::Placeholder(name) => {
-            let is_cmd = name == "cmd";
-            if rest.is_empty() {
-                if is_cmd {
-                    // Empty <cmd> (e.g., `sudo` with no inner command) is not a
-                    // valid command to evaluate, so skip it rather than adding an
-                    // empty candidate.
-                    if cmd_tokens.is_empty() {
-                        return Ok(());
-                    }
-                    let saved_len = captured.len();
-                    captured.extend_from_slice(cmd_tokens);
-                    all_candidates.push(captured.clone());
-                    captured.truncate(saved_len);
-                } else if cmd_tokens.len() == 1 {
-                    // Non-<cmd> placeholder at end of pattern consumes exactly
-                    // one token without adding it to captured (only <cmd> tokens
-                    // are captured). Only push if a <cmd> was captured earlier;
-                    // otherwise this pattern has no <cmd> and the candidate is
-                    // meaningless.
-                    if !captured.is_empty() {
-                        all_candidates.push(captured.clone());
-                    }
-                }
-            } else if !cmd_tokens.is_empty() {
-                for take in 1..=cmd_tokens.len() {
-                    let saved_len = captured.len();
-                    if is_cmd {
-                        captured.extend_from_slice(&cmd_tokens[..take]);
-                    }
-                    extract_placeholder_all(
+        PatternToken::Wildcard => {
+            for skip in 0..=cmd_tokens.len() {
+                if let Some((captured, all_candidates)) = &mut extract {
+                    match_engine(
                         rest,
-                        &cmd_tokens[take..],
+                        &cmd_tokens[skip..],
                         definitions,
                         steps,
-                        captured,
-                        all_candidates,
+                        None,
+                        Some((captured, all_candidates)),
                     )?;
-                    captured.truncate(saved_len);
+                } else if let Some(caps) = &mut captures {
+                    let saved_len = caps.len();
+                    caps.extend_from_slice(&cmd_tokens[..skip]);
+                    if match_engine(
+                        rest,
+                        &cmd_tokens[skip..],
+                        definitions,
+                        steps,
+                        Some(*caps),
+                        None,
+                    )? {
+                        return Ok(true);
+                    }
+                    caps.truncate(saved_len);
+                } else if match_engine(rest, &cmd_tokens[skip..], definitions, steps, None, None)? {
+                    return Ok(true);
                 }
             }
-            Ok(())
+            Ok(false)
         }
 
         PatternToken::Literal(s) => {
-            if !cmd_tokens.is_empty() && literal_matches(s, cmd_tokens[0]) {
-                extract_placeholder_all(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captured,
-                    all_candidates,
-                )?;
+            if cmd_tokens.is_empty() || !literal_matches(s, cmd_tokens[0]) {
+                return Ok(false);
             }
-            Ok(())
+            match_engine(
+                rest,
+                &cmd_tokens[1..],
+                definitions,
+                steps,
+                captures,
+                extract,
+            )
         }
 
         PatternToken::QuotedLiteral(s) => {
-            if !cmd_tokens.is_empty() && s == cmd_tokens[0] {
-                extract_placeholder_all(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captured,
-                    all_candidates,
-                )?;
+            if cmd_tokens.is_empty() || s != cmd_tokens[0] {
+                return Ok(false);
             }
-            Ok(())
+            match_engine(
+                rest,
+                &cmd_tokens[1..],
+                definitions,
+                steps,
+                captures,
+                extract,
+            )
         }
 
         PatternToken::Alternation(alts) => {
-            if !cmd_tokens.is_empty() && alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
-                extract_placeholder_all(
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+
+            // Flag-only alternations use order-independent matching (BoolMatch only).
+            let is_flag_only = alts.iter().all(|a| a.starts_with('-') && a != "--");
+            if is_flag_only && !is_extract {
+                for i in 0..cmd_tokens.len() {
+                    if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
+                        let remaining = remove_indices(cmd_tokens, &[i]);
+                        if let Some(caps) = &mut captures {
+                            let saved_len = caps.len();
+                            if match_engine(
+                                rest,
+                                &remaining,
+                                definitions,
+                                steps,
+                                Some(*caps),
+                                None,
+                            )? {
+                                return Ok(true);
+                            }
+                            caps.truncate(saved_len);
+                        } else if match_engine(rest, &remaining, definitions, steps, None, None)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                return Ok(false);
+            }
+
+            // Positional matching (first token)
+            if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
+                return match_engine(
                     rest,
                     &cmd_tokens[1..],
                     definitions,
                     steps,
-                    captured,
-                    all_candidates,
-                )?;
+                    captures,
+                    extract,
+                );
             }
-            Ok(())
+            Ok(false)
         }
 
         PatternToken::FlagWithValue { aliases, value } => {
             for i in 0..cmd_tokens.len() {
-                // Case 1: space-separated flag and value
+                // Case 1: space-separated flag and value (e.g. `--sort value`)
                 if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
                     && i + 1 < cmd_tokens.len()
                     && match_single_token(value, cmd_tokens[i + 1], definitions)
                 {
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
-                    extract_placeholder_all(
+                    let capture_val =
+                        matches!(**value, PatternToken::Wildcard).then_some(cmd_tokens[i + 1]);
+                    if try_recurse_flag_value(
                         rest,
                         &remaining,
                         definitions,
                         steps,
-                        captured,
-                        all_candidates,
-                    )?;
+                        &mut captures,
+                        &mut extract,
+                        capture_val,
+                    )? {
+                        return Ok(true);
+                    }
                 }
 
-                // Case 2: `=`-joined flag and value
-                if let Some(eq_pos) = cmd_tokens[i].find('=') {
-                    let flag_part = &cmd_tokens[i][..eq_pos];
-                    let value_part = &cmd_tokens[i][eq_pos + 1..];
-                    if flag_part.starts_with('-')
-                        && aliases.iter().any(|a| a.as_str() == flag_part)
-                        && match_single_token(value, value_part, definitions)
-                    {
-                        let remaining = remove_indices(cmd_tokens, &[i]);
-                        extract_placeholder_all(
-                            rest,
-                            &remaining,
-                            definitions,
-                            steps,
-                            captured,
-                            all_candidates,
-                        )?;
+                // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
+                if let Some((flag_part, value_part)) = split_flag_equals(cmd_tokens[i])
+                    && aliases.iter().any(|a| a.as_str() == flag_part)
+                    && match_single_token(value, value_part, definitions)
+                {
+                    let remaining = remove_indices(cmd_tokens, &[i]);
+                    let capture_val =
+                        matches!(**value, PatternToken::Wildcard).then_some(value_part);
+                    if try_recurse_flag_value(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        &mut captures,
+                        &mut extract,
+                        capture_val,
+                    )? {
+                        return Ok(true);
                     }
                 }
             }
-            Ok(())
-        }
-
-        PatternToken::Wildcard => {
-            for skip in 0..=cmd_tokens.len() {
-                extract_placeholder_all(
-                    rest,
-                    &cmd_tokens[skip..],
-                    definitions,
-                    steps,
-                    captured,
-                    all_candidates,
-                )?;
-            }
-            Ok(())
+            Ok(false)
         }
 
         PatternToken::Negation(inner) => {
             if is_flag_only_negation(inner) {
+                // Flag-only negations: scan all tokens for the forbidden flag.
                 let negation_passed = !cmd_tokens
                     .iter()
                     .any(|t| match_flag_token_with_equals(inner, t, definitions));
                 if negation_passed {
-                    extract_placeholder_all(
-                        rest,
-                        cmd_tokens,
-                        definitions,
-                        steps,
-                        captured,
-                        all_candidates,
-                    )?;
+                    match_engine(rest, cmd_tokens, definitions, steps, captures, extract)
+                } else {
+                    Ok(false)
                 }
             } else {
                 if cmd_tokens.is_empty() {
-                    return Ok(());
+                    return Ok(false);
                 }
                 let negation_passed = !match_single_token(inner, cmd_tokens[0], definitions);
                 if negation_passed {
-                    extract_placeholder_all(
+                    match_engine(
                         rest,
                         &cmd_tokens[1..],
                         definitions,
                         steps,
-                        captured,
-                        all_candidates,
-                    )?;
+                        captures,
+                        extract,
+                    )
+                } else {
+                    Ok(false)
                 }
             }
-            Ok(())
+        }
+
+        PatternToken::Optional(inner_tokens) => {
+            if is_extract {
+                return Err(RuleError::UnsupportedWrapperToken(
+                    "Optional ([...])".into(),
+                ));
+            }
+            // Try matching with the optional tokens present
+            let combined: Vec<PatternToken> = inner_tokens
+                .iter()
+                .cloned()
+                .chain(rest.iter().cloned())
+                .collect();
+            if let Some(caps) = &mut captures {
+                let saved_len = caps.len();
+                if match_engine(&combined, cmd_tokens, definitions, steps, Some(*caps), None)? {
+                    return Ok(true);
+                }
+                caps.truncate(saved_len);
+            } else if match_engine(&combined, cmd_tokens, definitions, steps, None, None)? {
+                return Ok(true);
+            }
+            // Try without the optional tokens
+            if optional_flags_absent(inner_tokens, cmd_tokens) {
+                return match_engine(rest, cmd_tokens, definitions, steps, captures, None);
+            }
+            Ok(false)
+        }
+
+        PatternToken::PathRef(name) => {
+            if is_extract {
+                return Err(RuleError::UnsupportedWrapperToken(format!(
+                    "PathRef (<path:{name}>)"
+                )));
+            }
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            let paths = resolve_paths(name, definitions);
+            let normalized_cmd = normalize_path(cmd_tokens[0]);
+            if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
+                match_engine(rest, &cmd_tokens[1..], definitions, steps, captures, None)
+            } else {
+                Ok(false)
+            }
+        }
+
+        PatternToken::Placeholder(name) => {
+            if let Some((captured, all_candidates)) = &mut extract {
+                // Wrapper placeholder extraction mode
+                let is_cmd = name == "cmd";
+                if rest.is_empty() {
+                    if is_cmd {
+                        if cmd_tokens.is_empty() {
+                            return Ok(false);
+                        }
+                        let saved_len = captured.len();
+                        captured.extend_from_slice(cmd_tokens);
+                        all_candidates.push(captured.clone());
+                        captured.truncate(saved_len);
+                    } else if cmd_tokens.len() == 1 {
+                        // Non-<cmd> placeholder at end consumes one token.
+                        if !captured.is_empty() {
+                            all_candidates.push(captured.clone());
+                        }
+                    }
+                } else if !cmd_tokens.is_empty() {
+                    for take in 1..=cmd_tokens.len() {
+                        let saved_len = captured.len();
+                        if is_cmd {
+                            captured.extend_from_slice(&cmd_tokens[..take]);
+                        }
+                        match_engine(
+                            rest,
+                            &cmd_tokens[take..],
+                            definitions,
+                            steps,
+                            None,
+                            Some((captured, all_candidates)),
+                        )?;
+                        captured.truncate(saved_len);
+                    }
+                }
+                Ok(false)
+            } else {
+                // Boolean matching: placeholder consumes one token
+                if cmd_tokens.is_empty() {
+                    return Ok(false);
+                }
+                match_engine(rest, &cmd_tokens[1..], definitions, steps, captures, None)
+            }
         }
 
         PatternToken::Opts => {
-            // Consume zero or more flag-like tokens (hyphen-prefixed).
-            // When a flag is consumed and the next token is not hyphen-prefixed,
-            // consume it as the flag's argument.
             let skip = consume_opts(cmd_tokens);
-            extract_placeholder_all(
+            match_engine(
                 rest,
                 &cmd_tokens[skip..],
                 definitions,
                 steps,
-                captured,
-                all_candidates,
+                captures,
+                extract,
             )
         }
 
         PatternToken::Vars => {
-            // Consume zero or more KEY=VALUE tokens.
             let skip = consume_vars(cmd_tokens);
-            extract_placeholder_all(
+            match_engine(
                 rest,
                 &cmd_tokens[skip..],
                 definitions,
                 steps,
-                captured,
-                all_candidates,
+                captures,
+                extract,
             )
         }
-
-        PatternToken::Optional(_) => Err(RuleError::UnsupportedWrapperToken(
-            "Optional ([...])".into(),
-        )),
-
-        PatternToken::PathRef(name) => Err(RuleError::UnsupportedWrapperToken(format!(
-            "PathRef (<path:{name}>)"
-        ))),
     }
 }
+
+/// Helper for FlagWithValue: recurse with remaining tokens after removing
+/// the matched flag+value, optionally capturing a wildcard value.
+fn try_recurse_flag_value<'a>(
+    rest: &[PatternToken],
+    remaining: &[&'a str],
+    definitions: &Definitions,
+    steps: &Cell<usize>,
+    captures: &mut Option<&mut Vec<&'a str>>,
+    extract: &mut Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
+    capture_val: Option<&'a str>,
+) -> Result<bool, RuleError> {
+    if let Some((captured, all_candidates)) = extract {
+        match_engine(
+            rest,
+            remaining,
+            definitions,
+            steps,
+            None,
+            Some((captured, all_candidates)),
+        )?;
+        // In extract mode, always continue scanning (don't return true)
+        Ok(false)
+    } else if let Some(caps) = captures {
+        let saved_len = caps.len();
+        if let Some(val) = capture_val {
+            caps.push(val);
+        }
+        if match_engine(rest, remaining, definitions, steps, Some(*caps), None)? {
+            return Ok(true);
+        }
+        caps.truncate(saved_len);
+        Ok(false)
+    } else {
+        match_engine(rest, remaining, definitions, steps, None, None)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
 
 /// Count how many tokens `<vars>` should consume from the front of `tokens`.
 ///
@@ -671,22 +609,10 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
     for token in optional_tokens {
         match token {
             PatternToken::FlagWithValue { aliases, .. } => {
-                if cmd_tokens.iter().any(|t| {
-                    // Exact match (space-separated form)
-                    if aliases.iter().any(|a| a.as_str() == *t) {
-                        return true;
-                    }
-                    // `=`-joined form: check the flag portion before `=`
-                    if let Some(eq_pos) = t.find('=') {
-                        let flag_part = &t[..eq_pos];
-                        if flag_part.starts_with('-')
-                            && aliases.iter().any(|a| a.as_str() == flag_part)
-                        {
-                            return true;
-                        }
-                    }
-                    false
-                }) {
+                if cmd_tokens
+                    .iter()
+                    .any(|t| flag_aliases_match_token(aliases, t))
+                {
                     return false;
                 }
             }
@@ -762,13 +688,6 @@ fn unescape_and_match(pattern: &str, token: &str) -> bool {
         }
     }
     if has_unescaped_glob {
-        // Perform glob matching. Escaped `*` characters are sentinels (`\x00`)
-        // and won't be split by glob_match. We need to also place the sentinel
-        // in the token for comparison purposes.
-        // Actually, the token is a real command string and won't contain `\x00`,
-        // but sentinels in the pattern's literal segments need to match `*` in
-        // the token. Replace sentinel back to `*` in the pattern parts that
-        // glob_match compares literally.
         glob_match(&unescaped, token)
     } else {
         // No glob — restore sentinels to `*` and do exact comparison.
@@ -924,13 +843,8 @@ fn match_flag_token_with_equals(
     if match_single_token(pattern, cmd_token, definitions) {
         return true;
     }
-    // If the command token contains `=` and the flag part starts with `-`,
-    // try matching only the flag portion before `=`.
-    if let Some(eq_pos) = cmd_token.find('=') {
-        let flag_part = &cmd_token[..eq_pos];
-        if flag_part.starts_with('-') {
-            return match_single_token(pattern, flag_part, definitions);
-        }
+    if let Some((flag_part, _)) = split_flag_equals(cmd_token) {
+        return match_single_token(pattern, flag_part, definitions);
     }
     false
 }
