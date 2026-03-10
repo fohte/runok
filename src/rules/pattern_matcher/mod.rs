@@ -4,13 +4,21 @@
 //! supporting wildcards, alternations, negations, optional groups,
 //! and path-variable expansion via [`Definitions`].
 
+mod flag_utils;
+mod token_matching;
+
 use std::cell::Cell;
-use std::path::{Component, Path};
 
 use crate::config::Definitions;
 use crate::rules::RuleError;
 use crate::rules::command_parser::ParsedCommand;
 use crate::rules::pattern_parser::{CommandPattern, Pattern, PatternToken};
+
+use flag_utils::{is_flag_only_negation, optional_flags_absent, split_flag_equals};
+use token_matching::{
+    literal_matches, match_flag_token_with_equals, match_single_token, normalize_path,
+    resolve_paths,
+};
 
 /// Maximum number of recursive steps allowed during pattern matching.
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
@@ -38,43 +46,6 @@ fn prepare_wildcard_iteration<'a>(
         let tokens = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
         (tokens, 0..=0)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Flag normalization
-// ---------------------------------------------------------------------------
-
-/// Split an `=`-joined flag token (e.g. `--flag=value`) into its flag and
-/// value parts. Only recognizes standard flag forms: short flags (`-X=val`)
-/// and long flags (`--flag=val`). Non-standard forms like `-Denv=prod` (where
-/// `-D` + key is fused into a single token) are not split, because they
-/// represent a single semantic token rather than a flag-value pair.
-fn split_flag_equals(token: &str) -> Option<(&str, &str)> {
-    let eq_pos = token.find('=')?;
-    let flag_part = &token[..eq_pos];
-    if flag_part.starts_with("--") {
-        // Long flag: --flag=value
-        Some((flag_part, &token[eq_pos + 1..]))
-    } else if flag_part.len() == 2 && flag_part.starts_with('-') {
-        // Short flag: -X=value (dash + single char)
-        Some((flag_part, &token[eq_pos + 1..]))
-    } else {
-        None
-    }
-}
-
-/// Check if any of the `aliases` match a command token, considering both
-/// the token itself and the flag portion of an `=`-joined token.
-fn flag_aliases_match_token(aliases: &[String], cmd_token: &str) -> bool {
-    if aliases.iter().any(|a| a.as_str() == cmd_token) {
-        return true;
-    }
-    if let Some((flag_part, _)) = split_flag_equals(cmd_token)
-        && aliases.iter().any(|a| a.as_str() == flag_part)
-    {
-        return true;
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -613,255 +584,6 @@ fn consume_opts(tokens: &[&str]) -> usize {
         }
     }
     i
-}
-
-/// Check that flags referenced by the optional group are not present in
-/// the command tokens. When we take the "absent" path for an Optional,
-/// the flag itself must not appear in the remaining command tokens.
-fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) -> bool {
-    for token in optional_tokens {
-        match token {
-            PatternToken::FlagWithValue { aliases, .. } => {
-                if cmd_tokens
-                    .iter()
-                    .any(|t| flag_aliases_match_token(aliases, t))
-                {
-                    return false;
-                }
-            }
-            PatternToken::Literal(s) | PatternToken::QuotedLiteral(s) if s.starts_with('-') => {
-                if cmd_tokens.contains(&s.as_str()) {
-                    return false;
-                }
-            }
-            PatternToken::Alternation(alts) if alts.iter().any(|a| a.starts_with('-')) => {
-                if cmd_tokens
-                    .iter()
-                    .any(|t| alts.iter().any(|a| literal_matches(a, t)))
-                {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-    }
-    true
-}
-
-/// Check if a pattern string matches a command token.
-///
-/// If the pattern contains `*`, it is treated as a glob pattern
-/// where `*` matches zero or more arbitrary characters. Otherwise, an
-/// exact string comparison is performed.
-fn literal_matches(pattern: &str, token: &str) -> bool {
-    if pattern.contains('\\') {
-        // Strip backslash escapes so that pattern `\;` matches command token `;`.
-        // The pattern lexer preserves backslash-escaped characters as-is (e.g. `\;`),
-        // while the command tokenizer resolves them (e.g. `\;` -> `;`).
-        // Uses sentinel-based matching so that `\*` is treated as a literal `*`,
-        // not a glob, even when the same token also contains a bare `*`.
-        unescape_and_match(pattern, token)
-    } else if pattern.contains('*') {
-        glob_match(pattern, token)
-    } else {
-        pattern == token
-    }
-}
-
-/// Remove backslash escapes and perform matching that correctly distinguishes
-/// escaped characters from glob wildcards.
-///
-/// `\;` → matches `;`, `\*` → matches literal `*` (not a glob), `\\` → matches `\`.
-///
-/// When the pattern contains both `\*` (literal) and bare `*` (glob), the
-/// escaped `*` characters are temporarily replaced with a sentinel (`\x00`)
-/// during glob expansion so they are not treated as wildcards.
-fn unescape_and_match(pattern: &str, token: &str) -> bool {
-    let mut unescaped = String::with_capacity(pattern.len());
-    let mut has_unescaped_glob = false;
-    let mut has_escaped_star = false;
-    let mut chars = pattern.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                if next == '*' {
-                    // Use sentinel for escaped `*` so glob_match won't treat it
-                    // as a wildcard. We restore it after matching.
-                    unescaped.push('\x00');
-                    has_escaped_star = true;
-                } else {
-                    unescaped.push(next);
-                }
-            }
-        } else {
-            if ch == '*' {
-                has_unescaped_glob = true;
-            }
-            unescaped.push(ch);
-        }
-    }
-    if has_unescaped_glob {
-        glob_match(&unescaped, token)
-    } else {
-        // No glob — restore sentinels to `*` and do exact comparison.
-        if has_escaped_star {
-            let plain = unescaped.replace('\x00', "*");
-            plain == token
-        } else {
-            unescaped == token
-        }
-    }
-}
-
-/// Simple glob matching where `*` matches zero or more arbitrary characters.
-///
-/// Only supports `*` as a wildcard; no other glob syntax (e.g. `?`, `[...]`)
-/// is supported.
-///
-/// When the pattern contains the sentinel character `\x00` (used by
-/// [`unescape_and_match`] for escaped `\*`), sentinels are restored to `*`
-/// in each literal segment before comparison so they match a literal `*` in
-/// the text rather than acting as a wildcard.
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-
-    // Single `*` (or only `*`s): match anything
-    if parts.iter().all(|p| p.is_empty()) {
-        return true;
-    }
-
-    let has_sentinel = pattern.contains('\x00');
-    let mut pos = 0;
-
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        // Restore sentinel `\x00` back to `*` for literal comparison when needed.
-        let owned;
-        let segment: &str = if has_sentinel && part.contains('\x00') {
-            owned = part.replace('\x00', "*");
-            &owned
-        } else {
-            part
-        };
-        if i == 0 {
-            if !text.starts_with(segment) {
-                return false;
-            }
-            pos = segment.len();
-        } else if i == parts.len() - 1 {
-            if !text[pos..].ends_with(segment) {
-                return false;
-            }
-            pos = text.len();
-        } else {
-            match text[pos..].find(segment) {
-                Some(offset) => pos += offset + segment.len(),
-                None => return false,
-            }
-        }
-    }
-
-    // If pattern doesn't end with `*`, we must have consumed the entire text
-    if !pattern.ends_with('*') {
-        return pos == text.len();
-    }
-
-    true
-}
-
-/// Check if a single pattern token matches a single command token.
-fn match_single_token(token: &PatternToken, cmd_token: &str, definitions: &Definitions) -> bool {
-    match token {
-        PatternToken::Literal(s) => literal_matches(s, cmd_token),
-        PatternToken::QuotedLiteral(s) => s == cmd_token,
-        PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
-        PatternToken::Wildcard => true,
-        PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
-        PatternToken::PathRef(name) => {
-            let paths = resolve_paths(name, definitions);
-            let normalized_cmd = normalize_path(cmd_token);
-            paths.iter().any(|p| normalize_path(p) == normalized_cmd)
-        }
-        PatternToken::Placeholder(_) => true,
-        // FlagWithValue, Optional, Opts, and Vars don't make sense as single-token matches
-        PatternToken::FlagWithValue { .. }
-        | PatternToken::Optional(_)
-        | PatternToken::Opts
-        | PatternToken::Vars => false,
-    }
-}
-
-/// Normalize a file path by resolving `.` and `..` components without
-/// touching the filesystem. This prevents traversal-based bypasses such
-/// as `/etc/./passwd` or `/etc/../etc/passwd` when matching `<path:name>`.
-fn normalize_path(path: &str) -> String {
-    let mut components = Vec::new();
-    for comp in Path::new(path).components() {
-        match comp {
-            Component::ParentDir => {
-                if matches!(components.last(), Some(Component::Normal(_))) {
-                    // Pop the last normal component
-                    components.pop();
-                } else if !matches!(components.last(), Some(Component::RootDir)) {
-                    // Preserve leading `..` in relative paths
-                    components.push(comp);
-                }
-            }
-            Component::CurDir => {
-                // Skip `.`
-            }
-            _ => {
-                components.push(comp);
-            }
-        }
-    }
-    if components.is_empty() {
-        return ".".to_string();
-    }
-    let rebuilt: std::path::PathBuf = components.iter().collect();
-    rebuilt.to_string_lossy().into_owned()
-}
-
-/// Resolve a path reference name from definitions, returning a borrowed slice.
-fn resolve_paths<'a>(name: &str, definitions: &'a Definitions) -> &'a [String] {
-    definitions
-        .paths
-        .as_ref()
-        .and_then(|paths| paths.get(name))
-        .map(|v| v.as_slice())
-        .unwrap_or(&[])
-}
-
-/// Check if a negation's inner pattern is flag-only (all alternatives start
-/// with `-` and none is the bare `--` separator).
-fn is_flag_only_negation(inner: &PatternToken) -> bool {
-    match inner {
-        PatternToken::Literal(s) => s.starts_with('-') && s != "--",
-        PatternToken::Alternation(alts) => alts.iter().all(|a| a.starts_with('-') && a != "--"),
-        _ => false,
-    }
-}
-
-/// Like [`match_single_token`] but also matches the flag portion of
-/// `=`-joined command tokens via [`split_flag_equals`] (e.g.
-/// `--pre=pdftotext` matches pattern `--pre`). This is the negation
-/// counterpart of [`flag_aliases_match_token`]: both delegate `=`-joined
-/// splitting to `split_flag_equals`, but this function operates on a
-/// `PatternToken` (for Negation) rather than a `&[String]` alias list.
-fn match_flag_token_with_equals(
-    pattern: &PatternToken,
-    cmd_token: &str,
-    definitions: &Definitions,
-) -> bool {
-    if match_single_token(pattern, cmd_token, definitions) {
-        return true;
-    }
-    if let Some((flag_part, _)) = split_flag_equals(cmd_token) {
-        return match_single_token(pattern, flag_part, definitions);
-    }
-    false
 }
 
 /// Remove elements at the given indices from a slice, returning a new Vec.
@@ -1410,24 +1132,6 @@ mod tests {
     }
 
     // ========================================
-    // normalize_path unit tests
-    // ========================================
-
-    #[rstest]
-    #[case::identity("/etc/passwd", "/etc/passwd")]
-    #[case::dot("/etc/./passwd", "/etc/passwd")]
-    #[case::dotdot("/etc/../etc/passwd", "/etc/passwd")]
-    #[case::multiple_dots("/a/./b/./c", "/a/b/c")]
-    #[case::dotdot_at_root("/../etc/passwd", "/etc/passwd")]
-    #[case::relative("foo/./bar", "foo/bar")]
-    #[case::relative_dotdot("foo/bar/../baz", "foo/baz")]
-    #[case::leading_dotdot("../etc/passwd", "../etc/passwd")]
-    #[case::leading_double_dotdot("../../etc/passwd", "../../etc/passwd")]
-    fn normalize_path_cases(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(normalize_path(input), expected);
-    }
-
-    // ========================================
     // matches_with_captures tests
     // ========================================
 
@@ -1684,32 +1388,6 @@ mod tests {
         );
     }
 
-    // === glob_match unit tests ===
-
-    #[rstest]
-    #[case::prefix_glob("list-*", "list-buckets", true)]
-    #[case::prefix_glob_short("list-*", "list-", true)]
-    #[case::prefix_glob_no_match("list-*", "get-buckets", false)]
-    #[case::prefix_glob_no_match_partial("list-*", "lis", false)]
-    #[case::suffix_glob("*-buckets", "list-buckets", true)]
-    #[case::suffix_glob_no_match("*-buckets", "list-pods", false)]
-    #[case::middle_glob("pre*suf", "pre-middle-suf", true)]
-    #[case::middle_glob_exact("pre*suf", "presuf", true)]
-    #[case::middle_glob_no_match("pre*suf", "pre-middle-end", false)]
-    #[case::exact_no_glob("list", "list", true)]
-    #[case::exact_no_glob_no_match("list", "list-buckets", false)]
-    #[case::star_only("*", "anything", true)]
-    #[case::star_only_empty("*", "", true)]
-    #[case::multiple_stars("a*b*c", "axbxc", true)]
-    #[case::multiple_stars_no_match("a*b*c", "axdxe", false)]
-    fn test_glob_match(#[case] pattern: &str, #[case] text: &str, #[case] expected: bool) {
-        assert_eq!(
-            glob_match(pattern, text),
-            expected,
-            "glob_match({pattern:?}, {text:?})",
-        );
-    }
-
     // === Alternation with glob wildcard matching ===
 
     #[rstest]
@@ -1870,47 +1548,6 @@ mod tests {
             check_match(pattern_str, command_str, &empty_defs()),
             expected,
             "pattern {pattern_str:?} vs command {command_str:?}",
-        );
-    }
-
-    // === literal_matches: backslash escape ===
-
-    #[rstest]
-    #[case::backslash_semicolon(r"\;", ";", true)]
-    #[case::backslash_semicolon_no_match(r"\;", "x", false)]
-    #[case::backslash_star_literal(r"\*", "*", true)]
-    #[case::backslash_star_not_glob(r"\*", "foo", false)]
-    #[case::escaped_and_bare_glob(r"\*.*", "*.foo", true)]
-    #[case::escaped_and_bare_glob_no_match(r"\*.*", "foo.bar", false)]
-    #[case::no_backslash("foo", "foo", true)]
-    #[case::plain_glob("fo*", "foobar", true)]
-    fn literal_matches_cases(#[case] pattern: &str, #[case] token: &str, #[case] expected: bool) {
-        assert_eq!(
-            literal_matches(pattern, token),
-            expected,
-            "literal_matches({pattern:?}, {token:?})",
-        );
-    }
-
-    // === split_flag_equals unit tests ===
-
-    #[rstest]
-    #[case::long_flag("--flag=value", Some(("--flag", "value")))]
-    #[case::short_flag("-f=val", Some(("-f", "val")))]
-    #[case::empty_value("--flag=", Some(("--flag", "")))]
-    #[case::multiple_equals("--flag=a=b", Some(("--flag", "a=b")))]
-    #[case::no_equals("--flag", None)]
-    #[case::java_system_property("-Denv=prod", None)]
-    #[case::combined_short_flags_with_equals("-rf=/path", None)]
-    #[case::no_dash("KEY=VALUE", None)]
-    #[case::equals_only("=value", None)]
-    #[case::empty("", None)]
-    #[case::dash_only("-", None)]
-    fn split_flag_equals_cases(#[case] input: &str, #[case] expected: Option<(&str, &str)>) {
-        assert_eq!(
-            split_flag_equals(input),
-            expected,
-            "split_flag_equals({input:?})",
         );
     }
 }
