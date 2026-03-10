@@ -79,7 +79,7 @@ Combine negation with alternation to exclude multiple values. The `!` prefix app
 ```
 
 :::note
-Flag-only negation patterns (all alternatives starting with `-`) use [order-independent matching](/pattern-syntax/matching-behavior/#flag-only-negation) — the negated flag is checked against all command tokens, not just the one at the pattern's position.
+Flag-only negation patterns (all alternatives starting with `-`) use [order-independent matching](/pattern-syntax/matching-behavior/#flag-only-negation) — the negated flag is checked against all command tokens, not just the one at the pattern's position. Flag-only negation does not consume a positional token and also passes when no tokens remain (the flag is trivially absent).
 :::
 
 ### Negation with Glob
