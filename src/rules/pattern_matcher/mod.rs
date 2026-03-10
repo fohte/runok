@@ -376,9 +376,15 @@ fn match_engine<'a>(
                 return Ok(false);
             }
 
-            // Flag-only alternations use order-independent matching (BoolMatch only).
-            let is_flag_only = alts.iter().all(|a| a.starts_with('-') && a != "--");
-            if is_flag_only && !is_extract {
+            let has_any_flag = alts.iter().any(|a| a.starts_with('-') && a != "--");
+
+            // Alternations containing flag alternatives scan all tokens
+            // (order-independent) so that flag-like tokens such as `-v`
+            // can be matched regardless of position.  In extract mode
+            // (wrapper placeholder extraction), positional matching is
+            // used instead because the flag token must stay at position 0
+            // for Placeholder capture to work correctly (e.g. `bash -c <cmd>`).
+            if has_any_flag && !is_extract {
                 for i in 0..cmd_tokens.len() {
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
@@ -414,13 +420,9 @@ fn match_engine<'a>(
                 return Ok(false);
             }
 
-            // After `--`, or flag-only alternations in extract mode,
-            // match positionally (no flag skipping).  Flag-only
-            // alternations in extract mode must use positional matching
-            // because `find_first_positional` would skip past the flag
-            // token that the alternation is meant to consume (e.g.
-            // `bash -c <cmd>` where `-c` is `Alternation(["-c"])`).
-            if after_double_dash.get() || (is_flag_only && is_extract) {
+            // After `--`, or flag-containing alternations in extract
+            // mode, match positionally (no flag skipping).
+            if after_double_dash.get() || (has_any_flag && is_extract) {
                 if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
                     return match_engine(
                         rest,
@@ -435,8 +437,8 @@ fn match_engine<'a>(
                 return Ok(false);
             }
 
-            // Order-independent matching: skip over leading flag tokens
-            // to find the first positional argument, consistent with
+            // Non-flag alternations: skip over leading flag tokens to
+            // find the first positional argument, consistent with
             // Literal matching.
             let mut value_aliases = HashSet::new();
             collect_value_flag_aliases(rest, &mut value_aliases);
@@ -987,6 +989,8 @@ mod tests {
         true
     )]
     #[case::non_flag_alt_after_double_dash_no_skip("cmd -- main|master", "cmd -- -v main", false)]
+    #[case::mixed_flag_nonflag_alt_flag_variant("cmd -v|verbose *", "cmd -v foo", true)]
+    #[case::mixed_flag_nonflag_alt_nonflag_variant("cmd -v|verbose *", "cmd verbose foo", true)]
     fn alternation_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
