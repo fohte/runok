@@ -112,7 +112,11 @@ impl Endpoint for ExecAdapter {
                 Ok(exit_code)
             }
             Action::Deny(deny_response) => {
-                eprintln!("runok: denied: {}", deny_response.matched_rule);
+                if deny_response.matched_rule.is_empty() {
+                    eprintln!("runok: command denied by default policy");
+                } else {
+                    eprintln!("runok: denied: {}", deny_response.matched_rule);
+                }
                 if let Some(ref message) = deny_response.message {
                     eprintln!("  reason: {}", message);
                 }
@@ -126,10 +130,6 @@ impl Endpoint for ExecAdapter {
                 let msg = message.unwrap_or_else(|| "command requires confirmation".to_string());
                 eprintln!("runok: {}", msg);
                 Ok(3)
-            }
-            Action::Default => {
-                // Should not reach here; run() handles Default before calling handle_action
-                Ok(0)
             }
         }
     }
@@ -181,9 +181,6 @@ impl Endpoint for ExecAdapter {
                     .as_deref()
                     .unwrap_or("command would require confirmation");
                 eprintln!("runok: dry-run: {}", msg);
-            }
-            Action::Default => {
-                eprintln!("runok: dry-run: no matching rule (default behavior)");
             }
         }
         Ok(0)
@@ -435,24 +432,6 @@ mod tests {
         assert_eq!(result, 3);
     }
 
-    // --- handle_action: Default ---
-
-    #[rstest]
-    fn handle_action_default_returns_exit_0() {
-        let adapter = ExecAdapter::new(
-            vec!["git".into(), "status".into()],
-            None,
-            Box::new(MockExecutor::new(0)),
-        );
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Default,
-                sandbox: SandboxInfo::Preset(None),
-            })
-            .unwrap();
-        assert_eq!(result, 0);
-    }
-
     // --- handle_no_match ---
 
     #[rstest]
@@ -600,7 +579,6 @@ mod tests {
         Action::Ask(Some("please confirm".to_string())),
         0
     )]
-    #[case::default_action(Action::Default, 0)]
     fn handle_dry_run_always_returns_exit_0(
         #[case] action: Action,
         #[case] expected_exit_code: i32,

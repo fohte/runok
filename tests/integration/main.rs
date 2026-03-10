@@ -43,12 +43,3 @@ fn assert_ask(actual: &Action) {
         actual
     );
 }
-
-fn assert_default(actual: &Action) {
-    assert_eq!(
-        *actual,
-        Action::Default,
-        "expected Default, got {:?}",
-        actual
-    );
-}

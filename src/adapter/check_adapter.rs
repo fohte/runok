@@ -83,7 +83,6 @@ fn build_check_output(result: &ActionResult) -> CheckOutput {
             deny.fix_suggestion.clone(),
         ),
         Action::Ask(message) => ("ask".to_string(), message.clone(), None),
-        Action::Default => ("ask".to_string(), None, None),
     };
 
     let sandbox = build_sandbox_info(&result.sandbox);

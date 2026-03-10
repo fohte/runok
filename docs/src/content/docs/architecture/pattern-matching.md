@@ -104,16 +104,16 @@ A step counter (`MAX_MATCH_STEPS = 10,000`) prevents exponential blowup on patho
 
 ### Matching rules by token type
 
-| Pattern token   | Matching behavior                                                                                                                                                                                                                                  |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Literal`       | Skips leading flag tokens to find the first positional argument and matches against it. **Order-independent** relative to flags; positional order among non-flag tokens is preserved. After `--`, matches at the current position with no skipping |
-| `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                                                                                                                   |
-| `Alternation`   | Flag-only alternations (all alternatives start with `-`) scan the entire token list (**order-independent**). Non-flag alternations skip leading flags like `Literal`. After `--`, matches at the current position                                  |
-| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. **Order-independent**: the flag can appear anywhere in the command                                                                                         |
-| `Negation`      | Matches if the command token does **not** equal the value. Flag-only negations (all alternatives start with `-`) are **order-independent**: scans all tokens                                                                                       |
-| `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                                                                                                            |
-| `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                                                                                                        |
-| `PathRef`       | Expands `definitions.paths` entries and matches against them                                                                                                                                                                                       |
+| Pattern token   | Matching behavior                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Literal`       | Skips leading flag tokens to find the first positional argument and matches against it. **Order-independent** relative to flags; positional order among non-flag tokens is preserved. After `--`, matches at the current position with no skipping                                                                                             |
+| `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                                                                                                                                                                                                               |
+| `Alternation`   | Flag-only alternations (all alternatives start with `-`) scan the entire token list (**order-independent**). Non-flag alternations skip leading flags like `Literal`. After `--`, matches at the current position                                                                                                                              |
+| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. Also matches `=`-joined forms (e.g. `--flag=value`). **Order-independent**: the flag can appear anywhere in the command                                                                                                                                |
+| `Negation`      | **Positional negation**: skips leading flags to find the first positional token and checks it does **not** equal the value. **Flag-only negation** (all alternatives start with `-`): scans the entire token list for the forbidden flag without consuming a positional token. Passes when the flag is absent, including when no tokens remain |
+| `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                                                                                                                                                                                                        |
+| `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                                                                                                                                                                                                    |
+| `PathRef`       | Expands `definitions.paths` entries and matches against them                                                                                                                                                                                                                                                                                   |
 
 ### Order-independent matching
 
@@ -124,6 +124,15 @@ Several token types use order-independent matching so that flag placement does n
 - **Flag-only `Alternation`** and **flag-only `Negation`**: Scan all tokens for a matching flag, independent of position.
 
 The bare `--` separator disables flag-skipping for subsequent `Literal` and `Alternation` matches, preserving the POSIX end-of-options semantics.
+
+### `=`-joined flag splitting
+
+`FlagWithValue` also matches `=`-joined command tokens (e.g. `--sort=value` for a pattern `--sort value`). The splitting only recognizes standard flag forms:
+
+- **Short flags**: `-X=val` (single dash + one character)
+- **Long flags**: `--flag=val` (double dash)
+
+Non-standard forms like `-Denv=prod` (Java) or `-DFOO=bar` (GCC) are not split. These are treated as single tokens because the portion before `=` (`-Denv`, `-DFOO`) is not a standard flag name — it is a fused flag-key combination specific to the command.
 
 ### Wrapper command matching
 

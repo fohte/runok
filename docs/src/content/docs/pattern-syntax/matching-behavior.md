@@ -68,9 +68,23 @@ Flags (tokens starting with `-`) in patterns are matched **regardless of their p
 
 This applies to standalone flags ([alternation](/pattern-syntax/alternation/)), [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference), and flag-only [negations](/pattern-syntax/alternation/#negation). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
 
+### `=`-joined Flag Values
+
+Flag-value patterns also match `=`-joined forms. A pattern like `-X POST` matches both the space-separated `curl -X POST` and the `=`-joined `curl -X=POST`:
+
+```yaml
+- deny: 'curl -X|--request POST *'
+```
+
+| Command                                   | Result  |
+| ----------------------------------------- | ------- |
+| `curl -X POST https://example.com`        | Matches |
+| `curl -X=POST https://example.com`        | Matches |
+| `curl --request=POST https://example.com` | Matches |
+
 ### Flag-only Negation
 
-Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found:
+Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):
 
 ```yaml
 - allow: 'find !-delete|-fprint|-fls *'
@@ -79,6 +93,7 @@ Negation patterns where all alternatives start with `-` also use order-independe
 | Command                    | Result         |
 | -------------------------- | -------------- |
 | `find . -name foo -type f` | Matches        |
+| `find`                     | Matches        |
 | `find . -delete`           | Does not match |
 | `find -fprint output .`    | Does not match |
 

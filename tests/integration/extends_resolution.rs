@@ -12,9 +12,7 @@ use tempfile::TempDir;
 use runok::config::{PresetCache, parse_config, resolve_extends};
 use runok::rules::rule_engine::evaluate_command;
 
-use super::{
-    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
-};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 struct ExtendsTestEnv {
     _tmp: TempDir,
@@ -62,7 +60,7 @@ fn env() -> ExtendsTestEnv {
           - allow: 'echo *'
     "},
     "ls -la",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn extends_resolves_child_rules(
     #[case] child_yaml: &str,

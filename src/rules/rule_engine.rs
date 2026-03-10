@@ -50,25 +50,34 @@ pub struct EvalResult {
     pub matched_rules: Vec<RuleMatchInfo>,
 }
 
+/// Per-sub-command evaluation detail, for verbose logging.
+#[derive(Debug, PartialEq)]
+pub struct SubCommandDetail {
+    pub command: String,
+    pub action: Action,
+    pub matched_rules: Vec<RuleMatchInfo>,
+}
+
 /// Result of compound command evaluation: an action and an optional merged
 /// sandbox policy built from all sub-commands' sandbox presets.
 #[derive(Debug, PartialEq)]
 pub struct CompoundEvalResult {
     pub action: Action,
     pub sandbox_policy: Option<MergedSandboxPolicy>,
+    /// Per-sub-command evaluation details, for verbose logging.
+    pub sub_command_details: Vec<SubCommandDetail>,
 }
 
 /// The action determined by rule evaluation.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Allow,
     Deny(DenyResponse),
     Ask(Option<String>),
-    Default,
 }
 
 /// Details included when a command is denied.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DenyResponse {
     pub message: Option<String>,
     pub fix_suggestion: Option<String>,
@@ -115,6 +124,7 @@ pub fn evaluate_compound(
 
     let mut merged_action: Option<Action> = None;
     let mut preset_names: Vec<String> = Vec::new();
+    let mut sub_command_details: Vec<SubCommandDetail> = Vec::new();
 
     for cmd in &commands {
         let result = evaluate_command(config, cmd, context)?;
@@ -124,19 +134,20 @@ pub fn evaluate_compound(
             preset_names.push(name);
         }
 
-        // Resolve Action::Default to the configured defaults.action so that
-        // unmatched sub-commands are compared at their effective restriction
-        // level (e.g. ask) rather than being silently swallowed by Allow.
-        let resolved_action = resolve_default_action(result.action, config);
+        sub_command_details.push(SubCommandDetail {
+            command: cmd.clone(),
+            action: result.action.clone(),
+            matched_rules: result.matched_rules,
+        });
 
         // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
-            Some(prev) => merge_actions(prev, resolved_action),
-            None => resolved_action,
+            Some(prev) => merge_actions(prev, result.action),
+            None => result.action,
         });
     }
 
-    let action = merged_action.unwrap_or(Action::Default);
+    let action = merged_action.unwrap_or_else(|| default_action(config));
 
     // Deduplicate preset names while preserving order
     let mut seen = HashSet::new();
@@ -178,6 +189,7 @@ pub fn evaluate_compound(
     Ok(CompoundEvalResult {
         action: final_action,
         sandbox_policy: final_policy,
+        sub_command_details,
     })
 }
 
@@ -211,7 +223,7 @@ fn has_writable_contradiction(
 /// Escalate an action to Ask if it is currently Allow or Default.
 fn escalate_to_ask(action: Action) -> Action {
     match action {
-        Action::Allow | Action::Default => Action::Ask(Some(
+        Action::Allow => Action::Ask(Some(
             "sandbox policy conflict: writable roots are contradictory".to_string(),
         )),
         other => other,
@@ -267,21 +279,13 @@ fn evaluate_command_inner(
             let mut merged: Option<EvalResult> = None;
             for sub in &nested_subs {
                 let result = evaluate_command_inner(config, sub, context, depth + 1)?;
-                let resolved_action = match resolve_default_action(result.action, config) {
-                    Action::Default => Action::Ask(None),
-                    other => other,
-                };
-                let result = EvalResult {
-                    action: resolved_action,
-                    ..result
-                };
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
                     None => result,
                 });
             }
             return Ok(merged.unwrap_or(EvalResult {
-                action: Action::Default,
+                action: default_action(config),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
             }));
@@ -293,14 +297,6 @@ fn evaluate_command_inner(
             let mut nested_merged: Option<EvalResult> = None;
             for sub in &nested_subs {
                 let result = evaluate_command_inner(config, sub, context, depth + 1)?;
-                let resolved_action = match resolve_default_action(result.action, config) {
-                    Action::Default => Action::Ask(None),
-                    other => other,
-                };
-                let result = EvalResult {
-                    action: resolved_action,
-                    ..result
-                };
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
                     None => result,
@@ -341,7 +337,7 @@ fn evaluate_simple_command(
         Some(rules) => rules,
         None => {
             return Ok(EvalResult {
-                action: Action::Default,
+                action: default_action(config),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
             });
@@ -405,7 +401,7 @@ fn evaluate_simple_command(
 
     if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {
-            action: Action::Default,
+            action: default_action(config),
             sandbox_preset: None,
             matched_rules: match_infos,
         });
@@ -511,8 +507,7 @@ fn try_unwrap_wrapper(
 
             let mut result: Option<EvalResult> = None;
             for cmd in &sub_commands {
-                let mut sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
-                sub_result.action = resolve_default_action(sub_result.action, config);
+                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
                     None => sub_result,
@@ -520,14 +515,24 @@ fn try_unwrap_wrapper(
             }
 
             if let Some(candidate_result) = result {
+                // When the wildcard in a wrapper pattern (e.g. `xargs * <cmd>`)
+                // can consume different numbers of tokens, some splits produce
+                // inner commands that match rules while others don't.  Prefer
+                // candidates that actually matched a rule (non-empty matched_rules)
+                // over unmatched ones, and among matched candidates pick the most
+                // restrictive (Explicit Deny Wins).
                 best = Some(match best {
-                    Some(prev)
-                        if action_priority(&candidate_result.action)
-                            > action_priority(&prev.action) =>
-                    {
-                        candidate_result
+                    Some(prev) => {
+                        let prev_matched = !prev.matched_rules.is_empty();
+                        let cand_matched = !candidate_result.matched_rules.is_empty();
+                        let prev_prio = action_priority(&prev.action);
+                        let cand_prio = action_priority(&candidate_result.action);
+                        if (cand_matched, cand_prio) > (prev_matched, prev_prio) {
+                            candidate_result
+                        } else {
+                            prev
+                        }
                     }
-                    Some(prev) => prev,
                     None => candidate_result,
                 });
             }
@@ -574,24 +579,18 @@ fn merge_actions(a: Action, b: Action) -> Action {
 /// Higher value = more restrictive.
 fn action_priority(action: &Action) -> u8 {
     match action {
-        Action::Default => 0,
-        Action::Allow => 1,
-        Action::Ask(_) => 2,
-        Action::Deny(_) => 3,
+        Action::Allow => 0,
+        Action::Ask(_) => 1,
+        Action::Deny(_) => 2,
     }
 }
 
-/// Resolve `Action::Default` to the configured `defaults.action`, so that
-/// unmatched sub-commands in compound evaluation participate in the
-/// Explicit Deny Wins comparison at their effective restriction level.
+/// Return the action to use when no rule matched.
 ///
-/// When `defaults.action` is not configured, `Action::Default` is preserved
-/// (the adapter layer will apply its own interpretation later).
-fn resolve_default_action(action: Action, config: &Config) -> Action {
+/// Uses `defaults.action` from the config, falling back to `Ask` when
+/// not configured.
+pub fn default_action(config: &Config) -> Action {
     use crate::config::ActionKind;
-    if !matches!(action, Action::Default) {
-        return action;
-    }
     match config.defaults.as_ref().and_then(|d| d.action) {
         Some(ActionKind::Allow) => Action::Allow,
         Some(ActionKind::Deny) => Action::Deny(DenyResponse {
@@ -599,8 +598,7 @@ fn resolve_default_action(action: Action, config: &Config) -> Action {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        Some(ActionKind::Ask) => Action::Ask(None),
-        None => Action::Default,
+        Some(ActionKind::Ask) | None => Action::Ask(None),
     }
 }
 
@@ -724,7 +722,7 @@ mod tests {
     fn no_rules_returns_default(empty_context: EvalContext) {
         let config = Config::default();
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
         assert_eq!(result.sandbox_preset, None);
     }
 
@@ -732,7 +730,7 @@ mod tests {
     fn empty_rules_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     // ========================================
@@ -764,7 +762,7 @@ mod tests {
     fn no_matching_rule_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_command(&config, "hg status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     // ========================================
@@ -867,7 +865,7 @@ mod tests {
     #[rstest]
     #[case::help_matches("* --help", "git --help", Action::Allow)]
     #[case::version_matches("* --version", "node --version", Action::Allow)]
-    #[case::no_match_without_flag("* --help", "git status", Action::Default)]
+    #[case::no_match_without_flag("* --help", "git status", Action::Ask(None))]
     fn wildcard_command_matching(
         #[case] pattern: &str,
         #[case] command: &str,
@@ -917,7 +915,7 @@ mod tests {
 
         let config = make_config(vec![rule]);
         let result = evaluate_command(&config, "aws s3 ls", &context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     #[test]
@@ -1040,7 +1038,7 @@ mod tests {
         assert!(matches!(result.action, Action::Deny(_)));
 
         let result = evaluate_command(&config, "cat /tmp/safe.txt", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     // ========================================
@@ -1190,7 +1188,7 @@ mod tests {
     fn wrapper_no_match_returns_default(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["sudo <cmd>"]);
         let result = evaluate_command(&config, "ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     #[rstest]
@@ -1222,14 +1220,14 @@ mod tests {
     fn wrapper_without_placeholder_does_not_recurse(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![allow_rule("sudo *")], vec!["time *"]);
         let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     #[rstest]
     fn no_wrappers_defined_skips_unwrap(empty_context: EvalContext) {
         let config = make_config(vec![deny_rule("rm -rf *")]);
         let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     #[rstest]
@@ -1372,7 +1370,7 @@ mod tests {
     fn compound_no_matching_rules_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_compound(&config, "hg status | wc -l", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Default);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     // ========================================
@@ -1436,12 +1434,13 @@ mod tests {
     }
 
     #[rstest]
-    fn compound_no_defaults_preserves_default_action(empty_context: EvalContext) {
-        // Without defaults.action configured, Default is preserved as-is.
-        // When merged with Allow, Allow wins (backward-compatible behavior).
+    fn compound_no_defaults_unmatched_wins_over_allow(empty_context: EvalContext) {
+        // Without defaults.action configured, unmatched sub-commands
+        // resolve to Ask (the safe default).  Ask wins over Allow,
+        // preventing a security bypass.
         let config = make_config(vec![allow_rule("echo *")]);
         let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Allow);
+        assert_eq!(result.action, Action::Ask(None));
     }
 
     #[rstest]
