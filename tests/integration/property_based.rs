@@ -210,7 +210,7 @@ fn arb_compound_command() -> impl Strategy<Value = String> {
             .prop_map(|(cmds, ops)| {
                 let mut result = cmds[0].clone();
                 for (i, cmd) in cmds.iter().enumerate().skip(1) {
-                    let op = &ops[i % ops.len()];
+                    let op = &ops[(i - 1) % ops.len()];
                     result = format!("{result} {op} {cmd}");
                 }
                 result
@@ -287,7 +287,11 @@ fn arb_rich_pattern() -> impl Strategy<Value = String> {
 fn build_command(cmd_name: &str, tokens: &[String]) -> String {
     let mut parts = vec![cmd_name.to_string()];
     parts.extend(tokens.iter().cloned());
-    shlex::try_join(parts.iter().map(|s| s.as_str())).unwrap_or_else(|_| parts.join(" "))
+    match shlex::try_join(parts.iter().map(|s| s.as_str())) {
+        Ok(cmd) => cmd,
+        // shlex::try_join only fails on nul bytes, which our strategies never generate
+        Err(_) => unreachable!("shlex::try_join failed: input contained nul byte"),
+    }
 }
 
 /// Build a YAML config with a single rule
