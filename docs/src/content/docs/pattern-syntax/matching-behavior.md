@@ -70,7 +70,7 @@ This applies to standalone flags ([alternation](/pattern-syntax/alternation/)), 
 
 ### Flag-only Negation
 
-Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found:
+Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):
 
 ```yaml
 - allow: 'find !-delete|-fprint|-fls *'
@@ -79,6 +79,7 @@ Negation patterns where all alternatives start with `-` also use order-independe
 | Command                    | Result         |
 | -------------------------- | -------------- |
 | `find . -name foo -type f` | Matches        |
+| `find`                     | Matches        |
 | `find . -delete`           | Does not match |
 | `find -fprint output .`    | Does not match |
 

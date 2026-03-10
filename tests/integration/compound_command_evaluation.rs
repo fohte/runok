@@ -1149,3 +1149,33 @@ fn command_substitution_must_not_bypass_rules(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Flag-only negation with empty tokens in compound commands
+// ========================================
+
+#[rstest]
+#[case::sort_no_args_in_pipeline(
+    "jq .type file | sort | uniq -c",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_with_banned_flag_in_pipeline(
+    "jq .type file | sort -o result.txt | uniq -c",
+    assert_ask as ActionAssertion,
+)]
+fn flag_negation_empty_tokens_in_compound(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'jq *'
+          - allow: 'sort !-o|--output|--compress-program *'
+          - allow: 'uniq *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

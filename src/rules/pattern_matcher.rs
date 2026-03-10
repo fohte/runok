@@ -222,23 +222,29 @@ fn match_tokens_core<'a>(
         }
 
         PatternToken::Negation(inner) => {
-            if cmd_tokens.is_empty() {
-                return false;
-            }
-            // Flag-only negations (all inner elements start with `-`, excluding
-            // bare `--`) use order-independent matching: scan the entire command
-            // token list. Other negations check only the positional token.
-            let negation_passed = if is_flag_only_negation(inner) {
-                !cmd_tokens
+            if is_flag_only_negation(inner) {
+                // Flag-only negations scan the entire command token list for
+                // the forbidden flag (order-independent). When no tokens remain
+                // the flag is trivially absent, so the negation passes.
+                let negation_passed = !cmd_tokens
                     .iter()
-                    .any(|t| match_flag_token_with_equals(inner, t, definitions))
+                    .any(|t| match_flag_token_with_equals(inner, t, definitions));
+                if negation_passed {
+                    // Flag-only negations do not consume a positional token.
+                    match_tokens_core(rest, cmd_tokens, definitions, steps, captures)
+                } else {
+                    false
+                }
             } else {
-                !match_single_token(inner, cmd_tokens[0], definitions)
-            };
-            if negation_passed {
-                match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
-            } else {
-                false
+                if cmd_tokens.is_empty() {
+                    return false;
+                }
+                let negation_passed = !match_single_token(inner, cmd_tokens[0], definitions);
+                if negation_passed {
+                    match_tokens_core(rest, &cmd_tokens[1..], definitions, steps, captures)
+                } else {
+                    false
+                }
             }
         }
 
@@ -497,25 +503,35 @@ fn extract_placeholder_all<'a>(
         }
 
         PatternToken::Negation(inner) => {
-            if cmd_tokens.is_empty() {
-                return Ok(());
-            }
-            let negation_passed = if is_flag_only_negation(inner) {
-                !cmd_tokens
+            if is_flag_only_negation(inner) {
+                let negation_passed = !cmd_tokens
                     .iter()
-                    .any(|t| match_flag_token_with_equals(inner, t, definitions))
+                    .any(|t| match_flag_token_with_equals(inner, t, definitions));
+                if negation_passed {
+                    extract_placeholder_all(
+                        rest,
+                        cmd_tokens,
+                        definitions,
+                        steps,
+                        captured,
+                        all_candidates,
+                    )?;
+                }
             } else {
-                !match_single_token(inner, cmd_tokens[0], definitions)
-            };
-            if negation_passed {
-                extract_placeholder_all(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captured,
-                    all_candidates,
-                )?;
+                if cmd_tokens.is_empty() {
+                    return Ok(());
+                }
+                let negation_passed = !match_single_token(inner, cmd_tokens[0], definitions);
+                if negation_passed {
+                    extract_placeholder_all(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captured,
+                        all_candidates,
+                    )?;
+                }
             }
             Ok(())
         }
@@ -1028,6 +1044,12 @@ mod tests {
         "sort --reverse=true file.txt",
         true
     )]
+    // Flag-only negation with empty command tokens (no arguments after command)
+    #[case::flag_negation_empty_tokens_single("sort !-o *", "sort", true)]
+    #[case::flag_negation_empty_tokens_alt("sort !-o|--output|--compress-program *", "sort", true)]
+    #[case::flag_negation_empty_tokens_find("find !-delete *", "find", true)]
+    // Positional negation with empty tokens should still be false
+    #[case::positional_negation_empty_tokens("kubectl !describe *", "kubectl", false)]
     fn negation_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
@@ -1496,7 +1518,32 @@ mod tests {
     #[case::negation_before_cmd(
         "run !--dry-run <cmd>",
         "run --verbose echo hello",
+        vec![vec!["--verbose", "echo", "hello"]],
+    )]
+    #[case::positional_negation_before_cmd(
+        "run !exec <cmd>",
+        "run start echo hello",
         vec![vec!["echo", "hello"]],
+    )]
+    #[case::positional_negation_empty_tokens(
+        "run !exec <cmd>",
+        "run",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::flag_negation_empty_tokens_before_cmd(
+        "run !--dry-run <cmd>",
+        "run",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::flag_negation_rejected_before_cmd(
+        "run !--dry-run <cmd>",
+        "run --dry-run echo hello",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::positional_negation_rejected_before_cmd(
+        "run !exec <cmd>",
+        "run exec echo hello",
+        Vec::<Vec<&str>>::new(),
     )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
