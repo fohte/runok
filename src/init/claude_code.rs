@@ -142,6 +142,40 @@ pub fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
     false
 }
 
+/// Check whether a PreToolUse entry matches the Bash tool.
+///
+/// An entry matches Bash if:
+/// - `matcher` is `"Bash"`
+/// - `matcher` is absent (matches all tools, including Bash)
+///
+/// Entries with a `matcher` set to a non-Bash value do not match.
+fn entry_matches_bash(entry: &serde_json::Value) -> bool {
+    match entry.get("matcher").and_then(|m| m.as_str()) {
+        Some("Bash") => true,
+        Some(_) => false,
+        // No matcher field: could be a plain string or an object without matcher.
+        // Both match all tools (including Bash).
+        None => true,
+    }
+}
+
+/// Detect PreToolUse entries that conflict with the runok hook.
+///
+/// Returns indices of entries (excluding runok's own entry) that match the
+/// Bash tool.  When multiple PreToolUse hooks match the same tool, Claude
+/// Code may silently discard `updatedInput` from earlier hooks, which can
+/// bypass runok's sandbox enforcement.
+pub fn detect_conflicting_hooks(pre_tool_use: &[serde_json::Value]) -> Vec<usize> {
+    let hook_command = "runok check --input-format claude-code-hook";
+    pre_tool_use
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !entry_has_runok_hook(entry, hook_command))
+        .filter(|(_, entry)| entry_matches_bash(entry))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Register runok hook in Claude Code settings.json.
 ///
 /// Adds a PreToolUse hook entry with `"matcher": "Bash"` that runs
@@ -765,6 +799,89 @@ mod tests {
                 "permissions": {}
             })
         );
+    }
+
+    // --- detect_conflicting_hooks ---
+
+    #[rstest]
+    #[case::empty(vec![], vec![])]
+    #[case::runok_only(
+        vec![serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+        })],
+        vec![],
+    )]
+    #[case::other_bash_matcher(
+        vec![serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        })],
+        vec![0],
+    )]
+    #[case::no_matcher_field(
+        vec![serde_json::json!({
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        })],
+        vec![0],
+    )]
+    #[case::non_bash_matcher(
+        vec![serde_json::json!({
+            "matcher": "Read",
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        })],
+        vec![],
+    )]
+    #[case::mixed_runok_and_conflicting(
+        vec![
+            serde_json::json!({
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+            }),
+            serde_json::json!({
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "other-tool"}]
+            }),
+        ],
+        vec![1],
+    )]
+    #[case::string_entry_non_runok(
+        vec![serde_json::json!("some-other-hook")],
+        vec![0],
+    )]
+    #[case::string_entry_runok(
+        vec![serde_json::json!("runok check --input-format claude-code-hook")],
+        vec![],
+    )]
+    #[case::no_matcher_with_runok_present(
+        vec![
+            serde_json::json!({
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+            }),
+            serde_json::json!({
+                "hooks": [{"type": "command", "command": "linter"}]
+            }),
+        ],
+        vec![1],
+    )]
+    #[case::multiple_conflicts(
+        vec![
+            serde_json::json!({
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "tool-a"}]
+            }),
+            serde_json::json!({
+                "hooks": [{"type": "command", "command": "tool-b"}]
+            }),
+        ],
+        vec![0, 1],
+    )]
+    fn test_detect_conflicting_hooks(
+        #[case] entries: Vec<serde_json::Value>,
+        #[case] expected: Vec<usize>,
+    ) {
+        assert_eq!(detect_conflicting_hooks(&entries), expected);
     }
 
     // --- entry_has_runok_hook ---
