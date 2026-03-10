@@ -54,7 +54,70 @@ fn arb_safe_positional() -> impl Strategy<Value = String> {
 }
 
 fn arb_flag_value() -> impl Strategy<Value = String> {
-    prop_oneof![arb_positional(), arb_flag(),]
+    prop_oneof![
+        8 => arb_positional(),
+        8 => arb_flag(),
+        // Low weight: shell special tokens to exercise edge cases
+        1 => arb_shell_special_token(),
+    ]
+}
+
+/// Shell syntax special tokens that have historically caused bugs.
+/// Mixed into arb_flag_value at low weight to exercise edge cases
+/// without overwhelming normal-path testing.
+fn arb_shell_special_token() -> impl Strategy<Value = String> {
+    prop_oneof![
+        // Redirects
+        Just(">".to_string()),
+        Just("<".to_string()),
+        Just(">>".to_string()),
+        Just("2>&1".to_string()),
+        Just("&>".to_string()),
+        Just("/dev/null".to_string()),
+        // Command substitution (PR #149, #151)
+        arb_cmd_name().prop_map(|c| format!("$({c})")),
+        arb_cmd_name().prop_map(|c| format!("$({c} arg)")),
+        arb_cmd_name().prop_map(|c| format!("`{c}`")),
+        // Process substitution
+        arb_cmd_name().prop_map(|c| format!("<({c})")),
+        arb_cmd_name().prop_map(|c| format!(">({c})")),
+        // Subshell
+        arb_cmd_name().prop_map(|c| format!("({c})")),
+        arb_cmd_name().prop_map(|c| format!("(({c}))")),
+        // Argument terminator (PR #153)
+        Just("--".to_string()),
+        // Variables / environment
+        Just("$HOME".to_string()),
+        Just("${PATH}".to_string()),
+        "[A-Z]{1,4}".prop_map(|k| format!("{k}=value")),
+        // Quoted strings (including nested command substitution, PR #151)
+        arb_positional().prop_map(|s| format!("\"{s}\"")),
+        arb_positional().prop_map(|s| format!("'{s}'")),
+        arb_cmd_name().prop_map(|c| format!("\"$({c})\"")),
+        // Comments
+        Just("#".to_string()),
+        Just("# comment".to_string()),
+        // Escapes
+        Just("\\;".to_string()),
+        Just("\\*".to_string()),
+        Just("\\\\".to_string()),
+        Just("\\#".to_string()),
+        // Braces / brackets
+        Just("{a,b,c}".to_string()),
+        Just("[abc]".to_string()),
+        Just("[!abc]".to_string()),
+        // Special characters
+        Just("!".to_string()),
+        Just("~".to_string()),
+        // Empty / whitespace
+        Just("".to_string()),
+        Just("  ".to_string()),
+        // Newline
+        Just("\n".to_string()),
+        // Non-ASCII
+        Just("/tmp/テスト".to_string()),
+        Just("日本語".to_string()),
+    ]
 }
 
 // ========================================
@@ -117,26 +180,63 @@ fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String
 // ========================================
 
 fn arb_simple_command() -> impl Strategy<Value = String> {
-    (
-        arb_cmd_name(),
-        proptest::collection::vec(arb_flag_value(), 0..=4),
-    )
-        .prop_map(|(name, tokens)| build_command(&name, &tokens))
+    prop_oneof![
+        // Normal command
+        8 => (
+            arb_cmd_name(),
+            proptest::collection::vec(arb_flag_value(), 0..=4),
+        )
+            .prop_map(|(name, tokens)| build_command(&name, &tokens)),
+        // Command with KEY=VALUE env prefix
+        1 => (
+            "[A-Z]{1,4}".prop_map(|k| format!("{k}=value")),
+            arb_cmd_name(),
+            proptest::collection::vec(arb_flag_value(), 0..=3),
+        )
+            .prop_map(|(env, name, tokens)| {
+                let cmd = build_command(&name, &tokens);
+                format!("{env} {cmd}")
+            }),
+    ]
 }
 
 fn arb_compound_command() -> impl Strategy<Value = String> {
-    (
-        proptest::collection::vec(arb_simple_command(), 2..=4),
-        proptest::collection::vec(arb_operator(), 1..=3),
-    )
-        .prop_map(|(cmds, ops)| {
-            let mut result = cmds[0].clone();
-            for (i, cmd) in cmds.iter().enumerate().skip(1) {
-                let op = &ops[i % ops.len()];
-                result = format!("{result} {op} {cmd}");
-            }
-            result
-        })
+    prop_oneof![
+        // Normal compound: cmd1 op cmd2 op cmd3 ...
+        8 => (
+            proptest::collection::vec(arb_simple_command(), 2..=4),
+            proptest::collection::vec(arb_operator(), 1..=3),
+        )
+            .prop_map(|(cmds, ops)| {
+                let mut result = cmds[0].clone();
+                for (i, cmd) in cmds.iter().enumerate().skip(1) {
+                    let op = &ops[i % ops.len()];
+                    result = format!("{result} {op} {cmd}");
+                }
+                result
+            }),
+        // Command with redirects (PR #149)
+        2 => (arb_simple_command(), arb_simple_command())
+            .prop_map(|(cmd, inner)| format!("{cmd} 2>&1 | {inner}")),
+        // Command substitution in arguments (PR #151)
+        2 => (arb_simple_command(), arb_cmd_name())
+            .prop_map(|(cmd, inner)| format!("{cmd} \"$({inner} arg)\"")),
+        // Subshell
+        1 => (arb_simple_command(), arb_operator(), arb_simple_command())
+            .prop_map(|(c1, op, c2)| format!("({c1} {op} {c2})")),
+        // Environment variable prefix
+        1 => (
+            "[A-Z]{1,4}".prop_map(|k| format!("{k}=value")),
+            arb_simple_command(),
+        )
+            .prop_map(|(env, cmd)| format!("{env} {cmd}")),
+        // for loop
+        1 => arb_cmd_name()
+            .prop_map(|c| format!("for i in *.txt; do {c} $i; done")),
+        // if/then
+        1 => (arb_simple_command(), arb_simple_command())
+            .prop_map(|(cond, body)| format!("if {cond}; then {body}; fi")),
+    ]
 }
 
 /// Generate a random pattern string containing various syntax elements.
@@ -147,23 +247,25 @@ fn arb_rich_pattern() -> impl Strategy<Value = String> {
         proptest::collection::vec(
             prop_oneof![
                 // Wildcard
-                Just("*".to_string()),
+                2 => Just("*".to_string()),
                 // Positional literal
-                arb_positional(),
+                2 => arb_positional(),
                 // Flag (becomes Alternation in parser)
-                arb_flag(),
+                2 => arb_flag(),
                 // Glob literal (random structure from arb_glob_pattern_and_match)
-                arb_glob_pattern_and_match().prop_map(|(pat, _, _)| pat),
+                1 => arb_glob_pattern_and_match().prop_map(|(pat, _, _)| pat),
                 // Negation
-                arb_positional().prop_map(|s| format!("!{s}")),
+                1 => arb_positional().prop_map(|s| format!("!{s}")),
                 // Flag negation
-                arb_flag().prop_map(|f| format!("!{f}")),
+                1 => arb_flag().prop_map(|f| format!("!{f}")),
                 // Optional
-                arb_flag().prop_map(|f| format!("[{f}]")),
+                1 => arb_flag().prop_map(|f| format!("[{f}]")),
                 // Alternation
-                (arb_positional(), arb_positional()).prop_map(|(a, b)| format!("{a}|{b}")),
+                1 => (arb_positional(), arb_positional()).prop_map(|(a, b)| format!("{a}|{b}")),
                 // QuotedLiteral
-                arb_positional().prop_map(|s| format!("\"{s}\"")),
+                1 => arb_positional().prop_map(|s| format!("\"{s}\"")),
+                // Shell special tokens for edge case coverage
+                1 => arb_shell_special_token(),
             ],
             0..=4,
         ),
