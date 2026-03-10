@@ -998,3 +998,48 @@ fn flag_negation_equals_form(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Flag-only negation with empty tokens (no arguments after command)
+// ========================================
+
+#[rstest]
+#[case::sort_no_args_allowed(
+    "sort",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_safe_flag_allowed(
+    "sort -r",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_banned_flag_rejected(
+    "sort -o result.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::find_no_args_allowed(
+    "find",
+    assert_allow as ActionAssertion,
+)]
+#[case::find_safe_args_allowed(
+    "find . -name foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::find_banned_flag_rejected(
+    "find . -delete",
+    assert_ask as ActionAssertion,
+)]
+fn flag_negation_empty_tokens(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'sort !-o|--output|--compress-program *'
+          - allow: 'find !-delete *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
