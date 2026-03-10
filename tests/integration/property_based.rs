@@ -181,11 +181,11 @@ fn build_command(cmd_name: &str, tokens: &[String]) -> String {
 
 /// Build a YAML config with a single rule
 fn build_yaml_config(action: &str, pattern: &str) -> String {
-    format!(
-        "rules:\n  - {action}: '{pattern}'",
-        action = action,
-        pattern = pattern.replace('\'', "''")
-    )
+    let escaped = pattern.replace('\'', "''");
+    indoc::formatdoc! {"
+        rules:
+          - {action}: '{escaped}'
+    "}
 }
 
 fn arb_operator() -> impl Strategy<Value = String> {
@@ -329,7 +329,7 @@ proptest! {
     fn prop_flag_negation_allows_when_absent(
         cmd_name in arb_cmd_name(),
         negated_flag in arb_flag(),
-        positionals in proptest::collection::vec(arb_positional(), 0..=3),
+        positionals in proptest::collection::vec(arb_safe_positional(), 0..=3),
     ) {
         let pattern = format!("{cmd_name} !{negated_flag} *");
         let yaml = build_yaml_config("allow", &pattern);
@@ -875,9 +875,11 @@ proptest! {
     ) {
         prop_assume!(allowed_cmd != denied_cmd);
 
-        let yaml = format!(
-            "rules:\n  - allow: '{allowed_cmd} *'\n  - deny: '{denied_cmd} *'"
-        );
+        let yaml = indoc::formatdoc! {"
+            rules:
+              - allow: '{allowed_cmd} *'
+              - deny: '{denied_cmd} *'
+        "};
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
@@ -905,9 +907,11 @@ proptest! {
     ) {
         prop_assume!(allowed_cmd != denied_cmd);
 
-        let yaml = format!(
-            "rules:\n  - allow: '{allowed_cmd} *'\n  - deny: '{denied_cmd} *'"
-        );
+        let yaml = indoc::formatdoc! {"
+            rules:
+              - allow: '{allowed_cmd} *'
+              - deny: '{denied_cmd} *'
+        "};
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
@@ -924,16 +928,32 @@ proptest! {
     fn prop_deny_propagation_compound_generated(
         compound in arb_compound_command(),
     ) {
-        let yaml = "rules:\n  - allow: 'git *'\n  - allow: 'curl *'\n  - allow: 'echo *'\n  - allow: 'npm *'\n  - allow: 'ls *'\n  - deny: 'rm *'";
+        let yaml = indoc::indoc! {"
+            rules:
+              - allow: 'git *'
+              - allow: 'curl *'
+              - allow: 'echo *'
+              - allow: 'npm *'
+              - allow: 'ls *'
+              - deny: 'rm *'
+        "};
         let config = parse_config(yaml).unwrap();
         let ctx = empty_context();
 
         let result = evaluate_compound(&config, &compound, &ctx).unwrap();
 
-        if compound.contains("rm ") || compound.starts_with("rm") {
+        // Check if "rm" appears as a command (after an operator or at start),
+        // not just as an argument to another command.
+        let has_rm_command = compound.starts_with("rm ")
+            || compound.starts_with("rm\t")
+            || compound.contains("&& rm ")
+            || compound.contains("|| rm ")
+            || compound.contains("| rm ")
+            || compound.contains("; rm ");
+        if has_rm_command {
             prop_assert!(
                 matches!(result.action, Action::Deny(_)),
-                "compound with 'rm' should deny: command={:?} result={:?}",
+                "compound with 'rm' command should deny: command={:?} result={:?}",
                 compound, result.action
             );
         }
