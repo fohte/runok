@@ -45,6 +45,8 @@ When an optional group is skipped, runok verifies that any flags in the group ar
 | `curl https://example.com`           | Matches        | Optional group is absent             |
 | `curl -X POST https://example.com`   | Matches        | Optional group matches               |
 | `curl -X DELETE https://example.com` | Does not match | `-X` is present but with wrong value |
+| `curl -X=POST https://example.com`   | Matches        | `=`-joined form is also supported    |
+| `curl -X=DELETE https://example.com` | Does not match | `-X` is present but with wrong value |
 
 ## Literal `[` and `]`
 
