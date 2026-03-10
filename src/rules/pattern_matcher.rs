@@ -1535,6 +1535,16 @@ mod tests {
         "run",
         Vec::<Vec<&str>>::new(),
     )]
+    #[case::flag_negation_rejected_before_cmd(
+        "run !--dry-run <cmd>",
+        "run --dry-run echo hello",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::positional_negation_rejected_before_cmd(
+        "run !exec <cmd>",
+        "run exec echo hello",
+        Vec::<Vec<&str>>::new(),
+    )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
