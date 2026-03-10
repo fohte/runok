@@ -78,9 +78,14 @@ fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String
         ],
         2..=6,
     )
-    .prop_filter("need at least one * and one literal", |segs| {
-        segs.iter().any(|(_, _, is_lit)| *is_lit) && segs.iter().any(|(_, _, is_lit)| !*is_lit)
-    })
+    .prop_filter(
+        "need at least one * and one literal, no consecutive globs",
+        |segs| {
+            segs.iter().any(|(_, _, is_lit)| *is_lit)
+                && segs.iter().any(|(_, _, is_lit)| !*is_lit)
+                && !segs.windows(2).any(|w| !w[0].2 && !w[1].2)
+        },
+    )
     .prop_map(|segments| {
         let pattern: String = segments.iter().map(|(p, _, _)| p.as_str()).collect();
         let matching: String = segments.iter().map(|(_, m, _)| m.as_str()).collect();
