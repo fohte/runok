@@ -150,7 +150,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf ../../../runok-${{ matrix.target }}.tar.gz runok
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: runok-nightly-${{ matrix.target }}
           path: runok-${{ matrix.target }}.tar.gz
@@ -167,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
