@@ -29,15 +29,9 @@ pub(crate) fn split_flag_equals(token: &str) -> Option<(&str, &str)> {
 /// Check if any of the `aliases` match a command token, considering both
 /// the token itself and the flag portion of an `=`-joined token.
 pub(crate) fn flag_aliases_match_token(aliases: &[String], cmd_token: &str) -> bool {
-    if aliases.iter().any(|a| a.as_str() == cmd_token) {
-        return true;
-    }
-    if let Some((flag_part, _)) = split_flag_equals(cmd_token)
-        && aliases.iter().any(|a| a.as_str() == flag_part)
-    {
-        return true;
-    }
-    false
+    aliases.iter().any(|a| a.as_str() == cmd_token)
+        || split_flag_equals(cmd_token)
+            .is_some_and(|(flag_part, _)| aliases.iter().any(|a| a.as_str() == flag_part))
 }
 
 /// Check if a negation's inner pattern is flag-only (all alternatives start
