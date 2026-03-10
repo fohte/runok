@@ -1894,6 +1894,7 @@ mod tests {
     #[case::empty_value("--flag=", Some(("--flag", "")))]
     #[case::multiple_equals("--flag=a=b", Some(("--flag", "a=b")))]
     #[case::no_equals("--flag", None)]
+    #[case::java_system_property("-Denv=prod", Some(("-Denv", "prod")))]
     #[case::no_dash("KEY=VALUE", None)]
     #[case::equals_only("=value", None)]
     #[case::empty("", None)]
