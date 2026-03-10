@@ -45,12 +45,18 @@ fn prepare_wildcard_iteration<'a>(
 // ---------------------------------------------------------------------------
 
 /// Split an `=`-joined flag token (e.g. `--flag=value`) into its flag and
-/// value parts. Returns `None` if the token does not contain `=` or the
-/// portion before `=` does not start with `-`.
+/// value parts. Only recognizes standard flag forms: short flags (`-X=val`)
+/// and long flags (`--flag=val`). Non-standard forms like `-Denv=prod` (where
+/// `-D` + key is fused into a single token) are not split, because they
+/// represent a single semantic token rather than a flag-value pair.
 fn split_flag_equals(token: &str) -> Option<(&str, &str)> {
     let eq_pos = token.find('=')?;
     let flag_part = &token[..eq_pos];
-    if flag_part.starts_with('-') {
+    if flag_part.starts_with("--") {
+        // Long flag: --flag=value
+        Some((flag_part, &token[eq_pos + 1..]))
+    } else if flag_part.len() == 2 && flag_part.starts_with('-') {
+        // Short flag: -X=value (dash + single char)
         Some((flag_part, &token[eq_pos + 1..]))
     } else {
         None
@@ -1894,6 +1900,8 @@ mod tests {
     #[case::empty_value("--flag=", Some(("--flag", "")))]
     #[case::multiple_equals("--flag=a=b", Some(("--flag", "a=b")))]
     #[case::no_equals("--flag", None)]
+    #[case::java_system_property("-Denv=prod", None)]
+    #[case::combined_short_flags_with_equals("-rf=/path", None)]
     #[case::no_dash("KEY=VALUE", None)]
     #[case::equals_only("=value", None)]
     #[case::empty("", None)]
