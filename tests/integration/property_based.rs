@@ -147,6 +147,25 @@ fn arb_negation_alternation_pair() -> impl Strategy<Value = (String, Vec<String>
         })
 }
 
+fn arb_quoted_literal_pair() -> impl Strategy<Value = (String, Vec<String>)> {
+    // QuotedLiteral: "value*" in a pattern suppresses glob expansion.
+    // The token must match the exact string including any `*` characters.
+    prop_oneof![
+        // Literal with glob-like chars that must match exactly
+        arb_positional().prop_map(|s| {
+            let quoted_val = format!("{s}*");
+            // Pattern uses double quotes to suppress glob
+            let pattern_frag = format!("\"{quoted_val}\"");
+            (pattern_frag, vec![quoted_val])
+        }),
+        // Plain quoted literal without special chars
+        arb_positional().prop_map(|s| {
+            let pattern_frag = format!("\"{s}\"");
+            (pattern_frag, vec![s])
+        }),
+    ]
+}
+
 fn arb_optional_pair() -> impl Strategy<Value = (String, Vec<String>)> {
     // Optional flag: [-f] matches with or without
     (arb_flag(), proptest::bool::ANY).prop_map(|(flag, present)| {
@@ -420,6 +439,51 @@ proptest! {
         prop_assert_eq!(result.action, Action::Allow,
             "negation alternation with absent values should Allow: pattern={:?} command={:?}",
             pattern, command);
+    }
+
+    #[test]
+    fn prop_quoted_literal_pair_matches(
+        cmd_name in arb_cmd_name(),
+        (pattern_frag, tokens) in arb_quoted_literal_pair(),
+        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+    ) {
+        // QuotedLiteral suppresses glob: "WIP*" matches literal "WIP*", not a wildcard
+        let pattern = format!("{cmd_name} {pattern_frag} *");
+        let mut all_tokens = tokens;
+        all_tokens.extend(suffix);
+        let command = build_command(&cmd_name, &all_tokens);
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "quoted literal should match exactly: pattern={:?} command={:?}",
+            pattern, command);
+    }
+
+    #[test]
+    fn prop_quoted_literal_no_glob_expansion(
+        cmd_name in arb_cmd_name(),
+        base in arb_positional(),
+        different_suffix in arb_positional(),
+    ) {
+        // "base*" in pattern must NOT match "base<something>" (glob suppressed)
+        let quoted_val = format!("{base}*");
+        let pattern = format!("{cmd_name} \"{quoted_val}\"");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Command with value that would match if glob were active but shouldn't
+        let non_matching_val = format!("{base}{different_suffix}");
+        prop_assume!(non_matching_val != quoted_val);
+        let command = build_command(&cmd_name, &[non_matching_val]);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "quoted literal should NOT glob-expand: pattern={:?} command={:?}",
+            pattern, command
+        );
     }
 
     #[test]
