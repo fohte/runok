@@ -33,6 +33,7 @@ fn main() {
         if let Ok(head) = std::fs::read_to_string(".git/HEAD")
             && let Some(ref_path) = head.trim().strip_prefix("ref: ")
         {
+            let ref_path = ref_path.replace(['\n', '\r'], "");
             println!("cargo::rerun-if-changed=.git/{ref_path}");
         }
         println!("cargo::rerun-if-changed=.git/refs/tags");
