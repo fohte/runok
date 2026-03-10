@@ -1,0 +1,101 @@
+name: nightly
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-skip:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+    steps:
+      - id: check
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ "$COMMIT_MESSAGE" == chore\(main\):\ release* ]]; then
+            echo "should_skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check-skip
+    if: needs.check-skip.outputs.should_skip != 'true'
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: rustup show
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Determine nightly version
+        id: version
+        run: |
+          base_version=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "nightly_version=${base_version}-nightly+${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUNOK_NIGHTLY_VERSION: ${{ steps.version.outputs.nightly_version }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../runok-${{ matrix.target }}.tar.gz runok
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runok-${{ matrix.target }}
+          path: runok-${{ matrix.target }}.tar.gz
+
+  publish:
+    needs: [check-skip, build]
+    if: needs.check-skip.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create or update nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Delete existing nightly release and tag if present
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+
+          # Create new nightly release
+          gh release create nightly \
+            --prerelease \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes "Nightly build from commit [\`${GITHUB_SHA::7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+          > [!WARNING]
+          > This is an automated nightly build and may be unstable. For stable releases, see the [latest release](https://github.com/${{ github.repository }}/releases/latest)." \
+            artifacts/runok-*.tar.gz
