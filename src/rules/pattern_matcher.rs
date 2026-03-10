@@ -179,13 +179,18 @@ pub fn extract_placeholder(
 
 /// Unified recursive matching engine.
 ///
-/// When `extract` is `None`, performs boolean matching (returns `Ok(true)` on
-/// success). When `captures` is `Some`, wildcard-matched tokens are recorded.
+/// Operates in one of two mutually exclusive modes determined by `captures`
+/// and `extract`. Callers must not pass `Some` for both simultaneously:
 ///
-/// When `extract` is `Some`, performs wrapper placeholder extraction. The
-/// first element is the current captured tokens, the second is the collection
-/// of all candidates. In this mode the function always returns `Ok(false)` on
-/// success (candidates are collected into `all_candidates`).
+/// - **Boolean matching** (`extract` is `None`): returns `Ok(true)` on the
+///   first successful match. When `captures` is `Some`, wildcard-matched
+///   tokens are recorded.
+///
+/// - **Placeholder extraction** (`extract` is `Some`): collects all possible
+///   `<cmd>` captures. The first element is the current captured tokens, the
+///   second is the collection of all candidates. Always returns `Ok(false)`
+///   on success (candidates are collected into `all_candidates`). `captures`
+///   is ignored in this mode.
 ///
 /// Returns `Err` if the pattern contains unsupported tokens for the current mode.
 fn match_engine<'a>(
@@ -412,6 +417,7 @@ fn match_engine<'a>(
                 .cloned()
                 .chain(rest.iter().cloned())
                 .collect();
+            // extract is always None here (early return above for is_extract)
             if let Some(caps) = &mut captures {
                 let saved_len = caps.len();
                 if match_engine(&combined, cmd_tokens, definitions, steps, Some(*caps), None)? {
@@ -440,6 +446,7 @@ fn match_engine<'a>(
             let paths = resolve_paths(name, definitions);
             let normalized_cmd = normalize_path(cmd_tokens[0]);
             if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
+                // extract is always None here (early return above for is_extract)
                 match_engine(rest, &cmd_tokens[1..], definitions, steps, captures, None)
             } else {
                 Ok(false)
@@ -832,9 +839,11 @@ fn is_flag_only_negation(inner: &PatternToken) -> bool {
 }
 
 /// Like [`match_single_token`] but also matches the flag portion of
-/// `=`-joined command tokens (e.g. `--pre=pdftotext` matches pattern `--pre`).
-/// This is used for flag-only negation so that `\!--pre` correctly rejects
-/// `--pre=value` in addition to the space-separated `--pre value` form.
+/// `=`-joined command tokens via [`split_flag_equals`] (e.g.
+/// `--pre=pdftotext` matches pattern `--pre`). This is the negation
+/// counterpart of [`flag_aliases_match_token`]: both delegate `=`-joined
+/// splitting to `split_flag_equals`, but this function operates on a
+/// `PatternToken` (for Negation) rather than a `&[String]` alias list.
 fn match_flag_token_with_equals(
     pattern: &PatternToken,
     cmd_token: &str,
@@ -1874,6 +1883,26 @@ mod tests {
             literal_matches(pattern, token),
             expected,
             "literal_matches({pattern:?}, {token:?})",
+        );
+    }
+
+    // === split_flag_equals unit tests ===
+
+    #[rstest]
+    #[case::long_flag("--flag=value", Some(("--flag", "value")))]
+    #[case::short_flag("-f=val", Some(("-f", "val")))]
+    #[case::empty_value("--flag=", Some(("--flag", "")))]
+    #[case::multiple_equals("--flag=a=b", Some(("--flag", "a=b")))]
+    #[case::no_equals("--flag", None)]
+    #[case::no_dash("KEY=VALUE", None)]
+    #[case::equals_only("=value", None)]
+    #[case::empty("", None)]
+    #[case::dash_only("-", None)]
+    fn split_flag_equals_cases(#[case] input: &str, #[case] expected: Option<(&str, &str)>) {
+        assert_eq!(
+            split_flag_equals(input),
+            expected,
+            "split_flag_equals({input:?})",
         );
     }
 }
