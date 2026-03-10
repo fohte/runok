@@ -415,24 +415,59 @@ fn match_tokens_core<'a>(
             // Flag-only negations (all inner elements start with `-`, excluding
             // bare `--`) use order-independent matching: scan the entire command
             // token list. Other negations check only the positional token.
-            let negation_passed = if is_flag_only_negation(inner) {
-                !cmd_tokens
+            if is_flag_only_negation(inner) {
+                let negation_passed = !cmd_tokens
                     .iter()
-                    .any(|t| match_flag_token_with_equals(inner, t, definitions))
+                    .any(|t| match_flag_token_with_equals(inner, t, definitions));
+                if negation_passed {
+                    match_tokens_core(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    )
+                } else {
+                    false
+                }
+            } else if after_double_dash.get() {
+                // After `--`, match positionally (no flag skipping)
+                let negation_passed = !match_single_token(inner, cmd_tokens[0], definitions);
+                if negation_passed {
+                    match_tokens_core(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    )
+                } else {
+                    false
+                }
             } else {
-                !match_single_token(inner, cmd_tokens[0], definitions)
-            };
-            if negation_passed {
-                match_tokens_core(
-                    rest,
-                    &cmd_tokens[1..],
-                    definitions,
-                    steps,
-                    captures,
-                    after_double_dash,
-                )
-            } else {
-                false
+                // Order-independent: skip flags to find the first positional,
+                // then check negation against it.
+                let mut value_aliases = HashSet::new();
+                collect_value_flag_aliases(rest, &mut value_aliases);
+                let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                    return false;
+                };
+                let negation_passed = !match_single_token(inner, cmd_tokens[pos], definitions);
+                if negation_passed {
+                    let remaining = remove_indices(cmd_tokens, &[pos]);
+                    match_tokens_core(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        captures,
+                        after_double_dash,
+                    )
+                } else {
+                    false
+                }
             }
         }
 
@@ -1212,6 +1247,7 @@ mod tests {
     #[case::flag_not_consumed_means_no_match("rm /tmp/*", "rm -rf /tmp/foo", false)]
     #[case::flag_skip_leaves_flag_unconsumed("rm file", "rm -f file", false)]
     #[case::skipped_flag_consumed_by_wildcard("git [-C *] commit *", "git -v commit -m fix", true)]
+    #[case::negation_bypass_with_flag("kubectl !describe *", "kubectl -v describe pods", false)]
     #[case::skipped_flag_unconsumed_without_wildcard("git [-C *] commit", "git -v commit", false)]
     fn order_independent_literal_matching(
         #[case] pattern_str: &str,
