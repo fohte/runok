@@ -71,29 +71,76 @@ fn arb_shell_special_token() -> impl Strategy<Value = String> {
         Just(">".to_string()),
         Just("<".to_string()),
         Just(">>".to_string()),
+        Just("2>".to_string()),
         Just("2>&1".to_string()),
         Just("&>".to_string()),
+        Just("&>>".to_string()),
+        Just("<&".to_string()),
+        Just(">&".to_string()),
         Just("/dev/null".to_string()),
-        // Command substitution (PR #149, #151)
+        // Here-documents / here-strings
+        Just(
+            indoc::indoc! {"
+            <<EOF
+            content
+            EOF"}
+            .to_string()
+        ),
+        Just(
+            indoc::indoc! {"
+            <<'EOF'
+            content
+            EOF"}
+            .to_string()
+        ),
+        Just("<<-EOF".to_string()),
+        Just("<<<word".to_string()),
+        // Command substitution
         arb_cmd_name().prop_map(|c| format!("$({c})")),
         arb_cmd_name().prop_map(|c| format!("$({c} arg)")),
         arb_cmd_name().prop_map(|c| format!("`{c}`")),
         // Process substitution
         arb_cmd_name().prop_map(|c| format!("<({c})")),
         arb_cmd_name().prop_map(|c| format!(">({c})")),
-        // Subshell
+        // Subshell / command group
         arb_cmd_name().prop_map(|c| format!("({c})")),
         arb_cmd_name().prop_map(|c| format!("(({c}))")),
-        // Argument terminator (PR #153)
+        arb_cmd_name().prop_map(|c| format!("{{ {c}; }}")),
+        // Conditional expressions
+        arb_cmd_name().prop_map(|c| format!("[[ {c} ]]")),
+        arb_cmd_name().prop_map(|c| format!("[ {c} ]")),
+        // Control structures
+        arb_cmd_name().prop_map(|c| format!("for i in a b; do {c}; done")),
+        arb_cmd_name().prop_map(|c| format!("while {c}; do {c}; done")),
+        arb_cmd_name().prop_map(|c| format!("if {c}; then {c}; fi")),
+        arb_cmd_name().prop_map(|c| format!("case word in pattern) {c};; esac")),
+        // Argument terminator
         Just("--".to_string()),
+        // Background
+        Just("&".to_string()),
         // Variables / environment
         Just("$HOME".to_string()),
         Just("${PATH}".to_string()),
+        Just("${VAR:-default}".to_string()),
+        Just("${VAR:+alt}".to_string()),
+        Just("${VAR%pattern}".to_string()),
+        Just("${#VAR}".to_string()),
         "[A-Z]{1,4}".prop_map(|k| format!("{k}=value")),
-        // Quoted strings (including nested command substitution, PR #151)
+        (
+            "[A-Z]{1,3}".prop_map(|k| format!("{k}=bar")),
+            arb_cmd_name(),
+        )
+            .prop_map(|(env, c)| format!("{env} {c}")),
+        // Arithmetic expansion
+        Just("$((1+2))".to_string()),
+        Just("$((x*y))".to_string()),
+        // Quoted strings (including nested command substitution)
         arb_positional().prop_map(|s| format!("\"{s}\"")),
         arb_positional().prop_map(|s| format!("'{s}'")),
         arb_cmd_name().prop_map(|c| format!("\"$({c})\"")),
+        Just("$'\\n\\t'".to_string()),
+        Just("$\"translatable\"".to_string()),
+        Just("\"hello\"'world'".to_string()),
         // Comments
         Just("#".to_string()),
         Just("# comment".to_string()),
@@ -102,18 +149,37 @@ fn arb_shell_special_token() -> impl Strategy<Value = String> {
         Just("\\*".to_string()),
         Just("\\\\".to_string()),
         Just("\\#".to_string()),
-        // Braces / brackets
+        // Brace expansion
         Just("{a,b,c}".to_string()),
+        Just("{1..10}".to_string()),
+        Just("{01..10..2}".to_string()),
+        // Glob / brackets
+        Just("?".to_string()),
         Just("[abc]".to_string()),
         Just("[!abc]".to_string()),
+        Just("[a-z]".to_string()),
+        Just("**".to_string()),
         // Special characters
         Just("!".to_string()),
         Just("~".to_string()),
+        Just("~user".to_string()),
+        Just("`".to_string()),
+        // Builtins
+        Just("exec".to_string()),
+        Just("eval".to_string()),
+        Just("source".to_string()),
+        Just(".".to_string()),
+        // Function definition
+        arb_cmd_name().prop_map(|c| format!("f() {{ {c}; }}")),
+        // Compound assignment
+        Just("array=(a b c)".to_string()),
         // Empty / whitespace
         Just("".to_string()),
         Just("  ".to_string()),
         // Newline
         Just("\n".to_string()),
+        // Nul byte
+        Just("\0".to_string()),
         // Non-ASCII
         Just("/tmp/テスト".to_string()),
         Just("日本語".to_string()),
@@ -153,19 +219,13 @@ fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String
         let pattern: String = segments.iter().map(|(p, _, _)| p.as_str()).collect();
         let matching: String = segments.iter().map(|(_, m, _)| m.as_str()).collect();
 
-        // Non-matching: replace ALL characters in ALL literal segments with '0'.
-        // Since literals use [a-z] and '0' never appears in [a-z], no literal
-        // from the pattern can match anywhere in the non-matching token, even
-        // when `*` segments shift the matching window.
+        // Non-matching: replace ALL characters in ALL segments with '0'.
+        // Both literal and glob filler segments must be replaced, because
+        // glob filler uses [a-z] which could coincidentally match a literal
+        // portion of the pattern when `*` shifts the matching window.
         let non_matching: String = segments
             .iter()
-            .map(|(_, m, is_lit)| {
-                if *is_lit {
-                    "0".repeat(m.len())
-                } else {
-                    m.clone()
-                }
-            })
+            .map(|(_, m, _)| "0".repeat(m.len()))
             .collect();
 
         (pattern, matching, non_matching)
@@ -283,14 +343,14 @@ fn arb_rich_pattern() -> impl Strategy<Value = String> {
 // Helper functions
 // ========================================
 
-/// Build a command string from tokens using shlex for proper quoting
+/// Build a command string from tokens using shlex for proper quoting.
+/// Nul bytes are stripped because shlex::try_join rejects them.
 fn build_command(cmd_name: &str, tokens: &[String]) -> String {
     let mut parts = vec![cmd_name.to_string()];
-    parts.extend(tokens.iter().cloned());
+    parts.extend(tokens.iter().map(|t| t.replace('\0', "")));
     match shlex::try_join(parts.iter().map(|s| s.as_str())) {
         Ok(cmd) => cmd,
-        // shlex::try_join only fails on nul bytes, which our strategies never generate
-        Err(_) => unreachable!("shlex::try_join failed: input contained nul byte"),
+        Err(_) => unreachable!("shlex::try_join failed after stripping nul bytes"),
     }
 }
 
