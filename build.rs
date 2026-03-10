@@ -21,7 +21,8 @@ fn main() {
     println!("cargo::rerun-if-env-changed=RUNOK_NIGHTLY_VERSION");
     println!("cargo::rerun-if-env-changed=CARGO_PKG_VERSION");
     println!("cargo::rerun-if-changed=.git/HEAD");
-    println!("cargo::rerun-if-changed=.git/refs");
+    println!("cargo::rerun-if-changed=.git/refs/tags");
+    println!("cargo::rerun-if-changed=.git/packed-refs");
 }
 
 /// If we're in a git repo and HEAD is not a release-tagged commit,
