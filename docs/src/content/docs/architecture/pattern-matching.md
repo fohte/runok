@@ -109,7 +109,7 @@ A step counter (`MAX_MATCH_STEPS = 10,000`) prevents exponential blowup on patho
 | `Literal`       | Exact string match at current position                                                                                                                                                                                                                                                                                              |
 | `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                                                                                                                                                                                                    |
 | `Alternation`   | Matches if the command token equals any alternative                                                                                                                                                                                                                                                                                 |
-| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. Also matches `=`-joined forms for standard flags: short (`-X=val`) and long (`--flag=val`). Non-standard forms like `-Denv=prod` are not split. **Order-independent**: the flag can appear anywhere in the command                          |
+| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. Also matches `=`-joined forms (e.g. `--flag=value`). **Order-independent**: the flag can appear anywhere in the command                                                                                                                     |
 | `Negation`      | **Positional negation**: matches if the current command token does **not** equal the value (consumes one token). **Flag-only negation** (all alternatives start with `-`): scans the entire token list for the forbidden flag without consuming a positional token. Passes when the flag is absent, including when no tokens remain |
 | `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                                                                                                                                                                                             |
 | `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                                                                                                                                                                                         |
@@ -124,6 +124,15 @@ A critical feature: flags with values are matched **regardless of their position
 ```
 
 matches both `curl -X POST https://example.com` and `curl https://example.com -X POST`, because `FlagWithValue` scans the full token list rather than requiring positional alignment.
+
+### `=`-joined flag splitting
+
+`FlagWithValue` also matches `=`-joined command tokens (e.g. `--sort=value` for a pattern `--sort value`). The splitting only recognizes standard flag forms:
+
+- **Short flags**: `-X=val` (single dash + one character)
+- **Long flags**: `--flag=val` (double dash)
+
+Non-standard forms like `-Denv=prod` (Java) or `-DFOO=bar` (GCC) are not split. These are treated as single tokens because the portion before `=` (`-Denv`, `-DFOO`) is not a standard flag name — it is a fused flag-key combination specific to the command.
 
 ### Wrapper command matching
 
