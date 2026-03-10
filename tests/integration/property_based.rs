@@ -381,6 +381,15 @@ fn action_variant(action: &Action) -> &'static str {
     }
 }
 
+/// Numeric priority matching the production merge_actions logic: Deny > Ask > Allow
+fn action_priority(action: &Action) -> u8 {
+    match action {
+        Action::Allow => 0,
+        Action::Ask(_) => 1,
+        Action::Deny(_) => 2,
+    }
+}
+
 // ========================================
 // Property A1: Wildcard subsumption
 // `{cmd} *` matches any command with the same name, regardless of arguments
@@ -1133,8 +1142,11 @@ proptest! {
         );
     }
 
+    /// The compound action must equal the highest-priority action among its
+    /// sub-commands (Deny > Ask > Allow). This validates the "Explicit Deny
+    /// Wins" aggregation rule end-to-end with randomly generated compounds.
     #[test]
-    fn prop_deny_propagation_compound_generated(
+    fn prop_compound_action_is_max_of_subcommands(
         compound in arb_compound_command(),
     ) {
         let yaml = indoc::indoc! {"
@@ -1151,19 +1163,59 @@ proptest! {
 
         let result = evaluate_compound(&config, &compound, &ctx).unwrap();
 
-        // Check if "rm" appears as a command (after an operator or at start),
-        // not just as an argument to another command.
-        let has_rm_command = compound.starts_with("rm ")
-            || compound.starts_with("rm\t")
-            || compound.contains("&& rm ")
-            || compound.contains("|| rm ")
-            || compound.contains("| rm ")
-            || compound.contains("; rm ");
-        if has_rm_command {
-            prop_assert!(
-                matches!(result.action, Action::Deny(_)),
-                "compound with 'rm' command should deny: command={:?} result={:?}",
-                compound, result.action
+        // Derive the expected action from sub-command details
+        let max_sub_action = result.sub_command_details.iter()
+            .map(|d| action_priority(&d.action))
+            .max()
+            .unwrap_or(0);
+        let compound_priority = action_priority(&result.action);
+
+        let msg = format!(
+            "compound action should be max of sub-actions: compound={:?} \
+             result={} sub_actions={:?}",
+            compound,
+            action_variant(&result.action),
+            result.sub_command_details.iter()
+                .map(|d| format!("{}={}", d.command, action_variant(&d.action)))
+                .collect::<Vec<_>>()
+        );
+        prop_assert_eq!(compound_priority, max_sub_action, "{}", msg);
+    }
+
+    /// Each sub-command action reported by evaluate_compound must match what
+    /// evaluate_command returns for the same command and config. This ensures
+    /// compound evaluation doesn't alter individual command evaluation logic.
+    #[test]
+    fn prop_compound_subcmd_matches_individual_eval(
+        compound in arb_compound_command(),
+    ) {
+        let yaml = indoc::indoc! {"
+            rules:
+              - allow: 'git *'
+              - allow: 'curl *'
+              - allow: 'echo *'
+              - allow: 'npm *'
+              - allow: 'ls *'
+              - deny: 'rm *'
+        "};
+        let config = parse_config(yaml).unwrap();
+        let ctx = empty_context();
+
+        let result = evaluate_compound(&config, &compound, &ctx).unwrap();
+
+        for detail in &result.sub_command_details {
+            let individual = evaluate_command(&config, &detail.command, &ctx).unwrap();
+            let msg = format!(
+                "sub-command {:?} action mismatch: compound reported {} but \
+                 individual eval returned {}",
+                detail.command,
+                action_variant(&detail.action),
+                action_variant(&individual.action),
+            );
+            prop_assert_eq!(
+                action_variant(&detail.action),
+                action_variant(&individual.action),
+                "{}", msg
             );
         }
     }
