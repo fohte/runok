@@ -384,7 +384,7 @@ fn arb_compound_command() -> impl Strategy<Value = String> {
 }
 
 /// Generate a random pattern string containing various syntax elements.
-/// Used by Property E to exercise the parser with diverse patterns.
+/// Used by no-panic tests to exercise the parser with diverse patterns.
 fn arb_rich_pattern() -> impl Strategy<Value = String> {
     (
         arb_cmd_name(),
@@ -447,6 +447,26 @@ fn build_yaml_config(action: &str, pattern: &str) -> String {
     "}
 }
 
+/// Build a YAML config with a single rule AND wrapper definitions
+fn build_yaml_config_with_wrappers(action: &str, pattern: &str, wrappers: &[&str]) -> String {
+    let escaped = pattern.replace('\'', "''");
+    let wrapper_lines: String = wrappers
+        .iter()
+        .map(|w| {
+            let esc = w.replace('\'', "''");
+            format!("      - '{esc}'")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    indoc::formatdoc! {"
+        definitions:
+          wrappers:
+        {wrapper_lines}
+        rules:
+          - {action}: '{escaped}'
+    "}
+}
+
 fn arb_operator() -> impl Strategy<Value = String> {
     prop_oneof![
         Just("&&".to_string()),
@@ -466,7 +486,7 @@ fn action_variant(action: &Action) -> &'static str {
 }
 
 // ========================================
-// Property A1: Wildcard subsumption
+// Wildcard subsumption
 // `{cmd} *` matches any command with the same name, regardless of arguments
 // ========================================
 
@@ -510,7 +530,7 @@ proptest! {
 }
 
 // ========================================
-// Property A2: Literal strictness
+// Literal strictness
 // `{cmd} {literal}` matches exactly and rejects different literals
 // ========================================
 
@@ -554,7 +574,7 @@ proptest! {
 }
 
 // ========================================
-// Property A3: Flag negation correctness
+// Flag negation correctness
 // `{cmd} !{flag} *` rejects when flag present, allows when absent
 // ========================================
 
@@ -605,7 +625,7 @@ proptest! {
 }
 
 // ========================================
-// Property A4: Value negation correctness (position-dependent)
+// Value negation correctness (position-dependent)
 // `{cmd} !{value} *` rejects when first token matches, allows otherwise
 // ========================================
 
@@ -660,7 +680,7 @@ proptest! {
 }
 
 // ========================================
-// Property A5: Alternation correctness
+// Alternation correctness
 // `{cmd} {a|b|c} *` matches when head is in set, rejects otherwise
 // ========================================
 
@@ -715,7 +735,7 @@ proptest! {
 }
 
 // ========================================
-// Property A6: Optional correctness
+// Optional correctness
 // `{cmd} [{flag}] *` matches with or without the flag
 // ========================================
 
@@ -761,7 +781,7 @@ proptest! {
 }
 
 // ========================================
-// Property A7: Glob literal correctness
+// Glob literal correctness
 // `{cmd} {glob}` matches tokens fitting the glob, rejects others
 // ========================================
 
@@ -804,7 +824,7 @@ proptest! {
 }
 
 // ========================================
-// Property A8: QuotedLiteral correctness
+// QuotedLiteral correctness
 // Quoted patterns suppress glob expansion
 // ========================================
 
@@ -854,7 +874,136 @@ proptest! {
 }
 
 // ========================================
-// Property B: Flag token position independence
+// Literal matches with interleaved flags
+// `{cmd} {literal} *` should match even when flags precede the literal
+// in the command (PR #177: order-independent literal matching).
+// These tests FAIL until PR #177 is merged — that is expected and proves
+// the PBT can detect the bug.
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_literal_matches_with_flags_before(
+        cmd_name in arb_cmd_name(),
+        literal in arb_safe_positional(),
+        flag in arb_flag(),
+        trailing in proptest::collection::vec(arb_safe_positional(), 1..=3),
+    ) {
+        // Pattern: {cmd} {literal} {flag} *
+        // Command: {cmd} {flag} {literal} {trailing...}
+        let pattern = format!("{cmd_name} {literal} {flag} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let mut tokens = vec![flag.clone(), literal.clone()];
+        tokens.extend(trailing.iter().cloned());
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "literal should match with flag before it: pattern={:?} command={:?}",
+            pattern, command);
+    }
+
+    #[test]
+    fn prop_literal_matches_with_multiple_flags_before(
+        cmd_name in arb_cmd_name(),
+        literal in arb_safe_positional(),
+        flags in proptest::collection::vec(arb_flag(), 1..=3),
+        trailing in proptest::collection::vec(arb_safe_positional(), 0..=2),
+    ) {
+        // Pattern: {cmd} {literal} *
+        // Command: {cmd} {flags...} {literal} {trailing...}
+        let pattern = format!("{cmd_name} {literal} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let mut tokens: Vec<String> = flags;
+        tokens.push(literal.clone());
+        tokens.extend(trailing);
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "literal should match with multiple flags before it: pattern={:?} command={:?}",
+            pattern, command);
+    }
+}
+
+// ========================================
+// evaluate_command compound guard
+// When evaluate_command receives a compound command (with &&, ||, ;, |),
+// wildcard must NOT match across operators (PR #108: 067ab7e)
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_evaluate_command_compound_guard_deny(
+        allowed_cmd in arb_cmd_name(),
+        denied_cmd in arb_cmd_name(),
+        operator in arb_operator(),
+        allowed_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        denied_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+    ) {
+        prop_assume!(allowed_cmd != denied_cmd);
+
+        // Only allow the first command with wildcard
+        let yaml = indoc::formatdoc! {"
+            rules:
+              - allow: '{allowed_cmd} *'
+              - deny: '{denied_cmd} *'
+        "};
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Build a compound command passed to evaluate_command (not evaluate_compound)
+        let allowed_part = build_command(&allowed_cmd, &allowed_args);
+        let denied_part = build_command(&denied_cmd, &denied_args);
+        let compound = format!("{allowed_part} {operator} {denied_part}");
+
+        // evaluate_command should detect the compound and deny
+        let result = evaluate_command(&config, &compound, &ctx).unwrap();
+        prop_assert!(
+            matches!(result.action, Action::Deny(_)),
+            "evaluate_command should not let wildcard match across operator: command={:?} result={:?}",
+            compound, result.action
+        );
+    }
+
+    #[test]
+    fn prop_evaluate_command_compound_guard_all_allowed(
+        cmd1 in arb_cmd_name(),
+        cmd2 in arb_cmd_name(),
+        operator in arb_operator(),
+        args1 in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        args2 in proptest::collection::vec(arb_safe_positional(), 0..=2),
+    ) {
+        // Both commands are allowed
+        let yaml = indoc::formatdoc! {"
+            rules:
+              - allow: '{cmd1} *'
+              - allow: '{cmd2} *'
+        "};
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let part1 = build_command(&cmd1, &args1);
+        let part2 = build_command(&cmd2, &args2);
+        let compound = format!("{part1} {operator} {part2}");
+
+        let result = evaluate_command(&config, &compound, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "evaluate_command should allow when all sub-commands allowed: command={:?}",
+            compound);
+    }
+}
+
+// ========================================
+// Flag token position independence
 // ========================================
 
 proptest! {
@@ -1012,7 +1161,7 @@ proptest! {
 }
 
 // ========================================
-// Property C: Equals-sign equivalence
+// Equals-sign equivalence
 // ========================================
 
 proptest! {
@@ -1153,7 +1302,7 @@ proptest! {
 }
 
 // ========================================
-// Property D: Deny propagation in compound commands
+// Deny propagation in compound commands
 // ========================================
 
 proptest! {
@@ -1291,7 +1440,63 @@ proptest! {
 }
 
 // ========================================
-// Property E: No panics or infinite loops
+// Unmatched sub-commands in compound must not resolve to Allow
+// When a compound contains a sub-command that matches no rule, the overall
+// result must NOT be Allow (should escalate to Ask). This catches bugs where
+// unmatched sub-commands silently resolve to Default->Allow (PR #178: 377f83d).
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_compound_unmatched_subcmd_not_allowed(
+        matched_cmd in arb_cmd_name(),
+        unmatched_cmd in arb_cmd_name(),
+        operator in arb_operator(),
+        matched_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        unmatched_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        unmatched_first in proptest::bool::ANY,
+    ) {
+        prop_assume!(matched_cmd != unmatched_cmd);
+
+        // Only configure a rule for matched_cmd; unmatched_cmd has no rule
+        let yaml = indoc::formatdoc! {"
+            rules:
+              - allow: '{matched_cmd} *'
+        "};
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let matched_part = build_command(&matched_cmd, &matched_args);
+        let unmatched_part = build_command(&unmatched_cmd, &unmatched_args);
+
+        let compound = if unmatched_first {
+            format!("{unmatched_part} {operator} {matched_part}")
+        } else {
+            format!("{matched_part} {operator} {unmatched_part}")
+        };
+
+        // evaluate_compound: unmatched sub-command should escalate, NOT Allow
+        let result = evaluate_compound(&config, &compound, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "compound with unmatched sub-command should NOT be Allow: compound={:?} result={:?}",
+            compound, result.action
+        );
+
+        // evaluate_command: same property via the compound guard path
+        let result_cmd = evaluate_command(&config, &compound, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result_cmd.action, Action::Allow),
+            "evaluate_command with unmatched sub-command should NOT be Allow: compound={:?} result={:?}",
+            compound, result_cmd.action
+        );
+    }
+}
+
+// ========================================
+// No panics or infinite loops
 // ========================================
 
 proptest! {
@@ -1300,6 +1505,31 @@ proptest! {
     #[test]
     fn prop_no_panic_evaluate_command(
         command in arb_simple_command(),
+        pattern in arb_rich_pattern(),
+        action in prop_oneof![
+            Just("allow".to_string()),
+            Just("deny".to_string()),
+            Just("ask".to_string()),
+        ],
+    ) {
+        let yaml = build_yaml_config(&action, &pattern);
+        if let Ok(config) = parse_config(&yaml) {
+            let ctx = empty_context();
+            let _ = evaluate_command(&config, &command, &ctx);
+        }
+    }
+
+    /// Same as prop_no_panic_evaluate_command but with compound commands fed
+    /// into evaluate_command (not evaluate_compound). Tests the compound guard
+    /// path in evaluate_command_inner, which was the source of stack overflow
+    /// bugs (PR #149: 97b46a7).
+    ///
+    /// Separated from prop_no_panic_evaluate_command because combining
+    /// arb_compound_command with arb_rich_pattern via prop_oneof exceeds
+    /// the default thread stack size due to deep proptest Strategy nesting.
+    #[test]
+    fn prop_no_panic_evaluate_command_with_compound(
+        command in arb_compound_command(),
         pattern in arb_rich_pattern(),
         action in prop_oneof![
             Just("allow".to_string()),
@@ -1333,7 +1563,7 @@ proptest! {
 }
 
 // ========================================
-// Property F: Rule order independence
+// Rule order independence
 // ========================================
 
 proptest! {
@@ -1429,5 +1659,185 @@ proptest! {
                     "inconsistent parse: one config parsed but the other didn't");
             }
         }
+    }
+}
+
+// ========================================
+// Wrapper recursive evaluation
+// Wrappers unwrap the inner command and evaluate it against rules.
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// `sudo <inner_cmd>` should evaluate the inner command against rules
+    #[test]
+    fn prop_wrapper_sudo_unwraps(
+        inner_cmd in arb_cmd_name(),
+        inner_args in proptest::collection::vec(arb_safe_positional(), 0..=3),
+        is_allow in proptest::bool::ANY,
+    ) {
+        let action = if is_allow { "allow" } else { "deny" };
+        let pattern = format!("{inner_cmd} *");
+        let yaml = build_yaml_config_with_wrappers(action, &pattern, &["sudo <cmd>"]);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let inner = build_command(&inner_cmd, &inner_args);
+        let command = format!("sudo {inner}");
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+
+        if is_allow {
+            prop_assert_eq!(result.action, Action::Allow,
+                "sudo wrapper should unwrap and allow: command={:?}", command);
+        } else {
+            prop_assert!(matches!(result.action, Action::Deny(_)),
+                "sudo wrapper should unwrap and deny: command={:?} result={:?}",
+                command, result.action);
+        }
+    }
+
+    /// `bash -c '<inner_cmd>'` should evaluate the inner command
+    #[test]
+    fn prop_wrapper_bash_c_unwraps(
+        inner_cmd in arb_cmd_name(),
+        inner_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        is_allow in proptest::bool::ANY,
+    ) {
+        let action = if is_allow { "allow" } else { "deny" };
+        let pattern = format!("{inner_cmd} *");
+        let yaml = build_yaml_config_with_wrappers(action, &pattern, &["bash -c <cmd>"]);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let inner = build_command(&inner_cmd, &inner_args);
+        let command = format!("bash -c {inner}");
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+
+        if is_allow {
+            prop_assert_eq!(result.action, Action::Allow,
+                "bash -c wrapper should unwrap and allow: command={:?}", command);
+        } else {
+            prop_assert!(matches!(result.action, Action::Deny(_)),
+                "bash -c wrapper should unwrap and deny: command={:?} result={:?}",
+                command, result.action);
+        }
+    }
+
+    /// Nested wrappers: `sudo bash -c '<inner>'` should unwrap through both
+    #[test]
+    fn prop_wrapper_nested_unwraps(
+        inner_cmd in arb_cmd_name(),
+        inner_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        is_allow in proptest::bool::ANY,
+    ) {
+        let action = if is_allow { "allow" } else { "deny" };
+        let pattern = format!("{inner_cmd} *");
+        let yaml = build_yaml_config_with_wrappers(
+            action, &pattern, &["sudo <cmd>", "bash -c <cmd>"],
+        );
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let inner = build_command(&inner_cmd, &inner_args);
+        let command = format!("sudo bash -c {inner}");
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+
+        if is_allow {
+            prop_assert_eq!(result.action, Action::Allow,
+                "nested wrapper should unwrap and allow: command={:?}", command);
+        } else {
+            prop_assert!(matches!(result.action, Action::Deny(_)),
+                "nested wrapper should unwrap and deny: command={:?} result={:?}",
+                command, result.action);
+        }
+    }
+
+    /// Wrapper with compound inner: `bash -c 'allowed && denied'` should deny
+    #[test]
+    fn prop_wrapper_compound_inner_deny_propagates(
+        allowed_cmd in arb_cmd_name(),
+        denied_cmd in arb_cmd_name(),
+        operator in arb_operator(),
+    ) {
+        prop_assume!(allowed_cmd != denied_cmd);
+
+        let yaml = indoc::formatdoc! {"
+            definitions:
+              wrappers:
+                - 'bash -c <cmd>'
+            rules:
+              - allow: '{allowed_cmd} *'
+              - deny: '{denied_cmd} *'
+        "};
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let inner = format!("{allowed_cmd} arg {operator} {denied_cmd} arg");
+        let command = format!("bash -c '{inner}'");
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert!(
+            matches!(result.action, Action::Deny(_)),
+            "wrapper with compound inner should deny: command={:?} result={:?}",
+            command, result.action
+        );
+    }
+
+    /// No panics with diverse commands passed through wrappers
+    #[test]
+    fn prop_no_panic_wrapper_evaluation(
+        command in arb_simple_command(),
+        pattern in arb_rich_pattern(),
+        action in prop_oneof![
+            Just("allow".to_string()),
+            Just("deny".to_string()),
+            Just("ask".to_string()),
+        ],
+        wrapper in prop_oneof![
+            Just("sudo <cmd>".to_string()),
+            Just("bash -c <cmd>".to_string()),
+            Just("sh -c <cmd>".to_string()),
+            Just("env <opts> <vars> <cmd>".to_string()),
+            Just("xargs * <cmd>".to_string()),
+        ],
+    ) {
+        let escaped_pattern = pattern.replace('\'', "''");
+        let escaped_wrapper = wrapper.replace('\'', "''");
+        let yaml = indoc::formatdoc! {"
+            definitions:
+              wrappers:
+                - '{escaped_wrapper}'
+            rules:
+              - {action}: '{escaped_pattern}'
+        "};
+        if let Ok(config) = parse_config(&yaml) {
+            let ctx = empty_context();
+            let _ = evaluate_command(&config, &command, &ctx);
+        }
+    }
+
+    /// Deeply nested wrappers must trigger RecursionDepthExceeded, not
+    /// stack-overflow (PR #149: 97b46a7). The depth guard requires that
+    /// each recursive call increments `depth`; without `depth + 1` the
+    /// guard never fires and this test fails.
+    #[test]
+    fn prop_wrapper_deep_nesting_hits_depth_guard(
+        inner_cmd in arb_cmd_name(),
+        inner_args in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        nesting in 12..=20usize,
+    ) {
+        let pattern = format!("{inner_cmd} *");
+        let yaml = build_yaml_config_with_wrappers("allow", &pattern, &["sudo <cmd>"]);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Build: sudo sudo sudo ... <inner_cmd> <args>
+        let inner = build_command(&inner_cmd, &inner_args);
+        let command = format!("{}{inner}", "sudo ".repeat(nesting));
+        let result = evaluate_command(&config, &command, &ctx);
+        // Nesting exceeds MAX_WRAPPER_DEPTH (10), so the depth guard must fire
+        prop_assert!(result.is_err(),
+            "deeply nested wrapper should return RecursionDepthExceeded: command={:?} result={:?}",
+            command, result);
     }
 }

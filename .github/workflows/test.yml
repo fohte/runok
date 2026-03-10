@@ -94,7 +94,16 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
+      - uses: actions/create-github-app-token@v2
+        if: runner.os == 'Linux'
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # Allow unprivileged user namespaces for bubblewrap on Ubuntu 24.04+
       # where AppArmor restricts them by default
@@ -118,7 +127,22 @@ jobs:
         run: rustup component add llvm-tools-preview
 
       - name: Run tests with coverage
+        id: tests
+        continue-on-error: true
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Commit proptest regressions
+        if: runner.os == 'Linux' && !cancelled()
+        uses: suzuki-shunsuke/commit-action@v0.1.1
+        with:
+          commit_message: 'test: add proptest regression seeds'
+          github_token: ${{ steps.app-token.outputs.token }}
+          files: tests/proptest-regressions/
+          fail_on_self_push: false
+
+      - name: Fail if tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
