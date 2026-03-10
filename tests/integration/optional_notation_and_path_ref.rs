@@ -14,6 +14,9 @@ use runok::rules::rule_engine::{EvalContext, evaluate_command};
 #[case::with_short_flag("curl -X GET https://example.com", assert_allow as ActionAssertion)]
 #[case::with_long_flag("curl --request GET https://example.com", assert_allow as ActionAssertion)]
 #[case::with_wrong_value("curl -X POST https://example.com", assert_ask as ActionAssertion)]
+#[case::equals_joined_short("curl -X=GET https://example.com", assert_allow as ActionAssertion)]
+#[case::equals_joined_long("curl --request=GET https://example.com", assert_allow as ActionAssertion)]
+#[case::equals_joined_wrong_value("curl -X=POST https://example.com", assert_ask as ActionAssertion)]
 fn optional_flag_with_value(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -37,6 +40,7 @@ fn optional_flag_with_value(
 #[case::without_c("git status", assert_allow as ActionAssertion)]
 #[case::with_c("git -C /some/path status", assert_allow as ActionAssertion)]
 #[case::with_c_different_path("git -C /another/path status", assert_allow as ActionAssertion)]
+#[case::equals_joined("git -C=/tmp status", assert_allow as ActionAssertion)]
 fn optional_flag_with_wildcard_value(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -45,6 +49,42 @@ fn optional_flag_with_wildcard_value(
     let config = parse_config(indoc! {"
         rules:
           - allow: 'git [-C *] status'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Optional notation with `=`-joined flag value (e.g. --sort=-committerdate)
+// ========================================
+
+#[rstest]
+#[case::space_separated(
+    "git branch -a --sort -committerdate",
+    assert_allow as ActionAssertion,
+)]
+#[case::equals_joined(
+    "git branch -a --sort=-committerdate",
+    assert_allow as ActionAssertion,
+)]
+#[case::without_sort(
+    "git branch -a",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_only(
+    "git branch --sort=-committerdate",
+    assert_allow as ActionAssertion,
+)]
+fn optional_flag_with_value_equals_joined(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git branch [-a|--all] [-r|--remotes] [-v|--verbose] [--sort *] [-l|--list *]'
     "})
     .unwrap();
 
@@ -306,6 +346,14 @@ fn path_normalization_resolves_traversal(
 )]
 #[case::flag_between_args(
     "curl -H 'Content-Type: application/json' -X POST https://example.com",
+    assert_deny as ActionAssertion,
+)]
+#[case::equals_joined_short(
+    "curl -X=POST https://example.com",
+    assert_deny as ActionAssertion,
+)]
+#[case::equals_joined_long(
+    "curl --request=POST https://example.com",
     assert_deny as ActionAssertion,
 )]
 fn flag_with_value_position_independence(

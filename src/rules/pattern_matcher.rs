@@ -197,6 +197,7 @@ fn match_tokens_core<'a>(
             // Search for the flag anywhere in the remaining command tokens
             // (order-independent matching)
             for i in 0..cmd_tokens.len() {
+                // Case 1: space-separated flag and value (e.g. `--sort value`)
                 if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
                     && i + 1 < cmd_tokens.len()
                     && match_single_token(value, cmd_tokens[i + 1], definitions)
@@ -215,6 +216,31 @@ fn match_tokens_core<'a>(
                         caps.truncate(saved_len);
                     } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
                         return true;
+                    }
+                }
+
+                // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
+                if let Some(eq_pos) = cmd_tokens[i].find('=') {
+                    let flag_part = &cmd_tokens[i][..eq_pos];
+                    let value_part = &cmd_tokens[i][eq_pos + 1..];
+                    if flag_part.starts_with('-')
+                        && aliases.iter().any(|a| a.as_str() == flag_part)
+                        && match_single_token(value, value_part, definitions)
+                    {
+                        let remaining = remove_indices(cmd_tokens, &[i]);
+                        if let Some(ref mut caps) = captures {
+                            let saved_len = caps.len();
+                            if matches!(value.as_ref(), PatternToken::Wildcard) {
+                                caps.push(value_part);
+                            }
+                            if match_tokens_core(rest, &remaining, definitions, steps, Some(*caps))
+                            {
+                                return true;
+                            }
+                            caps.truncate(saved_len);
+                        } else if match_tokens_core(rest, &remaining, definitions, steps, None) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -624,10 +650,22 @@ fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) 
     for token in optional_tokens {
         match token {
             PatternToken::FlagWithValue { aliases, .. } => {
-                if cmd_tokens
-                    .iter()
-                    .any(|t| aliases.iter().any(|a| a.as_str() == *t))
-                {
+                if cmd_tokens.iter().any(|t| {
+                    // Exact match (space-separated form)
+                    if aliases.iter().any(|a| a.as_str() == *t) {
+                        return true;
+                    }
+                    // `=`-joined form: check the flag portion before `=`
+                    if let Some(eq_pos) = t.find('=') {
+                        let flag_part = &t[..eq_pos];
+                        if flag_part.starts_with('-')
+                            && aliases.iter().any(|a| a.as_str() == flag_part)
+                        {
+                            return true;
+                        }
+                    }
+                    false
+                }) {
                     return false;
                 }
             }
@@ -1162,6 +1200,32 @@ mod tests {
     #[case::optional_bare_flags_wrong_value_interleaved(
         "curl [-s] [-X GET] *",
         "curl -X POST https://example.com -s",
+        false
+    )]
+    // `=`-joined flag with value
+    #[case::optional_flag_with_value_equals_joined(
+        "git branch [--sort *]",
+        "git branch --sort=-committerdate",
+        true
+    )]
+    #[case::optional_flag_with_value_equals_joined_absent(
+        "git branch [--sort *]",
+        "git branch",
+        true
+    )]
+    #[case::optional_flag_with_value_equals_joined_with_other_flags(
+        "git branch [-a] [--sort *]",
+        "git branch -a --sort=-committerdate",
+        true
+    )]
+    #[case::optional_flag_with_value_equals_joined_specific_value(
+        "curl [-X|--request GET] *",
+        "curl -X=GET https://example.com",
+        true
+    )]
+    #[case::optional_flag_with_value_equals_joined_wrong_value(
+        "curl [-X|--request GET] *",
+        "curl -X=POST https://example.com",
         false
     )]
     fn optional_matching(
