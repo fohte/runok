@@ -158,6 +158,9 @@ jobs:
   publish-nightly:
     needs: [release-please, build-nightly]
     if: needs.release-please.outputs.release_created != 'true' && github.event_name != 'workflow_dispatch'
+    concurrency:
+      group: publish-nightly
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: write
