@@ -1652,24 +1652,13 @@ mod tests {
     }
 
     #[rstest]
-    fn extract_placeholder_with_flag_with_value(empty_defs: Definitions) {
-        // FlagWithValue token before <cmd>
-        let result = check_extract(
-            "run -m|--mode debug <cmd>",
-            "run -m debug echo hello",
-            &empty_defs,
-        );
-        assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
-    }
-
-    #[rstest]
-    fn extract_placeholder_with_flag_with_value_equals_joined(empty_defs: Definitions) {
-        // FlagWithValue token before <cmd> with `=`-joined flag
-        let result = check_extract(
-            "run -m|--mode debug <cmd>",
-            "run -m=debug echo hello",
-            &empty_defs,
-        );
+    #[case::space_separated("run -m debug echo hello")]
+    #[case::equals_joined("run -m=debug echo hello")]
+    fn extract_placeholder_with_flag_with_value(
+        #[case] command_str: &str,
+        empty_defs: Definitions,
+    ) {
+        let result = check_extract("run -m|--mode debug <cmd>", command_str, &empty_defs);
         assert_eq!(result, vec![vec!["echo".to_string(), "hello".to_string()]]);
     }
 
