@@ -17,6 +17,8 @@ fn main() {
         .or_else(|| git_nightly_version(&cargo_version))
         .unwrap_or(cargo_version);
 
+    // Sanitize newlines to prevent Cargo instruction injection via env vars
+    let version = version.replace(['\n', '\r'], "");
     println!("cargo::rustc-env=RUNOK_VERSION={version}");
     println!("cargo::rerun-if-env-changed=RUNOK_NIGHTLY_VERSION");
     println!("cargo::rerun-if-env-changed=CARGO_PKG_VERSION");
