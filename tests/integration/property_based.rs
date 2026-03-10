@@ -85,15 +85,20 @@ fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String
         let pattern: String = segments.iter().map(|(p, _, _)| p.as_str()).collect();
         let matching: String = segments.iter().map(|(_, m, _)| m.as_str()).collect();
 
-        // Non-matching: find the first literal segment and replace its first
-        // character with '0' (a digit that never appears in [a-z] literals).
-        // This breaks the literal anchor so the glob cannot compensate.
-        let mut non_match_parts: Vec<String> = segments.iter().map(|(_, m, _)| m.clone()).collect();
-        if let Some(idx) = segments.iter().position(|(_, _, is_lit)| *is_lit) {
-            let lit = &non_match_parts[idx];
-            non_match_parts[idx] = format!("0{}", &lit[1..]);
-        }
-        let non_matching: String = non_match_parts.concat();
+        // Non-matching: replace ALL characters in ALL literal segments with '0'.
+        // Since literals use [a-z] and '0' never appears in [a-z], no literal
+        // from the pattern can match anywhere in the non-matching token, even
+        // when `*` segments shift the matching window.
+        let non_matching: String = segments
+            .iter()
+            .map(|(_, m, is_lit)| {
+                if *is_lit {
+                    "0".repeat(m.len())
+                } else {
+                    m.clone()
+                }
+            })
+            .collect();
 
         (pattern, matching, non_matching)
     })
