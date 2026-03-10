@@ -48,155 +48,59 @@ fn arb_positional() -> impl Strategy<Value = String> {
     ]
 }
 
+/// Positional values that never start with `-` (safe for =joined flag values)
+fn arb_safe_positional() -> impl Strategy<Value = String> {
+    arb_positional().prop_filter("must not start with -", |s| !s.starts_with('-'))
+}
+
 fn arb_flag_value() -> impl Strategy<Value = String> {
     prop_oneof![arb_positional(), arb_flag(),]
 }
 
 // ========================================
-// Pattern token pair strategies
-// Each returns (pattern_fragment, matching_tokens)
+// Glob pattern strategy
 // ========================================
 
-fn arb_literal_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    arb_positional().prop_map(|s| (s.clone(), vec![s]))
-}
-
-fn arb_wildcard_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    proptest::collection::vec(arb_positional(), 0..=3).prop_map(|tokens| ("*".to_string(), tokens))
-}
-
-fn arb_alternation_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    (
-        arb_positional(),
-        proptest::collection::vec(arb_positional(), 1..=3),
-    )
-        .prop_map(|(chosen, mut others)| {
-            if !others.contains(&chosen) {
-                others.push(chosen.clone());
+/// Generates a (glob_pattern, matching_token, non_matching_token) triple.
+/// The glob pattern is built from random literal chunks and `*` segments.
+fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String)> {
+    // Strategy: generate a pattern like "abc*def*ghi" where literals use [a-z]
+    // and wildcards use `*`. The matching token fills `*` with [a-z] filler.
+    // The non-matching token replaces the leading literal with a DIFFERENT
+    // leading literal (prefixed with "0" digit which never appears in [a-z]
+    // patterns), guaranteeing the glob cannot match.
+    //
+    // Structure: literal(*literal)+ ensures leading literal anchor.
+    (1..=3usize)
+        .prop_flat_map(|glob_count| {
+            let lit_count = glob_count + 1;
+            (
+                proptest::collection::vec("[a-z]{2,4}", lit_count),
+                proptest::collection::vec("[a-z]{0,3}", glob_count),
+            )
+        })
+        .prop_map(|(lits, fillers)| {
+            // Pattern: lit[0] * lit[1] * lit[2] ...
+            let mut pat_parts = Vec::new();
+            let mut match_parts = Vec::new();
+            for (i, lit) in lits.iter().enumerate() {
+                if i > 0 {
+                    pat_parts.push("*".to_string());
+                    match_parts.push(fillers[i - 1].clone());
+                }
+                pat_parts.push(lit.clone());
+                match_parts.push(lit.clone());
             }
-            let pattern_frag = others.join("|");
-            (pattern_frag, vec![chosen])
+            let pattern: String = pat_parts.concat();
+            let matching: String = match_parts.concat();
+
+            // Non-matching: prefix "0" to the matching token.
+            // The pattern starts with [a-z]{2,4}, so the leading literal
+            // can never start with "0". This breaks the leading anchor match.
+            let non_matching = format!("0{matching}");
+
+            (pattern, matching, non_matching)
         })
-}
-
-fn arb_flag_alternation_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // Flag alternation is position-independent: flag can appear anywhere in tokens
-    (
-        arb_flag(),
-        proptest::collection::vec(arb_positional(), 0..=2),
-    )
-        .prop_map(|(flag, mut prefix)| {
-            let pattern_frag = flag.clone();
-            prefix.push(flag);
-            (pattern_frag, prefix)
-        })
-}
-
-fn arb_flag_with_value_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // FlagWithValue is position-independent.
-    // Generates both space-separated and =joined forms.
-    (arb_flag(), arb_positional(), proptest::bool::ANY).prop_map(|(flag, value, use_equals)| {
-        let pattern_frag = format!("{flag} *");
-        if use_equals {
-            (pattern_frag, vec![format!("{flag}={value}")])
-        } else {
-            (pattern_frag, vec![flag, value])
-        }
-    })
-}
-
-fn arb_flag_negation_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // Flag negation: !--flag means "this flag must NOT be present"
-    // Generate tokens that do NOT contain the negated flag
-    (
-        arb_flag(),
-        proptest::collection::vec(arb_positional(), 0..=2),
-    )
-        .prop_map(|(negated_flag, positionals)| {
-            let pattern_frag = format!("!{negated_flag}");
-            (pattern_frag, positionals)
-        })
-}
-
-fn arb_value_negation_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // Non-flag negation is position-dependent (matches cmd_tokens[0])
-    (arb_positional(), arb_positional())
-        .prop_filter(
-            "negated value must differ from chosen",
-            |(negated, chosen)| negated != chosen,
-        )
-        .prop_map(|(negated, chosen)| {
-            let pattern_frag = format!("!{negated}");
-            (pattern_frag, vec![chosen])
-        })
-}
-
-fn arb_negation_alternation_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // NegationAlternation: !describe|get|list matches when none of the alternatives is present
-    (
-        proptest::collection::vec(arb_positional(), 2..=4),
-        arb_positional(),
-    )
-        .prop_filter(
-            "chosen must not be in negated set",
-            |(negated_set, chosen)| !negated_set.contains(chosen),
-        )
-        .prop_map(|(negated_set, chosen)| {
-            let pattern_frag = format!("!{}", negated_set.join("|"));
-            (pattern_frag, vec![chosen])
-        })
-}
-
-fn arb_quoted_literal_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // QuotedLiteral: "value*" in a pattern suppresses glob expansion.
-    // The token must match the exact string including any `*` characters.
-    prop_oneof![
-        // Literal with glob-like chars that must match exactly
-        arb_positional().prop_map(|s| {
-            let quoted_val = format!("{s}*");
-            // Pattern uses double quotes to suppress glob
-            let pattern_frag = format!("\"{quoted_val}\"");
-            (pattern_frag, vec![quoted_val])
-        }),
-        // Plain quoted literal without special chars
-        arb_positional().prop_map(|s| {
-            let pattern_frag = format!("\"{s}\"");
-            (pattern_frag, vec![s])
-        }),
-    ]
-}
-
-fn arb_optional_pair() -> impl Strategy<Value = (String, Vec<String>)> {
-    // Optional flag: [-f] matches with or without
-    (arb_flag(), proptest::bool::ANY).prop_map(|(flag, present)| {
-        let pattern_frag = format!("[{flag}]");
-        if present {
-            (pattern_frag, vec![flag])
-        } else {
-            (pattern_frag, vec![])
-        }
-    })
-}
-
-/// Composite matching pair: combines multiple pattern token types into
-/// a single (pattern, command) pair that should always match.
-fn arb_matching_pair() -> impl Strategy<Value = (String, String)> {
-    (
-        arb_cmd_name(),
-        arb_literal_pair(),
-        arb_optional_pair(),
-        arb_wildcard_pair(),
-    )
-        .prop_map(
-            |(cmd, (lit_pat, lit_tok), (opt_pat, opt_tok), (wild_pat, wild_tok))| {
-                let pattern = format!("{cmd} {lit_pat} {opt_pat} {wild_pat}");
-                let mut tokens = lit_tok;
-                tokens.extend(opt_tok);
-                tokens.extend(wild_tok);
-                let command = build_command(&cmd, &tokens);
-                (pattern, command)
-            },
-        )
 }
 
 // ========================================
@@ -223,6 +127,44 @@ fn arb_compound_command() -> impl Strategy<Value = String> {
                 result = format!("{result} {op} {cmd}");
             }
             result
+        })
+}
+
+/// Generate a random pattern string containing various syntax elements.
+/// Used by Property E to exercise the parser with diverse patterns.
+fn arb_rich_pattern() -> impl Strategy<Value = String> {
+    (
+        arb_cmd_name(),
+        proptest::collection::vec(
+            prop_oneof![
+                // Wildcard
+                Just("*".to_string()),
+                // Positional literal
+                arb_positional(),
+                // Flag (becomes Alternation in parser)
+                arb_flag(),
+                // Glob literal
+                "[a-z]{1,4}".prop_map(|s| format!("{s}-*")),
+                // Negation
+                arb_positional().prop_map(|s| format!("!{s}")),
+                // Flag negation
+                arb_flag().prop_map(|f| format!("!{f}")),
+                // Optional
+                arb_flag().prop_map(|f| format!("[{f}]")),
+                // Alternation
+                (arb_positional(), arb_positional()).prop_map(|(a, b)| format!("{a}|{b}")),
+                // QuotedLiteral
+                arb_positional().prop_map(|s| format!("\"{s}\"")),
+            ],
+            0..=4,
+        ),
+    )
+        .prop_map(|(cmd, tokens)| {
+            if tokens.is_empty() {
+                cmd
+            } else {
+                format!("{cmd} {}", tokens.join(" "))
+            }
         })
 }
 
@@ -265,217 +207,382 @@ fn action_variant(action: &Action) -> &'static str {
 }
 
 // ========================================
-// Property A: Generated matching pairs must always match
+// Property A1: Wildcard subsumption
+// `{cmd} *` matches any command with the same name, regardless of arguments
 // ========================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn prop_matching_pairs_always_allow(
+    fn prop_wildcard_subsumes_any_args(
         cmd_name in arb_cmd_name(),
-        extra_tokens in proptest::collection::vec(arb_positional(), 0..=4),
+        tokens in proptest::collection::vec(arb_flag_value(), 0..=5),
     ) {
         let pattern = format!("{cmd_name} *");
-        let command = build_command(&cmd_name, &extra_tokens);
-        let yaml = build_yaml_config("allow", &pattern);
-        let config = parse_config(&yaml).unwrap();
-        let ctx = empty_context();
-        let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
-    }
-}
-
-// ========================================
-// Property A (extended): individual pattern token types
-// ========================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
-
-    #[test]
-    fn prop_literal_pair_matches(
-        cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_literal_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
-    ) {
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
-        let yaml = build_yaml_config("allow", &pattern);
-        let config = parse_config(&yaml).unwrap();
-        let ctx = empty_context();
-        let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
-    }
-
-    #[test]
-    fn prop_wildcard_pair_matches(
-        cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_wildcard_pair(),
-    ) {
-        let pattern = format!("{cmd_name} {pattern_frag}");
         let command = build_command(&cmd_name, &tokens);
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
         let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
+        let msg = format!("'{cmd_name} *' should match any args: command={command:?}");
+        prop_assert_eq!(result.action, Action::Allow, "{}", msg);
     }
 
     #[test]
-    fn prop_alternation_pair_matches(
+    fn prop_wildcard_does_not_match_different_command(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_alternation_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+        other_cmd in arb_cmd_name(),
+        tokens in proptest::collection::vec(arb_flag_value(), 0..=3),
     ) {
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        prop_assume!(cmd_name != other_cmd);
+        let pattern = format!("{cmd_name} *");
+        let command = build_command(&other_cmd, &tokens);
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        let msg = format!("'{cmd_name} *' should NOT match '{other_cmd}' command: command={command:?}");
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "{}", msg
+        );
+    }
+}
+
+// ========================================
+// Property A2: Literal strictness
+// `{cmd} {literal}` matches exactly and rejects different literals
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_literal_exact_match(
+        cmd_name in arb_cmd_name(),
+        literal in arb_positional(),
+    ) {
+        let pattern = format!("{cmd_name} {literal}");
+        let command = build_command(&cmd_name, std::slice::from_ref(&literal));
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
         let result = evaluate_command(&config, &command, &ctx).unwrap();
         prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
+            "exact literal should match: pattern={:?} command={:?}", pattern, command);
     }
 
     #[test]
-    fn prop_flag_alternation_pair_matches(
+    fn prop_literal_rejects_different(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_flag_alternation_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+        literal in arb_positional(),
+        other_literal in arb_positional(),
     ) {
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        prop_assume!(literal != other_literal);
+        let pattern = format!("{cmd_name} {literal}");
+        let command = build_command(&cmd_name, std::slice::from_ref(&other_literal));
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
         let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "literal should reject different value: pattern={:?} command={:?}",
+            pattern, command
+        );
     }
+}
+
+// ========================================
+// Property A3: Flag negation correctness
+// `{cmd} !{flag} *` rejects when flag present, allows when absent
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn prop_flag_with_value_pair_matches(
+    fn prop_flag_negation_rejects_when_present(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_flag_with_value_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+        negated_flag in arb_flag(),
+        positionals in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        let pattern = format!("{cmd_name} !{negated_flag} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
+
+        // Command with the negated flag present
+        let mut tokens = positionals;
+        tokens.push(negated_flag.clone());
+        let command = build_command(&cmd_name, &tokens);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "flag negation should reject when flag present: pattern={:?} command={:?}",
+            pattern, command
+        );
     }
 
     #[test]
-    fn prop_flag_negation_pair_matches(
+    fn prop_flag_negation_allows_when_absent(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_flag_negation_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+        negated_flag in arb_flag(),
+        positionals in proptest::collection::vec(arb_positional(), 0..=3),
     ) {
-        // Negated flag is absent from tokens -> should Allow
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        let pattern = format!("{cmd_name} !{negated_flag} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
+
+        // Command without the negated flag (positionals only, no flags)
+        let command = build_command(&cmd_name, &positionals);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
         prop_assert_eq!(result.action, Action::Allow,
-            "flag negation with absent flag should Allow: pattern={:?} command={:?}",
+            "flag negation should allow when flag absent: pattern={:?} command={:?}",
             pattern, command);
     }
+}
+
+// ========================================
+// Property A4: Value negation correctness (position-dependent)
+// `{cmd} !{value} *` rejects when first token matches, allows otherwise
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn prop_value_negation_pair_matches(
+    fn prop_value_negation_rejects_matching_head(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_value_negation_pair(),
+        negated in arb_safe_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // Negated value is absent from first position -> should Allow
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        let pattern = format!("{cmd_name} !{negated} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
+
+        // Command with the negated value at head position
+        let mut tokens = vec![negated.clone()];
+        tokens.extend(suffix);
+        let command = build_command(&cmd_name, &tokens);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "value negation with different value should Allow: pattern={:?} command={:?}",
-            pattern, command);
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "value negation should reject matching head: pattern={:?} command={:?}",
+            pattern, command
+        );
     }
 
     #[test]
-    fn prop_negation_alternation_pair_matches(
+    fn prop_value_negation_allows_different_head(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_negation_alternation_pair(),
+        negated in arb_safe_positional(),
+        different in arb_safe_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // None of the negated alternatives present -> should Allow
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        prop_assume!(negated != different);
+        let pattern = format!("{cmd_name} !{negated} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
+
+        // Command with a different value at head position
+        let mut tokens = vec![different.clone()];
+        tokens.extend(suffix);
+        let command = build_command(&cmd_name, &tokens);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
         prop_assert_eq!(result.action, Action::Allow,
-            "negation alternation with absent values should Allow: pattern={:?} command={:?}",
+            "value negation should allow different head: pattern={:?} command={:?}",
             pattern, command);
     }
+}
+
+// ========================================
+// Property A5: Alternation correctness
+// `{cmd} {a|b|c} *` matches when head is in set, rejects otherwise
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn prop_quoted_literal_pair_matches(
+    fn prop_alternation_matches_member(
         cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_quoted_literal_pair(),
+        alternatives in proptest::collection::vec(arb_safe_positional(), 2..=4),
+        chosen_idx in 0..4usize,
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // QuotedLiteral suppresses glob: "WIP*" matches literal "WIP*", not a wildcard
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
+        let idx = chosen_idx % alternatives.len();
+        let chosen = &alternatives[idx];
+        let pattern = format!("{cmd_name} {} *", alternatives.join("|"));
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
+
+        let mut tokens = vec![chosen.clone()];
+        tokens.extend(suffix);
+        let command = build_command(&cmd_name, &tokens);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
         prop_assert_eq!(result.action, Action::Allow,
-            "quoted literal should match exactly: pattern={:?} command={:?}",
-            pattern, command);
+            "alternation should match member: pattern={:?} command={:?}", pattern, command);
     }
 
     #[test]
-    fn prop_quoted_literal_no_glob_expansion(
+    fn prop_alternation_rejects_non_member(
         cmd_name in arb_cmd_name(),
-        base in arb_positional(),
-        different_suffix in arb_positional(),
+        alternatives in proptest::collection::vec(arb_safe_positional(), 2..=4),
+        outsider in arb_safe_positional(),
+        suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // "base*" in pattern must NOT match "base<something>" (glob suppressed)
+        prop_assume!(!alternatives.contains(&outsider));
+        let pattern = format!("{cmd_name} {} *", alternatives.join("|"));
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let mut tokens = vec![outsider.clone()];
+        tokens.extend(suffix);
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "alternation should reject non-member: pattern={:?} command={:?}",
+            pattern, command
+        );
+    }
+}
+
+// ========================================
+// Property A6: Optional correctness
+// `{cmd} [{flag}] *` matches with or without the flag
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_optional_matches_with_flag(
+        cmd_name in arb_cmd_name(),
+        opt_flag in arb_flag(),
+        suffix in proptest::collection::vec(arb_positional(), 0..=3),
+    ) {
+        let pattern = format!("{cmd_name} [{opt_flag}] *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let mut tokens = vec![opt_flag.clone()];
+        tokens.extend(suffix);
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "optional should match with flag: pattern={:?} command={:?}", pattern, command);
+    }
+
+    #[test]
+    fn prop_optional_matches_without_flag(
+        cmd_name in arb_cmd_name(),
+        opt_flag in arb_flag(),
+        suffix in proptest::collection::vec(arb_positional(), 0..=3),
+    ) {
+        let pattern = format!("{cmd_name} [{opt_flag}] *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Command without the optional flag
+        let command = build_command(&cmd_name, &suffix);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "optional should match without flag: pattern={:?} command={:?}", pattern, command);
+    }
+}
+
+// ========================================
+// Property A7: Glob literal correctness
+// `{cmd} {glob}` matches tokens fitting the glob, rejects others
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_glob_literal_matches(
+        cmd_name in arb_cmd_name(),
+        (glob_pat, matching_tok, _non_matching) in arb_glob_pattern_and_match(),
+    ) {
+        let pattern = format!("{cmd_name} {glob_pat}");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let command = build_command(&cmd_name, std::slice::from_ref(&matching_tok));
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "glob should match: pattern={:?} token={:?}", glob_pat, matching_tok);
+    }
+
+    #[test]
+    fn prop_glob_literal_rejects_non_match(
+        cmd_name in arb_cmd_name(),
+        (glob_pat, _matching, non_matching) in arb_glob_pattern_and_match(),
+    ) {
+        let pattern = format!("{cmd_name} {glob_pat}");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let command = build_command(&cmd_name, std::slice::from_ref(&non_matching));
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "glob should reject non-match: pattern={:?} token={:?}", glob_pat, non_matching
+        );
+    }
+}
+
+// ========================================
+// Property A8: QuotedLiteral correctness
+// Quoted patterns suppress glob expansion
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_quoted_literal_exact_match(
+        cmd_name in arb_cmd_name(),
+        value in arb_positional(),
+    ) {
+        // "value" in pattern matches the exact string
+        let pattern = format!("{cmd_name} \"{value}\"");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        let command = build_command(&cmd_name, std::slice::from_ref(&value));
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "quoted literal should match exactly: pattern={:?} command={:?}", pattern, command);
+    }
+
+    #[test]
+    fn prop_quoted_literal_suppresses_glob(
+        cmd_name in arb_cmd_name(),
+        base in arb_safe_positional(),
+        extra in arb_safe_positional(),
+    ) {
+        // "base*" must NOT match "base<extra>" (glob suppressed)
         let quoted_val = format!("{base}*");
         let pattern = format!("{cmd_name} \"{quoted_val}\"");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Command with value that would match if glob were active but shouldn't
-        let non_matching_val = format!("{base}{different_suffix}");
+        let non_matching_val = format!("{base}{extra}");
         prop_assume!(non_matching_val != quoted_val);
         let command = build_command(&cmd_name, &[non_matching_val]);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
@@ -484,44 +591,6 @@ proptest! {
             "quoted literal should NOT glob-expand: pattern={:?} command={:?}",
             pattern, command
         );
-    }
-
-    #[test]
-    fn prop_optional_pair_matches(
-        cmd_name in arb_cmd_name(),
-        (pattern_frag, tokens) in arb_optional_pair(),
-        suffix in proptest::collection::vec(arb_positional(), 0..=2),
-    ) {
-        let pattern = format!("{cmd_name} {pattern_frag} *");
-        let mut all_tokens = tokens;
-        all_tokens.extend(suffix);
-        let command = build_command(&cmd_name, &all_tokens);
-        let yaml = build_yaml_config("allow", &pattern);
-        let config = parse_config(&yaml).unwrap();
-        let ctx = empty_context();
-        let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "pattern={:?} command={:?}", pattern, command);
-    }
-}
-
-// ========================================
-// Property A (composite): combined pattern token types
-// ========================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
-
-    #[test]
-    fn prop_composite_matching_pair(
-        (pattern, command) in arb_matching_pair(),
-    ) {
-        let yaml = build_yaml_config("allow", &pattern);
-        let config = parse_config(&yaml).unwrap();
-        let ctx = empty_context();
-        let result = evaluate_command(&config, &command, &ctx).unwrap();
-        prop_assert_eq!(result.action, Action::Allow,
-            "composite match failed: pattern={:?} command={:?}", pattern, command);
     }
 }
 
@@ -539,7 +608,6 @@ proptest! {
         prefix in proptest::collection::vec(arb_positional(), 0..=2),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // Flag alternation is position-independent: flag at any position should match
         let pattern = format!("{cmd_name} {flag} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
@@ -582,7 +650,6 @@ proptest! {
         prefix in proptest::collection::vec(arb_positional(), 0..=2),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // FlagWithValue is position-independent: --flag value pair at any position
         let pattern = format!("{cmd_name} {flag} * *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
@@ -626,7 +693,6 @@ proptest! {
         other_flag in arb_flag(),
         positionals in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // Flag negation is position-independent: !--flag should detect the flag at any position
         prop_assume!(negated_flag != other_flag);
 
         let pattern = format!("{cmd_name} !{negated_flag} *");
@@ -646,7 +712,6 @@ proptest! {
         let cmd_end = build_command(&cmd_name, &tokens_end);
         let result_end = evaluate_command(&config, &cmd_end, &ctx).unwrap();
 
-        // Both should give the same result (not Allow, since flag is present)
         prop_assert_eq!(&result_start.action, &result_end.action,
             "flag negation position should not matter: start={:?} end={:?}",
             cmd_start, cmd_end);
@@ -667,20 +732,16 @@ proptest! {
         value in arb_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // --flag=value and --flag value should produce the same result
-        // for FlagWithValue patterns with wildcard value
         let pattern = format!("{cmd_name} {flag} * *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Space-separated form
         let mut tokens_space = vec![flag.clone(), value.clone()];
         tokens_space.extend(suffix.iter().cloned());
         let cmd_space = build_command(&cmd_name, &tokens_space);
         let result_space = evaluate_command(&config, &cmd_space, &ctx).unwrap();
 
-        // Equals-joined form
         let mut tokens_eq = vec![format!("{flag}={value}")];
         tokens_eq.extend(suffix);
         let cmd_eq = build_command(&cmd_name, &tokens_eq);
@@ -694,27 +755,19 @@ proptest! {
     fn prop_equals_equivalence_flag_with_fixed_value(
         cmd_name in arb_cmd_name(),
         flag in arb_flag(),
-        value in arb_positional(),
+        value in arb_safe_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // Value must not start with '-' because --flag=-value is parsed as
-        // a single flag token (not flag=value) by the command parser
-        prop_assume!(!value.starts_with('-'));
-
-        // --flag=value and --flag value should produce the same result
-        // for FlagWithValue patterns with a fixed literal value
         let pattern = format!("{cmd_name} {flag} {value} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Space-separated form
         let mut tokens_space = vec![flag.clone(), value.clone()];
         tokens_space.extend(suffix.iter().cloned());
         let cmd_space = build_command(&cmd_name, &tokens_space);
         let result_space = evaluate_command(&config, &cmd_space, &ctx).unwrap();
 
-        // Equals-joined form
         let mut tokens_eq = vec![format!("{flag}={value}")];
         tokens_eq.extend(suffix);
         let cmd_eq = build_command(&cmd_name, &tokens_eq);
@@ -731,19 +784,16 @@ proptest! {
         value in arb_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // Optional FlagWithValue: [-X GET] should match -X=GET
         let pattern = format!("{cmd_name} [{flag} {value}] *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Space-separated form
         let mut tokens_space = vec![flag.clone(), value.clone()];
         tokens_space.extend(suffix.iter().cloned());
         let cmd_space = build_command(&cmd_name, &tokens_space);
         let result_space = evaluate_command(&config, &cmd_space, &ctx).unwrap();
 
-        // Equals-joined form
         let mut tokens_eq = vec![format!("{flag}={value}")];
         tokens_eq.extend(suffix);
         let cmd_eq = build_command(&cmd_name, &tokens_eq);
@@ -761,19 +811,16 @@ proptest! {
         value in arb_positional(),
         suffix in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        // !--flag should detect --flag=value just like --flag value
         let pattern = format!("{cmd_name} !{negated_flag} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Space-separated form with the negated flag
         let mut tokens_space = vec![negated_flag.clone(), value.clone()];
         tokens_space.extend(suffix.iter().cloned());
         let cmd_space = build_command(&cmd_name, &tokens_space);
         let result_space = evaluate_command(&config, &cmd_space, &ctx).unwrap();
 
-        // Equals-joined form with the negated flag
         let mut tokens_eq = vec![format!("{negated_flag}={value}")];
         tokens_eq.extend(suffix);
         let cmd_eq = build_command(&cmd_name, &tokens_eq);
@@ -781,6 +828,34 @@ proptest! {
 
         prop_assert_eq!(&result_space.action, &result_eq.action,
             "equals negation equivalence failed: space={:?} eq={:?}", cmd_space, cmd_eq);
+    }
+
+    #[test]
+    fn prop_equals_equivalence_with_glob_value(
+        cmd_name in arb_cmd_name(),
+        flag in arb_flag(),
+        (glob_pat, matching_tok, _) in arb_glob_pattern_and_match(),
+        suffix in proptest::collection::vec(arb_positional(), 0..=2),
+    ) {
+        // FlagWithValue with glob in value position: --flag glob_pattern
+        let pattern = format!("{cmd_name} {flag} {glob_pat} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        if let Ok(config) = parse_config(&yaml) {
+            let ctx = empty_context();
+
+            let mut tokens_space = vec![flag.clone(), matching_tok.clone()];
+            tokens_space.extend(suffix.iter().cloned());
+            let cmd_space = build_command(&cmd_name, &tokens_space);
+            let result_space = evaluate_command(&config, &cmd_space, &ctx).unwrap();
+
+            let mut tokens_eq = vec![format!("{flag}={matching_tok}")];
+            tokens_eq.extend(suffix);
+            let cmd_eq = build_command(&cmd_name, &tokens_eq);
+            let result_eq = evaluate_command(&config, &cmd_eq, &ctx).unwrap();
+
+            prop_assert_eq!(&result_space.action, &result_eq.action,
+                "glob value equals equivalence failed: space={:?} eq={:?}", cmd_space, cmd_eq);
+        }
     }
 }
 
@@ -836,7 +911,6 @@ proptest! {
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
-        // Denied command inside $() should still produce Deny
         let compound = format!("{allowed_cmd} $({denied_cmd} arg)");
         let result = evaluate_compound(&config, &compound, &ctx).unwrap();
         prop_assert!(
@@ -850,14 +924,12 @@ proptest! {
     fn prop_deny_propagation_compound_generated(
         compound in arb_compound_command(),
     ) {
-        // With deny on 'rm *', any compound containing 'rm ...' should deny
         let yaml = "rules:\n  - allow: 'git *'\n  - allow: 'curl *'\n  - allow: 'echo *'\n  - allow: 'npm *'\n  - allow: 'ls *'\n  - deny: 'rm *'";
         let config = parse_config(yaml).unwrap();
         let ctx = empty_context();
 
         let result = evaluate_compound(&config, &compound, &ctx).unwrap();
 
-        // If "rm" appears as a command in the compound, result must be Deny
         if compound.contains("rm ") || compound.starts_with("rm") {
             prop_assert!(
                 matches!(result.action, Action::Deny(_)),
@@ -878,32 +950,16 @@ proptest! {
     #[test]
     fn prop_no_panic_evaluate_command(
         command in arb_simple_command(),
-        pattern_cmd in arb_cmd_name(),
-        pattern_suffix in proptest::collection::vec(
-            prop_oneof![
-                Just("*".to_string()),
-                arb_positional(),
-                arb_flag(),
-            ],
-            0..=4
-        ),
+        pattern in arb_rich_pattern(),
         action in prop_oneof![
             Just("allow".to_string()),
             Just("deny".to_string()),
             Just("ask".to_string()),
         ],
     ) {
-        let pattern = if pattern_suffix.is_empty() {
-            pattern_cmd
-        } else {
-            format!("{pattern_cmd} {}", pattern_suffix.join(" "))
-        };
         let yaml = build_yaml_config(&action, &pattern);
-
-        // parse_config might fail on some generated patterns; that's fine
         if let Ok(config) = parse_config(&yaml) {
             let ctx = empty_context();
-            // Must not panic; errors are acceptable
             let _ = evaluate_command(&config, &command, &ctx);
         }
     }
@@ -911,19 +967,16 @@ proptest! {
     #[test]
     fn prop_no_panic_evaluate_compound(
         compound in arb_compound_command(),
-        pattern_cmd in arb_cmd_name(),
+        pattern in arb_rich_pattern(),
         action in prop_oneof![
             Just("allow".to_string()),
             Just("deny".to_string()),
             Just("ask".to_string()),
         ],
     ) {
-        let pattern = format!("{pattern_cmd} *");
         let yaml = build_yaml_config(&action, &pattern);
-
         if let Ok(config) = parse_config(&yaml) {
             let ctx = empty_context();
-            // Must not panic
             let _ = evaluate_compound(&config, &compound, &ctx);
         }
     }
@@ -976,19 +1029,15 @@ proptest! {
         let mut reordered_lines = rule_lines.clone();
         if reverse {
             reordered_lines.reverse();
-        } else {
-            // Rotate by 1
-            if reordered_lines.len() > 1 {
-                let first = reordered_lines.remove(0);
-                reordered_lines.push(first);
-            }
+        } else if reordered_lines.len() > 1 {
+            let first = reordered_lines.remove(0);
+            reordered_lines.push(first);
         }
         let yaml_reordered = format!("rules:\n{}", reordered_lines.join("\n"));
 
         let config_orig = parse_config(&yaml_original);
         let config_reord = parse_config(&yaml_reordered);
 
-        // Both configs must parse successfully or both must fail
         match (&config_orig, &config_reord) {
             (Ok(c1), Ok(c2)) => {
                 let ctx = empty_context();
@@ -1003,9 +1052,7 @@ proptest! {
                             "rule order should not change result: original={:?} reordered={:?} command={:?}",
                             yaml_original, yaml_reordered, command);
                     }
-                    (Err(_), Err(_)) => {
-                        // Both errored, consistent behavior
-                    }
+                    (Err(_), Err(_)) => {}
                     (Ok(r1), Err(e2)) => {
                         prop_assert!(false,
                             "inconsistent: original succeeded ({:?}) but reordered failed ({:?})",
@@ -1018,9 +1065,7 @@ proptest! {
                     }
                 }
             }
-            (Err(_), Err(_)) => {
-                // Both failed to parse, consistent
-            }
+            (Err(_), Err(_)) => {}
             _ => {
                 prop_assert!(false,
                     "inconsistent parse: one config parsed but the other didn't");
