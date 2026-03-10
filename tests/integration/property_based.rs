@@ -62,45 +62,44 @@ fn arb_flag_value() -> impl Strategy<Value = String> {
 // ========================================
 
 /// Generates a (glob_pattern, matching_token, non_matching_token) triple.
-/// The glob pattern is built from random literal chunks and `*` segments.
+/// Segments are randomly ordered literals and `*`, allowing patterns like
+/// `*suffix`, `pre**suf`, `*mid*`, `lit*lit*`, etc.
 fn arb_glob_pattern_and_match() -> impl Strategy<Value = (String, String, String)> {
-    // Strategy: generate a pattern like "abc*def*ghi" where literals use [a-z]
-    // and wildcards use `*`. The matching token fills `*` with [a-z] filler.
-    // The non-matching token replaces the leading literal with a DIFFERENT
-    // leading literal (prefixed with "0" digit which never appears in [a-z]
-    // patterns), guaranteeing the glob cannot match.
-    //
-    // Structure: literal(*literal)+ ensures leading literal anchor.
-    (1..=3usize)
-        .prop_flat_map(|glob_count| {
-            let lit_count = glob_count + 1;
-            (
-                proptest::collection::vec("[a-z]{2,4}", lit_count),
-                proptest::collection::vec("[a-z]{0,3}", glob_count),
-            )
-        })
-        .prop_map(|(lits, fillers)| {
-            // Pattern: lit[0] * lit[1] * lit[2] ...
-            let mut pat_parts = Vec::new();
-            let mut match_parts = Vec::new();
-            for (i, lit) in lits.iter().enumerate() {
-                if i > 0 {
-                    pat_parts.push("*".to_string());
-                    match_parts.push(fillers[i - 1].clone());
-                }
-                pat_parts.push(lit.clone());
-                match_parts.push(lit.clone());
-            }
-            let pattern: String = pat_parts.concat();
-            let matching: String = match_parts.concat();
+    // Each segment is either a literal [a-z] chunk or a `*`.
+    // We generate a random sequence, requiring at least one `*` and one literal.
+    // The literal requirement ensures we can construct a non-matching token by
+    // injecting a digit into one literal position (digits never appear in [a-z]).
+    proptest::collection::vec(
+        prop_oneof![
+            // literal segment: (pattern_part, match_part, is_literal)
+            "[a-z]{2,4}".prop_map(|s| (s.clone(), s, true)),
+            // glob segment: * matches random filler
+            "[a-z]{0,3}".prop_map(|filler| ("*".to_string(), filler, false)),
+        ],
+        2..=6,
+    )
+    .prop_filter("need at least one * and one literal", |segs| {
+        segs.iter().any(|(_, _, is_lit)| *is_lit) && segs.iter().any(|(_, _, is_lit)| !*is_lit)
+    })
+    .prop_map(|segments| {
+        let pattern: String = segments.iter().map(|(p, _, _)| p.as_str()).collect();
+        let matching: String = segments.iter().map(|(_, m, _)| m.as_str()).collect();
 
-            // Non-matching: prefix "0" to the matching token.
-            // The pattern starts with [a-z]{2,4}, so the leading literal
-            // can never start with "0". This breaks the leading anchor match.
-            let non_matching = format!("0{matching}");
+        // Non-matching: find the first literal segment and replace its first
+        // character with '0' (a digit that never appears in [a-z] literals).
+        // This breaks the literal anchor so the glob cannot compensate.
+        let mut non_match_parts: Vec<String> = segments.iter().map(|(_, m, _)| m.clone()).collect();
+        if let Some(idx) = segments.iter().position(|(_, _, is_lit)| *is_lit) {
+            let lit = &non_match_parts[idx];
+            non_match_parts[idx] = format!("0{}", &lit[1..]);
+        }
+        let non_matching: String = non_match_parts.concat();
 
-            (pattern, matching, non_matching)
-        })
+        (pattern, matching, non_matching)
+    })
+    .prop_filter("matching and non-matching must differ", |(_, m, nm)| {
+        m != nm
+    })
 }
 
 // ========================================
@@ -143,8 +142,8 @@ fn arb_rich_pattern() -> impl Strategy<Value = String> {
                 arb_positional(),
                 // Flag (becomes Alternation in parser)
                 arb_flag(),
-                // Glob literal
-                "[a-z]{1,4}".prop_map(|s| format!("{s}-*")),
+                // Glob literal (random structure from arb_glob_pattern_and_match)
+                arb_glob_pattern_and_match().prop_map(|(pat, _, _)| pat),
                 // Negation
                 arb_positional().prop_map(|s| format!("!{s}")),
                 // Flag negation
@@ -714,6 +713,40 @@ proptest! {
 
         prop_assert_eq!(&result_start.action, &result_end.action,
             "flag negation position should not matter: start={:?} end={:?}",
+            cmd_start, cmd_end);
+    }
+
+    /// FlagWithValue with a glob value pattern: position should not matter.
+    #[test]
+    fn prop_flag_with_glob_value_position_independence(
+        cmd_name in arb_cmd_name(),
+        flag in arb_flag(),
+        (glob_pat, matching_tok, _) in arb_glob_pattern_and_match(),
+        prefix in proptest::collection::vec(arb_safe_positional(), 0..=2),
+        suffix in proptest::collection::vec(arb_safe_positional(), 0..=2),
+    ) {
+        let pattern = format!("{cmd_name} {flag} {glob_pat} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // flag+value at start
+        let mut tokens_start = vec![flag.clone(), matching_tok.clone()];
+        tokens_start.extend(prefix.iter().cloned());
+        tokens_start.extend(suffix.iter().cloned());
+        let cmd_start = build_command(&cmd_name, &tokens_start);
+        let result_start = evaluate_command(&config, &cmd_start, &ctx).unwrap();
+
+        // flag+value at end
+        let mut tokens_end = prefix.clone();
+        tokens_end.extend(suffix.iter().cloned());
+        tokens_end.push(flag.clone());
+        tokens_end.push(matching_tok.clone());
+        let cmd_end = build_command(&cmd_name, &tokens_end);
+        let result_end = evaluate_command(&config, &cmd_end, &ctx).unwrap();
+
+        prop_assert_eq!(&result_start.action, &result_end.action,
+            "FlagWithValue glob position should not matter: start={:?} end={:?}",
             cmd_start, cmd_end);
     }
 }
