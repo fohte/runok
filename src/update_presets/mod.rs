@@ -153,7 +153,7 @@ fn update_single_preset<G: GitClient>(
 
     // Check if this is a version tag that can be upgraded
     if let Some(current_tag) = extract_version_tag(&parsed) {
-        return try_tag_upgrade(
+        let result = try_tag_upgrade(
             reference,
             current_tag,
             &params.url,
@@ -162,9 +162,14 @@ fn update_single_preset<G: GitClient>(
             git_client,
             tags_cache,
         );
+        // If no upgrade was found, the tag might actually be a branch (e.g., `v1` in
+        // GitHub Actions style). Fall through to force_refetch so it still gets updated.
+        if !matches!(result, UpdateResult::UpToDate) {
+            return result;
+        }
     }
 
-    // Branch/Latest: force re-fetch and show diff
+    // Branch/Latest (or version tag with no upgrade): force re-fetch and show diff
     force_refetch(reference, &parsed, &params, cache, git_client)
 }
 
@@ -755,9 +760,27 @@ mod tests {
     }
 
     #[rstest]
-    fn update_semver_tag_no_newer_version(tmp: TempDir) {
+    fn update_semver_tag_no_newer_version_falls_through_to_refetch(tmp: TempDir) {
+        // When no upgrade is found, falls through to force_refetch (branch-like behavior).
+        // This handles cases like GitHub Actions where `v1` is a branch, not a semver tag.
         let reference = "github:org/repo@v1.2.0";
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        let cache_dir = cache.cache_dir(reference);
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        let content = indoc! {"
+            rules:
+              - allow: 'git status'
+        "};
+        fs::write(cache_dir.join("runok.yml"), content).unwrap();
+
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference.to_string(),
+            resolved_sha: Some("abc123".to_string()),
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let git_client = MockGitClient::new();
         git_client.on_ls_remote_tags(Ok(vec![
@@ -765,20 +788,44 @@ mod tests {
             "v1.1.0".to_string(),
             "v1.2.0".to_string(),
         ]));
+        // force_refetch path: fetch + checkout + rev_parse
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("abc123".to_string()));
 
         let mut tags_cache = HashMap::new();
         let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
+        // Content unchanged, so UpToDate after re-fetch
         assert!(matches!(result, UpdateResult::UpToDate));
     }
 
     #[rstest]
-    fn update_semver_tag_respects_major_boundary(tmp: TempDir) {
+    fn update_full_semver_tag_respects_major_boundary(tmp: TempDir) {
+        // v1.0.0 should NOT upgrade to v2.0.0, and then falls through to re-fetch
         let reference = "github:org/repo@v1.0.0";
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        let cache_dir = cache.cache_dir(reference);
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        let content = indoc! {"
+            rules:
+              - allow: 'git status'
+        "};
+        fs::write(cache_dir.join("runok.yml"), content).unwrap();
+
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference.to_string(),
+            resolved_sha: Some("abc123".to_string()),
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let git_client = MockGitClient::new();
-        // Only v2.0.0 is available (different major), no compatible upgrade
         git_client.on_ls_remote_tags(Ok(vec!["v1.0.0".to_string(), "v2.0.0".to_string()]));
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("abc123".to_string()));
 
         let mut tags_cache = HashMap::new();
         let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
