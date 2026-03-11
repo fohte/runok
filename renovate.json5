@@ -13,9 +13,18 @@
       commitMessagePrefix: 'chore:',
       semanticCommitScope: null,
     },
+    // docs/ dependencies: automerge patch for all, minor for devDependencies only.
+    // Production deps (astro, starlight, etc.) need manual review for minor
+    // updates due to potential breaking changes in the framework ecosystem.
     {
       matchFileNames: ['docs/**'],
-      matchUpdateTypes: ['minor', 'patch'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+    },
+    {
+      matchFileNames: ['docs/**'],
+      matchDepTypes: ['devDependencies', 'packageManager'],
+      matchUpdateTypes: ['minor'],
       automerge: true,
     },
   ],
