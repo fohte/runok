@@ -12,6 +12,10 @@
       matchFileNames: ['docs/**'],
       commitMessagePrefix: 'chore:',
       semanticCommitScope: null,
+    },
+    {
+      matchFileNames: ['docs/**'],
+      matchUpdateTypes: ['minor', 'patch'],
       automerge: true,
     },
   ],
