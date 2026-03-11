@@ -877,8 +877,6 @@ proptest! {
 // Literal matches with interleaved flags
 // `{cmd} {literal} *` should match even when flags precede the literal
 // in the command (PR #177: order-independent literal matching).
-// These tests FAIL until PR #177 is merged — that is expected and proves
-// the PBT can detect the bug.
 // ========================================
 
 proptest! {
@@ -1098,11 +1096,8 @@ proptest! {
     fn prop_flag_negation_position_independence(
         cmd_name in arb_cmd_name(),
         negated_flag in arb_flag(),
-        other_flag in arb_flag(),
         positionals in proptest::collection::vec(arb_positional(), 0..=2),
     ) {
-        prop_assume!(negated_flag != other_flag);
-
         let pattern = format!("{cmd_name} !{negated_flag} *");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();

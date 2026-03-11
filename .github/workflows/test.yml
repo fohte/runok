@@ -137,7 +137,7 @@ jobs:
         with:
           commit_message: 'test: add proptest regression seeds'
           github_token: ${{ steps.app-token.outputs.token }}
-          files: tests/proptest-regressions/
+          files: tests/integration/proptest-regressions/
           fail_on_self_push: false
 
       - name: Fail if tests failed
