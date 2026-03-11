@@ -12,6 +12,7 @@
       matchFileNames: ['docs/**'],
       commitMessagePrefix: 'chore:',
       semanticCommitScope: null,
+      automerge: true,
     },
   ],
 }
