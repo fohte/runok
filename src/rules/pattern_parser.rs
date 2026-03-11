@@ -359,6 +359,10 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         LexToken::Placeholder(_) => false,
         LexToken::Wildcard => inside_group || has_more_after,
+        // A negation whose inner value is a flag (e.g., `!--in-place`) should
+        // not be consumed as a flag value — it is an independent negation token.
+        LexToken::Negation(s) if is_flag(s) => false,
+        LexToken::NegationAlternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         _ => true,
     }
 }
@@ -537,6 +541,11 @@ mod tests {
             aliases: vec!["-rf".into()],
             value: Box::new(PatternToken::Literal("/".into())),
         },
+    ])]
+    #[case::flag_not_consuming_flag_negation("git --parse !--in-place *", "git", vec![
+        PatternToken::Alternation(vec!["--parse".into()]),
+        PatternToken::Negation(Box::new(PatternToken::Literal("--in-place".into()))),
+        PatternToken::Wildcard,
     ])]
     fn parse_bare_flag(
         #[case] input: &str,

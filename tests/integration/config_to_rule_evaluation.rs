@@ -1135,3 +1135,39 @@ fn flag_negation_empty_tokens(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Long flag negation with preceding literal tokens (no trailing arguments)
+// ========================================
+
+#[rstest]
+#[case::no_trailing_args_allowed(
+    "git interpret-trailers --parse",
+    assert_allow as ActionAssertion,
+)]
+#[case::safe_trailing_arg_allowed(
+    "git interpret-trailers --parse file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::banned_flag_rejected(
+    "git interpret-trailers --parse --in-place",
+    assert_ask as ActionAssertion,
+)]
+#[case::banned_flag_with_arg_rejected(
+    "git interpret-trailers --parse --in-place file.txt",
+    assert_ask as ActionAssertion,
+)]
+fn long_flag_negation_with_preceding_literals(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git interpret-trailers --parse !--in-place *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
