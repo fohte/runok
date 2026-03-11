@@ -8,6 +8,7 @@ mod flag_utils;
 mod token_matching;
 
 use std::cell::Cell;
+use std::collections::HashSet;
 
 use crate::config::Definitions;
 use crate::rules::RuleError;
@@ -23,6 +24,47 @@ use token_matching::{
 /// Maximum number of recursive steps allowed during pattern matching.
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
 const MAX_MATCH_STEPS: usize = 10_000;
+
+/// Collect all flag aliases from `FlagWithValue` tokens in the pattern token
+/// list.  Used by the Literal matcher to identify value-flag tokens whose
+/// values should also be skipped when searching for the first positional
+/// argument in `cmd_tokens`.
+fn collect_value_flag_aliases<'a>(tokens: &'a [PatternToken], aliases: &mut HashSet<&'a str>) {
+    for token in tokens {
+        if let PatternToken::FlagWithValue {
+            aliases: flag_aliases,
+            ..
+        } = token
+        {
+            for a in flag_aliases {
+                aliases.insert(a.as_str());
+            }
+        }
+        if let PatternToken::Optional(inner) = token {
+            collect_value_flag_aliases(inner, aliases);
+        }
+    }
+}
+
+/// Find the index of the first positional (non-flag) token in `cmd_tokens`,
+/// skipping over flag tokens and their associated values based on
+/// `value_flag_aliases`.  Returns `None` if no positional token is found.
+fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &HashSet<&str>) -> Option<usize> {
+    let mut i = 0;
+    while i < cmd_tokens.len() {
+        let t = cmd_tokens[i];
+        if t.starts_with('-') && t != "--" {
+            if value_flag_aliases.contains(t) && i + 1 < cmd_tokens.len() {
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            return Some(i);
+        }
+    }
+    None
+}
 
 /// Compute the range of command-name token counts to try when matching.
 ///
@@ -65,6 +107,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
     for skip in skip_range {
         let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
         if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -72,6 +115,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
             &steps,
             None,
             None,
+            &after_dd,
         )
         .unwrap_or(false)
         {
@@ -96,6 +140,7 @@ pub fn matches_with_captures(
     let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
     for skip in skip_range {
         let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
         let mut captures = Vec::new();
         if match_engine(
             &pattern.tokens,
@@ -104,6 +149,7 @@ pub fn matches_with_captures(
             &steps,
             Some(&mut captures),
             None,
+            &after_dd,
         )
         .unwrap_or(false)
         {
@@ -134,6 +180,7 @@ pub fn extract_placeholder(
     let mut all_candidates: Vec<Vec<&str>> = Vec::new();
     for skip in skip_range {
         let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
         let mut captured = Vec::new();
         match_engine(
             &pattern.tokens,
@@ -142,6 +189,7 @@ pub fn extract_placeholder(
             &steps,
             None,
             Some((&mut captured, &mut all_candidates)),
+            &after_dd,
         )?;
     }
     Ok(all_candidates
@@ -177,6 +225,7 @@ fn match_engine<'a>(
     steps: &Cell<usize>,
     mut captures: Option<&mut Vec<&'a str>>,
     mut extract: Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
+    after_double_dash: &Cell<bool>,
 ) -> Result<bool, RuleError> {
     let count = steps.get() + 1;
     steps.set(count);
@@ -200,6 +249,7 @@ fn match_engine<'a>(
     match first {
         PatternToken::Wildcard => {
             for skip in 0..=cmd_tokens.len() {
+                let saved_dd = after_double_dash.get();
                 if let Some((captured, all_candidates)) = &mut extract {
                     match_engine(
                         rest,
@@ -208,6 +258,7 @@ fn match_engine<'a>(
                         steps,
                         None,
                         Some((captured, all_candidates)),
+                        after_double_dash,
                     )?;
                 } else if let Some(caps) = &mut captures {
                     let saved_len = caps.len();
@@ -219,29 +270,90 @@ fn match_engine<'a>(
                         steps,
                         Some(*caps),
                         None,
+                        after_double_dash,
                     )? {
                         return Ok(true);
                     }
                     caps.truncate(saved_len);
-                } else if match_engine(rest, &cmd_tokens[skip..], definitions, steps, None, None)? {
+                } else if match_engine(
+                    rest,
+                    &cmd_tokens[skip..],
+                    definitions,
+                    steps,
+                    None,
+                    None,
+                    after_double_dash,
+                )? {
                     return Ok(true);
                 }
+                after_double_dash.set(saved_dd);
             }
             Ok(false)
         }
 
         PatternToken::Literal(s) => {
-            if cmd_tokens.is_empty() || !literal_matches(s, cmd_tokens[0]) {
+            if cmd_tokens.is_empty() {
                 return Ok(false);
             }
-            match_engine(
-                rest,
-                &cmd_tokens[1..],
-                definitions,
-                steps,
-                captures,
-                extract,
-            )
+            // After `--`, all tokens are positional — no flag skipping.
+            // Also, flag-like literals (e.g. `-m` from parse_multi) remain
+            // positional to avoid mismatches with value-flag arguments.
+            let is_flag_literal = s.starts_with('-') && s.as_str() != "--";
+            if after_double_dash.get() || is_flag_literal {
+                if literal_matches(s, cmd_tokens[0]) {
+                    return match_engine(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        extract,
+                        after_double_dash,
+                    );
+                }
+                return Ok(false);
+            }
+            // When matching `--`, set the after_double_dash flag so that
+            // subsequent Literal matches do not skip flag-like tokens.
+            if s.as_str() == "--" {
+                if cmd_tokens[0] == "--" {
+                    after_double_dash.set(true);
+                    return match_engine(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        extract,
+                        after_double_dash,
+                    );
+                }
+                return Ok(false);
+            }
+            // Order-independent matching: skip over leading flag tokens
+            // (and their values for known value-flags) to find the first
+            // positional argument.  Only the matched positional token is
+            // removed; skipped flag tokens are kept for later FlagWithValue
+            // or flag-only Alternation matching.
+            let mut value_aliases = HashSet::new();
+            collect_value_flag_aliases(rest, &mut value_aliases);
+            let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                return Ok(false);
+            };
+            if literal_matches(s, cmd_tokens[pos]) {
+                let remaining = remove_indices(cmd_tokens, &[pos]);
+                match_engine(
+                    rest,
+                    &remaining,
+                    definitions,
+                    steps,
+                    captures,
+                    extract,
+                    after_double_dash,
+                )
+            } else {
+                Ok(false)
+            }
         }
 
         PatternToken::QuotedLiteral(s) => {
@@ -255,6 +367,7 @@ fn match_engine<'a>(
                 steps,
                 captures,
                 extract,
+                after_double_dash,
             )
         }
 
@@ -263,12 +376,19 @@ fn match_engine<'a>(
                 return Ok(false);
             }
 
-            // Flag-only alternations use order-independent matching (BoolMatch only).
-            let is_flag_only = alts.iter().all(|a| a.starts_with('-') && a != "--");
-            if is_flag_only && !is_extract {
+            let has_any_flag = alts.iter().any(|a| a.starts_with('-') && a != "--");
+
+            // Alternations containing flag alternatives scan all tokens
+            // (order-independent) so that flag-like tokens such as `-v`
+            // can be matched regardless of position.  In extract mode
+            // (wrapper placeholder extraction), positional matching is
+            // used instead because the flag token must stay at position 0
+            // for Placeholder capture to work correctly (e.g. `bash -c <cmd>`).
+            if has_any_flag && !is_extract {
                 for i in 0..cmd_tokens.len() {
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
+                        let saved_dd = after_double_dash.get();
                         if let Some(caps) = &mut captures {
                             let saved_len = caps.len();
                             if match_engine(
@@ -278,30 +398,67 @@ fn match_engine<'a>(
                                 steps,
                                 Some(*caps),
                                 None,
+                                after_double_dash,
                             )? {
                                 return Ok(true);
                             }
                             caps.truncate(saved_len);
-                        } else if match_engine(rest, &remaining, definitions, steps, None, None)? {
+                        } else if match_engine(
+                            rest,
+                            &remaining,
+                            definitions,
+                            steps,
+                            None,
+                            None,
+                            after_double_dash,
+                        )? {
                             return Ok(true);
                         }
+                        after_double_dash.set(saved_dd);
                     }
                 }
                 return Ok(false);
             }
 
-            // Positional matching (first token)
-            if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
-                return match_engine(
+            // After `--`, or flag-containing alternations in extract
+            // mode, match positionally (no flag skipping).
+            if after_double_dash.get() || (has_any_flag && is_extract) {
+                if alts.iter().any(|a| literal_matches(a, cmd_tokens[0])) {
+                    return match_engine(
+                        rest,
+                        &cmd_tokens[1..],
+                        definitions,
+                        steps,
+                        captures,
+                        extract,
+                        after_double_dash,
+                    );
+                }
+                return Ok(false);
+            }
+
+            // Non-flag alternations: skip over leading flag tokens to
+            // find the first positional argument, consistent with
+            // Literal matching.
+            let mut value_aliases = HashSet::new();
+            collect_value_flag_aliases(rest, &mut value_aliases);
+            let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                return Ok(false);
+            };
+            if alts.iter().any(|a| literal_matches(a, cmd_tokens[pos])) {
+                let remaining = remove_indices(cmd_tokens, &[pos]);
+                match_engine(
                     rest,
-                    &cmd_tokens[1..],
+                    &remaining,
                     definitions,
                     steps,
                     captures,
                     extract,
-                );
+                    after_double_dash,
+                )
+            } else {
+                Ok(false)
             }
-            Ok(false)
         }
 
         PatternToken::FlagWithValue { aliases, value } => {
@@ -314,6 +471,7 @@ fn match_engine<'a>(
                     let remaining = remove_indices(cmd_tokens, &[i, i + 1]);
                     let capture_val =
                         matches!(**value, PatternToken::Wildcard).then_some(cmd_tokens[i + 1]);
+                    let saved_dd = after_double_dash.get();
                     if try_recurse_flag_value(
                         rest,
                         &remaining,
@@ -322,9 +480,11 @@ fn match_engine<'a>(
                         &mut captures,
                         &mut extract,
                         capture_val,
+                        after_double_dash,
                     )? {
                         return Ok(true);
                     }
+                    after_double_dash.set(saved_dd);
                 }
 
                 // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
@@ -335,6 +495,7 @@ fn match_engine<'a>(
                     let remaining = remove_indices(cmd_tokens, &[i]);
                     let capture_val =
                         matches!(**value, PatternToken::Wildcard).then_some(value_part);
+                    let saved_dd = after_double_dash.get();
                     if try_recurse_flag_value(
                         rest,
                         &remaining,
@@ -343,9 +504,11 @@ fn match_engine<'a>(
                         &mut captures,
                         &mut extract,
                         capture_val,
+                        after_double_dash,
                     )? {
                         return Ok(true);
                     }
+                    after_double_dash.set(saved_dd);
                 }
             }
             Ok(false)
@@ -358,11 +521,20 @@ fn match_engine<'a>(
                     .iter()
                     .any(|t| match_flag_token_with_equals(inner, t, definitions));
                 if negation_passed {
-                    match_engine(rest, cmd_tokens, definitions, steps, captures, extract)
+                    match_engine(
+                        rest,
+                        cmd_tokens,
+                        definitions,
+                        steps,
+                        captures,
+                        extract,
+                        after_double_dash,
+                    )
                 } else {
                     Ok(false)
                 }
-            } else {
+            } else if after_double_dash.get() {
+                // After `--`, match positionally (no flag skipping)
                 if cmd_tokens.is_empty() {
                     return Ok(false);
                 }
@@ -375,6 +547,33 @@ fn match_engine<'a>(
                         steps,
                         captures,
                         extract,
+                        after_double_dash,
+                    )
+                } else {
+                    Ok(false)
+                }
+            } else {
+                if cmd_tokens.is_empty() {
+                    return Ok(false);
+                }
+                // Order-independent: skip flags to find the first positional,
+                // then check negation against it.
+                let mut value_aliases = HashSet::new();
+                collect_value_flag_aliases(rest, &mut value_aliases);
+                let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
+                    return Ok(false);
+                };
+                let negation_passed = !match_single_token(inner, cmd_tokens[pos], definitions);
+                if negation_passed {
+                    let remaining = remove_indices(cmd_tokens, &[pos]);
+                    match_engine(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        captures,
+                        extract,
+                        after_double_dash,
                     )
                 } else {
                     Ok(false)
@@ -394,19 +593,45 @@ fn match_engine<'a>(
                 .cloned()
                 .chain(rest.iter().cloned())
                 .collect();
+            let saved_dd = after_double_dash.get();
             // extract is always None here (early return above for is_extract)
             if let Some(caps) = &mut captures {
                 let saved_len = caps.len();
-                if match_engine(&combined, cmd_tokens, definitions, steps, Some(*caps), None)? {
+                if match_engine(
+                    &combined,
+                    cmd_tokens,
+                    definitions,
+                    steps,
+                    Some(*caps),
+                    None,
+                    after_double_dash,
+                )? {
                     return Ok(true);
                 }
                 caps.truncate(saved_len);
-            } else if match_engine(&combined, cmd_tokens, definitions, steps, None, None)? {
+            } else if match_engine(
+                &combined,
+                cmd_tokens,
+                definitions,
+                steps,
+                None,
+                None,
+                after_double_dash,
+            )? {
                 return Ok(true);
             }
+            after_double_dash.set(saved_dd);
             // Try without the optional tokens
             if optional_flags_absent(inner_tokens, cmd_tokens) {
-                return match_engine(rest, cmd_tokens, definitions, steps, captures, None);
+                return match_engine(
+                    rest,
+                    cmd_tokens,
+                    definitions,
+                    steps,
+                    captures,
+                    None,
+                    after_double_dash,
+                );
             }
             Ok(false)
         }
@@ -424,7 +649,15 @@ fn match_engine<'a>(
             let normalized_cmd = normalize_path(cmd_tokens[0]);
             if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
                 // extract is always None here (early return above for is_extract)
-                match_engine(rest, &cmd_tokens[1..], definitions, steps, captures, None)
+                match_engine(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    None,
+                    after_double_dash,
+                )
             } else {
                 Ok(false)
             }
@@ -462,6 +695,7 @@ fn match_engine<'a>(
                             steps,
                             None,
                             Some((captured, all_candidates)),
+                            after_double_dash,
                         )?;
                         captured.truncate(saved_len);
                     }
@@ -472,7 +706,15 @@ fn match_engine<'a>(
                 if cmd_tokens.is_empty() {
                     return Ok(false);
                 }
-                match_engine(rest, &cmd_tokens[1..], definitions, steps, captures, None)
+                match_engine(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    None,
+                    after_double_dash,
+                )
             }
         }
 
@@ -485,6 +727,7 @@ fn match_engine<'a>(
                 steps,
                 captures,
                 extract,
+                after_double_dash,
             )
         }
 
@@ -497,6 +740,7 @@ fn match_engine<'a>(
                 steps,
                 captures,
                 extract,
+                after_double_dash,
             )
         }
     }
@@ -504,6 +748,10 @@ fn match_engine<'a>(
 
 /// Helper for FlagWithValue: recurse with remaining tokens after removing
 /// the matched flag+value, optionally capturing a wildcard value.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors match_engine signature plus capture_val"
+)]
 fn try_recurse_flag_value<'a>(
     rest: &[PatternToken],
     remaining: &[&'a str],
@@ -512,6 +760,7 @@ fn try_recurse_flag_value<'a>(
     captures: &mut Option<&mut Vec<&'a str>>,
     extract: &mut Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
     capture_val: Option<&'a str>,
+    after_double_dash: &Cell<bool>,
 ) -> Result<bool, RuleError> {
     if let Some((captured, all_candidates)) = extract {
         match_engine(
@@ -521,6 +770,7 @@ fn try_recurse_flag_value<'a>(
             steps,
             None,
             Some((captured, all_candidates)),
+            after_double_dash,
         )?;
         // In extract mode, always continue scanning (don't return true)
         Ok(false)
@@ -529,13 +779,29 @@ fn try_recurse_flag_value<'a>(
         if let Some(val) = capture_val {
             caps.push(val);
         }
-        if match_engine(rest, remaining, definitions, steps, Some(*caps), None)? {
+        if match_engine(
+            rest,
+            remaining,
+            definitions,
+            steps,
+            Some(*caps),
+            None,
+            after_double_dash,
+        )? {
             return Ok(true);
         }
         caps.truncate(saved_len);
         Ok(false)
     } else {
-        match_engine(rest, remaining, definitions, steps, None, None)
+        match_engine(
+            rest,
+            remaining,
+            definitions,
+            steps,
+            None,
+            None,
+            after_double_dash,
+        )
     }
 }
 
@@ -673,6 +939,41 @@ mod tests {
     }
 
     // ========================================
+    // Order-independent literal matching
+    // ========================================
+
+    #[rstest]
+    #[case::flag_before_literal("gh api -X GET *", "gh -X GET api /", true)]
+    #[case::literal_at_normal_position("gh api -X GET *", "gh api -X GET /", true)]
+    #[case::multiple_flags_before_literal("gh api -X GET *", "gh -X GET -v api /", true)]
+    #[case::extra_flag_not_in_pattern_no_match(
+        "git remote add origin",
+        "git -v remote add origin",
+        false
+    )]
+    #[case::double_dash_stays_positional("cmd foo -- bar", "cmd -- foo bar", false)]
+    #[case::double_dash_at_correct_position("cmd foo -- bar", "cmd foo -- bar", true)]
+    #[case::literal_mismatch_still_fails("gh api -X GET *", "gh -X GET issues /", false)]
+    #[case::flag_literal_remains_positional("cmd -v status", "cmd status -v", false)]
+    #[case::flag_after_double_dash_is_positional("cmd -- status *", "cmd -- -v status foo", false)]
+    #[case::flag_not_consumed_means_no_match("rm /tmp/*", "rm -rf /tmp/foo", false)]
+    #[case::flag_skip_leaves_flag_unconsumed("rm file", "rm -f file", false)]
+    #[case::skipped_flag_consumed_by_wildcard("git [-C *] commit *", "git -v commit -m fix", true)]
+    #[case::negation_bypass_with_flag("kubectl !describe *", "kubectl -v describe pods", false)]
+    #[case::skipped_flag_unconsumed_without_wildcard("git [-C *] commit", "git -v commit", false)]
+    fn order_independent_literal_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // ========================================
     // Alias / alternation matching
     // ========================================
 
@@ -681,6 +982,15 @@ mod tests {
     #[case::second_alt("git push main|master", "git push master", true)]
     #[case::no_alt_match("git push main|master", "git push develop", false)]
     #[case::subcommand_alt("kubectl describe|get|list *", "kubectl get pods", true)]
+    #[case::non_flag_alt_skips_flags("git push main|master *", "git push -v main origin", true)]
+    #[case::non_flag_alt_skips_flags_second(
+        "git push main|master *",
+        "git push -v master origin",
+        true
+    )]
+    #[case::non_flag_alt_after_double_dash_no_skip("cmd -- main|master", "cmd -- -v main", false)]
+    #[case::mixed_flag_nonflag_alt_flag_variant("cmd -v|verbose *", "cmd -v foo", true)]
+    #[case::mixed_flag_nonflag_alt_nonflag_variant("cmd -v|verbose *", "cmd verbose foo", true)]
     fn alternation_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
@@ -1262,6 +1572,16 @@ mod tests {
         "run !exec <cmd>",
         "run exec echo hello",
         Vec::<Vec<&str>>::new(),
+    )]
+    #[case::flag_like_literal_bash_c(
+        "bash -c <cmd>",
+        "bash -c 'rm -rf /'",
+        vec![vec!["rm -rf /"]],
+    )]
+    #[case::flag_like_literal_before_cmd(
+        "run -v <cmd>",
+        "run -v echo hello",
+        vec![vec!["echo", "hello"]],
     )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
