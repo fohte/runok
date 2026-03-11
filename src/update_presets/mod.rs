@@ -13,7 +13,7 @@ use crate::config::preset_remote::{
 };
 use crate::config::{Config, parse_config};
 
-use semver_utils::{find_latest_compatible_tag, parse_semver_tag};
+use semver_utils::{find_latest_upgrade, parse_version_spec};
 
 /// A remote preset reference paired with the config file it came from.
 struct TrackedReference {
@@ -109,8 +109,10 @@ enum UpdateResult {
     Error(String),
 }
 
-/// Extract the current tag from a parsed reference, if it has a semver-parseable tag.
-fn extract_semver_tag(parsed: &PresetReference) -> Option<&str> {
+/// Extract the current tag from a parsed reference, if it has a version-parseable tag.
+///
+/// Recognizes full semver (`v1.0.0`), partial major (`v1`), and partial major.minor (`v1.0`).
+fn extract_version_tag(parsed: &PresetReference) -> Option<&str> {
     let tag = match parsed {
         PresetReference::GitHub {
             version: crate::config::preset_remote::GitHubVersion::Tag(t),
@@ -121,8 +123,8 @@ fn extract_semver_tag(parsed: &PresetReference) -> Option<&str> {
         } => r.as_str(),
         _ => return None,
     };
-    // Only return if it's actually parseable as semver
-    parse_semver_tag(tag).map(|_| tag)
+    // Only return if it's parseable as a version spec
+    parse_version_spec(tag).map(|_| tag)
 }
 
 /// Build a new reference string by replacing the old tag with the new one.
@@ -149,8 +151,8 @@ fn update_single_preset<G: GitClient>(
         return UpdateResult::Skipped;
     }
 
-    // Check if this is a semver tag that can be upgraded
-    if let Some(current_tag) = extract_semver_tag(&parsed) {
+    // Check if this is a version tag that can be upgraded
+    if let Some(current_tag) = extract_version_tag(&parsed) {
         return try_tag_upgrade(
             reference,
             current_tag,
@@ -185,7 +187,7 @@ fn try_tag_upgrade<G: GitClient>(
         },
     };
 
-    let new_tag = match find_latest_compatible_tag(current_tag, remote_tags) {
+    let new_tag = match find_latest_upgrade(current_tag, remote_tags) {
         Some(t) => t,
         None => return UpdateResult::UpToDate,
     };

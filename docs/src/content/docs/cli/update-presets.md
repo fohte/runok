@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-`runok update-presets` updates all remote presets referenced in your configuration's `extends` field. For branch references, it forces a re-fetch bypassing the TTL cache. For semver-tagged references, it finds the latest compatible version within the same major version and updates your config file.
+`runok update-presets` updates all remote presets referenced in your configuration's `extends` field. For branch references, it forces a re-fetch bypassing the TTL cache. For version-tagged references, it finds the latest compatible version and updates your config file.
 
 ## Usage
 
@@ -17,8 +17,8 @@ runok update-presets
 
 1. **Collect references** -- Scans all configuration layers (global, global local override, project, project local override) for remote `extends` references (GitHub shorthand and git URLs). Local file references are ignored.
 2. **Skip immutable references** -- Presets pinned to a commit SHA (40-character hex) are permanently cached and skipped.
-3. **Semver tag upgrade** -- For references with a semver-parseable tag (e.g., `@v1.0.0`), queries the remote repository for all available tags and finds the latest version within the same major version. If a newer compatible version exists, fetches it and updates the `extends` entry in your config file. Major version boundaries are respected -- `@v1.0.0` will not be upgraded to `v2.0.0`.
-4. **Branch/Latest re-fetch** -- For non-semver references (e.g., `@main`, no version), forces a re-fetch regardless of cache TTL.
+3. **Version tag upgrade** -- For references with a version tag, queries the remote repository for all available tags and finds the latest compatible version. The upgrade scope depends on the tag precision (see [Version upgrade rules](#version-upgrade-rules) below). If a newer compatible version exists, fetches it and updates the `extends` entry in your config file.
+4. **Branch/Latest re-fetch** -- For non-version references (e.g., `@main`, no version), forces a re-fetch regardless of cache TTL.
 5. **Show diff** -- Displays a colored unified diff for any preset whose content changed.
 6. **Summary** -- Prints a summary of how many presets were updated, upgraded, already up to date, skipped, or errored.
 
@@ -64,10 +64,13 @@ Summary: 1 updated, 0 upgraded, 0 already up to date, 0 skipped, 0 errors
 
 ## Version upgrade rules
 
-- **Semver tags** (`v1.0.0`, `1.2.3`): Upgraded to the latest stable version within the same major version. Pre-release versions are excluded.
-- **Non-semver tags** (`main`, `stable`): Treated as branch references and force-re-fetched.
+- **Major-only tags** (`v1`, `2`): Upgraded to the latest major version (e.g., `@v1` → `@v2`). Crosses major version boundaries.
+- **Major.minor tags** (`v1.0`, `1.2`): Upgraded to the latest minor version within the same major (e.g., `@v1.0` → `@v1.3`). Does not cross major version boundaries.
+- **Full semver tags** (`v1.0.0`, `1.2.3`): Upgraded to the latest stable version within the same major version (e.g., `@v1.0.0` → `@v1.2.0`). Does not cross major version boundaries.
+- **Non-version tags** (`main`, `stable`): Treated as branch references and force-re-fetched.
 - **Commit SHA** (40-character hex): Skipped entirely (immutable).
-- **v-prefix matching**: If your current tag uses a `v` prefix (e.g., `v1.0.0`), only tags with a `v` prefix are considered as upgrade candidates, and vice versa.
+- **Pre-release exclusion**: Pre-release versions (e.g., `v2.0.0-beta.1`) are never selected as upgrade candidates.
+- **v-prefix matching**: If your current tag uses a `v` prefix (e.g., `v1`), only tags with a `v` prefix are considered as upgrade candidates, and vice versa.
 
 ## Exit codes
 
