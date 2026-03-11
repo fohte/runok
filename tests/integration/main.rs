@@ -4,6 +4,7 @@ mod extends_resolution;
 mod init_wizard;
 mod optional_notation_and_path_ref;
 mod path_resolution;
+mod property_based;
 mod remote_preset_with_path;
 mod when_clause_rules;
 mod wrapper_recursive_evaluation;
