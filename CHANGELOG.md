@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.4](https://github.com/fohte/runok/compare/v0.1.3...v0.1.4) (2026-03-11)
+
+
+### Features
+
+* **init:** warn when other PreToolUse hooks conflict with runok sandbox ([#186](https://github.com/fohte/runok/issues/186)) ([94a506f](https://github.com/fohte/runok/commit/94a506faa5601019e36a2855563f4720aa1f8052))
+* **rules:** apply order-independent matching to literal tokens ([#177](https://github.com/fohte/runok/issues/177)) ([e257cad](https://github.com/fohte/runok/commit/e257cadb91d097583448136d78c30a4945efbeb0))
+
+
+### Bug Fixes
+
+* **rules:** allow flag-only negation to pass with empty command tokens ([#179](https://github.com/fohte/runok/issues/179)) ([1d6c757](https://github.com/fohte/runok/commit/1d6c757106fe2b9bd021c9fb88301954c0c2c059))
+* **rules:** match `FlagWithValue` patterns against `=`-joined tokens ([#180](https://github.com/fohte/runok/issues/180)) ([6ebb296](https://github.com/fohte/runok/commit/6ebb2962929dcfd381e0a61e1b939f43fa577d22))
+* **rules:** match flag-only negation patterns against `=`-joined tokens ([#175](https://github.com/fohte/runok/issues/175)) ([7cf8eaa](https://github.com/fohte/runok/commit/7cf8eaaa34fa67b2a7d192f61102b507df105d79))
+* **rules:** resolve unmatched sub-commands to concrete actions in compound evaluation ([#178](https://github.com/fohte/runok/issues/178)) ([377f83d](https://github.com/fohte/runok/commit/377f83d5936544987ba17d7d0fcdac6514863d1e))
+
 ## [0.1.3](https://github.com/fohte/runok/compare/v0.1.2...v0.1.3) (2026-03-09)
 
 
