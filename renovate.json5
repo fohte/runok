@@ -27,5 +27,14 @@
       matchUpdateTypes: ['minor'],
       automerge: true,
     },
+    // Cargo dev-dependencies use depType 'dev-dependencies' (hyphenated),
+    // but the shared config only matches npm-style 'devDependencies'.
+    // Override here to prevent release-please version bumps for dev-only crates.
+    {
+      matchManagers: ['cargo'],
+      matchDepTypes: ['dev-dependencies'],
+      commitMessagePrefix: 'chore:',
+      semanticCommitScope: null,
+    },
   ],
 }
