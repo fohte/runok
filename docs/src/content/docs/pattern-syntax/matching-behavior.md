@@ -109,9 +109,21 @@ This also works with `=`-joined flags. For example, `!--pre` rejects both `--pre
 | `rg --pre pdftotext pat` | Does not match |
 | `rg --pre=pdftotext pat` | Does not match |
 
-### Non-flag Tokens are Position-dependent
+### Positional Arguments Skip Over Flags
 
-Tokens that do not start with `-` are matched **in order**:
+Non-flag positional tokens — both literals and [alternations](/pattern-syntax/alternation/) — also benefit from order-independent matching. When matching a positional token, the matcher skips over any leading flag tokens in the command to find the first positional argument. This means flags can appear before positional arguments without breaking the match:
+
+```yaml
+- allow: 'gh api -X GET *'
+```
+
+| Command                | Result  |
+| ---------------------- | ------- |
+| `gh api -X GET /repos` | Matches |
+| `gh -X GET api /repos` | Matches |
+| `gh api /repos -X GET` | Matches |
+
+Positional arguments are still matched **in order relative to each other**:
 
 ```yaml
 - allow: 'git push origin main'
@@ -121,6 +133,8 @@ Tokens that do not start with `-` are matched **in order**:
 | ---------------------- | -------------- |
 | `git push origin main` | Matches        |
 | `git push main origin` | Does not match |
+
+The bare `--` separator is treated as a positional token, not a flag. It is always matched at its exact position to preserve the distinction between arguments before and after `--`.
 
 ## Backslash Escapes
 
