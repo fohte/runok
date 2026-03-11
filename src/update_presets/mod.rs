@@ -1,4 +1,7 @@
-use std::path::Path;
+mod semver_utils;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use similar::ChangeTag;
 
@@ -9,6 +12,14 @@ use crate::config::preset_remote::{
     resolve_preset_file_path,
 };
 use crate::config::{Config, parse_config};
+
+use semver_utils::{find_latest_compatible_tag, parse_semver_tag};
+
+/// A remote preset reference paired with the config file it came from.
+struct TrackedReference {
+    reference: String,
+    source_file: PathBuf,
+}
 
 /// Collect all `extends` references from a parsed config, returning only remote ones.
 fn collect_remote_references(config: &Config) -> Vec<String> {
@@ -37,7 +48,7 @@ fn read_preset_content(cache_dir: &Path, preset_path: Option<&str>) -> String {
 }
 
 /// Print a colored unified-style diff between two strings.
-fn print_diff(reference: &str, before: &str, after: &str) {
+fn print_diff(old_label: &str, new_label: &str, before: &str, after: &str) {
     let diff = similar::TextDiff::from_lines(before, after);
 
     const RED: &str = "\x1b[31m";
@@ -45,8 +56,8 @@ fn print_diff(reference: &str, before: &str, after: &str) {
     const CYAN: &str = "\x1b[36m";
     const RESET: &str = "\x1b[0m";
 
-    eprintln!("{RED}--- a/{reference}{RESET}");
-    eprintln!("{GREEN}+++ b/{reference}{RESET}");
+    eprintln!("{RED}--- a/{old_label}{RESET}");
+    eprintln!("{GREEN}+++ b/{new_label}{RESET}");
 
     for group in diff.grouped_ops(3) {
         let first = &group[0];
@@ -81,14 +92,42 @@ fn current_timestamp() -> u64 {
 
 /// Result of updating a single preset.
 enum UpdateResult {
-    /// Preset was updated with changes.
+    /// Preset content was refreshed with changes (branch/Latest).
     Updated { before: String, after: String },
     /// Preset was already up to date (no changes).
     UpToDate,
     /// Preset is immutable (commit SHA), skipped.
     Skipped,
+    /// A newer semver tag was found and the preset was upgraded.
+    Upgraded {
+        before: String,
+        after: String,
+        old_reference: String,
+        new_reference: String,
+    },
     /// Error occurred during update.
     Error(String),
+}
+
+/// Extract the current tag from a parsed reference, if it has a semver-parseable tag.
+fn extract_semver_tag(parsed: &PresetReference) -> Option<&str> {
+    let tag = match parsed {
+        PresetReference::GitHub {
+            version: crate::config::preset_remote::GitHubVersion::Tag(t),
+            ..
+        } => t.as_str(),
+        PresetReference::GitUrl {
+            git_ref: Some(r), ..
+        } => r.as_str(),
+        _ => return None,
+    };
+    // Only return if it's actually parseable as semver
+    parse_semver_tag(tag).map(|_| tag)
+}
+
+/// Build a new reference string by replacing the old tag with the new one.
+fn build_updated_reference(original: &str, old_tag: &str, new_tag: &str) -> String {
+    original.replacen(&format!("@{old_tag}"), &format!("@{new_tag}"), 1)
 }
 
 /// Force-fetch a single remote preset and return the update result.
@@ -96,6 +135,7 @@ fn update_single_preset<G: GitClient>(
     reference: &str,
     cache: &PresetCache,
     git_client: &G,
+    tags_cache: &mut HashMap<String, Vec<String>>,
 ) -> UpdateResult {
     let parsed = match parse_preset_reference(reference) {
         Ok(p) => p,
@@ -109,15 +149,129 @@ fn update_single_preset<G: GitClient>(
         return UpdateResult::Skipped;
     }
 
+    // Check if this is a semver tag that can be upgraded
+    if let Some(current_tag) = extract_semver_tag(&parsed) {
+        return try_tag_upgrade(
+            reference,
+            current_tag,
+            &params.url,
+            &parsed,
+            cache,
+            git_client,
+            tags_cache,
+        );
+    }
+
+    // Branch/Latest: force re-fetch and show diff
+    force_refetch(reference, &parsed, &params, cache, git_client)
+}
+
+/// Try to upgrade a semver-tagged preset to the latest compatible version.
+fn try_tag_upgrade<G: GitClient>(
+    reference: &str,
+    current_tag: &str,
+    url: &str,
+    parsed: &PresetReference,
+    cache: &PresetCache,
+    git_client: &G,
+    tags_cache: &mut HashMap<String, Vec<String>>,
+) -> UpdateResult {
+    // Fetch remote tags (cached per URL to avoid redundant network calls)
+    let remote_tags = match tags_cache.entry(url.to_string()) {
+        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+        std::collections::hash_map::Entry::Vacant(e) => match git_client.ls_remote_tags(url) {
+            Ok(tags) => e.insert(tags),
+            Err(err) => return UpdateResult::Error(format!("ls-remote failed: {err}")),
+        },
+    };
+
+    let new_tag = match find_latest_compatible_tag(current_tag, remote_tags) {
+        Some(t) => t,
+        None => return UpdateResult::UpToDate,
+    };
+
+    let new_reference = build_updated_reference(reference, current_tag, &new_tag);
+    let preset_path = preset_path_from_reference(parsed);
+
+    // Read old content from current cache
+    let old_cache_dir = cache.cache_dir(reference);
+    let before = read_preset_content(&old_cache_dir, preset_path);
+
+    // Fetch the new version into its own cache slot
+    let new_cache_dir = cache.cache_dir(&new_reference);
+    let new_parsed = match parse_preset_reference(&new_reference) {
+        Ok(p) => p,
+        Err(e) => return UpdateResult::Error(format!("invalid new reference: {e}")),
+    };
+    let new_params = resolve_git_params(&new_parsed);
+
+    let _lock = match cache.acquire_lock(&new_reference) {
+        Ok(l) => l,
+        Err(e) => return UpdateResult::Error(e.to_string()),
+    };
+
+    // Check if already cached
+    match cache.check(&new_reference, new_params.is_immutable) {
+        CacheStatus::Hit(_) => {}
+        CacheStatus::Stale(_) | CacheStatus::Miss => {
+            if !new_cache_dir.exists() {
+                if let Some(parent) = new_cache_dir.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    return UpdateResult::Error(format!("failed to create cache directory: {e}"));
+                }
+                if let Err(e) = git_client.clone_shallow(
+                    &new_params.url,
+                    &new_cache_dir,
+                    new_params.git_ref.as_deref(),
+                ) {
+                    return UpdateResult::Error(format!("clone failed: {e}"));
+                }
+            } else {
+                if let Err(e) = git_client.fetch(&new_cache_dir, new_params.git_ref.as_deref()) {
+                    return UpdateResult::Error(format!("fetch failed: {e}"));
+                }
+                if let Err(e) = git_client.checkout(&new_cache_dir, "FETCH_HEAD") {
+                    return UpdateResult::Error(format!("checkout failed: {e}"));
+                }
+            }
+            let resolved_sha = git_client.rev_parse_head(&new_cache_dir).ok();
+            let metadata = CacheMetadata {
+                fetched_at: current_timestamp(),
+                is_immutable: new_params.is_immutable,
+                reference: new_reference.clone(),
+                resolved_sha,
+            };
+            let _ = PresetCache::write_metadata(&new_cache_dir, &metadata);
+        }
+    }
+
+    let after = read_preset_content(&new_cache_dir, preset_path);
+
+    UpdateResult::Upgraded {
+        before,
+        after,
+        old_reference: reference.to_string(),
+        new_reference,
+    }
+}
+
+/// Force re-fetch a branch/Latest preset and return diff result.
+fn force_refetch<G: GitClient>(
+    reference: &str,
+    parsed: &PresetReference,
+    params: &crate::config::preset_remote::GitParams,
+    cache: &PresetCache,
+    git_client: &G,
+) -> UpdateResult {
     let cache_dir = cache.cache_dir(reference);
-    let preset_path = preset_path_from_reference(&parsed);
+    let preset_path = preset_path_from_reference(parsed);
 
     // Read old content before fetching
     let before = read_preset_content(&cache_dir, preset_path);
 
     match cache.check(reference, false) {
         CacheStatus::Hit(_) | CacheStatus::Stale(_) => {
-            // Cache exists: fetch and update
             let _lock = match cache.acquire_lock(reference) {
                 Ok(l) => l,
                 Err(e) => return UpdateResult::Error(e.to_string()),
@@ -131,7 +285,6 @@ fn update_single_preset<G: GitClient>(
                 return UpdateResult::Error(format!("checkout failed: {e}"));
             }
 
-            // Update metadata
             let resolved_sha = git_client.rev_parse_head(&cache_dir).ok();
             let metadata = CacheMetadata {
                 fetched_at: current_timestamp(),
@@ -142,7 +295,6 @@ fn update_single_preset<G: GitClient>(
             let _ = PresetCache::write_metadata(&cache_dir, &metadata);
         }
         CacheStatus::Miss => {
-            // No cache: clone fresh
             let _lock = match cache.acquire_lock(reference) {
                 Ok(l) => l,
                 Err(e) => return UpdateResult::Error(e.to_string()),
@@ -160,7 +312,6 @@ fn update_single_preset<G: GitClient>(
                 return UpdateResult::Error(format!("clone failed: {e}"));
             }
 
-            // Write metadata
             let resolved_sha = git_client.rev_parse_head(&cache_dir).ok();
             let metadata = CacheMetadata {
                 fetched_at: current_timestamp(),
@@ -172,7 +323,6 @@ fn update_single_preset<G: GitClient>(
         }
     }
 
-    // Read new content after fetching
     let after = read_preset_content(&cache_dir, preset_path);
 
     if before == after {
@@ -182,14 +332,27 @@ fn update_single_preset<G: GitClient>(
     }
 }
 
+/// Replace a preset reference in a config file, preserving formatting.
+fn update_config_file(
+    source_file: &Path,
+    old_reference: &str,
+    new_reference: &str,
+) -> Result<(), anyhow::Error> {
+    let content = std::fs::read_to_string(source_file)?;
+    let updated = content.replace(old_reference, new_reference);
+    std::fs::write(source_file, updated)?;
+    Ok(())
+}
+
 /// Run the update-presets command.
 ///
 /// Finds all config files, collects remote preset references, and force-fetches each one.
+/// For semver-tagged presets, checks for newer compatible versions and updates config files.
 /// Displays a diff for presets that changed.
 pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
-    let references = collect_all_remote_references(cwd)?;
+    let tracked_refs = collect_all_tracked_references(cwd)?;
 
-    if references.is_empty() {
+    if tracked_refs.is_empty() {
         eprintln!("No remote presets found in configuration.");
         return Ok(());
     }
@@ -197,16 +360,30 @@ pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
     let cache = PresetCache::from_env()?;
     let git_client = ProcessGitClient;
 
+    run_with(tracked_refs, &cache, &git_client)
+}
+
+/// Inner implementation that accepts injected dependencies for testing.
+fn run_with<G: GitClient>(
+    tracked_refs: Vec<TrackedReference>,
+    cache: &PresetCache,
+    git_client: &G,
+) -> Result<(), anyhow::Error> {
     let mut updated_count = 0;
     let mut up_to_date_count = 0;
     let mut skipped_count = 0;
+    let mut upgraded_count = 0;
     let mut error_count = 0;
 
-    for reference in &references {
-        match update_single_preset(reference, &cache, &git_client) {
+    // Cache ls-remote results per URL to avoid redundant network calls
+    let mut tags_cache: HashMap<String, Vec<String>> = HashMap::new();
+
+    for tracked in &tracked_refs {
+        let reference = &tracked.reference;
+        match update_single_preset(reference, cache, git_client, &mut tags_cache) {
             UpdateResult::Updated { before, after } => {
                 eprintln!("\x1b[1mUpdated:\x1b[0m {reference}");
-                print_diff(reference, &before, &after);
+                print_diff(reference, reference, &before, &after);
                 eprintln!();
                 updated_count += 1;
             }
@@ -218,6 +395,33 @@ pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
                 eprintln!("Skipped (immutable): {reference}");
                 skipped_count += 1;
             }
+            UpdateResult::Upgraded {
+                before,
+                after,
+                old_reference,
+                new_reference,
+            } => {
+                eprintln!("\x1b[1mUpgraded:\x1b[0m {old_reference} \u{2192} {new_reference}");
+                print_diff(&old_reference, &new_reference, &before, &after);
+
+                match update_config_file(&tracked.source_file, &old_reference, &new_reference) {
+                    Ok(()) => {
+                        eprintln!(
+                            "  Updated {}: {old_reference} \u{2192} {new_reference}",
+                            tracked.source_file.display()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  \x1b[31mFailed to update {}:\x1b[0m {e}",
+                            tracked.source_file.display()
+                        );
+                        error_count += 1;
+                    }
+                }
+                eprintln!();
+                upgraded_count += 1;
+            }
             UpdateResult::Error(msg) => {
                 eprintln!("\x1b[31mError:\x1b[0m {reference}: {msg}");
                 error_count += 1;
@@ -227,8 +431,8 @@ pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
 
     eprintln!();
     eprintln!(
-        "Summary: {} updated, {} already up to date, {} skipped, {} errors",
-        updated_count, up_to_date_count, skipped_count, error_count
+        "Summary: {} updated, {} upgraded, {} already up to date, {} skipped, {} errors",
+        updated_count, upgraded_count, up_to_date_count, skipped_count, error_count
     );
 
     if error_count > 0 {
@@ -238,12 +442,9 @@ pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
     }
 }
 
-/// Collect all remote preset references from all config layers.
-///
-/// Reads global and project config files (without resolving extends) to extract
-/// the raw `extends` lists.
-fn collect_all_remote_references(cwd: &Path) -> Result<Vec<String>, anyhow::Error> {
-    let mut references = Vec::new();
+/// Collect all remote preset references from all config layers, tracking source files.
+fn collect_all_tracked_references(cwd: &Path) -> Result<Vec<TrackedReference>, anyhow::Error> {
+    let mut tracked = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     let config_filenames = &["runok.yml", "runok.yaml"];
@@ -251,31 +452,31 @@ fn collect_all_remote_references(cwd: &Path) -> Result<Vec<String>, anyhow::Erro
 
     // Global config directory
     if let Some(global_dir) = crate::config::dirs::config_dir().map(|d| d.join("runok")) {
-        collect_from_dir(&global_dir, config_filenames, &mut references, &mut seen);
-        collect_from_dir(
+        collect_tracked_from_dir(&global_dir, config_filenames, &mut tracked, &mut seen);
+        collect_tracked_from_dir(
             &global_dir,
             local_override_filenames,
-            &mut references,
+            &mut tracked,
             &mut seen,
         );
     }
 
     // Project config directory (walk up from cwd)
     if let Some(project_dir) = find_project_dir(cwd) {
-        collect_from_dir(&project_dir, config_filenames, &mut references, &mut seen);
-        collect_from_dir(
+        collect_tracked_from_dir(&project_dir, config_filenames, &mut tracked, &mut seen);
+        collect_tracked_from_dir(
             &project_dir,
             local_override_filenames,
-            &mut references,
+            &mut tracked,
             &mut seen,
         );
     }
 
-    Ok(references)
+    Ok(tracked)
 }
 
 /// Find project directory by walking up from `start` looking for config files.
-fn find_project_dir(start: &Path) -> Option<std::path::PathBuf> {
+fn find_project_dir(start: &Path) -> Option<PathBuf> {
     let home_dir = crate::config::dirs::home_dir();
     let config_files = [
         "runok.yml",
@@ -297,11 +498,11 @@ fn find_project_dir(start: &Path) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Read a config file directory and collect remote references from `extends`.
-fn collect_from_dir(
+/// Read a config file and collect remote references with source file tracking.
+fn collect_tracked_from_dir(
     dir: &Path,
     filenames: &[&str],
-    references: &mut Vec<String>,
+    tracked: &mut Vec<TrackedReference>,
     seen: &mut std::collections::HashSet<String>,
 ) {
     let path = filenames
@@ -323,7 +524,10 @@ fn collect_from_dir(
 
     for r in collect_remote_references(&config) {
         if seen.insert(r.clone()) {
-            references.push(r);
+            tracked.push(TrackedReference {
+                reference: r,
+                source_file: path.clone(),
+            });
         }
     }
 }
@@ -343,6 +547,8 @@ mod tests {
     fn tmp() -> TempDir {
         TempDir::new().unwrap()
     }
+
+    // === collect_remote_references ===
 
     #[rstest]
     #[case::github_shorthand("github:org/repo@v1", true)]
@@ -366,20 +572,24 @@ mod tests {
         assert!(collect_remote_references(&config).is_empty());
     }
 
+    // === update_single_preset ===
+
     #[rstest]
     fn update_skips_immutable_preset(tmp: TempDir) {
         let sha = "a".repeat(40);
         let reference = format!("github:org/repo@{sha}");
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
         let git_client = MockGitClient::new();
+        let mut tags_cache = HashMap::new();
 
-        let result = update_single_preset(&reference, &cache, &git_client);
+        let result = update_single_preset(&reference, &cache, &git_client, &mut tags_cache);
         assert!(matches!(result, UpdateResult::Skipped));
     }
 
     #[rstest]
-    fn update_reports_up_to_date_when_no_changes(tmp: TempDir) {
-        let reference = "github:org/repo@v1";
+    fn update_branch_reports_up_to_date_when_no_changes(tmp: TempDir) {
+        // "main" is not semver, so it goes through the branch/force-refetch path
+        let reference = "github:org/repo@main";
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
         let cache_dir = cache.cache_dir(reference);
         fs::create_dir_all(&cache_dir).unwrap();
@@ -403,13 +613,14 @@ mod tests {
         git_client.on_checkout(Ok(()));
         git_client.on_rev_parse(Ok("abc123".to_string()));
 
-        let result = update_single_preset(reference, &cache, &git_client);
+        let mut tags_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
         assert!(matches!(result, UpdateResult::UpToDate));
     }
 
     #[rstest]
     fn update_handles_fetch_error(tmp: TempDir) {
-        let reference = "github:org/repo@v1";
+        let reference = "github:org/repo@main";
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
         let cache_dir = cache.cache_dir(reference);
         fs::create_dir_all(&cache_dir).unwrap();
@@ -429,7 +640,8 @@ mod tests {
             message: "network error".to_string(),
         }));
 
-        let result = update_single_preset(reference, &cache, &git_client);
+        let mut tags_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
         match result {
             UpdateResult::Error(msg) => {
                 assert_eq!(
@@ -440,6 +652,138 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
     }
+
+    // === semver tag upgrade ===
+
+    #[rstest]
+    fn update_upgrades_semver_tag(tmp: TempDir) {
+        let reference = "github:org/repo@v1.0.0";
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        // Set up old cache for v1.0.0
+        let old_cache_dir = cache.cache_dir(reference);
+        fs::create_dir_all(&old_cache_dir).unwrap();
+        fs::write(
+            old_cache_dir.join("runok.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+
+        let new_reference = "github:org/repo@v1.2.0";
+        let new_cache_dir = cache.cache_dir(new_reference);
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_tags(Ok(vec![
+            "v0.9.0".to_string(),
+            "v1.0.0".to_string(),
+            "v1.1.0".to_string(),
+            "v1.2.0".to_string(),
+            "v2.0.0".to_string(),
+        ]));
+        // new_cache_dir doesn't exist yet, so it takes the clone path.
+        // Mock clone succeeds, and we pre-create the directory/file to simulate what
+        // a real git clone would produce.
+        git_client.on_clone(Ok(()));
+        git_client.on_rev_parse(Ok("def456".to_string()));
+
+        // Pre-create the new cache directory with the new preset content.
+        // In production, git clone creates this. The mock doesn't, so we do it manually.
+        // However, the code checks `!new_cache_dir.exists()` AFTER acquiring the lock,
+        // so we must create it *after* on_clone is "called" — but since MockGitClient
+        // doesn't actually do anything, we create it before and the code will see it exists
+        // and go to the fetch+checkout path instead. So don't pre-create it; instead,
+        // set up a directory that will be checked after clone.
+        //
+        // The flow: lock -> check cache (Miss) -> !exists -> clone_shallow -> write_metadata
+        //   -> read_preset_content. Since mock clone doesn't create files, we need to
+        //   create the directory after the test starts but the mock is synchronous...
+        //
+        // Simplest fix: pre-create the parent so clone doesn't fail, and create the
+        // preset file in a separate step. Actually, let's just pre-create the cache dir
+        // with content and queue fetch+checkout mocks for the existing-dir path.
+        fs::create_dir_all(&new_cache_dir).unwrap();
+        fs::write(
+            new_cache_dir.join("runok.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+                  - allow: 'git log'
+            "},
+        )
+        .unwrap();
+
+        // Since new_cache_dir already exists, code takes the fetch+checkout path.
+        // We need to replace clone mock with fetch+checkout mocks.
+        // Clear the clone mock and set up fetch+checkout instead.
+        // Actually, MockGitClient queues are already set with on_clone above.
+        // The code checks `!new_cache_dir.exists()` — since we created it, it goes
+        // to the else branch (fetch+checkout). So on_clone won't be consumed, and
+        // fetch+checkout will pop from empty queues.
+        // Fix: don't call on_clone, call on_fetch + on_checkout instead.
+        drop(git_client);
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_tags(Ok(vec![
+            "v0.9.0".to_string(),
+            "v1.0.0".to_string(),
+            "v1.1.0".to_string(),
+            "v1.2.0".to_string(),
+            "v2.0.0".to_string(),
+        ]));
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("def456".to_string()));
+
+        let mut tags_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
+        match result {
+            UpdateResult::Upgraded {
+                old_reference,
+                new_reference: new_ref,
+                ..
+            } => {
+                assert_eq!(old_reference, "github:org/repo@v1.0.0");
+                assert_eq!(new_ref, "github:org/repo@v1.2.0");
+            }
+            other => panic!("expected Upgraded, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn update_semver_tag_no_newer_version(tmp: TempDir) {
+        let reference = "github:org/repo@v1.2.0";
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_tags(Ok(vec![
+            "v1.0.0".to_string(),
+            "v1.1.0".to_string(),
+            "v1.2.0".to_string(),
+        ]));
+
+        let mut tags_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
+        assert!(matches!(result, UpdateResult::UpToDate));
+    }
+
+    #[rstest]
+    fn update_semver_tag_respects_major_boundary(tmp: TempDir) {
+        let reference = "github:org/repo@v1.0.0";
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        let git_client = MockGitClient::new();
+        // Only v2.0.0 is available (different major), no compatible upgrade
+        git_client.on_ls_remote_tags(Ok(vec!["v1.0.0".to_string(), "v2.0.0".to_string()]));
+
+        let mut tags_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
+        assert!(matches!(result, UpdateResult::UpToDate));
+    }
+
+    // === collect_tracked_from_dir ===
 
     #[rstest]
     fn collect_references_deduplicates(tmp: TempDir) {
@@ -455,20 +799,127 @@ mod tests {
         )
         .unwrap();
 
-        let mut refs = Vec::new();
+        let mut tracked = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        collect_from_dir(dir, &["runok.yml"], &mut refs, &mut seen);
+        collect_tracked_from_dir(dir, &["runok.yml"], &mut tracked, &mut seen);
 
+        let refs: Vec<&str> = tracked.iter().map(|t| t.reference.as_str()).collect();
         assert_eq!(refs, vec!["github:org/repo@v1", "github:org/other@v2"]);
+    }
+
+    #[rstest]
+    fn collect_references_tracks_source_file(tmp: TempDir) {
+        let dir = tmp.path();
+        fs::write(
+            dir.join("runok.yml"),
+            indoc! {"
+                extends:
+                  - github:org/repo@v1
+            "},
+        )
+        .unwrap();
+
+        let mut tracked = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        collect_tracked_from_dir(dir, &["runok.yml"], &mut tracked, &mut seen);
+
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].source_file, dir.join("runok.yml"));
     }
 
     #[rstest]
     fn collect_references_skips_missing_files(tmp: TempDir) {
         let dir = tmp.path();
-        let mut refs = Vec::new();
+        let mut tracked = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        collect_from_dir(dir, &["nonexistent.yml"], &mut refs, &mut seen);
-        assert!(refs.is_empty());
+        collect_tracked_from_dir(dir, &["nonexistent.yml"], &mut tracked, &mut seen);
+        assert!(tracked.is_empty());
+    }
+
+    // === update_config_file ===
+
+    #[rstest]
+    fn update_config_file_replaces_reference(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        let content = indoc! {"
+            extends:
+              - github:org/repo@v1.0.0
+            rules:
+              - allow: 'git status'
+        "};
+        fs::write(&config_path, content).unwrap();
+
+        update_config_file(
+            &config_path,
+            "github:org/repo@v1.0.0",
+            "github:org/repo@v1.2.0",
+        )
+        .unwrap();
+
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            updated,
+            indoc! {"
+                extends:
+                  - github:org/repo@v1.2.0
+                rules:
+                  - allow: 'git status'
+            "}
+        );
+    }
+
+    #[rstest]
+    fn update_config_file_preserves_comments(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        let content = indoc! {"
+            # Shared rules
+            extends:
+              - github:org/repo@v1.0.0  # pinned
+            rules:
+              - allow: 'git status'
+        "};
+        fs::write(&config_path, content).unwrap();
+
+        update_config_file(
+            &config_path,
+            "github:org/repo@v1.0.0",
+            "github:org/repo@v1.2.0",
+        )
+        .unwrap();
+
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            updated,
+            indoc! {"
+                # Shared rules
+                extends:
+                  - github:org/repo@v1.2.0  # pinned
+                rules:
+                  - allow: 'git status'
+            "}
+        );
+    }
+
+    // === build_updated_reference ===
+
+    #[rstest]
+    #[case::github("github:org/repo@v1.0.0", "v1.0.0", "v1.2.0", "github:org/repo@v1.2.0")]
+    #[case::git_url(
+        "https://github.com/org/repo.git@v1.0.0",
+        "v1.0.0",
+        "v1.2.0",
+        "https://github.com/org/repo.git@v1.2.0"
+    )]
+    fn build_updated_reference_test(
+        #[case] original: &str,
+        #[case] old_tag: &str,
+        #[case] new_tag: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            build_updated_reference(original, old_tag, new_tag),
+            expected
+        );
     }
 
     impl std::fmt::Debug for UpdateResult {
@@ -477,6 +928,7 @@ mod tests {
                 UpdateResult::Updated { .. } => write!(f, "Updated"),
                 UpdateResult::UpToDate => write!(f, "UpToDate"),
                 UpdateResult::Skipped => write!(f, "Skipped"),
+                UpdateResult::Upgraded { .. } => write!(f, "Upgraded"),
                 UpdateResult::Error(msg) => write!(f, "Error({msg})"),
             }
         }
