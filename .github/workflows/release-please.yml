@@ -107,6 +107,88 @@ jobs:
           gh release upload "$TAG_NAME" \
             "$PROJECT_NAME"-${{ matrix.target }}.tar.gz
 
+  build-nightly:
+    needs: release-please
+    if: needs.release-please.outputs.release_created != 'true' && github.event_name != 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: rustup show
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Determine nightly version
+        id: version
+        run: |
+          base_version=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "nightly_version=${base_version}-nightly+${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUNOK_NIGHTLY_VERSION: ${{ steps.version.outputs.nightly_version }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../runok-${{ matrix.target }}.tar.gz runok
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runok-nightly-${{ matrix.target }}
+          path: runok-${{ matrix.target }}.tar.gz
+
+  publish-nightly:
+    needs: [release-please, build-nightly]
+    if: needs.release-please.outputs.release_created != 'true' && github.event_name != 'workflow_dispatch'
+    concurrency:
+      group: publish-nightly
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create or update nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Delete existing nightly release and tag if present
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+
+          # Create new nightly release
+          gh release create nightly \
+            --prerelease \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes "Nightly build from commit [\`${GITHUB_SHA::7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+          > [!WARNING]
+          > This is an automated nightly build and may be unstable. For stable releases, see the [latest release](https://github.com/${{ github.repository }}/releases/latest)." \
+            artifacts/runok-*.tar.gz
+
   publish-homebrew:
     needs: [release-please, build-release]
     # build-release uses always() so this job also needs it to avoid being skipped

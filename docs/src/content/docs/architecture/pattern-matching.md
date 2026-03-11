@@ -125,6 +125,15 @@ A critical feature: flags with values are matched **regardless of their position
 
 matches both `curl -X POST https://example.com` and `curl https://example.com -X POST`, because `FlagWithValue` scans the full token list rather than requiring positional alignment.
 
+### `=`-joined flag splitting
+
+`FlagWithValue` also matches `=`-joined command tokens (e.g. `--sort=value` for a pattern `--sort value`). The splitting only recognizes standard flag forms:
+
+- **Short flags**: `-X=val` (single dash + one character)
+- **Long flags**: `--flag=val` (double dash)
+
+Non-standard forms like `-Denv=prod` (Java) or `-DFOO=bar` (GCC) are not split. These are treated as single tokens because the portion before `=` (`-Denv`, `-DFOO`) is not a standard flag name — it is a fused flag-key combination specific to the command.
+
 ### Wrapper command matching
 
 When a pattern contains a `<cmd>` placeholder (defined in `definitions.wrappers`), the matcher captures all tokens at that position. The captured tokens are then reassembled into a command string and recursively evaluated by the rule engine.
