@@ -4,6 +4,22 @@ use proptest::prelude::*;
 use runok::config::parse_config;
 use runok::rules::rule_engine::{Action, evaluate_command, evaluate_compound};
 
+/// Assert that the action matches the expected allow/deny based on `is_allow`.
+macro_rules! prop_assert_allow_or_deny {
+    ($action:expr, $is_allow:expr, $ctx:expr) => {
+        if $is_allow {
+            prop_assert_eq!($action, Action::Allow, "expected Allow: {}", $ctx);
+        } else {
+            prop_assert!(
+                matches!($action, Action::Deny(_)),
+                "expected Deny: {} actual={:?}",
+                $ctx,
+                $action
+            );
+        }
+    };
+}
+
 // ========================================
 // Basic part strategies
 // ========================================
@@ -1682,14 +1698,7 @@ proptest! {
         let command = format!("sudo {inner}");
         let result = evaluate_command(&config, &command, &ctx).unwrap();
 
-        if is_allow {
-            prop_assert_eq!(result.action, Action::Allow,
-                "sudo wrapper should unwrap and allow: command={:?}", command);
-        } else {
-            prop_assert!(matches!(result.action, Action::Deny(_)),
-                "sudo wrapper should unwrap and deny: command={:?} result={:?}",
-                command, result.action);
-        }
+        prop_assert_allow_or_deny!(result.action, is_allow, format!("sudo wrapper: command={:?}", command));
     }
 
     /// `bash -c '<inner_cmd>'` should evaluate the inner command
@@ -1709,14 +1718,7 @@ proptest! {
         let command = format!("bash -c {inner}");
         let result = evaluate_command(&config, &command, &ctx).unwrap();
 
-        if is_allow {
-            prop_assert_eq!(result.action, Action::Allow,
-                "bash -c wrapper should unwrap and allow: command={:?}", command);
-        } else {
-            prop_assert!(matches!(result.action, Action::Deny(_)),
-                "bash -c wrapper should unwrap and deny: command={:?} result={:?}",
-                command, result.action);
-        }
+        prop_assert_allow_or_deny!(result.action, is_allow, format!("bash -c wrapper: command={:?}", command));
     }
 
     /// Nested wrappers: `sudo bash -c '<inner>'` should unwrap through both
@@ -1738,14 +1740,7 @@ proptest! {
         let command = format!("sudo bash -c {inner}");
         let result = evaluate_command(&config, &command, &ctx).unwrap();
 
-        if is_allow {
-            prop_assert_eq!(result.action, Action::Allow,
-                "nested wrapper should unwrap and allow: command={:?}", command);
-        } else {
-            prop_assert!(matches!(result.action, Action::Deny(_)),
-                "nested wrapper should unwrap and deny: command={:?} result={:?}",
-                command, result.action);
-        }
+        prop_assert_allow_or_deny!(result.action, is_allow, format!("nested wrapper: command={:?}", command));
     }
 
     /// Wrapper with compound inner: `bash -c 'allowed && denied'` should deny
