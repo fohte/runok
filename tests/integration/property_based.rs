@@ -641,6 +641,62 @@ proptest! {
 }
 
 // ========================================
+// Flag negation after preceding literals
+// `{cmd} {literal} !{flag} *` allows when flag absent, rejects when present
+// ========================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_flag_negation_after_literal_allows_when_absent(
+        cmd_name in arb_cmd_name(),
+        literal in arb_safe_positional(),
+        negated_flag in arb_flag(),
+        positionals in proptest::collection::vec(arb_safe_positional(), 0..=2),
+    ) {
+        let pattern = format!("{cmd_name} {literal} !{negated_flag} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Command with the literal but without the negated flag
+        let mut tokens = vec![literal];
+        tokens.extend(positionals);
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "flag negation after literal should allow when flag absent: pattern={:?} command={:?}",
+            pattern, command);
+    }
+
+    #[test]
+    fn prop_flag_negation_after_literal_rejects_when_present(
+        cmd_name in arb_cmd_name(),
+        literal in arb_safe_positional(),
+        negated_flag in arb_flag(),
+        positionals in proptest::collection::vec(arb_positional(), 0..=2),
+    ) {
+        let pattern = format!("{cmd_name} {literal} !{negated_flag} *");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
+        // Command with the literal and the negated flag present
+        let mut tokens = vec![literal];
+        tokens.push(negated_flag.clone());
+        tokens.extend(positionals);
+        let command = build_command(&cmd_name, &tokens);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert!(
+            !matches!(result.action, Action::Allow),
+            "flag negation after literal should reject when flag present: pattern={:?} command={:?}",
+            pattern, command
+        );
+    }
+}
+
+// ========================================
 // Value negation correctness (position-dependent)
 // `{cmd} !{value} *` rejects when first token matches, allows otherwise
 // ========================================
