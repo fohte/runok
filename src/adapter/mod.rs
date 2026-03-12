@@ -165,27 +165,6 @@ fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) 
     action_result
 }
 
-/// Evaluate each sub-command individually to collect per-sub-command results for audit logging.
-fn collect_sub_evaluations(
-    config: &Config,
-    commands: &[String],
-    context: &EvalContext,
-) -> Vec<SubEvalResult> {
-    commands
-        .iter()
-        .filter_map(|cmd| {
-            evaluate_command(config, cmd, context)
-                .ok()
-                .map(|result| SubEvalResult {
-                    command: cmd.clone(),
-                    action: result.action,
-                    matched_rules: result.matched_rules,
-                    eval_type: "compound".to_owned(),
-                })
-        })
-        .collect()
-}
-
 /// Write an audit log entry for the given evaluation result.
 /// Failures are reported to stderr but do not affect the exit code (fail-open).
 fn write_audit_log(
@@ -318,8 +297,17 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     );
                 }
 
-                // Collect per-sub-command evaluations for audit logging
-                let sub_evaluations = collect_sub_evaluations(config, &commands, &context);
+                let sub_evaluations: Vec<SubEvalResult> = compound_result
+                    .sub_results
+                    .into_iter()
+                    .zip(commands.iter())
+                    .map(|(result, cmd)| SubEvalResult {
+                        command: cmd.clone(),
+                        action: result.action,
+                        matched_rules: result.matched_rules,
+                        eval_type: "compound".to_owned(),
+                    })
+                    .collect();
 
                 ActionResult {
                     action: compound_result.action,
@@ -1142,7 +1130,15 @@ mod tests {
         }
     }
 
-    fn make_audit_config(dir: &tempfile::TempDir) -> crate::config::AuditConfig {
+    use rstest::fixture;
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn audit_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    fn make_audit_config(dir: &TempDir) -> crate::config::AuditConfig {
         crate::config::AuditConfig {
             enabled: Some(true),
             path: Some(dir.path().to_string_lossy().to_string()),
@@ -1150,9 +1146,20 @@ mod tests {
         }
     }
 
+    fn read_single_audit_entry(audit_dir: &TempDir) -> serde_json::Value {
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        assert!(log_path.exists(), "audit log file should be created");
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "expected a single line in the audit log");
+
+        serde_json::from_str(lines[0]).unwrap()
+    }
+
     #[rstest]
-    fn audit_log_written_for_auditable_endpoint_on_match() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_written_for_auditable_endpoint_on_match(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status")]),
@@ -1161,15 +1168,7 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let today = chrono::Utc::now().format("%Y-%m-%d");
-        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
-        assert!(log_path.exists(), "audit log file should be created");
-
-        let content = std::fs::read_to_string(&log_path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 1);
-
-        let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let entry = read_single_audit_entry(&audit_dir);
         assert_eq!(entry["command"], "git status");
         assert_eq!(entry["action"]["type"], "allow");
         assert_eq!(entry["metadata"]["endpoint_type"], "test");
@@ -1177,8 +1176,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_not_written_for_non_auditable_endpoint() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_not_written_for_non_auditable_endpoint(audit_dir: TempDir) {
         let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status")]),
@@ -1187,7 +1185,6 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        // MockEndpoint.is_auditable() returns false, so no log should be written
         let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
         assert!(
             entries.is_empty(),
@@ -1196,8 +1193,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_not_written_in_dry_run_mode() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_not_written_in_dry_run_mode(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status")]),
@@ -1218,8 +1214,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_not_written_when_disabled() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_not_written_when_disabled(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status")]),
@@ -1240,8 +1235,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_records_deny_action() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_records_deny_action(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("rm -rf /".to_string())));
         let config = Config {
             rules: Some(vec![deny_rule("rm -rf /")]),
@@ -1250,17 +1244,13 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let today = chrono::Utc::now().format("%Y-%m-%d");
-        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
-        let content = std::fs::read_to_string(&log_path).unwrap();
-        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        let entry = read_single_audit_entry(&audit_dir);
         assert_eq!(entry["action"]["type"], "deny");
         assert_eq!(entry["command"], "rm -rf /");
     }
 
     #[rstest]
-    fn audit_log_records_default_action_for_no_match() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_records_default_action_for_no_match(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("unknown-command".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status")]),
@@ -1273,10 +1263,7 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let today = chrono::Utc::now().format("%Y-%m-%d");
-        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
-        let content = std::fs::read_to_string(&log_path).unwrap();
-        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        let entry = read_single_audit_entry(&audit_dir);
         assert_eq!(entry["action"]["type"], "default");
         assert_eq!(entry["default_action"], "ask");
     }
@@ -1301,8 +1288,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_records_compound_sub_evaluations() {
-        let audit_dir = tempfile::TempDir::new().unwrap();
+    fn audit_log_records_compound_sub_evaluations(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status && rm -rf /".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status"), deny_rule("rm -rf /")]),
@@ -1311,11 +1297,7 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let today = chrono::Utc::now().format("%Y-%m-%d");
-        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
-        let content = std::fs::read_to_string(&log_path).unwrap();
-        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
-
+        let entry = read_single_audit_entry(&audit_dir);
         assert_eq!(entry["action"]["type"], "deny");
         let subs = entry["sub_evaluations"].as_array().unwrap();
         assert_eq!(subs.len(), 2);

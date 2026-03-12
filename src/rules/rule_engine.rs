@@ -56,6 +56,8 @@ pub struct EvalResult {
 pub struct CompoundEvalResult {
     pub action: Action,
     pub sandbox_policy: Option<MergedSandboxPolicy>,
+    /// Per-sub-command evaluation results for audit logging.
+    pub sub_results: Vec<EvalResult>,
 }
 
 /// The action determined by rule evaluation.
@@ -115,25 +117,28 @@ pub fn evaluate_compound(
 
     let mut merged_action: Option<Action> = None;
     let mut preset_names: Vec<String> = Vec::new();
+    let mut sub_results: Vec<EvalResult> = Vec::new();
 
     for cmd in &commands {
         let result = evaluate_command(config, cmd, context)?;
 
         // Collect sandbox preset names
-        if let Some(name) = result.sandbox_preset {
-            preset_names.push(name);
+        if let Some(ref name) = result.sandbox_preset {
+            preset_names.push(name.clone());
         }
 
         // Resolve Action::Default to the configured defaults.action so that
         // unmatched sub-commands are compared at their effective restriction
         // level (e.g. ask) rather than being silently swallowed by Allow.
-        let resolved_action = resolve_default_action(result.action, config);
+        let resolved_action = resolve_default_action(result.action.clone(), config);
 
         // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
             Some(prev) => merge_actions(prev, resolved_action),
             None => resolved_action,
         });
+
+        sub_results.push(result);
     }
 
     let action = merged_action.unwrap_or(Action::Default);
@@ -178,6 +183,7 @@ pub fn evaluate_compound(
     Ok(CompoundEvalResult {
         action: final_action,
         sandbox_policy: final_policy,
+        sub_results,
     })
 }
 
