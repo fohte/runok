@@ -58,10 +58,14 @@ impl TimeSpec {
             Err(_) => return None,
         };
         let secs = match unit {
-            "m" => num * 60,
-            "h" => num * 3600,
-            "d" => num * 86400,
+            "m" => num.checked_mul(60),
+            "h" => num.checked_mul(3600),
+            "d" => num.checked_mul(86400),
             _ => unreachable!(),
+        };
+        let secs = match secs {
+            Some(s) => s,
+            None => return Some(Err(format!("duration overflow: {num}{unit} is too large"))),
         };
         Some(Ok(TimeSpec::Relative(Duration::from_secs(secs))))
     }
@@ -70,7 +74,10 @@ impl TimeSpec {
     pub fn resolve(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         match self {
             TimeSpec::Absolute(dt) => *dt,
-            TimeSpec::Relative(dur) => now - chrono::Duration::seconds(dur.as_secs() as i64),
+            TimeSpec::Relative(dur) => {
+                let secs = i64::try_from(dur.as_secs()).unwrap_or(i64::MAX);
+                now - chrono::Duration::seconds(secs)
+            }
         }
     }
 }
@@ -162,6 +169,14 @@ mod tests {
     fn resolve(#[case] ts: TimeSpec, #[case] expected: DateTime<Utc>) {
         let now = "2026-02-25T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
         assert_eq!(ts.resolve(now), expected);
+    }
+
+    #[rstest]
+    #[case::large_days("999999999999999999d")]
+    #[case::large_hours("999999999999999999h")]
+    #[case::large_minutes("999999999999999999m")]
+    fn parse_overflow_returns_error(#[case] input: &str) {
+        assert!(TimeSpec::parse(input).is_err());
     }
 
     #[rstest]
