@@ -966,6 +966,242 @@ mod tests {
         );
     }
 
+    // === run_with ===
+
+    /// Set up cache for a reference with a given SHA in metadata.
+    fn setup_cache_with_sha(cache: &PresetCache, reference: &str, sha: &str) {
+        let cache_dir = cache.cache_dir(reference);
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(cache_dir.join("runok.yml"), "rules: []").unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference.to_string(),
+            resolved_sha: Some(sha.to_string()),
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+    }
+
+    #[rstest]
+    fn run_with_upgraded_updates_config_file(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        fs::write(
+            &config_path,
+            indoc! {"
+                extends:
+                  - github:org/repo@v1.0.0
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+
+        // Set up old version cache
+        setup_cache_with_sha(&cache, "github:org/repo@v1.0.0", "aaa111");
+
+        // Set up new version cache so it's a cache Hit (no fetch needed)
+        setup_cache_with_sha(&cache, "github:org/repo@v1.2.0", "bbb222");
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.2.0", T)])));
+
+        let tracked = vec![TrackedReference {
+            reference: "github:org/repo@v1.0.0".to_string(),
+            source_file: config_path.clone(),
+        }];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_ok());
+
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(
+            updated,
+            indoc! {"
+                extends:
+                  - github:org/repo@v1.2.0
+                rules:
+                  - allow: 'git status'
+            "}
+        );
+    }
+
+    #[rstest]
+    fn run_with_updated_does_not_modify_config(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        let original_content = indoc! {"
+            extends:
+              - github:org/repo@main
+            rules:
+              - allow: 'git status'
+        "};
+        fs::write(&config_path, original_content).unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
+
+        let git_client = MockGitClient::new();
+        // SHA changes → Updated
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("def456".to_string()));
+
+        let tracked = vec![TrackedReference {
+            reference: "github:org/repo@main".to_string(),
+            source_file: config_path.clone(),
+        }];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_ok());
+
+        let after = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(after, original_content);
+    }
+
+    #[rstest]
+    fn run_with_up_to_date_does_not_modify_config(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        let original_content = indoc! {"
+            extends:
+              - github:org/repo@main
+        "};
+        fs::write(&config_path, original_content).unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
+
+        let git_client = MockGitClient::new();
+        // Same SHA → UpToDate
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("abc123".to_string()));
+
+        let tracked = vec![TrackedReference {
+            reference: "github:org/repo@main".to_string(),
+            source_file: config_path.clone(),
+        }];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_ok());
+
+        let after = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(after, original_content);
+    }
+
+    #[rstest]
+    fn run_with_skipped_does_not_modify_config(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        let original_content = indoc! {"
+            extends:
+              - github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        "};
+        fs::write(&config_path, original_content).unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+        let git_client = MockGitClient::new();
+
+        let tracked = vec![TrackedReference {
+            reference: "github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            source_file: config_path.clone(),
+        }];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_ok());
+
+        let after = fs::read_to_string(&config_path).unwrap();
+        assert_eq!(after, original_content);
+    }
+
+    #[rstest]
+    fn run_with_error_returns_err(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        fs::write(
+            &config_path,
+            indoc! {"
+                extends:
+                  - github:org/repo@main
+            "},
+        )
+        .unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
+
+        let git_client = MockGitClient::new();
+        git_client.on_fetch(Err(crate::config::PresetError::GitClone {
+            reference: "mock".to_string(),
+            message: "network error".to_string(),
+        }));
+
+        let tracked = vec![TrackedReference {
+            reference: "github:org/repo@main".to_string(),
+            source_file: config_path.clone(),
+        }];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("1 preset(s) failed to update")
+        );
+    }
+
+    #[rstest]
+    fn run_with_mixed_results_counts_errors(tmp: TempDir) {
+        let config_path = tmp.path().join("runok.yml");
+        fs::write(
+            &config_path,
+            indoc! {"
+                extends:
+                  - github:org/repo@main
+                  - github:org/other@develop
+            "},
+        )
+        .unwrap();
+
+        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
+
+        // First reference: UpToDate (same SHA)
+        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
+
+        // Second reference: Error (fetch fails)
+        setup_cache_with_sha(&cache, "github:org/other@develop", "xyz789");
+
+        let git_client = MockGitClient::new();
+        // First: success path
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("abc123".to_string()));
+        // Second: fetch error
+        git_client.on_fetch(Err(crate::config::PresetError::GitClone {
+            reference: "mock".to_string(),
+            message: "timeout".to_string(),
+        }));
+
+        let tracked = vec![
+            TrackedReference {
+                reference: "github:org/repo@main".to_string(),
+                source_file: config_path.clone(),
+            },
+            TrackedReference {
+                reference: "github:org/other@develop".to_string(),
+                source_file: config_path.clone(),
+            },
+        ];
+
+        let result = run_with(tracked, &cache, &git_client);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("1 preset(s) failed to update")
+        );
+    }
+
     impl std::fmt::Debug for UpdateResult {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
