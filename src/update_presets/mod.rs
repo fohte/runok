@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use similar::ChangeTag;
 
 use crate::config::cache::{CacheMetadata, CacheStatus, PresetCache};
-use crate::config::git_client::{GitClient, ProcessGitClient};
+use crate::config::git_client::{GitClient, ProcessGitClient, RemoteRef};
 use crate::config::preset_remote::{
     PresetReference, parse_preset_reference, preset_path_from_reference, resolve_git_params,
     resolve_preset_file_path,
@@ -137,7 +137,7 @@ fn update_single_preset<G: GitClient>(
     reference: &str,
     cache: &PresetCache,
     git_client: &G,
-    tags_cache: &mut HashMap<String, Vec<String>>,
+    refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
 ) -> UpdateResult {
     let parsed = match parse_preset_reference(reference) {
         Ok(p) => p,
@@ -160,7 +160,7 @@ fn update_single_preset<G: GitClient>(
             &parsed,
             cache,
             git_client,
-            tags_cache,
+            refs_cache,
         );
         // If no upgrade was found, the tag might actually be a branch (e.g., `v1` in
         // GitHub Actions style). Fall through to force_refetch so it still gets updated.
@@ -181,18 +181,19 @@ fn try_tag_upgrade<G: GitClient>(
     parsed: &PresetReference,
     cache: &PresetCache,
     git_client: &G,
-    tags_cache: &mut HashMap<String, Vec<String>>,
+    refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
 ) -> UpdateResult {
-    // Fetch remote tags (cached per URL to avoid redundant network calls)
-    let remote_tags = match tags_cache.entry(url.to_string()) {
+    // Fetch remote refs (cached per URL to avoid redundant network calls)
+    let remote_refs = match refs_cache.entry(url.to_string()) {
         std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
         std::collections::hash_map::Entry::Vacant(e) => match git_client.ls_remote_refs(url) {
-            Ok(tags) => e.insert(tags),
+            Ok(refs) => e.insert(refs),
             Err(err) => return UpdateResult::Error(format!("ls-remote failed: {err}")),
         },
     };
 
-    let new_tag = match find_latest_upgrade(current_tag, remote_tags) {
+    let ref_names: Vec<String> = remote_refs.iter().map(|r| r.name.clone()).collect();
+    let new_tag = match find_latest_upgrade(current_tag, &ref_names) {
         Some(t) => t,
         None => return UpdateResult::UpToDate,
     };
@@ -383,11 +384,11 @@ fn run_with<G: GitClient>(
     let mut error_count = 0;
 
     // Cache ls-remote results per URL to avoid redundant network calls
-    let mut tags_cache: HashMap<String, Vec<String>> = HashMap::new();
+    let mut refs_cache: HashMap<String, Vec<RemoteRef>> = HashMap::new();
 
     for tracked in &tracked_refs {
         let reference = &tracked.reference;
-        match update_single_preset(reference, cache, git_client, &mut tags_cache) {
+        match update_single_preset(reference, cache, git_client, &mut refs_cache) {
             UpdateResult::Updated { before, after } => {
                 eprintln!("\x1b[1mUpdated:\x1b[0m {reference}");
                 print_diff(reference, reference, &before, &after);
@@ -543,6 +544,7 @@ fn collect_tracked_from_dir(
 mod tests {
     use super::*;
     use crate::config::cache::PresetCache;
+    use crate::config::git_client::RefKind;
     use crate::config::git_client::mock::MockGitClient;
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -592,6 +594,20 @@ mod tests {
         Skipped,
     }
 
+    const T: RefKind = RefKind::Tag;
+    const B: RefKind = RefKind::Branch;
+
+    /// Build a `Vec<RemoteRef>` from `(name, kind)` pairs.
+    fn refs(pairs: &[(&str, RefKind)]) -> Vec<RemoteRef> {
+        pairs
+            .iter()
+            .map(|(name, kind)| RemoteRef {
+                name: name.to_string(),
+                kind: *kind,
+            })
+            .collect()
+    }
+
     /// Run `update_single_preset` with the given scenario.
     ///
     /// - Sets up old cache with preset content.
@@ -602,7 +618,7 @@ mod tests {
     fn run_update_scenario(
         tmp: &TempDir,
         reference: &str,
-        remote_refs: &[&str],
+        remote_refs: Vec<RemoteRef>,
         expected: &Expected,
     ) -> UpdateResult {
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
@@ -650,8 +666,7 @@ mod tests {
         let git_client = MockGitClient::new();
 
         if !remote_refs.is_empty() {
-            let refs: Vec<String> = remote_refs.iter().map(|s| s.to_string()).collect();
-            git_client.on_ls_remote_refs(Ok(refs));
+            git_client.on_ls_remote_refs(Ok(remote_refs));
         }
 
         // Mock fetch/checkout/rev_parse for upgrade path or force_refetch fallback
@@ -661,8 +676,8 @@ mod tests {
             git_client.on_rev_parse(Ok("abc123".to_string()));
         }
 
-        let mut tags_cache = HashMap::new();
-        update_single_preset(reference, &cache, &git_client, &mut tags_cache)
+        let mut refs_cache = HashMap::new();
+        update_single_preset(reference, &cache, &git_client, &mut refs_cache)
     }
 
     #[rstest]
@@ -681,88 +696,88 @@ mod tests {
     // -- v1 branch with v2 branch available: upgraded --
     #[case::v1_branch_to_v2_branch(
         "github:org/repo@v1",
-        &["v1", "v2"],
+        &[("v1", B), ("v2", B)],
         Expected::Upgraded("github:org/repo@v2"),
     )]
     // -- v1 tag with v2 tag available: upgraded --
     #[case::v1_tag_to_v2_tag(
         "github:org/repo@v1",
-        &["v1.0.0", "v2.0.0"],
+        &[("v1.0.0", T), ("v2.0.0", T)],
         Expected::Upgraded("github:org/repo@v2"),
     )]
     // -- v1 with both v2 branch and v2.x tags: upgraded to v2 --
     #[case::v1_mixed_branches_and_tags(
         "github:org/repo@v1",
-        &["v1", "v1.0.0", "v2", "v2.0.0"],
+        &[("v1", B), ("v1.0.0", T), ("v2", B), ("v2.0.0", T)],
         Expected::Upgraded("github:org/repo@v2"),
     )]
     // -- v1 with no v2 available: no upgrade, re-fetched --
     #[case::v1_no_newer_major(
         "github:org/repo@v1",
-        &["v1", "v1.0.0", "v1.1.0"],
+        &[("v1", B), ("v1.0.0", T), ("v1.1.0", T)],
         Expected::UpToDate,
     )]
     // -- full semver v1.0.0 with v1.0.1 and v1.2.0: picks v1.2.0 (latest within major) --
     #[case::full_semver_picks_latest_minor(
         "github:org/repo@v1.0.0",
-        &["v1.0.0", "v1.0.1", "v1.2.0"],
+        &[("v1.0.0", T), ("v1.0.1", T), ("v1.2.0", T)],
         Expected::Upgraded("github:org/repo@v1.2.0"),
     )]
     // -- full semver v1.0.0 with v2.0.0 only: no upgrade (major boundary) --
     #[case::full_semver_respects_major_boundary(
         "github:org/repo@v1.0.0",
-        &["v1.0.0", "v2.0.0"],
+        &[("v1.0.0", T), ("v2.0.0", T)],
         Expected::UpToDate,
     )]
     // -- full semver v1.0.0 with v1.0.1 available: patch upgrade --
     #[case::full_semver_patch_upgrade(
         "github:org/repo@v1.0.0",
-        &["v1.0.0", "v1.0.1"],
+        &[("v1.0.0", T), ("v1.0.1", T)],
         Expected::Upgraded("github:org/repo@v1.0.1"),
     )]
     // -- full semver at latest: no upgrade --
     #[case::full_semver_already_latest(
         "github:org/repo@v1.2.0",
-        &["v1.0.0", "v1.1.0", "v1.2.0"],
+        &[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)],
         Expected::UpToDate,
     )]
     // -- major.minor v1.0 with v1.3 available: upgraded --
     #[case::major_minor_upgrade(
         "github:org/repo@v1.0",
-        &["v1.0.0", "v1.1.0", "v1.3.0"],
+        &[("v1.0.0", T), ("v1.1.0", T), ("v1.3.0", T)],
         Expected::Upgraded("github:org/repo@v1.3"),
     )]
     // -- major.minor v1.2 at latest: no upgrade --
     #[case::major_minor_already_latest(
         "github:org/repo@v1.2",
-        &["v1.0.0", "v1.1.0", "v1.2.0"],
+        &[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)],
         Expected::UpToDate,
     )]
     // -- major.minor respects major boundary --
     #[case::major_minor_respects_major_boundary(
         "github:org/repo@v1.0",
-        &["v1.0.0", "v2.0.0"],
+        &[("v1.0.0", T), ("v2.0.0", T)],
         Expected::UpToDate,
     )]
     // -- pre-release tags are excluded from upgrades --
     #[case::pre_release_excluded(
         "github:org/repo@v1.0.0",
-        &["v1.0.0", "v1.1.0-beta.1"],
+        &[("v1.0.0", T), ("v1.1.0-beta.1", T)],
         Expected::UpToDate,
     )]
     // -- v-prefix mismatch: v-prefixed ref ignores non-prefixed tags --
     #[case::v_prefix_mismatch(
         "github:org/repo@v1.0.0",
-        &["1.1.0", "v1.1.0"],
+        &[("1.1.0", T), ("v1.1.0", T)],
         Expected::Upgraded("github:org/repo@v1.1.0"),
     )]
     fn update_single_preset_scenarios(
         tmp: TempDir,
         #[case] reference: &str,
-        #[case] remote_refs: &[&str],
+        #[case] remote_refs: &[(&str, RefKind)],
         #[case] expected: Expected,
     ) {
-        let result = run_update_scenario(&tmp, reference, remote_refs, &expected);
+        let result = run_update_scenario(&tmp, reference, refs(remote_refs), &expected);
         match &expected {
             Expected::Upgraded(new_ref) => match result {
                 UpdateResult::Upgraded {
@@ -812,8 +827,8 @@ mod tests {
             message: "network error".to_string(),
         }));
 
-        let mut tags_cache = HashMap::new();
-        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
+        let mut refs_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
         match result {
             UpdateResult::Error(msg) => {
                 assert_eq!(
