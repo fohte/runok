@@ -405,6 +405,7 @@ fn run_with<G: GitClient>(
                             &config_before,
                             &config_after,
                         );
+                        upgraded_count += 1;
                     }
                     Err(e) => {
                         eprintln!(
@@ -415,7 +416,6 @@ fn run_with<G: GitClient>(
                     }
                 }
                 eprintln!();
-                upgraded_count += 1;
             }
             UpdateResult::Error(msg) => {
                 eprintln!("\x1b[31mError:\x1b[0m {reference}: {msg}");
@@ -518,7 +518,11 @@ fn collect_tracked_from_dir(
     };
 
     for r in collect_remote_references(&config) {
-        if seen.insert(r.clone()) {
+        // Deduplicate by (reference, source_file) pair. The same reference
+        // in different config files must be tracked separately so that all
+        // files are updated on upgrade.
+        let key = format!("{}:{}", r, path.display());
+        if seen.insert(key) {
             tracked.push(TrackedReference {
                 reference: r,
                 source_file: path.clone(),
@@ -852,6 +856,31 @@ mod tests {
     }
 
     #[rstest]
+    fn collect_references_allows_same_ref_from_different_dirs(tmp: TempDir) {
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::create_dir_all(&dir_b).unwrap();
+
+        let content = indoc! {"
+            extends:
+              - github:org/repo@v1
+        "};
+        fs::write(dir_a.join("runok.yml"), content).unwrap();
+        fs::write(dir_b.join("runok.yml"), content).unwrap();
+
+        let mut tracked = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        collect_tracked_from_dir(&dir_a, &["runok.yml"], &mut tracked, &mut seen);
+        collect_tracked_from_dir(&dir_b, &["runok.yml"], &mut tracked, &mut seen);
+
+        // Same reference from different files should both be tracked
+        assert_eq!(tracked.len(), 2);
+        assert_eq!(tracked[0].source_file, dir_a.join("runok.yml"));
+        assert_eq!(tracked[1].source_file, dir_b.join("runok.yml"));
+    }
+
+    #[rstest]
     fn collect_references_tracks_source_file(tmp: TempDir) {
         let dir = tmp.path();
         fs::write(
@@ -1059,7 +1088,12 @@ mod tests {
     // -- Upgraded: config file is rewritten with new version --
     #[case::upgraded_updates_config(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@v1.0.0\nrules:\n  - allow: 'git status'\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@v1.0.0
+                rules:
+                  - allow: 'git status'
+            "},
             references: vec!["github:org/repo@v1.0.0"],
             cache_entries: vec![
                 ("github:org/repo@v1.0.0", "aaa111"),
@@ -1070,14 +1104,22 @@ mod tests {
             checkout_results: vec![],
             rev_parse_results: vec![],
         },
-        RunWithExpected::ConfigUpdated(
-            "extends:\n  - github:org/repo@v1.2.0\nrules:\n  - allow: 'git status'\n",
-        ),
+        RunWithExpected::ConfigUpdated(indoc! {"
+            extends:
+              - github:org/repo@v1.2.0
+            rules:
+              - allow: 'git status'
+        "}),
     )]
     // -- Updated (SHA changed): config file unchanged --
     #[case::updated_does_not_modify_config(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@main\nrules:\n  - allow: 'git status'\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@main
+                rules:
+                  - allow: 'git status'
+            "},
             references: vec!["github:org/repo@main"],
             cache_entries: vec![("github:org/repo@main", "abc123")],
             remote_refs: vec![],
@@ -1090,7 +1132,10 @@ mod tests {
     // -- UpToDate (same SHA): config file unchanged --
     #[case::up_to_date_does_not_modify_config(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@main\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@main
+            "},
             references: vec!["github:org/repo@main"],
             cache_entries: vec![("github:org/repo@main", "abc123")],
             remote_refs: vec![],
@@ -1103,7 +1148,10 @@ mod tests {
     // -- Skipped (commit SHA): config file unchanged --
     #[case::skipped_does_not_modify_config(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            "},
             references: vec!["github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
             cache_entries: vec![],
             remote_refs: vec![],
@@ -1116,7 +1164,10 @@ mod tests {
     // -- Error (fetch fails): returns Err --
     #[case::error_returns_err(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@main\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@main
+            "},
             references: vec!["github:org/repo@main"],
             cache_entries: vec![("github:org/repo@main", "abc123")],
             remote_refs: vec![],
@@ -1132,7 +1183,11 @@ mod tests {
     // -- Mixed: one success + one error → returns Err --
     #[case::mixed_results_counts_errors(
         RunWithScenario {
-            config_content: "extends:\n  - github:org/repo@main\n  - github:org/other@develop\n",
+            config_content: indoc! {"
+                extends:
+                  - github:org/repo@main
+                  - github:org/other@develop
+            "},
             references: vec!["github:org/repo@main", "github:org/other@develop"],
             cache_entries: vec![
                 ("github:org/repo@main", "abc123"),
