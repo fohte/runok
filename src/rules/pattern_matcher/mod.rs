@@ -1068,7 +1068,7 @@ mod tests {
     #[case::flag_negation_empty_tokens_single("sort !-o *", "sort", true)]
     #[case::flag_negation_empty_tokens_alt("sort !-o|--output|--compress-program *", "sort", true)]
     #[case::flag_negation_empty_tokens_find("find !-delete *", "find", true)]
-    // Long flag negation with preceding literals and no trailing arguments
+    // Long flag negation with preceding literals
     #[case::long_flag_negation_empty_after_literals(
         "git interpret-trailers --parse !--in-place *",
         "git interpret-trailers --parse",
