@@ -7,10 +7,7 @@ use similar::ChangeTag;
 
 use crate::config::cache::{CacheMetadata, CacheStatus, PresetCache};
 use crate::config::git_client::{GitClient, ProcessGitClient, RemoteRef};
-use crate::config::preset_remote::{
-    PresetReference, parse_preset_reference, preset_path_from_reference, resolve_git_params,
-    resolve_preset_file_path,
-};
+use crate::config::preset_remote::{PresetReference, parse_preset_reference, resolve_git_params};
 use crate::config::{Config, parse_config};
 
 use semver_utils::{find_latest_upgrade, parse_version_spec};
@@ -39,14 +36,6 @@ fn collect_remote_references(config: &Config) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Read raw YAML content from a preset cache directory, returning empty string if not found.
-fn read_preset_content(cache_dir: &Path, preset_path: Option<&str>) -> String {
-    resolve_preset_file_path(cache_dir, preset_path)
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_default()
-}
-
 /// Print a colored unified-style diff between two strings.
 fn print_diff(old_label: &str, new_label: &str, before: &str, after: &str) {
     let diff = similar::TextDiff::from_lines(before, after);
@@ -56,8 +45,8 @@ fn print_diff(old_label: &str, new_label: &str, before: &str, after: &str) {
     const CYAN: &str = "\x1b[36m";
     const RESET: &str = "\x1b[0m";
 
-    eprintln!("{RED}--- a/{old_label}{RESET}");
-    eprintln!("{GREEN}+++ b/{new_label}{RESET}");
+    eprintln!("{RED}--- {old_label}{RESET}");
+    eprintln!("{GREEN}+++ {new_label}{RESET}");
 
     for group in diff.grouped_ops(3) {
         let first = &group[0];
@@ -93,15 +82,16 @@ fn current_timestamp() -> u64 {
 /// Result of updating a single preset.
 enum UpdateResult {
     /// Preset content was refreshed with changes (branch/Latest).
-    Updated { before: String, after: String },
+    Updated {
+        old_sha: Option<String>,
+        new_sha: Option<String>,
+    },
     /// Preset was already up to date (no changes).
     UpToDate,
     /// Preset is immutable (commit SHA), skipped.
     Skipped,
-    /// A newer semver tag was found and the preset was upgraded.
+    /// A newer version tag was found and the preset was upgraded.
     Upgraded {
-        before: String,
-        after: String,
         old_reference: String,
         new_reference: String,
     },
@@ -157,7 +147,6 @@ fn update_single_preset<G: GitClient>(
             reference,
             current_tag,
             &params.url,
-            &parsed,
             cache,
             git_client,
             refs_cache,
@@ -169,16 +158,15 @@ fn update_single_preset<G: GitClient>(
         }
     }
 
-    // Branch/Latest (or version tag with no upgrade): force re-fetch and show diff
-    force_refetch(reference, &parsed, &params, cache, git_client)
+    // Branch/Latest (or version tag with no upgrade): force re-fetch
+    force_refetch(reference, &params, cache, git_client)
 }
 
-/// Try to upgrade a semver-tagged preset to the latest compatible version.
+/// Try to upgrade a version-tagged preset to the latest compatible version.
 fn try_tag_upgrade<G: GitClient>(
     reference: &str,
     current_tag: &str,
     url: &str,
-    parsed: &PresetReference,
     cache: &PresetCache,
     git_client: &G,
     refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
@@ -199,11 +187,6 @@ fn try_tag_upgrade<G: GitClient>(
     };
 
     let new_reference = build_updated_reference(reference, current_tag, &new_tag);
-    let preset_path = preset_path_from_reference(parsed);
-
-    // Read old content from current cache
-    let old_cache_dir = cache.cache_dir(reference);
-    let before = read_preset_content(&old_cache_dir, preset_path);
 
     // Fetch the new version into its own cache slot
     let new_cache_dir = cache.cache_dir(&new_reference);
@@ -254,29 +237,24 @@ fn try_tag_upgrade<G: GitClient>(
         }
     }
 
-    let after = read_preset_content(&new_cache_dir, preset_path);
-
     UpdateResult::Upgraded {
-        before,
-        after,
         old_reference: reference.to_string(),
         new_reference,
     }
 }
 
-/// Force re-fetch a branch/Latest preset and return diff result.
+/// Force re-fetch a branch/Latest preset and return the result.
 fn force_refetch<G: GitClient>(
     reference: &str,
-    parsed: &PresetReference,
     params: &crate::config::preset_remote::GitParams,
     cache: &PresetCache,
     git_client: &G,
 ) -> UpdateResult {
     let cache_dir = cache.cache_dir(reference);
-    let preset_path = preset_path_from_reference(parsed);
 
-    // Read old content before fetching
-    let before = read_preset_content(&cache_dir, preset_path);
+    // Read old SHA from existing metadata
+    let old_sha =
+        PresetCache::read_metadata(&cache_dir.join("metadata.json")).and_then(|m| m.resolved_sha);
 
     match cache.check(reference, false) {
         CacheStatus::Hit(_) | CacheStatus::Stale(_) => {
@@ -293,14 +271,20 @@ fn force_refetch<G: GitClient>(
                 return UpdateResult::Error(format!("checkout failed: {e}"));
             }
 
-            let resolved_sha = git_client.rev_parse_head(&cache_dir).ok();
+            let new_sha = git_client.rev_parse_head(&cache_dir).ok();
             let metadata = CacheMetadata {
                 fetched_at: current_timestamp(),
                 is_immutable: false,
                 reference: reference.to_string(),
-                resolved_sha,
+                resolved_sha: new_sha.clone(),
             };
             let _ = PresetCache::write_metadata(&cache_dir, &metadata);
+
+            if old_sha == new_sha {
+                UpdateResult::UpToDate
+            } else {
+                UpdateResult::Updated { old_sha, new_sha }
+            }
         }
         CacheStatus::Miss => {
             let _lock = match cache.acquire_lock(reference) {
@@ -320,23 +304,20 @@ fn force_refetch<G: GitClient>(
                 return UpdateResult::Error(format!("clone failed: {e}"));
             }
 
-            let resolved_sha = git_client.rev_parse_head(&cache_dir).ok();
+            let new_sha = git_client.rev_parse_head(&cache_dir).ok();
             let metadata = CacheMetadata {
                 fetched_at: current_timestamp(),
                 is_immutable: false,
                 reference: reference.to_string(),
-                resolved_sha,
+                resolved_sha: new_sha.clone(),
             };
             let _ = PresetCache::write_metadata(&cache_dir, &metadata);
+
+            UpdateResult::Updated {
+                old_sha: None,
+                new_sha,
+            }
         }
-    }
-
-    let after = read_preset_content(&cache_dir, preset_path);
-
-    if before == after {
-        UpdateResult::UpToDate
-    } else {
-        UpdateResult::Updated { before, after }
     }
 }
 
@@ -389,10 +370,10 @@ fn run_with<G: GitClient>(
     for tracked in &tracked_refs {
         let reference = &tracked.reference;
         match update_single_preset(reference, cache, git_client, &mut refs_cache) {
-            UpdateResult::Updated { before, after } => {
-                eprintln!("\x1b[1mUpdated:\x1b[0m {reference}");
-                print_diff(reference, reference, &before, &after);
-                eprintln!();
+            UpdateResult::Updated { old_sha, new_sha } => {
+                let old = old_sha.as_deref().map_or("(none)", |s| s);
+                let new = new_sha.as_deref().map_or("(unknown)", |s| s);
+                eprintln!("\x1b[1mUpdated:\x1b[0m {reference} ({old} \u{2192} {new})");
                 updated_count += 1;
             }
             UpdateResult::UpToDate => {
@@ -404,19 +385,25 @@ fn run_with<G: GitClient>(
                 skipped_count += 1;
             }
             UpdateResult::Upgraded {
-                before,
-                after,
                 old_reference,
                 new_reference,
             } => {
                 eprintln!("\x1b[1mUpgraded:\x1b[0m {old_reference} \u{2192} {new_reference}");
-                print_diff(&old_reference, &new_reference, &before, &after);
+
+                // Read config file content before updating
+                let config_before =
+                    std::fs::read_to_string(&tracked.source_file).unwrap_or_default();
 
                 match update_config_file(&tracked.source_file, &old_reference, &new_reference) {
                     Ok(()) => {
-                        eprintln!(
-                            "  Updated {}: {old_reference} \u{2192} {new_reference}",
-                            tracked.source_file.display()
+                        let config_after =
+                            std::fs::read_to_string(&tracked.source_file).unwrap_or_default();
+                        let config_path = tracked.source_file.display();
+                        print_diff(
+                            &format!("a/{config_path}"),
+                            &format!("b/{config_path}"),
+                            &config_before,
+                            &config_after,
                         );
                     }
                     Err(e) => {

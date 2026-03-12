@@ -30,19 +30,16 @@ Update all remote presets:
 runok update-presets
 ```
 
-Example output when a semver tag is upgraded:
+Example output when a version tag is upgraded:
 
 ```
 Upgraded: github:org/shared-rules@v1.0.0 → github:org/shared-rules@v1.2.0
---- a/github:org/shared-rules@v1.0.0
-+++ b/github:org/shared-rules@v1.2.0
-@@ -1,3 +1,4 @@
- rules:
-   - allow: 'git status'
-+  - allow: 'git log'
-   - deny: 'rm -rf /'
-
-  Updated runok.yml: github:org/shared-rules@v1.0.0 → github:org/shared-rules@v1.2.0
+--- a/runok.yml
++++ b/runok.yml
+@@ -1,3 +1,3 @@
+ extends:
+-  - github:org/shared-rules@v1.0.0
++  - github:org/shared-rules@v1.2.0
 
 Summary: 0 updated, 1 upgraded, 0 already up to date, 0 skipped, 0 errors
 ```
@@ -50,14 +47,7 @@ Summary: 0 updated, 1 upgraded, 0 already up to date, 0 skipped, 0 errors
 Example output when a branch reference has new content:
 
 ```
-Updated: github:org/shared-rules@main
---- a/github:org/shared-rules@main
-+++ b/github:org/shared-rules@main
-@@ -1,3 +1,4 @@
- rules:
-   - allow: 'git status'
-+  - allow: 'git push'
-   - deny: 'rm -rf /'
+Updated: github:org/shared-rules@main (abc1234 → def5678)
 
 Summary: 1 updated, 0 upgraded, 0 already up to date, 0 skipped, 0 errors
 ```
