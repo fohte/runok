@@ -24,7 +24,13 @@ impl AuditTestEnv {
 
         let result = Self { env, audit_dir };
 
-        let global_config = format!("audit:\n  path: '{}'", result.audit_dir.to_string_lossy());
+        let global_config = format!(
+            indoc! {"
+                audit:
+                  path: '{}'
+            "},
+            result.audit_dir.to_string_lossy()
+        );
         result.write_global_config(&global_config);
 
         result
@@ -128,38 +134,26 @@ fn exec_audit_env() -> AuditTestEnv {
 // ========================================
 
 #[rstest]
-fn exec_creates_audit_log_file(exec_audit_env: AuditTestEnv) {
+#[case::allow(&["exec", "--", "echo", "hello"], 0, "echo hello", "allow")]
+#[case::deny(&["exec", "--", "rm", "-rf", "/"], 3, "rm -rf /", "deny")]
+fn exec_creates_audit_log(
+    exec_audit_env: AuditTestEnv,
+    #[case] args: &[&str],
+    #[case] expected_code: i32,
+    #[case] expected_command: &str,
+    #[case] expected_action: &str,
+) {
     exec_audit_env
         .command()
-        .args(["exec", "--", "echo", "hello"])
+        .args(args)
         .assert()
-        .code(0);
-
-    let today = Utc::now().format("%Y-%m-%d");
-    let log_path = exec_audit_env
-        .audit_dir
-        .join(format!("audit-{today}.jsonl"));
-    assert!(log_path.exists(), "audit log file should be created");
+        .code(expected_code);
 
     let entries = exec_audit_env.read_audit_entries();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["command"], "echo hello");
-    assert_eq!(entries[0]["action"]["type"], "allow");
+    assert_eq!(entries[0]["command"], expected_command);
+    assert_eq!(entries[0]["action"]["type"], expected_action);
     assert_eq!(entries[0]["metadata"]["endpoint_type"], "exec");
-}
-
-#[rstest]
-fn exec_deny_creates_audit_log(exec_audit_env: AuditTestEnv) {
-    exec_audit_env
-        .command()
-        .args(["exec", "--", "rm", "-rf", "/"])
-        .assert()
-        .code(3);
-
-    let entries = exec_audit_env.read_audit_entries();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["command"], "rm -rf /");
-    assert_eq!(entries[0]["action"]["type"], "deny");
 }
 
 // ========================================
@@ -365,20 +359,18 @@ fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
 }
 
 // ========================================
-// check does not generate audit log (E2E)
+// Non-auditable commands (E2E)
 // ========================================
 
 #[rstest]
-fn check_subcommand_does_not_create_audit_log(allow_echo_env: AuditTestEnv) {
-    allow_echo_env
-        .command()
-        .args(["check", "--", "echo", "hello"])
-        .assert()
-        .code(0);
+#[case::check(&["check", "--", "echo", "hello"])]
+#[case::dry_run(&["exec", "--dry-run", "--", "echo", "hello"])]
+fn non_exec_does_not_create_audit_log(allow_echo_env: AuditTestEnv, #[case] args: &[&str]) {
+    allow_echo_env.command().args(args).assert().code(0);
 
     assert!(
         !allow_echo_env.audit_file_exists(),
-        "check should not create audit log files"
+        "should not create audit log files"
     );
 }
 
@@ -462,22 +454,4 @@ fn no_audit_config_still_works() {
         .assert()
         .code(0)
         .stdout(predicates::str::contains("hello"));
-}
-
-// ========================================
-// Dry-run does not generate audit log (E2E)
-// ========================================
-
-#[rstest]
-fn exec_dry_run_does_not_create_audit_log(allow_echo_env: AuditTestEnv) {
-    allow_echo_env
-        .command()
-        .args(["exec", "--dry-run", "--", "echo", "hello"])
-        .assert()
-        .code(0);
-
-    assert!(
-        !allow_echo_env.audit_file_exists(),
-        "dry-run should not create audit log files"
-    );
 }
