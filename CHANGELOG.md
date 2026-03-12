@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/fohte/runok/compare/v0.1.4...v0.1.5) (2026-03-12)
+
+
+### Bug Fixes
+
+* **rules:** handle `=`-joined flag tokens in Alternation matching ([#196](https://github.com/fohte/runok/issues/196)) ([15fe774](https://github.com/fohte/runok/commit/15fe77484a6df1fe07f3edc1e9d6f470838c4284))
+* **rules:** prevent flag negation from being consumed as preceding flag's value ([#191](https://github.com/fohte/runok/issues/191)) ([31b76a8](https://github.com/fohte/runok/commit/31b76a827be23f1bb62d9ba031222e04d444b10b))
+
 ## [0.1.4](https://github.com/fohte/runok/compare/v0.1.3...v0.1.4) (2026-03-11)
 
 
