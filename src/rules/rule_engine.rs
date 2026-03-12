@@ -59,7 +59,7 @@ pub struct CompoundEvalResult {
 }
 
 /// The action determined by rule evaluation.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Allow,
     Deny(DenyResponse),
@@ -68,7 +68,7 @@ pub enum Action {
 }
 
 /// Details included when a command is denied.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DenyResponse {
     pub message: Option<String>,
     pub fix_suggestion: Option<String>,

@@ -2,6 +2,10 @@ pub mod check_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
 
+use crate::audit::{
+    AuditEntry, AuditMetadata, AuditWriter, SerializableAction, SerializableRuleMatch,
+    SubEvaluation,
+};
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
 use crate::rules::rule_engine::{
@@ -16,6 +20,19 @@ use crate::rules::rule_engine::{
 pub struct ActionResult {
     pub action: Action,
     pub sandbox: SandboxInfo,
+    /// Rules that matched during evaluation (for audit logging).
+    pub matched_rules: Vec<RuleMatchInfo>,
+    /// Sub-evaluation results for compound commands (for audit logging).
+    pub sub_evaluations: Option<Vec<SubEvalResult>>,
+}
+
+/// Intermediate sub-evaluation result carrying raw `Action` (not yet serialized).
+#[derive(Debug)]
+pub struct SubEvalResult {
+    pub command: String,
+    pub action: Action,
+    pub matched_rules: Vec<RuleMatchInfo>,
+    pub eval_type: String,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -70,6 +87,18 @@ pub trait Endpoint {
     /// Default implementation delegates to `handle_action`.
     fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
         self.handle_action(result)
+    }
+
+    /// Return audit metadata for this endpoint. Used to populate the
+    /// `metadata` field of `AuditEntry`.
+    fn audit_metadata(&self) -> AuditMetadata {
+        AuditMetadata::default()
+    }
+
+    /// Whether this endpoint should produce audit log entries.
+    /// Returns `false` for endpoints like `check` where logging is not desired.
+    fn is_auditable(&self) -> bool {
+        false
     }
 }
 
@@ -134,6 +163,90 @@ fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) 
         other => other,
     };
     action_result
+}
+
+/// Evaluate each sub-command individually to collect per-sub-command results for audit logging.
+fn collect_sub_evaluations(
+    config: &Config,
+    commands: &[String],
+    context: &EvalContext,
+) -> Vec<SubEvalResult> {
+    commands
+        .iter()
+        .filter_map(|cmd| {
+            evaluate_command(config, cmd, context)
+                .ok()
+                .map(|result| SubEvalResult {
+                    command: cmd.clone(),
+                    action: result.action,
+                    matched_rules: result.matched_rules,
+                    eval_type: "compound".to_owned(),
+                })
+        })
+        .collect()
+}
+
+/// Write an audit log entry for the given evaluation result.
+/// Failures are reported to stderr but do not affect the exit code (fail-open).
+fn write_audit_log(
+    endpoint: &dyn Endpoint,
+    config: &Config,
+    command: &str,
+    action_result: &ActionResult,
+    defaults: &Defaults,
+) {
+    let audit_config = config.audit.clone().unwrap_or_default();
+    if !audit_config.is_enabled() {
+        return;
+    }
+
+    let writer = AuditWriter::new(audit_config);
+    let metadata = endpoint.audit_metadata();
+
+    let sandbox_preset = match &action_result.sandbox {
+        SandboxInfo::Preset(p) => p.clone(),
+        SandboxInfo::MergedPolicy(_) => None,
+    };
+
+    let default_action = defaults.action.map(|a| match a {
+        crate::config::ActionKind::Allow => "allow".to_owned(),
+        crate::config::ActionKind::Ask => "ask".to_owned(),
+        crate::config::ActionKind::Deny => "deny".to_owned(),
+    });
+
+    let entry = AuditEntry {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        command: command.to_owned(),
+        action: SerializableAction::from(action_result.action.clone()),
+        matched_rules: action_result
+            .matched_rules
+            .iter()
+            .cloned()
+            .map(SerializableRuleMatch::from)
+            .collect(),
+        sandbox_preset,
+        default_action,
+        metadata,
+        sub_evaluations: action_result.sub_evaluations.as_ref().map(|subs| {
+            subs.iter()
+                .map(|s| SubEvaluation {
+                    command: s.command.clone(),
+                    action: SerializableAction::from(s.action.clone()),
+                    matched_rules: s
+                        .matched_rules
+                        .iter()
+                        .cloned()
+                        .map(SerializableRuleMatch::from)
+                        .collect(),
+                    eval_type: s.eval_type.clone(),
+                })
+                .collect()
+        }),
+    };
+
+    if let Err(e) = writer.write(&entry) {
+        eprintln!("runok: warning: audit log write failed: {e}");
+    }
 }
 
 /// Run the common evaluation flow for any endpoint.
@@ -204,9 +317,15 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                         compound_result.action
                     );
                 }
+
+                // Collect per-sub-command evaluations for audit logging
+                let sub_evaluations = collect_sub_evaluations(config, &commands, &context);
+
                 ActionResult {
                     action: compound_result.action,
                     sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+                    matched_rules: vec![],
+                    sub_evaluations: Some(sub_evaluations),
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -216,6 +335,8 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         ActionResult {
             action: Action::Default,
             sandbox: SandboxInfo::Preset(None),
+            matched_rules: vec![],
+            sub_evaluations: None,
         }
     } else {
         match evaluate_command(config, effective_command, &context) {
@@ -230,6 +351,8 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 ActionResult {
                     action: result.action,
                     sandbox: SandboxInfo::Preset(result.sandbox_preset),
+                    matched_rules: result.matched_rules,
+                    sub_evaluations: None,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -238,6 +361,11 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
 
     // Apply defaults.sandbox fallback when the matched rule has no sandbox
     let action_result = apply_sandbox_fallback(action_result, &defaults);
+
+    // Record audit log entry (exec/hook only, not dry-run or check)
+    if endpoint.is_auditable() && !options.dry_run {
+        write_audit_log(endpoint, config, &command, &action_result, &defaults);
+    }
 
     // Determine dispatch target
     let dispatch = if matches!(action_result.action, Action::Default) {
@@ -966,6 +1094,238 @@ mod tests {
         assert_eq!(exit_code, 0);
     }
 
+    // --- audit log integration tests ---
+
+    struct AuditableMockEndpoint {
+        inner: MockEndpoint,
+    }
+
+    impl AuditableMockEndpoint {
+        fn new(command: Result<Option<String>, String>) -> Self {
+            Self {
+                inner: MockEndpoint::new(command),
+            }
+        }
+    }
+
+    impl Endpoint for AuditableMockEndpoint {
+        fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
+            self.inner.extract_command()
+        }
+
+        fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+            self.inner.handle_action(result)
+        }
+
+        fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
+            self.inner.handle_no_match(defaults)
+        }
+
+        fn handle_error(&self, error: anyhow::Error) -> i32 {
+            self.inner.handle_error(error)
+        }
+
+        fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+            self.inner.handle_dry_run(result)
+        }
+
+        fn audit_metadata(&self) -> crate::audit::AuditMetadata {
+            crate::audit::AuditMetadata {
+                endpoint_type: "test".to_owned(),
+                cwd: Some("/tmp/test".to_owned()),
+                ..Default::default()
+            }
+        }
+
+        fn is_auditable(&self) -> bool {
+            true
+        }
+    }
+
+    fn make_audit_config(dir: &tempfile::TempDir) -> crate::config::AuditConfig {
+        crate::config::AuditConfig {
+            enabled: Some(true),
+            path: Some(dir.path().to_string_lossy().to_string()),
+            rotation: None,
+        }
+    }
+
+    #[rstest]
+    fn audit_log_written_for_auditable_endpoint_on_match() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        assert!(log_path.exists(), "audit log file should be created");
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1);
+
+        let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(entry["command"], "git status");
+        assert_eq!(entry["action"]["type"], "allow");
+        assert_eq!(entry["metadata"]["endpoint_type"], "test");
+        assert_eq!(entry["metadata"]["cwd"], "/tmp/test");
+    }
+
+    #[rstest]
+    fn audit_log_not_written_for_non_auditable_endpoint() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        // MockEndpoint.is_auditable() returns false, so no log should be written
+        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "no audit log should be written for non-auditable endpoint"
+        );
+    }
+
+    #[rstest]
+    fn audit_log_not_written_in_dry_run_mode() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        run_with_options(&endpoint, &config, &options);
+
+        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "no audit log should be written in dry-run mode"
+        );
+    }
+
+    #[rstest]
+    fn audit_log_not_written_when_disabled() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(false),
+                path: Some(audit_dir.path().to_string_lossy().to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "no audit log should be written when disabled"
+        );
+    }
+
+    #[rstest]
+    fn audit_log_records_deny_action() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("rm -rf /".to_string())));
+        let config = Config {
+            rules: Some(vec![deny_rule("rm -rf /")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(entry["action"]["type"], "deny");
+        assert_eq!(entry["command"], "rm -rf /");
+    }
+
+    #[rstest]
+    fn audit_log_records_default_action_for_no_match() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("unknown-command".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(entry["action"]["type"], "default");
+        assert_eq!(entry["default_action"], "ask");
+    }
+
+    #[rstest]
+    fn audit_log_write_failure_does_not_affect_exit_code() {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(true),
+                path: Some("/proc/nonexistent/impossible/path".to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        };
+        let exit_code = run(&endpoint, &config);
+        assert_eq!(
+            exit_code, 0,
+            "audit log failure should not affect exit code"
+        );
+    }
+
+    #[rstest]
+    fn audit_log_records_compound_sub_evaluations() {
+        let audit_dir = tempfile::TempDir::new().unwrap();
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status && rm -rf /".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status"), deny_rule("rm -rf /")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+
+        assert_eq!(entry["action"]["type"], "deny");
+        let subs = entry["sub_evaluations"].as_array().unwrap();
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0]["command"], "git status");
+        assert_eq!(subs[0]["action"]["type"], "allow");
+        assert_eq!(subs[0]["eval_type"], "compound");
+        assert_eq!(subs[1]["command"], "rm -rf /");
+        assert_eq!(subs[1]["action"]["type"], "deny");
+    }
+
     // --- apply_sandbox_fallback unit tests ---
 
     #[rstest]
@@ -993,6 +1353,8 @@ mod tests {
         let action_result = ActionResult {
             action: Action::Allow,
             sandbox,
+            matched_rules: vec![],
+            sub_evaluations: None,
         };
         let defaults = Defaults {
             action: None,
