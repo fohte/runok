@@ -38,24 +38,6 @@ impl AuditTestEnv {
         Self { env, audit_dir }
     }
 
-    /// Create with custom global config YAML (for audit-specific settings).
-    fn with_global_config(rules_yaml: &str, global_yaml: &str) -> Self {
-        let env = TestEnv::new(rules_yaml);
-        let audit_dir = env.cwd.join("audit-logs");
-
-        let global_config_dir = env
-            .cwd
-            .parent()
-            .unwrap_or_else(|| panic!("cwd has no parent"))
-            .join("home/.config/runok");
-        fs::create_dir_all(&global_config_dir)
-            .unwrap_or_else(|e| panic!("failed to create global config dir: {e}"));
-        fs::write(global_config_dir.join("runok.yml"), global_yaml)
-            .unwrap_or_else(|e| panic!("failed to write global config: {e}"));
-
-        Self { env, audit_dir }
-    }
-
     fn command(&self) -> assert_cmd::Command {
         self.env.command()
     }
@@ -114,8 +96,16 @@ fn parse_json_stdout(output: &assert_cmd::assert::Assert) -> Vec<serde_json::Val
 }
 
 // ========================================
-// exec generates audit log
+// Fixtures
 // ========================================
+
+#[fixture]
+fn allow_echo_env() -> AuditTestEnv {
+    AuditTestEnv::new(indoc! {"
+        rules:
+          - allow: 'echo *'
+    "})
+}
 
 #[fixture]
 fn exec_audit_env() -> AuditTestEnv {
@@ -125,6 +115,10 @@ fn exec_audit_env() -> AuditTestEnv {
           - deny: 'rm *'
     "})
 }
+
+// ========================================
+// exec generates audit log
+// ========================================
 
 #[rstest]
 fn exec_creates_audit_log_file(exec_audit_env: AuditTestEnv) {
@@ -303,20 +297,16 @@ fn audit_filter_by_limit(audit_view_env: AuditTestEnv) {
 }
 
 #[rstest]
-fn audit_filter_by_since() {
-    let env = AuditTestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-    "});
-
+fn audit_filter_by_since(allow_echo_env: AuditTestEnv) {
     // Run a command to generate an audit entry
-    env.command()
+    allow_echo_env
+        .command()
         .args(["exec", "--", "echo", "recent"])
         .assert()
         .code(0);
 
     // --since 1h should include the entry we just created
-    let assert = env
+    let assert = allow_echo_env
         .command()
         .args(["audit", "--since", "1h", "--json"])
         .assert()
@@ -332,11 +322,8 @@ fn audit_filter_by_since() {
 // ========================================
 
 #[rstest]
-fn audit_rotation_deletes_old_files() {
-    let env = AuditTestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-    "});
+fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
+    let env = allow_echo_env;
 
     // Rewrite global config with short retention
     let global_config_dir = env
@@ -391,19 +378,15 @@ fn audit_rotation_deletes_old_files() {
 // ========================================
 
 #[rstest]
-fn check_subcommand_does_not_create_audit_log() {
-    let env = AuditTestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-    "});
-
-    env.command()
+fn check_subcommand_does_not_create_audit_log(allow_echo_env: AuditTestEnv) {
+    allow_echo_env
+        .command()
         .args(["check", "--", "echo", "hello"])
         .assert()
         .code(0);
 
     assert!(
-        !env.audit_file_exists(),
+        !allow_echo_env.audit_file_exists(),
         "check should not create audit log files"
     );
 }
@@ -414,20 +397,27 @@ fn check_subcommand_does_not_create_audit_log() {
 
 #[rstest]
 fn audit_disabled_no_log_created() {
-    let env = AuditTestEnv::with_global_config(
+    let env = AuditTestEnv::new(indoc! {"
+        rules:
+          - allow: 'echo *'
+    "});
+
+    let global_config_dir = env
+        .env
+        .cwd
+        .parent()
+        .unwrap_or_else(|| panic!("cwd has no parent"))
+        .join("home/.config/runok");
+    let config = format!(
         indoc! {"
-            rules:
-              - allow: 'echo *'
+            audit:
+              enabled: false
+              path: '{}'
         "},
-        &format!(
-            indoc! {"
-                audit:
-                  enabled: false
-                  path: '{}'
-            "},
-            "/tmp/runok-test-disabled-audit",
-        ),
+        env.audit_dir.to_string_lossy()
     );
+    fs::write(global_config_dir.join("runok.yml"), config)
+        .unwrap_or_else(|e| panic!("failed to write global config: {e}"));
 
     env.command()
         .args(["exec", "--", "echo", "hello"])
@@ -445,20 +435,15 @@ fn audit_disabled_no_log_created() {
 // ========================================
 
 #[rstest]
-fn exec_compound_command_audit_log() {
-    let env = AuditTestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-          - deny: 'rm *'
-    "});
-
+fn exec_compound_command_audit_log(exec_audit_env: AuditTestEnv) {
     // Pass compound command as a single argument so the parser detects &&
-    env.command()
+    exec_audit_env
+        .command()
         .args(["exec", "--", "echo hello && rm -rf /tmp"])
         .assert()
         .code(3);
 
-    let entries = env.read_audit_entries();
+    let entries = exec_audit_env.read_audit_entries();
     assert_eq!(entries.len(), 1);
 
     let sub_evals = entries[0]["sub_evaluations"]
@@ -501,19 +486,15 @@ fn no_audit_config_still_works() {
 // ========================================
 
 #[rstest]
-fn exec_dry_run_does_not_create_audit_log() {
-    let env = AuditTestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-    "});
-
-    env.command()
+fn exec_dry_run_does_not_create_audit_log(allow_echo_env: AuditTestEnv) {
+    allow_echo_env
+        .command()
         .args(["exec", "--dry-run", "--", "echo", "hello"])
         .assert()
         .code(0);
 
     assert!(
-        !env.audit_file_exists(),
+        !allow_echo_env.audit_file_exists(),
         "dry-run should not create audit log files"
     );
 }

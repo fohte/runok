@@ -80,6 +80,27 @@ fn read_audit_entries(dir: &std::path::Path) -> Vec<AuditEntry> {
         .collect()
 }
 
+struct AuditTestConfig {
+    config: runok::config::Config,
+    audit_dir: TempDir,
+}
+
+#[fixture]
+fn allow_echo_audit_config(audit_dir: TempDir) -> AuditTestConfig {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'echo *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+    AuditTestConfig { config, audit_dir }
+}
+
 fn audit_file_exists(dir: &std::path::Path) -> bool {
     if !dir.exists() {
         return false;
@@ -96,19 +117,7 @@ fn audit_file_exists(dir: &std::path::Path) -> bool {
 }
 
 #[rstest]
-fn exec_generates_audit_log(audit_dir: TempDir) {
-    let audit_path = audit_dir.path().to_string_lossy().to_string();
-    let config = parse_config(&format!(
-        indoc! {"
-            rules:
-              - allow: 'echo *'
-            audit:
-              path: '{}'
-        "},
-        audit_path
-    ))
-    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
-
+fn exec_generates_audit_log(allow_echo_audit_config: AuditTestConfig) {
     let endpoint = ExecAdapter::new(
         vec!["echo".into(), "hello".into()],
         None,
@@ -116,10 +125,10 @@ fn exec_generates_audit_log(audit_dir: TempDir) {
     );
     let options = RunOptions::default();
 
-    let exit_code = adapter::run_with_options(&endpoint, &config, &options);
+    let exit_code = adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
     assert_eq!(exit_code, 0);
 
-    let entries = read_audit_entries(audit_dir.path());
+    let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].command, "echo hello");
     assert_eq!(entries[0].action, runok::audit::SerializableAction::Allow);
@@ -160,27 +169,15 @@ fn exec_deny_generates_audit_log(audit_dir: TempDir) {
 }
 
 #[rstest]
-fn check_does_not_generate_audit_log(audit_dir: TempDir) {
-    let audit_path = audit_dir.path().to_string_lossy().to_string();
-    let config = parse_config(&format!(
-        indoc! {"
-            rules:
-              - allow: 'echo *'
-            audit:
-              path: '{}'
-        "},
-        audit_path
-    ))
-    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
-
+fn check_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig) {
     let endpoint =
         runok::adapter::check_adapter::CheckAdapter::from_command("echo hello".to_owned());
     let options = RunOptions::default();
 
-    let exit_code = adapter::run_with_options(&endpoint, &config, &options);
+    let exit_code = adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
     assert_eq!(exit_code, 0);
 
-    assert!(!audit_file_exists(audit_dir.path()));
+    assert!(!audit_file_exists(allow_echo_audit_config.audit_dir.path()));
 }
 
 #[rstest]
@@ -280,19 +277,7 @@ fn no_audit_section_uses_default_behavior() {
 }
 
 #[rstest]
-fn dry_run_does_not_generate_audit_log(audit_dir: TempDir) {
-    let audit_path = audit_dir.path().to_string_lossy().to_string();
-    let config = parse_config(&format!(
-        indoc! {"
-            rules:
-              - allow: 'echo *'
-            audit:
-              path: '{}'
-        "},
-        audit_path
-    ))
-    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
-
+fn dry_run_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig) {
     let endpoint = ExecAdapter::new(
         vec!["echo".into(), "hello".into()],
         None,
@@ -303,26 +288,14 @@ fn dry_run_does_not_generate_audit_log(audit_dir: TempDir) {
         verbose: false,
     };
 
-    let exit_code = adapter::run_with_options(&endpoint, &config, &options);
+    let exit_code = adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
     assert_eq!(exit_code, 0);
 
-    assert!(!audit_file_exists(audit_dir.path()));
+    assert!(!audit_file_exists(allow_echo_audit_config.audit_dir.path()));
 }
 
 #[rstest]
-fn audit_log_records_matched_rules(audit_dir: TempDir) {
-    let audit_path = audit_dir.path().to_string_lossy().to_string();
-    let config = parse_config(&format!(
-        indoc! {"
-            rules:
-              - allow: 'echo *'
-            audit:
-              path: '{}'
-        "},
-        audit_path
-    ))
-    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
-
+fn audit_log_records_matched_rules(allow_echo_audit_config: AuditTestConfig) {
     let endpoint = ExecAdapter::new(
         vec!["echo".into(), "hello".into()],
         None,
@@ -330,9 +303,9 @@ fn audit_log_records_matched_rules(audit_dir: TempDir) {
     );
     let options = RunOptions::default();
 
-    adapter::run_with_options(&endpoint, &config, &options);
+    adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
 
-    let entries = read_audit_entries(audit_dir.path());
+    let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].matched_rules.is_empty());
     assert_eq!(entries[0].matched_rules[0].action_kind, "allow");
