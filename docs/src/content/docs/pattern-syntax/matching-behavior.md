@@ -82,6 +82,20 @@ Flag-value patterns also match `=`-joined forms. A pattern like `-X POST` matche
 | `curl -X=POST https://example.com`        | Matches |
 | `curl --request=POST https://example.com` | Matches |
 
+Standalone flag alternations (without an explicit value pattern) also recognize `=`-joined tokens. The flag part is matched against the alternation and the value part becomes a separate token for subsequent pattern matching:
+
+```yaml
+- ask: 'curl * -o|--output *'
+- allow: 'curl *'
+```
+
+| Command                                      | Result  |
+| -------------------------------------------- | ------- |
+| `curl --output /tmp/out https://example.com` | `ask`   |
+| `curl --output=/tmp/out https://example.com` | `ask`   |
+| `curl -o=/tmp/out https://example.com`       | `ask`   |
+| `curl https://example.com`                   | `allow` |
+
 ### Flag-only Negation
 
 Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):

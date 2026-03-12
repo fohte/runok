@@ -386,8 +386,46 @@ fn match_engine<'a>(
             // for Placeholder capture to work correctly (e.g. `bash -c <cmd>`).
             if has_any_flag && !is_extract {
                 for i in 0..cmd_tokens.len() {
+                    // Direct match: e.g. `--output` matches `--output`
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
+                        let saved_dd = after_double_dash.get();
+                        if let Some(caps) = &mut captures {
+                            let saved_len = caps.len();
+                            if match_engine(
+                                rest,
+                                &remaining,
+                                definitions,
+                                steps,
+                                Some(*caps),
+                                None,
+                                after_double_dash,
+                            )? {
+                                return Ok(true);
+                            }
+                            caps.truncate(saved_len);
+                        } else if match_engine(
+                            rest,
+                            &remaining,
+                            definitions,
+                            steps,
+                            None,
+                            None,
+                            after_double_dash,
+                        )? {
+                            return Ok(true);
+                        }
+                        after_double_dash.set(saved_dd);
+                    }
+
+                    // `=`-joined match: e.g. `--output=/tmp/out` where
+                    // `--output` matches an alternative. The value part
+                    // is kept as a separate token for subsequent matching.
+                    if let Some((flag_part, value_part)) = split_flag_equals(cmd_tokens[i])
+                        && alts.iter().any(|a| literal_matches(a, flag_part))
+                    {
+                        let mut remaining = remove_indices(cmd_tokens, &[i]);
+                        remaining.insert(i.min(remaining.len()), value_part);
                         let saved_dd = after_double_dash.get();
                         if let Some(caps) = &mut captures {
                             let saved_len = caps.len();
@@ -1876,6 +1914,36 @@ mod tests {
     #[case::quoted_star_only(r#"cmd "*""#, "cmd *", true)]
     #[case::quoted_star_only_no_glob(r#"cmd "*""#, "cmd hello", false)]
     fn quoted_literal_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    // === Alternation flag with `=`-joined command token ===
+
+    #[rstest]
+    #[case::long_flag_equals_joined(
+        "curl * -o|--output *",
+        "curl --output=/tmp/out https://example.com",
+        true
+    )]
+    #[case::short_flag_equals_joined(
+        "curl * -o|--output *",
+        "curl -o=/tmp/out https://example.com",
+        true
+    )]
+    #[case::equals_joined_no_match_wrong_flag(
+        "curl * -o|--output *",
+        "curl --header=Accept https://example.com",
+        false
+    )]
+    fn alternation_flag_equals_joined(
         #[case] pattern_str: &str,
         #[case] command_str: &str,
         #[case] expected: bool,

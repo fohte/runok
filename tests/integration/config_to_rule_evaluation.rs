@@ -1171,3 +1171,81 @@ fn long_flag_negation_with_preceding_literals(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Boolean flag with trailing wildcard is not broken by equals splitting
+// ========================================
+
+#[rstest]
+#[case::boolean_flag_space_separated(
+    "git push --force origin",
+    assert_deny as ActionAssertion,
+)]
+#[case::boolean_flag_with_multiple_args(
+    "git push --force origin main",
+    assert_deny as ActionAssertion,
+)]
+#[case::no_flag_allowed(
+    "git push origin main",
+    assert_allow as ActionAssertion,
+)]
+#[case::boolean_flag_equals_not_split(
+    "git push --force=unexpected origin",
+    assert_deny as ActionAssertion,
+)]
+fn boolean_flag_not_broken_by_equals_splitting(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'git push -f|--force *'
+          - allow: 'git push *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Flag with equals-joined value matches wildcard value pattern
+// ========================================
+
+#[rstest]
+#[case::space_separated_flag_matches(
+    "curl --output /tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::equals_joined_flag_matches(
+    "curl --output=/tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::short_flag_space_separated(
+    "curl -o /tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::short_flag_equals_joined(
+    "curl -o=/tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::no_output_flag_allowed(
+    "curl https://example.com",
+    assert_allow as ActionAssertion,
+)]
+fn flag_equals_value_with_wildcard_pattern(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'curl * -o|--output *'
+          - allow: 'curl *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
