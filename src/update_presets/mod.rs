@@ -328,7 +328,7 @@ fn update_config_file(
     new_reference: &str,
 ) -> Result<(), anyhow::Error> {
     let content = std::fs::read_to_string(source_file)?;
-    let updated = content.replace(old_reference, new_reference);
+    let updated = content.replacen(old_reference, new_reference, 1);
     std::fs::write(source_file, updated)?;
     Ok(())
 }
