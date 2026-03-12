@@ -2,7 +2,7 @@
 title: runok audit
 description: View and filter audit log entries.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 `runok audit` displays recorded audit log entries. Every `exec` and hook evaluation is logged automatically (unless disabled), and this subcommand lets you query those entries by time range, action, or command pattern.

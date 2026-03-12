@@ -2,7 +2,7 @@
 title: runok update-presets
 description: Update all remote presets referenced via extends.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 `runok update-presets` updates all remote presets referenced in your configuration's `extends` field. For branch references, it forces a re-fetch bypassing the TTL cache. For version-tagged references, it finds the latest compatible version and updates your config file.
