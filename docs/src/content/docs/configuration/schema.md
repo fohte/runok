@@ -50,7 +50,7 @@ extends:
   - github:example-org/runok-presets/readonly-unix@v1
 ```
 
-See [Extends (Presets)](/configuration/extends/) for full details on local paths, GitHub shorthand, and Git URLs.
+See [Extends (Presets)](/configuration/extends/) for full details on local paths, GitHub shorthand, and Git URLs. For the official preset collection, see [Official Presets (runok-presets)](/configuration/official-presets/).
 
 ### `defaults`
 

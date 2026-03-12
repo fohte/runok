@@ -141,5 +141,6 @@ Each cached entry includes a `metadata.json` file tracking:
 
 ## Related
 
+- [Official Presets (runok-presets)](/configuration/official-presets/) -- Ready-made rule presets for common read-only commands.
 - [File Discovery and Merging](/configuration/file-discovery/) -- How configuration files are loaded and merged.
 - [Configuration Schema](/configuration/schema/) -- Full reference for `runok.yml`.
