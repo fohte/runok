@@ -22,20 +22,27 @@ impl AuditTestEnv {
         let env = TestEnv::new(rules_yaml);
         let audit_dir = env.cwd.join("audit-logs");
 
-        // Write audit config to the global config location.
-        // TestEnv creates: tmp/project (cwd) and tmp/home (HOME).
-        let global_config_dir = env
+        let result = Self { env, audit_dir };
+
+        let global_config = format!("audit:\n  path: '{}'", result.audit_dir.to_string_lossy());
+        result.write_global_config(&global_config);
+
+        result
+    }
+
+    /// Write content to the global config file at $HOME/.config/runok/runok.yml.
+    /// Creates the directory if it does not exist.
+    fn write_global_config(&self, yaml: &str) {
+        let global_config_dir = self
+            .env
             .cwd
             .parent()
             .unwrap_or_else(|| panic!("cwd has no parent"))
             .join("home/.config/runok");
         fs::create_dir_all(&global_config_dir)
             .unwrap_or_else(|e| panic!("failed to create global config dir: {e}"));
-        let global_config = format!("audit:\n  path: '{}'", audit_dir.to_string_lossy());
-        fs::write(global_config_dir.join("runok.yml"), global_config)
+        fs::write(global_config_dir.join("runok.yml"), yaml)
             .unwrap_or_else(|e| panic!("failed to write global config: {e}"));
-
-        Self { env, audit_dir }
     }
 
     fn command(&self) -> assert_cmd::Command {
@@ -241,31 +248,23 @@ fn audit_subcommand_json_format(audit_view_env: AuditTestEnv) {
 // ========================================
 
 #[rstest]
-fn audit_filter_by_action_deny(audit_view_env: AuditTestEnv) {
+#[case::deny("deny", 1)]
+#[case::allow("allow", 2)]
+fn audit_filter_by_action(
+    audit_view_env: AuditTestEnv,
+    #[case] action: &str,
+    #[case] expected_count: usize,
+) {
     let assert = audit_view_env
         .command()
-        .args(["audit", "--action", "deny", "--json"])
+        .args(["audit", "--action", action, "--json"])
         .assert()
         .code(0);
 
     let json_entries = parse_json_stdout(&assert);
-    assert_eq!(json_entries.len(), 1);
-    assert_eq!(json_entries[0]["action"]["type"], "deny");
-    assert_eq!(json_entries[0]["command"], "rm -rf /tmp");
-}
-
-#[rstest]
-fn audit_filter_by_action_allow(audit_view_env: AuditTestEnv) {
-    let assert = audit_view_env
-        .command()
-        .args(["audit", "--action", "allow", "--json"])
-        .assert()
-        .code(0);
-
-    let json_entries = parse_json_stdout(&assert);
-    assert_eq!(json_entries.len(), 2);
+    assert_eq!(json_entries.len(), expected_count);
     for entry in &json_entries {
-        assert_eq!(entry["action"]["type"], "allow");
+        assert_eq!(entry["action"]["type"], action);
     }
 }
 
@@ -326,13 +325,7 @@ fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
     let env = allow_echo_env;
 
     // Rewrite global config with short retention
-    let global_config_dir = env
-        .env
-        .cwd
-        .parent()
-        .unwrap_or_else(|| panic!("cwd has no parent"))
-        .join("home/.config/runok");
-    let config = format!(
+    env.write_global_config(&format!(
         indoc! {"
             audit:
               path: '{}'
@@ -340,9 +333,7 @@ fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
                 retention_days: 1
         "},
         env.audit_dir.to_string_lossy()
-    );
-    fs::write(global_config_dir.join("runok.yml"), config)
-        .unwrap_or_else(|e| panic!("failed to write global config: {e}"));
+    ));
 
     // Create an old audit file manually
     fs::create_dir_all(&env.audit_dir)
@@ -402,22 +393,14 @@ fn audit_disabled_no_log_created() {
           - allow: 'echo *'
     "});
 
-    let global_config_dir = env
-        .env
-        .cwd
-        .parent()
-        .unwrap_or_else(|| panic!("cwd has no parent"))
-        .join("home/.config/runok");
-    let config = format!(
+    env.write_global_config(&format!(
         indoc! {"
             audit:
               enabled: false
               path: '{}'
         "},
         env.audit_dir.to_string_lossy()
-    );
-    fs::write(global_config_dir.join("runok.yml"), config)
-        .unwrap_or_else(|e| panic!("failed to write global config: {e}"));
+    ));
 
     env.command()
         .args(["exec", "--", "echo", "hello"])

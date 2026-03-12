@@ -117,55 +117,60 @@ fn audit_file_exists(dir: &std::path::Path) -> bool {
 }
 
 #[rstest]
-fn exec_generates_audit_log(allow_echo_audit_config: AuditTestConfig) {
-    let endpoint = ExecAdapter::new(
-        vec!["echo".into(), "hello".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
-    let options = RunOptions::default();
-
-    let exit_code = adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
-    assert_eq!(exit_code, 0);
-
-    let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].command, "echo hello");
-    assert_eq!(entries[0].action, runok::audit::SerializableAction::Allow);
-    assert_eq!(entries[0].metadata.endpoint_type, "exec");
-}
-
-#[rstest]
-fn exec_deny_generates_audit_log(audit_dir: TempDir) {
+#[case::allow(
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+        audit:
+          path: '{}'
+    "},
+    vec!["echo".into(), "hello".into()],
+    0,
+    "echo hello",
+    "allow",
+)]
+#[case::deny(
+    indoc! {"
+        rules:
+          - deny: 'rm *'
+        audit:
+          path: '{}'
+    "},
+    vec!["rm".into(), "-rf".into(), "/".into()],
+    3,
+    "rm -rf /",
+    "deny",
+)]
+fn exec_generates_audit_log(
+    audit_dir: TempDir,
+    #[case] config_template: &str,
+    #[case] command_args: Vec<String>,
+    #[case] expected_exit_code: i32,
+    #[case] expected_command: &str,
+    #[case] expected_action: &str,
+) {
     let audit_path = audit_dir.path().to_string_lossy().to_string();
-    let config = parse_config(&format!(
-        indoc! {"
-            rules:
-              - deny: 'rm *'
-            audit:
-              path: '{}'
-        "},
-        audit_path
-    ))
-    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+    let config = parse_config(&config_template.replace("{}", &audit_path))
+        .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
 
-    let endpoint = ExecAdapter::new(
-        vec!["rm".into(), "-rf".into(), "/".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
+    let endpoint = ExecAdapter::new(command_args, None, Box::new(MockExecutor::new(0)));
     let options = RunOptions::default();
 
     let exit_code = adapter::run_with_options(&endpoint, &config, &options);
-    assert_eq!(exit_code, 3);
+    assert_eq!(exit_code, expected_exit_code);
 
     let entries = read_audit_entries(audit_dir.path());
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].command, "rm -rf /");
-    assert!(matches!(
-        entries[0].action,
-        runok::audit::SerializableAction::Deny { .. }
-    ));
+    assert_eq!(entries[0].command, expected_command);
+    assert_eq!(entries[0].metadata.endpoint_type, "exec");
+    match expected_action {
+        "allow" => assert_eq!(entries[0].action, runok::audit::SerializableAction::Allow),
+        "deny" => assert!(matches!(
+            entries[0].action,
+            runok::audit::SerializableAction::Deny { .. }
+        )),
+        other => panic!("unexpected action: {other}"),
+    }
 }
 
 #[rstest]
