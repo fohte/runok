@@ -22,6 +22,8 @@ pub enum Commands {
     Audit(AuditArgs),
     /// Initialize runok configuration
     Init(InitArgs),
+    /// Force-update all remote presets referenced via extends
+    UpdatePresets,
     /// Print the JSON Schema for runok.yml to stdout
     #[cfg(feature = "config-schema")]
     ConfigSchema,
@@ -233,6 +235,10 @@ mod tests {
     #[case::init_all_flags(
         &["runok", "init", "--scope", "user", "-y"],
         Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
+    )]
+    #[case::update_presets(
+        &["runok", "update-presets"],
+        Commands::UpdatePresets,
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);

@@ -216,13 +216,13 @@ fn parse_git_url(reference: &str) -> Result<PresetReference, PresetError> {
 }
 
 /// Resolve git parameters from a `PresetReference`.
-struct GitParams {
-    url: String,
-    git_ref: Option<String>,
-    is_immutable: bool,
+pub struct GitParams {
+    pub url: String,
+    pub git_ref: Option<String>,
+    pub is_immutable: bool,
 }
 
-fn resolve_git_params(reference: &PresetReference) -> GitParams {
+pub fn resolve_git_params(reference: &PresetReference) -> GitParams {
     match reference {
         PresetReference::GitHub {
             owner,
@@ -258,11 +258,14 @@ fn resolve_git_params(reference: &PresetReference) -> GitParams {
     }
 }
 
-/// Read a preset config file from a directory.
+/// Resolve the preset file path within a directory.
 ///
-/// When `preset_path` is `None`, reads `runok.yml` (or `runok.yaml`) from the root.
-/// When `preset_path` is `Some("foo/bar")`, reads `foo/bar.yml` (or `foo/bar.yaml`).
-fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config, ConfigError> {
+/// When `preset_path` is `None`, looks for `runok.yml` (or `runok.yaml`) from the root.
+/// When `preset_path` is `Some("foo/bar")`, looks for `foo/bar.yml` (or `foo/bar.yaml`).
+pub fn resolve_preset_file_path(
+    dir: &Path,
+    preset_path: Option<&str>,
+) -> Result<PathBuf, ConfigError> {
     let (yml, yaml, not_found_msg) = match preset_path {
         Some(p) => (
             dir.join(format!("{p}.yml")),
@@ -276,18 +279,25 @@ fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config,
         ),
     };
 
-    let path = if yml.exists() {
-        yml
+    if yml.exists() {
+        Ok(yml)
     } else if yaml.exists() {
-        yaml
+        Ok(yaml)
     } else {
-        return Err(PresetError::GitClone {
+        Err(PresetError::GitClone {
             reference: dir.display().to_string(),
             message: not_found_msg,
         }
-        .into());
-    };
+        .into())
+    }
+}
 
+/// Read a preset config file from a directory.
+///
+/// When `preset_path` is `None`, reads `runok.yml` (or `runok.yaml`) from the root.
+/// When `preset_path` is `Some("foo/bar")`, reads `foo/bar.yml` (or `foo/bar.yaml`).
+pub fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config, ConfigError> {
+    let path = resolve_preset_file_path(dir, preset_path)?;
     let content = std::fs::read_to_string(&path)?;
     let config = parse_config(&content)?;
     Ok(config)
@@ -314,7 +324,7 @@ fn current_timestamp() -> u64 {
 }
 
 /// Extract the preset path from a reference (only GitHub shorthand supports this).
-fn preset_path_from_reference(reference: &PresetReference) -> Option<&str> {
+pub fn preset_path_from_reference(reference: &PresetReference) -> Option<&str> {
     match reference {
         PresetReference::GitHub { path, .. } => path.as_deref(),
         _ => None,

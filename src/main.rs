@@ -68,9 +68,25 @@ fn main() -> ExitCode {
         return run_init(args);
     }
 
+    // UpdatePresets reads config files directly (not via DefaultConfigLoader)
+    if matches!(cli.command, Commands::UpdatePresets) {
+        return run_update_presets();
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exit_code = run_command(cli.command, &cwd, std::io::stdin());
     ExitCode::from(exit_code as u8)
+}
+
+fn run_update_presets() -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match runok::update_presets::run(&cwd) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("runok: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_init(args: &cli::InitArgs) -> ExitCode {
@@ -102,6 +118,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         Commands::Check(_) => 2,
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Init(_) => unreachable!("handled in main()"),
+        Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
         #[cfg(target_os = "linux")]
@@ -163,6 +180,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         }
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Init(_) => unreachable!("handled in main()"),
+        Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
         #[cfg(target_os = "linux")]

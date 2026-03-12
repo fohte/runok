@@ -25,6 +25,10 @@ Evaluate a command against your rules and, if allowed, execute it — [optionall
 
 View and filter audit log entries. Every `exec` and hook evaluation is logged automatically, and this subcommand lets you query those entries by time range, action, or command.
 
+### [`runok update-presets`](/cli/update-presets/)
+
+Force-update all remote presets referenced via `extends`, bypassing the TTL-based cache. Shows a diff for each preset that changed.
+
 ## Related
 
 - [Denial feedback](/configuration/denial-feedback/) -- Configure `message` and `fix_suggestion` for denied commands.
