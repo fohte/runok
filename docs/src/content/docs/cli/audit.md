@@ -87,7 +87,7 @@ audit:
   enabled: true
   path: ~/.local/share/runok/
   rotation:
-    retention_days: 30
+    retention_days: 7
 ```
 
 ## Log storage

@@ -353,7 +353,7 @@ Log rotation settings.
 Number of days to retain log files. Files older than this are automatically deleted during log writes.
 
 **Type:** `int`\
-**Default:** `30`
+**Default:** `7`
 
 ## Complete Example
 
