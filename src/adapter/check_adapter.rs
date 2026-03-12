@@ -266,7 +266,12 @@ mod tests {
         #[case] sandbox: SandboxInfo,
         #[case] expected: CheckOutput,
     ) {
-        let result = ActionResult { action, sandbox };
+        let result = ActionResult {
+            action,
+            sandbox,
+            matched_rules: vec![],
+            sub_evaluations: None,
+        };
         assert_eq!(build_check_output(&result), expected);
     }
 
@@ -285,6 +290,8 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox: SandboxInfo::Preset(None),
+            matched_rules: vec![],
+            sub_evaluations: None,
         };
         assert_eq!(adapter.handle_action(result).ok(), Some(0));
     }
@@ -391,5 +398,13 @@ mod tests {
                 network_allowed: Some(false),
             })
         );
+    }
+
+    // --- audit ---
+
+    #[rstest]
+    fn is_auditable_returns_false() {
+        let adapter = CheckAdapter::from_command("test".to_string());
+        assert!(!adapter.is_auditable());
     }
 }
