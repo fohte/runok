@@ -1924,4 +1924,34 @@ mod tests {
             "pattern {pattern_str:?} vs command {command_str:?}",
         );
     }
+
+    // === Alternation flag with `=`-joined command token ===
+
+    #[rstest]
+    #[case::long_flag_equals_joined(
+        "curl * -o|--output *",
+        "curl --output=/tmp/out https://example.com",
+        true
+    )]
+    #[case::short_flag_equals_joined(
+        "curl * -o|--output *",
+        "curl -o=/tmp/out https://example.com",
+        true
+    )]
+    #[case::equals_joined_no_match_wrong_flag(
+        "curl * -o|--output *",
+        "curl --header=Accept https://example.com",
+        false
+    )]
+    fn alternation_flag_equals_joined(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
 }
