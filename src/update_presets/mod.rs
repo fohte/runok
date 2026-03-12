@@ -581,48 +581,213 @@ mod tests {
 
     // === update_single_preset ===
 
-    #[rstest]
-    fn update_skips_immutable_preset(tmp: TempDir) {
-        let sha = "a".repeat(40);
-        let reference = format!("github:org/repo@{sha}");
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let git_client = MockGitClient::new();
-        let mut tags_cache = HashMap::new();
-
-        let result = update_single_preset(&reference, &cache, &git_client, &mut tags_cache);
-        assert!(matches!(result, UpdateResult::Skipped));
+    /// Expected outcome of `update_single_preset`.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Expected {
+        /// Upgraded to a new version reference.
+        Upgraded(&'static str),
+        /// Content re-fetched but unchanged (or no upgrade available, fell through to re-fetch).
+        UpToDate,
+        /// Immutable reference, skipped entirely.
+        Skipped,
     }
 
-    #[rstest]
-    fn update_branch_reports_up_to_date_when_no_changes(tmp: TempDir) {
-        // "main" is not semver, so it goes through the branch/force-refetch path
-        let reference = "github:org/repo@main";
+    /// Run `update_single_preset` with the given scenario.
+    ///
+    /// - Sets up old cache with preset content.
+    /// - If `expected` is `Upgraded(new_ref)`, pre-creates the upgrade target cache with
+    ///   different content so the diff is non-empty.
+    /// - Mocks `ls_remote_refs` with `remote_refs` (empty for non-version references).
+    /// - Mocks fetch/checkout/rev_parse for the force_refetch fallback path.
+    fn run_update_scenario(
+        tmp: &TempDir,
+        reference: &str,
+        remote_refs: &[&str],
+        expected: &Expected,
+    ) -> UpdateResult {
         let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let cache_dir = cache.cache_dir(reference);
-        fs::create_dir_all(&cache_dir).unwrap();
 
-        let content = indoc! {"
+        let old_content = indoc! {"
             rules:
               - allow: 'git status'
         "};
-        fs::write(cache_dir.join("runok.yml"), content).unwrap();
 
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference.to_string(),
-            resolved_sha: Some("abc123".to_string()),
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+        // Set up old cache (skip for commit SHA which has no prior cache)
+        let is_sha = reference
+            .split('@')
+            .next_back()
+            .is_some_and(|s| s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()));
+
+        if !is_sha {
+            let cache_dir = cache.cache_dir(reference);
+            fs::create_dir_all(&cache_dir).unwrap();
+            fs::write(cache_dir.join("runok.yml"), old_content).unwrap();
+
+            let metadata = CacheMetadata {
+                fetched_at: current_timestamp(),
+                is_immutable: false,
+                reference: reference.to_string(),
+                resolved_sha: Some("abc123".to_string()),
+            };
+            PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+        }
+
+        // If we expect an upgrade, pre-create the target cache with new content
+        if let Expected::Upgraded(new_ref) = expected {
+            let new_cache_dir = cache.cache_dir(new_ref);
+            fs::create_dir_all(&new_cache_dir).unwrap();
+            fs::write(
+                new_cache_dir.join("runok.yml"),
+                indoc! {"
+                    rules:
+                      - allow: 'git status'
+                      - allow: 'git log'
+                "},
+            )
+            .unwrap();
+        }
 
         let git_client = MockGitClient::new();
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("abc123".to_string()));
+
+        if !remote_refs.is_empty() {
+            let refs: Vec<String> = remote_refs.iter().map(|s| s.to_string()).collect();
+            git_client.on_ls_remote_refs(Ok(refs));
+        }
+
+        // Mock fetch/checkout/rev_parse for upgrade path or force_refetch fallback
+        if !is_sha {
+            git_client.on_fetch(Ok(()));
+            git_client.on_checkout(Ok(()));
+            git_client.on_rev_parse(Ok("abc123".to_string()));
+        }
 
         let mut tags_cache = HashMap::new();
-        let result = update_single_preset(reference, &cache, &git_client, &mut tags_cache);
-        assert!(matches!(result, UpdateResult::UpToDate));
+        update_single_preset(reference, &cache, &git_client, &mut tags_cache)
+    }
+
+    #[rstest]
+    // -- commit SHA: always skipped --
+    #[case::commit_sha_is_skipped(
+        "github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &[],
+        Expected::Skipped,
+    )]
+    // -- branch name: re-fetched, content unchanged → UpToDate --
+    #[case::branch_refetched(
+        "github:org/repo@main",
+        &[],
+        Expected::UpToDate,
+    )]
+    // -- v1 branch with v2 branch available: upgraded --
+    #[case::v1_branch_to_v2_branch(
+        "github:org/repo@v1",
+        &["v1", "v2"],
+        Expected::Upgraded("github:org/repo@v2"),
+    )]
+    // -- v1 tag with v2 tag available: upgraded --
+    #[case::v1_tag_to_v2_tag(
+        "github:org/repo@v1",
+        &["v1.0.0", "v2.0.0"],
+        Expected::Upgraded("github:org/repo@v2"),
+    )]
+    // -- v1 with both v2 branch and v2.x tags: upgraded to v2 --
+    #[case::v1_mixed_branches_and_tags(
+        "github:org/repo@v1",
+        &["v1", "v1.0.0", "v2", "v2.0.0"],
+        Expected::Upgraded("github:org/repo@v2"),
+    )]
+    // -- v1 with no v2 available: no upgrade, re-fetched --
+    #[case::v1_no_newer_major(
+        "github:org/repo@v1",
+        &["v1", "v1.0.0", "v1.1.0"],
+        Expected::UpToDate,
+    )]
+    // -- full semver v1.0.0 with v1.0.1 and v1.2.0: picks v1.2.0 (latest within major) --
+    #[case::full_semver_picks_latest_minor(
+        "github:org/repo@v1.0.0",
+        &["v1.0.0", "v1.0.1", "v1.2.0"],
+        Expected::Upgraded("github:org/repo@v1.2.0"),
+    )]
+    // -- full semver v1.0.0 with v2.0.0 only: no upgrade (major boundary) --
+    #[case::full_semver_respects_major_boundary(
+        "github:org/repo@v1.0.0",
+        &["v1.0.0", "v2.0.0"],
+        Expected::UpToDate,
+    )]
+    // -- full semver v1.0.0 with v1.0.1 available: patch upgrade --
+    #[case::full_semver_patch_upgrade(
+        "github:org/repo@v1.0.0",
+        &["v1.0.0", "v1.0.1"],
+        Expected::Upgraded("github:org/repo@v1.0.1"),
+    )]
+    // -- full semver at latest: no upgrade --
+    #[case::full_semver_already_latest(
+        "github:org/repo@v1.2.0",
+        &["v1.0.0", "v1.1.0", "v1.2.0"],
+        Expected::UpToDate,
+    )]
+    // -- major.minor v1.0 with v1.3 available: upgraded --
+    #[case::major_minor_upgrade(
+        "github:org/repo@v1.0",
+        &["v1.0.0", "v1.1.0", "v1.3.0"],
+        Expected::Upgraded("github:org/repo@v1.3"),
+    )]
+    // -- major.minor v1.2 at latest: no upgrade --
+    #[case::major_minor_already_latest(
+        "github:org/repo@v1.2",
+        &["v1.0.0", "v1.1.0", "v1.2.0"],
+        Expected::UpToDate,
+    )]
+    // -- major.minor respects major boundary --
+    #[case::major_minor_respects_major_boundary(
+        "github:org/repo@v1.0",
+        &["v1.0.0", "v2.0.0"],
+        Expected::UpToDate,
+    )]
+    // -- pre-release tags are excluded from upgrades --
+    #[case::pre_release_excluded(
+        "github:org/repo@v1.0.0",
+        &["v1.0.0", "v1.1.0-beta.1"],
+        Expected::UpToDate,
+    )]
+    // -- v-prefix mismatch: v-prefixed ref ignores non-prefixed tags --
+    #[case::v_prefix_mismatch(
+        "github:org/repo@v1.0.0",
+        &["1.1.0", "v1.1.0"],
+        Expected::Upgraded("github:org/repo@v1.1.0"),
+    )]
+    fn update_single_preset_scenarios(
+        tmp: TempDir,
+        #[case] reference: &str,
+        #[case] remote_refs: &[&str],
+        #[case] expected: Expected,
+    ) {
+        let result = run_update_scenario(&tmp, reference, remote_refs, &expected);
+        match &expected {
+            Expected::Upgraded(new_ref) => match result {
+                UpdateResult::Upgraded {
+                    old_reference,
+                    new_reference,
+                    ..
+                } => {
+                    assert_eq!(old_reference, reference);
+                    assert_eq!(new_reference, *new_ref);
+                }
+                other => panic!("expected Upgraded to {new_ref}, got {other:?}"),
+            },
+            Expected::UpToDate => {
+                assert!(
+                    matches!(result, UpdateResult::UpToDate),
+                    "expected UpToDate, got {result:?}"
+                );
+            }
+            Expected::Skipped => {
+                assert!(
+                    matches!(result, UpdateResult::Skipped),
+                    "expected Skipped, got {result:?}"
+                );
+            }
+        }
     }
 
     #[rstest]
@@ -658,161 +823,6 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
-    }
-
-    // === version tag upgrade ===
-
-    /// Helper: set up a cached preset with old content, pre-create the upgrade target cache
-    /// with new content, and run `update_single_preset`.
-    fn run_upgrade_test(
-        tmp: &TempDir,
-        reference: &str,
-        expected_new_reference: &str,
-        remote_refs: Vec<String>,
-    ) -> UpdateResult {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-
-        // Set up old cache
-        let old_cache_dir = cache.cache_dir(reference);
-        fs::create_dir_all(&old_cache_dir).unwrap();
-        fs::write(
-            old_cache_dir.join("runok.yml"),
-            indoc! {"
-                rules:
-                  - allow: 'git status'
-            "},
-        )
-        .unwrap();
-
-        // Pre-create new cache dir with updated content (mock clone doesn't create files)
-        let new_cache_dir = cache.cache_dir(expected_new_reference);
-        fs::create_dir_all(&new_cache_dir).unwrap();
-        fs::write(
-            new_cache_dir.join("runok.yml"),
-            indoc! {"
-                rules:
-                  - allow: 'git status'
-                  - allow: 'git log'
-            "},
-        )
-        .unwrap();
-
-        let git_client = MockGitClient::new();
-        git_client.on_ls_remote_refs(Ok(remote_refs));
-        // new_cache_dir already exists → fetch+checkout path
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("def456".to_string()));
-
-        let mut tags_cache = HashMap::new();
-        update_single_preset(reference, &cache, &git_client, &mut tags_cache)
-    }
-
-    /// Helper: set up a cached preset and run `update_single_preset` with the given remote refs.
-    /// The cache is pre-populated with unchanged content so that if no upgrade is found and
-    /// force_refetch runs, the result is `UpToDate`.
-    fn run_no_upgrade_test(
-        tmp: &TempDir,
-        reference: &str,
-        remote_refs: Vec<String>,
-    ) -> UpdateResult {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let cache_dir = cache.cache_dir(reference);
-        fs::create_dir_all(&cache_dir).unwrap();
-
-        let content = indoc! {"
-            rules:
-              - allow: 'git status'
-        "};
-        fs::write(cache_dir.join("runok.yml"), content).unwrap();
-
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference.to_string(),
-            resolved_sha: Some("abc123".to_string()),
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
-
-        let git_client = MockGitClient::new();
-        git_client.on_ls_remote_refs(Ok(remote_refs));
-        // force_refetch path (fallback when no upgrade found)
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("abc123".to_string()));
-
-        let mut tags_cache = HashMap::new();
-        update_single_preset(reference, &cache, &git_client, &mut tags_cache)
-    }
-
-    #[rstest]
-    #[case::full_semver(
-        "github:org/repo@v1.0.0",
-        "github:org/repo@v1.2.0",
-        &["v0.9.0", "v1.0.0", "v1.1.0", "v1.2.0", "v2.0.0"],
-    )]
-    #[case::major_only(
-        "github:org/repo@v1",
-        "github:org/repo@v2",
-        &["v1.0.0", "v1.1.0", "v2.0.0"],
-    )]
-    #[case::major_minor(
-        "github:org/repo@v1.0",
-        "github:org/repo@v1.2",
-        &["v1.0.0", "v1.1.0", "v1.2.0"],
-    )]
-    #[case::major_from_branches(
-        "github:org/repo@v1",
-        "github:org/repo@v3",
-        &["v1", "v2", "v3"],
-    )]
-    fn update_upgrades_version_tag(
-        tmp: TempDir,
-        #[case] reference: &str,
-        #[case] expected_new_reference: &str,
-        #[case] remote_refs: &[&str],
-    ) {
-        let refs: Vec<String> = remote_refs.iter().map(|s| s.to_string()).collect();
-        let result = run_upgrade_test(&tmp, reference, expected_new_reference, refs);
-        match result {
-            UpdateResult::Upgraded {
-                old_reference,
-                new_reference,
-                ..
-            } => {
-                assert_eq!(old_reference, reference);
-                assert_eq!(new_reference, expected_new_reference);
-            }
-            other => panic!("expected Upgraded, got {other:?}"),
-        }
-    }
-
-    #[rstest]
-    #[case::full_no_newer_version(
-        "github:org/repo@v1.2.0",
-        &["v1.0.0", "v1.1.0", "v1.2.0"],
-    )]
-    #[case::full_respects_major_boundary(
-        "github:org/repo@v1.0.0",
-        &["v1.0.0", "v2.0.0"],
-    )]
-    #[case::major_no_newer(
-        "github:org/repo@v2",
-        &["v1.0.0", "v2.0.0"],
-    )]
-    #[case::minor_no_newer(
-        "github:org/repo@v1.2",
-        &["v1.0.0", "v1.1.0", "v1.2.0"],
-    )]
-    fn update_no_upgrade_falls_through_to_refetch(
-        tmp: TempDir,
-        #[case] reference: &str,
-        #[case] remote_refs: &[&str],
-    ) {
-        let refs: Vec<String> = remote_refs.iter().map(|s| s.to_string()).collect();
-        let result = run_no_upgrade_test(&tmp, reference, refs);
-        // No upgrade found, falls through to force_refetch. Content unchanged → UpToDate.
-        assert!(matches!(result, UpdateResult::UpToDate));
     }
 
     // === collect_tracked_from_dir ===
