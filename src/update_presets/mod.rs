@@ -186,7 +186,7 @@ fn try_tag_upgrade<G: GitClient>(
     // Fetch remote tags (cached per URL to avoid redundant network calls)
     let remote_tags = match tags_cache.entry(url.to_string()) {
         std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-        std::collections::hash_map::Entry::Vacant(e) => match git_client.ls_remote_tags(url) {
+        std::collections::hash_map::Entry::Vacant(e) => match git_client.ls_remote_refs(url) {
             Ok(tags) => e.insert(tags),
             Err(err) => return UpdateResult::Error(format!("ls-remote failed: {err}")),
         },
@@ -683,7 +683,7 @@ mod tests {
         let new_cache_dir = cache.cache_dir(new_reference);
 
         let git_client = MockGitClient::new();
-        git_client.on_ls_remote_tags(Ok(vec![
+        git_client.on_ls_remote_refs(Ok(vec![
             "v0.9.0".to_string(),
             "v1.0.0".to_string(),
             "v1.1.0".to_string(),
@@ -733,7 +733,7 @@ mod tests {
         drop(git_client);
 
         let git_client = MockGitClient::new();
-        git_client.on_ls_remote_tags(Ok(vec![
+        git_client.on_ls_remote_refs(Ok(vec![
             "v0.9.0".to_string(),
             "v1.0.0".to_string(),
             "v1.1.0".to_string(),
@@ -783,7 +783,7 @@ mod tests {
         PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let git_client = MockGitClient::new();
-        git_client.on_ls_remote_tags(Ok(vec![
+        git_client.on_ls_remote_refs(Ok(vec![
             "v1.0.0".to_string(),
             "v1.1.0".to_string(),
             "v1.2.0".to_string(),
@@ -822,7 +822,7 @@ mod tests {
         PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let git_client = MockGitClient::new();
-        git_client.on_ls_remote_tags(Ok(vec!["v1.0.0".to_string(), "v2.0.0".to_string()]));
+        git_client.on_ls_remote_refs(Ok(vec!["v1.0.0".to_string(), "v2.0.0".to_string()]));
         git_client.on_fetch(Ok(()));
         git_client.on_checkout(Ok(()));
         git_client.on_rev_parse(Ok("abc123".to_string()));

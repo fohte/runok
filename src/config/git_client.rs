@@ -24,8 +24,10 @@ pub trait GitClient {
     /// Run `git rev-parse HEAD` in `repo_dir` and return the commit SHA.
     fn rev_parse_head(&self, repo_dir: &Path) -> Result<String, PresetError>;
 
-    /// Run `git ls-remote --tags --refs <url>` and return tag names (without `refs/tags/` prefix).
-    fn ls_remote_tags(&self, url: &str) -> Result<Vec<String>, PresetError>;
+    /// Run `git ls-remote --tags --heads --refs <url>` and return ref names
+    /// (tags without `refs/tags/` prefix, branches without `refs/heads/` prefix).
+    /// Duplicates are removed (if a name exists as both a tag and a branch, it appears once).
+    fn ls_remote_refs(&self, url: &str) -> Result<Vec<String>, PresetError>;
 }
 
 /// Strip credentials from a URL for safe use in error messages.
@@ -153,12 +155,12 @@ impl GitClient for ProcessGitClient {
         }
     }
 
-    fn ls_remote_tags(&self, url: &str) -> Result<Vec<String>, PresetError> {
+    fn ls_remote_refs(&self, url: &str) -> Result<Vec<String>, PresetError> {
         let mut cmd = Command::new("git");
         cmd.env_remove("GIT_DIR");
         cmd.env_remove("GIT_INDEX_FILE");
-        // --refs excludes peeled refs (^{})
-        cmd.args(["ls-remote", "--tags", "--refs", "--", url]);
+        // --tags --heads: list both tags and branches; --refs excludes peeled refs (^{})
+        cmd.args(["ls-remote", "--tags", "--heads", "--refs", "--", url]);
 
         let output = cmd.output().map_err(|e| PresetError::GitClone {
             reference: sanitize_url(url),
@@ -173,18 +175,22 @@ impl GitClient for ProcessGitClient {
             });
         }
 
-        // Output format: "<sha>\trefs/tags/<tagname>"
+        // Output format: "<sha>\trefs/tags/<name>" or "<sha>\trefs/heads/<name>"
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let tags = stdout
+        let mut seen = std::collections::HashSet::new();
+        let refs = stdout
             .lines()
             .filter_map(|line| {
                 let (_sha, refname) = line.split_once('\t')?;
-                refname.strip_prefix("refs/tags/")
+                refname
+                    .strip_prefix("refs/tags/")
+                    .or_else(|| refname.strip_prefix("refs/heads/"))
             })
+            .filter(|name| seen.insert(name.to_string()))
             .map(String::from)
             .collect();
 
-        Ok(tags)
+        Ok(refs)
     }
 }
 
@@ -203,7 +209,7 @@ pub mod mock {
         Fetch,
         Checkout { git_ref: String },
         RevParseHead,
-        LsRemoteTags { url: String },
+        LsRemoteRefs { url: String },
     }
 
     /// Test double for `GitClient` that returns pre-configured results.
@@ -212,7 +218,7 @@ pub mod mock {
         fetch_results: RefCell<VecDeque<Result<(), PresetError>>>,
         checkout_results: RefCell<VecDeque<Result<(), PresetError>>>,
         rev_parse_results: RefCell<VecDeque<Result<String, PresetError>>>,
-        ls_remote_tags_results: RefCell<VecDeque<Result<Vec<String>, PresetError>>>,
+        ls_remote_refs_results: RefCell<VecDeque<Result<Vec<String>, PresetError>>>,
         pub calls: RefCell<Vec<GitCall>>,
     }
 
@@ -229,7 +235,7 @@ pub mod mock {
                 fetch_results: RefCell::new(VecDeque::new()),
                 checkout_results: RefCell::new(VecDeque::new()),
                 rev_parse_results: RefCell::new(VecDeque::new()),
-                ls_remote_tags_results: RefCell::new(VecDeque::new()),
+                ls_remote_refs_results: RefCell::new(VecDeque::new()),
                 calls: RefCell::new(Vec::new()),
             }
         }
@@ -258,9 +264,9 @@ pub mod mock {
             self
         }
 
-        /// Queue a result for the next `ls_remote_tags` call.
-        pub fn on_ls_remote_tags(&self, result: Result<Vec<String>, PresetError>) -> &Self {
-            self.ls_remote_tags_results.borrow_mut().push_back(result);
+        /// Queue a result for the next `ls_remote_refs` call.
+        pub fn on_ls_remote_refs(&self, result: Result<Vec<String>, PresetError>) -> &Self {
+            self.ls_remote_refs_results.borrow_mut().push_back(result);
             self
         }
 
@@ -306,11 +312,11 @@ pub mod mock {
             Self::pop_result(&self.rev_parse_results)
         }
 
-        fn ls_remote_tags(&self, url: &str) -> Result<Vec<String>, PresetError> {
-            self.calls.borrow_mut().push(GitCall::LsRemoteTags {
+        fn ls_remote_refs(&self, url: &str) -> Result<Vec<String>, PresetError> {
+            self.calls.borrow_mut().push(GitCall::LsRemoteRefs {
                 url: url.to_string(),
             });
-            Self::pop_result(&self.ls_remote_tags_results)
+            Self::pop_result(&self.ls_remote_refs_results)
         }
     }
 }
