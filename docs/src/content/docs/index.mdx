@@ -1,0 +1,132 @@
+---
+title: runok
+description: Smarter command permissions for AI coding agents.
+template: splash
+hero:
+  tagline: Smarter command permissions for AI coding agents.
+  image:
+    dark: ../../assets/logo-dark.svg
+    light: ../../assets/logo-light.svg
+    alt: runok logo
+  actions:
+    - text: Getting Started
+      link: /getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/fohte/runok
+      icon: external
+      variant: minimal
+---
+
+import { CardGrid, Card, LinkCard } from '@astrojs/starlight/components'
+
+<div class="features">
+  <div class="feature">
+    <h3>Command Allowlisting</h3>
+    <p>Define exactly which commands are allowed. Everything else is denied by default.</p>
+  </div>
+  <div class="feature">
+    <h3>Pattern Matching</h3>
+    <p>Wildcards, placeholders, and alternation to match commands precisely.</p>
+  </div>
+  <div class="feature">
+    <h3>Sandbox Execution</h3>
+    <p>Run allowed commands in a restricted environment with filesystem and network isolation.</p>
+  </div>
+</div>
+
+<div class="why-section">
+
+## Why runok?
+
+Claude Code's built-in permissions use simple glob matching. This works for basic cases, but breaks down quickly.
+
+**Text-based parsing causes false positives.** Even when `git log` is in your allow list, Claude adds a comment and you get prompted:
+
+```
+⏺ Bash(# check logs
+      git log --oneline -5)
+
+Command contains newlines that could separate multiple commands
+```
+
+runok uses tree-sitter-bash to parse commands into an AST, so comments, compound commands, and other shell constructs are handled correctly.
+
+**Denied commands give no explanation.** The agent cannot learn why a command was blocked. With runok, deny rules include a message and a suggested fix:
+
+```yaml title="runok.yml"
+- deny: 'git push -f|--force *'
+  message: 'Force push is not allowed.'
+  fix_suggestion: 'git push --force-with-lease'
+```
+
+**Global flags break matching.** `git -C /path commit` does not match `git commit *`. runok supports [optional groups, alternation, and order-independent matching](/pattern-syntax/overview/):
+
+```yaml title="runok.yml"
+- allow: 'git [-C *] commit *'
+# matches both "git commit" and "git -C /path commit"
+```
+
+[Read the full comparison &rarr;](/getting-started/why-runok/)
+
+</div>
+
+<div class="demo-section">
+
+### How it works
+
+Define allowed commands in `runok.yml`:
+
+```yaml
+rules:
+  - allow: "git push|pull|fetch **"
+  - allow: "npm install|test|run **"
+  - deny: "rm -rf /"
+```
+
+Then use runok to check or execute commands:
+
+```sh
+$ runok check "git push origin main"
+# ✅ allowed
+
+$ runok check "rm -rf /"
+# ❌ denied
+
+$ runok exec "npm test"
+# runs in a sandboxed environment
+```
+
+</div>
+
+## Explore the docs
+
+<CardGrid>
+  <Card title="Getting Started" icon="rocket">
+    Install runok and set up your first configuration.
+
+    [Why runok?](/getting-started/why-runok/) | [Installation](/getting-started/installation/) | [Quick Start](/getting-started/quickstart/) | [Claude Code](/getting-started/claude-code/)
+
+  </Card>
+  <Card title="Configuration" icon="setting">
+    Full reference for `runok.yml` configuration options.
+
+    [Configuration Reference](/configuration/schema/)
+
+  </Card>
+  <Card title="Pattern Syntax" icon="document">
+    Learn the pattern syntax for matching commands.
+
+    [Pattern Syntax Reference](/pattern-syntax/overview/)
+
+  </Card>
+  <Card title="CLI Reference" icon="laptop">
+    Reference for `runok check`, `runok exec`, and other commands.
+
+    [CLI Reference](/cli/overview/)
+
+  </Card>
+</CardGrid>
+
+<LinkCard title="Recipes" href="/recipes/overview/" description="Practical configuration examples for common use cases." />
+<LinkCard title="Troubleshooting" href="/troubleshooting/debugging/" description="Common issues and debugging tips." />

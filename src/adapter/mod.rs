@@ -9,7 +9,7 @@ use crate::audit::{
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::extract_commands;
 use crate::rules::rule_engine::{
-    Action, EvalContext, RuleMatchInfo, evaluate_command, evaluate_compound,
+    Action, EvalContext, RuleMatchInfo, default_action, evaluate_command, evaluate_compound,
 };
 
 /// Unified evaluation result for the adapter layer.
@@ -51,19 +51,6 @@ pub struct RunOptions {
     pub dry_run: bool,
     /// When true, output detailed rule matching information to stderr.
     pub verbose: bool,
-}
-
-/// Describes what should happen after command evaluation.
-/// Separates the "what happened" decision from "how to handle it",
-/// ensuring dry-run is checked at exactly one point.
-enum Dispatch {
-    /// A rule matched and produced an action (Allow/Deny/Ask).
-    Matched(ActionResult),
-    /// No rule matched; fall back to defaults.
-    NoMatch {
-        action_result: ActionResult,
-        defaults: Defaults,
-    },
 }
 
 /// Abstracts protocol-specific input/output differences across
@@ -126,25 +113,6 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
             );
         }
     }
-}
-
-/// Resolve an `Action::Default` against the user's configured defaults,
-/// producing a concrete action (Allow/Ask/Deny) for dry-run reporting.
-/// When no default is configured (`None`), leaves the action as `Default`
-/// so each adapter's `handle_dry_run` can apply its own interpretation.
-fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
-    use crate::config::ActionKind;
-    action_result.action = match defaults.action {
-        Some(ActionKind::Allow) => Action::Allow,
-        Some(ActionKind::Deny) => Action::Deny(crate::rules::rule_engine::DenyResponse {
-            message: None,
-            fix_suggestion: None,
-            matched_rule: String::new(),
-        }),
-        Some(ActionKind::Ask) => Action::Ask(None),
-        None => return action_result, // keep Action::Default
-    };
-    action_result
 }
 
 /// Apply `defaults.sandbox` as a fallback when the rule evaluation produced
@@ -291,6 +259,13 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         match evaluate_compound(config, &command, &context) {
             Ok(compound_result) => {
                 if options.verbose {
+                    for detail in &compound_result.sub_command_details {
+                        log_matched_rules(&detail.matched_rules);
+                        eprintln!(
+                            "[verbose]   sub-command {:?}: {:?}",
+                            detail.command, detail.action
+                        );
+                    }
                     eprintln!(
                         "[verbose] Compound evaluation result: {:?}",
                         compound_result.action
@@ -321,7 +296,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     } else if commands.is_empty() {
         // No executable commands (e.g. comment-only input) — use default action
         ActionResult {
-            action: Action::Default,
+            action: default_action(config),
             sandbox: SandboxInfo::Preset(None),
             matched_rules: vec![],
             sub_evaluations: None,
@@ -355,45 +330,18 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         write_audit_log(endpoint, config, &command, &action_result, &defaults);
     }
 
-    // Determine dispatch target
-    let dispatch = if matches!(action_result.action, Action::Default) {
-        if options.verbose {
-            eprintln!("[verbose] No matching rule, using default behavior");
-        }
-        Dispatch::NoMatch {
-            action_result,
-            defaults,
-        }
-    } else {
-        Dispatch::Matched(action_result)
-    };
-
-    // Single dry-run checkpoint: all dispatch paths are covered here
     if options.dry_run {
         if options.verbose {
             eprintln!("[verbose] Dry-run mode: skipping execution");
         }
-        let action_result = match dispatch {
-            Dispatch::Matched(ar) => ar,
-            Dispatch::NoMatch {
-                action_result,
-                defaults,
-            } => resolve_no_match(action_result, &defaults),
-        };
         return endpoint
             .handle_dry_run(action_result)
             .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
-    // Normal execution
-    match dispatch {
-        Dispatch::Matched(action_result) => endpoint
-            .handle_action(action_result)
-            .unwrap_or_else(|e| endpoint.handle_error(e)),
-        Dispatch::NoMatch { defaults, .. } => endpoint
-            .handle_no_match(&defaults)
-            .unwrap_or_else(|e| endpoint.handle_error(e)),
-    }
+    endpoint
+        .handle_action(action_result)
+        .unwrap_or_else(|e| endpoint.handle_error(e))
 }
 
 #[cfg(test)]
@@ -636,26 +584,31 @@ mod tests {
         );
     }
 
-    // --- no matching rule -> handle_no_match ---
+    // --- no matching rule -> handle_action with default action ---
 
     #[rstest]
     #[case::no_matching_rule("unknown-command", make_config(vec![allow_rule("git status")]))]
     #[case::empty_config("git status", Config::default())]
-    fn no_match_calls_handle_no_match(#[case] command: &str, #[case] config: Config) {
+    fn no_match_calls_handle_action_with_ask(#[case] command: &str, #[case] config: Config) {
+        // With no defaults.action configured, unmatched commands resolve
+        // to Ask (the safe fallback).
         let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Ask(None))
+        ));
         assert_eq!(exit_code, 0);
     }
 
-    // --- defaults are passed through when no rules match ---
+    // --- defaults.action = allow resolves to Allow ---
 
     #[rstest]
-    fn no_match_uses_config_defaults() {
-        let endpoint =
-            MockEndpoint::new(Ok(Some("unknown-command".to_string()))).with_no_match_exit_code(5);
+    fn no_match_with_defaults_allow_calls_handle_action_with_allow() {
+        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Allow),
@@ -666,12 +619,13 @@ mod tests {
         };
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert_eq!(exit_code, 5);
-        assert_eq!(
-            *endpoint.last_defaults_action.borrow(),
-            Some(Some(ActionKind::Allow))
-        );
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Allow)
+        ));
+        assert_eq!(exit_code, 0);
     }
 
     // --- compound command: deny wins over allow ---
@@ -696,16 +650,20 @@ mod tests {
         ));
     }
 
-    // --- compound command: all default -> handle_no_match ---
+    // --- compound command: all unmatched -> handle_action with Ask ---
 
     #[rstest]
-    fn compound_all_default_calls_handle_no_match() {
+    fn compound_all_unmatched_calls_handle_action_with_ask() {
         let endpoint = MockEndpoint::new(Ok(Some("unknown-cmd1 && unknown-cmd2".to_string())));
         let config = make_config(vec![allow_rule("git status")]);
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Ask(None))
+        ));
         assert_eq!(exit_code, 0);
     }
 
@@ -792,12 +750,9 @@ mod tests {
     // --- handle_no_match error falls back to handle_error ---
 
     #[rstest]
-    #[case::extract_none(Ok(None))]
-    #[case::no_matching_rule(Ok(Some("unknown-command".to_string())))]
-    fn handle_no_match_error_delegates_to_handle_error(
-        #[case] command: Result<Option<String>, String>,
-    ) {
-        let endpoint = MockEndpoint::new(command)
+    fn handle_no_match_error_delegates_to_handle_error() {
+        // handle_no_match is only called when extract_command returns None
+        let endpoint = MockEndpoint::new(Ok(None))
             .with_no_match_failure()
             .with_error_exit_code(2);
         let config = Config::default();
@@ -888,11 +843,11 @@ mod tests {
         assert!(!*endpoint.called_handle_no_match.borrow());
         assert_eq!(exit_code, 0);
 
-        // With no configured defaults, Action::Default is preserved
+        // With no configured defaults, defaults fall back to Ask
         let last = endpoint.last_action.borrow();
         assert!(
-            matches!(last.as_ref(), Some(Action::Default)),
-            "expected Action::Default, got {last:?}"
+            matches!(last.as_ref(), Some(Action::Ask(None))),
+            "expected Action::Ask(None), got {last:?}"
         );
     }
 
@@ -1033,8 +988,8 @@ mod tests {
     #[case::for_loop_no_matching_rule(
         "for f in *.yaml; do echo $f; done",
         allow_rule("git status"),
+        true,  // defaults to Ask -> handle_action
         false,
-        true
     )]
     fn single_extracted_subcommand_evaluates_simplified_form(
         #[case] command: &str,
@@ -1257,8 +1212,11 @@ mod tests {
         run(&endpoint, &config);
 
         let entry = read_single_audit_entry(&audit_dir);
-        assert_eq!(entry["action"]["type"], "default");
+        // When no rule matches, action is resolved to defaults.action (ask)
+        assert_eq!(entry["action"]["type"], "ask");
         assert_eq!(entry["default_action"], "ask");
+        // No matched rules
+        assert_eq!(entry["matched_rules"].as_array().unwrap().len(), 0);
     }
 
     #[rstest]

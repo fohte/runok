@@ -1,5 +1,6 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
+use serde_json::Value;
 
 use super::helpers::TestEnv;
 
@@ -184,4 +185,79 @@ fn check_allow_with_sandbox_info() {
     assert_eq!(json["decision"], "allow");
     assert!(json["sandbox"].is_object());
     assert_eq!(json["sandbox"]["preset"], "restricted");
+}
+
+// --- Wrapper with find -exec and <cmd> placeholder ---
+
+#[rstest]
+#[case::find_exec_deny(r#"{"command":"find . -exec rm -rf / \\;"}"#, "deny")]
+#[case::find_exec_plus_deny(r#"{"command":"find . -exec rm -rf / +"}"#, "deny")]
+#[case::find_execdir_allow(r#"{"command":"find . -execdir echo hello +"}"#, "allow")]
+#[case::find_ok_deny(r#"{"command":"find /tmp -ok rm -rf / \\;"}"#, "deny")]
+#[case::find_okdir_allow(r#"{"command":"find . -okdir ls -la +"}"#, "allow")]
+fn check_find_exec_wrapper(#[case] stdin_json: &str, #[case] expected_decision: &str) {
+    let env = TestEnv::new(indoc! {r#"
+        rules:
+          - deny: 'rm *'
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - "find * -exec|-execdir|-ok|-okdir <cmd> \\;|+"
+    "#});
+    let assert = env
+        .command()
+        .args(["check", "--output-format", "json"])
+        .write_stdin(stdin_json)
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(
+        json["decision"], expected_decision,
+        "stdin: {stdin_json}, full output: {json}"
+    );
+}
+
+// --- Command substitution in quoted strings ---
+
+#[fixture]
+fn cmd_sub_env() -> TestEnv {
+    TestEnv::new(indoc! {"
+        defaults:
+          action: ask
+        rules:
+          - allow: 'echo *'
+          - allow: 'curl *'
+          - allow: 'docker *'
+          - deny: 'rm -rf *'
+    "})
+}
+
+#[rstest]
+#[case::cmd_sub_in_quotes_deny(r#"curl -u "user:$(rm -rf /tmp/data)" https://example.com"#, "deny")]
+#[case::cmd_sub_in_quotes_inner_unmatched_is_ask(
+    r#"curl -u "user:$(printenv SECRET)" https://example.com"#,
+    "ask"
+)]
+#[case::single_quotes_no_substitution("echo '$(rm -rf /tmp/data)'", "allow")]
+#[case::backtick_in_quotes_deny(r#"curl -u "user:`rm -rf /tmp/data`" https://example.com"#, "deny")]
+#[case::docker_env_with_unmatched_cmd_sub(
+    r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
+    "ask"
+)]
+fn check_cmd_sub_in_quoted_string(
+    cmd_sub_env: TestEnv,
+    #[case] command: &str,
+    #[case] expected_decision: &str,
+) {
+    let assert = cmd_sub_env
+        .command()
+        .args(["check", "--output-format", "json", "--"])
+        .arg(command)
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(json["decision"], expected_decision);
 }

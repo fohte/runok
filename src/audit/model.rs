@@ -91,7 +91,6 @@ impl From<Action> for SerializableAction {
                 fix_suggestion,
             },
             Action::Ask(message) => SerializableAction::Ask { message },
-            Action::Default => SerializableAction::Default,
         }
     }
 }
@@ -295,7 +294,6 @@ mod tests {
         Action::Ask(None),
         SerializableAction::Ask { message: None },
     )]
-    #[case::default(Action::Default, SerializableAction::Default)]
     fn action_to_serializable(#[case] action: Action, #[case] expected: SerializableAction) {
         let result: SerializableAction = action.into();
         assert_eq!(result, expected);

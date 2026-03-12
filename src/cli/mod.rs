@@ -1,11 +1,11 @@
 mod route;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 pub use route::{CheckRoute, route_check};
 
 #[derive(Parser)]
-#[command(name = "runok")]
+#[command(name = "runok", version = env!("RUNOK_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -20,9 +20,58 @@ pub enum Commands {
     Check(CheckArgs),
     /// View audit log entries
     Audit(AuditArgs),
+    /// Initialize runok configuration
+    Init(InitArgs),
     /// Print the JSON Schema for runok.yml to stdout
     #[cfg(feature = "config-schema")]
     ConfigSchema,
+
+    /// Internal: Linux sandbox execution (stage 1/stage 2)
+    #[cfg(target_os = "linux")]
+    #[command(name = "__sandbox-exec", hide = true)]
+    SandboxExec(SandboxExecArgs),
+}
+
+/// Scope for init configuration: user-level or project-level.
+#[derive(Clone, ValueEnum)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum InitScope {
+    User,
+    Project,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct InitArgs {
+    /// Configuration scope: "user" for global, "project" for local
+    #[arg(long, value_enum)]
+    pub scope: Option<InitScope>,
+
+    /// Accept all defaults without prompting
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct SandboxExecArgs {
+    /// Sandbox policy as JSON string.
+    #[arg(long)]
+    pub policy: String,
+
+    /// Working directory for the sandboxed command.
+    #[arg(long)]
+    pub cwd: std::path::PathBuf,
+
+    /// Stage 2 mode: apply landlock + seccomp, then exec the command.
+    /// Used internally when re-invoked inside bubblewrap.
+    #[arg(long)]
+    pub apply_sandbox_then_exec: bool,
+
+    /// The command and its arguments to execute.
+    #[arg(last = true, required = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -161,8 +210,39 @@ mod tests {
         &["runok", "audit", "--action", "allow", "--since", "7d", "--until", "1h", "--command", "git", "--limit", "10", "--json"],
         Commands::Audit(AuditArgs { action: Some("allow".into()), since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), limit: 10, json: true }),
     )]
+    #[case::init_defaults(
+        &["runok", "init"],
+        Commands::Init(InitArgs { scope: None, yes: false }),
+    )]
+    #[case::init_with_scope_user(
+        &["runok", "init", "--scope", "user"],
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: false }),
+    )]
+    #[case::init_with_scope_project(
+        &["runok", "init", "--scope", "project"],
+        Commands::Init(InitArgs { scope: Some(InitScope::Project), yes: false }),
+    )]
+    #[case::init_with_yes(
+        &["runok", "init", "-y"],
+        Commands::Init(InitArgs { scope: None, yes: true }),
+    )]
+    #[case::init_with_yes_long(
+        &["runok", "init", "--yes"],
+        Commands::Init(InitArgs { scope: None, yes: true }),
+    )]
+    #[case::init_all_flags(
+        &["runok", "init", "--scope", "user", "-y"],
+        Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
+    )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);
         assert_eq!(cli.command, expected);
+    }
+
+    #[rstest]
+    #[case::invalid_scope(&["runok", "init", "--scope", "invalid"])]
+    fn cli_parsing_errors(#[case] argv: &[&str]) {
+        let result = Cli::try_parse_from(argv);
+        assert!(result.is_err());
     }
 }

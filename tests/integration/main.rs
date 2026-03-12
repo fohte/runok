@@ -1,7 +1,12 @@
 mod audit_log_integration;
 mod compound_command_evaluation;
 mod config_to_rule_evaluation;
+mod extends_resolution;
+mod init_wizard;
 mod optional_notation_and_path_ref;
+mod path_resolution;
+mod property_based;
+mod remote_preset_with_path;
 mod when_clause_rules;
 mod wrapper_recursive_evaluation;
 
@@ -37,15 +42,6 @@ fn assert_ask(actual: &Action) {
     assert!(
         matches!(actual, Action::Ask(_)),
         "expected Ask, got {:?}",
-        actual
-    );
-}
-
-fn assert_default(actual: &Action) {
-    assert_eq!(
-        *actual,
-        Action::Default,
-        "expected Default, got {:?}",
         actual
     );
 }

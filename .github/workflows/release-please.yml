@@ -33,6 +33,30 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  publish-crates-io:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish to crates.io
+        run: cargo publish --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
   build-release:
     needs: release-please
     # always() is required because release-please job is skipped on workflow_dispatch,
@@ -50,6 +74,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
     steps:
       - uses: actions/checkout@v6
 
@@ -57,8 +84,8 @@ jobs:
 
       - run: rustup target add ${{ matrix.target }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -79,3 +106,145 @@ jobs:
         run: |
           gh release upload "$TAG_NAME" \
             "$PROJECT_NAME"-${{ matrix.target }}.tar.gz
+
+  build-nightly:
+    needs: release-please
+    if: needs.release-please.outputs.release_created != 'true' && github.event_name != 'workflow_dispatch'
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: rustup show
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Determine nightly version
+        id: version
+        run: |
+          base_version=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "nightly_version=${base_version}-nightly+${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUNOK_NIGHTLY_VERSION: ${{ steps.version.outputs.nightly_version }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../runok-${{ matrix.target }}.tar.gz runok
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runok-nightly-${{ matrix.target }}
+          path: runok-${{ matrix.target }}.tar.gz
+
+  publish-nightly:
+    needs: [release-please, build-nightly]
+    if: needs.release-please.outputs.release_created != 'true' && github.event_name != 'workflow_dispatch'
+    concurrency:
+      group: publish-nightly
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create or update nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Delete existing nightly release and tag if present
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+
+          # Create new nightly release
+          gh release create nightly \
+            --prerelease \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes "Nightly build from commit [\`${GITHUB_SHA::7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+          > [!WARNING]
+          > This is an automated nightly build and may be unstable. For stable releases, see the [latest release](https://github.com/${{ github.repository }}/releases/latest)." \
+            artifacts/runok-*.tar.gz
+
+  publish-homebrew:
+    needs: [release-please, build-release]
+    # build-release uses always() so this job also needs it to avoid being skipped
+    # when release-please is skipped (workflow_dispatch).
+    # Also require build-release to succeed so we don't push a formula referencing missing assets.
+    if: always() && needs.build-release.result == 'success' && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: fohte
+          repositories: homebrew-tap
+
+      - name: Generate Homebrew formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
+        run: |
+          version="${TAG_NAME#v}"
+
+          sha256_macos_arm64=$(gh release download "$TAG_NAME" --pattern 'runok-aarch64-apple-darwin.tar.gz' --output - | sha256sum | cut -d ' ' -f 1)
+          sha256_linux_arm64=$(gh release download "$TAG_NAME" --pattern 'runok-aarch64-unknown-linux-gnu.tar.gz' --output - | sha256sum | cut -d ' ' -f 1)
+          sha256_linux_x86_64=$(gh release download "$TAG_NAME" --pattern 'runok-x86_64-unknown-linux-gnu.tar.gz' --output - | sha256sum | cut -d ' ' -f 1)
+
+          sed \
+            -e "s|VERSION_PLACEHOLDER|$version|" \
+            -e "s|SHA256_MACOS_ARM64_PLACEHOLDER|$sha256_macos_arm64|" \
+            -e "s|SHA256_LINUX_ARM64_PLACEHOLDER|$sha256_linux_arm64|" \
+            -e "s|SHA256_LINUX_X86_64_PLACEHOLDER|$sha256_linux_x86_64|" \
+            .github/formula-template/runok.rb > runok.rb
+
+      - name: Push formula to homebrew-tap
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG_NAME: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
+        run: |
+          version="${TAG_NAME#v}"
+
+          git clone https://github.com/fohte/homebrew-tap.git homebrew-tap
+          cd homebrew-tap
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/fohte/homebrew-tap.git"
+
+          mkdir -p Formula
+          cp ../runok.rb Formula/runok.rb
+
+          git config user.name "fohte-bot[bot]"
+          git config user.email "fohte-bot[bot]@users.noreply.github.com"
+          git add Formula/runok.rb
+          git diff --cached --quiet || {
+            git commit -m "Update runok to ${version}"
+            git push origin main
+          }

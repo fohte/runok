@@ -21,8 +21,8 @@ use runok::exec::macos_sandbox::MacOsSandboxExecutor;
 /// Create the appropriate command executor for the current platform.
 ///
 /// On macOS, uses MacOsSandboxExecutor (seatbelt/SBPL via sandbox-exec).
-/// On Linux, attempts to find the runok-linux-sandbox helper binary and use
-/// the LinuxSandboxExecutor. Falls back to the stub executor if not found.
+/// On Linux, uses LinuxSandboxExecutor (bubblewrap + landlock + seccomp).
+/// Falls back to the stub executor if sandbox setup fails.
 fn create_executor() -> Box<dyn CommandExecutor> {
     #[cfg(target_os = "macos")]
     {
@@ -57,9 +57,35 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // Linux sandbox subcommand runs independently without config
+    #[cfg(target_os = "linux")]
+    if let Commands::SandboxExec(ref args) = cli.command {
+        return run_sandbox_exec(args);
+    }
+
+    // Init runs independently without loading config
+    if let Commands::Init(ref args) = cli.command {
+        return run_init(args);
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exit_code = run_command(cli.command, &cwd, std::io::stdin());
     ExitCode::from(exit_code as u8)
+}
+
+fn run_init(args: &cli::InitArgs) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let scope = args.scope.as_ref().map(|s| match s {
+        cli::InitScope::User => runok::init::InitScope::User,
+        cli::InitScope::Project => runok::init::InitScope::Project,
+    });
+    match runok::init::run_wizard(scope.as_ref(), args.yes, &cwd) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("runok: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Read) -> i32 {
@@ -75,8 +101,11 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         Commands::Exec(_) => 1,
         Commands::Check(_) => 2,
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::Init(_) => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
+        #[cfg(target_os = "linux")]
+        Commands::SandboxExec(_) => unreachable!("handled in main()"),
     };
 
     let config = match loader.load(cwd) {
@@ -133,8 +162,44 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
             }
         }
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::Init(_) => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
+        #[cfg(target_os = "linux")]
+        Commands::SandboxExec(_) => unreachable!("handled in main()"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_sandbox_exec(args: &cli::SandboxExecArgs) -> ExitCode {
+    use runok::exec::command_executor::SandboxPolicy;
+    use runok::exec::linux_sandbox;
+
+    let policy: SandboxPolicy = match serde_json::from_str(&args.policy) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("runok: invalid sandbox policy JSON: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    if args.apply_sandbox_then_exec {
+        // Stage 2: apply landlock + seccomp, then exec
+        if let Err(e) = linux_sandbox::run_stage2(&policy, &args.command) {
+            eprintln!("runok: {e}");
+            return ExitCode::from(1);
+        }
+        // exec_command never returns on success
+        unreachable!()
+    }
+
+    // Stage 1: set up bubblewrap and re-invoke
+    match linux_sandbox::run_stage1(&policy, &args.cwd, &args.policy, &args.command) {
+        Ok(code) => ExitCode::from(code as u8),
+        Err(e) => {
+            eprintln!("runok: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -316,5 +381,20 @@ mod tests {
         "};
         let exit_code = run_command(cmd, &cwd, input.as_bytes());
         assert_eq!(exit_code, 0);
+    }
+
+    // === Linux sandbox exec ===
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    fn run_sandbox_exec_rejects_invalid_json() {
+        let args = cli::SandboxExecArgs {
+            policy: "not valid json".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            apply_sandbox_then_exec: false,
+            command: vec!["true".to_string()],
+        };
+        let exit_code = run_sandbox_exec(&args);
+        assert_eq!(exit_code, ExitCode::from(1));
     }
 }

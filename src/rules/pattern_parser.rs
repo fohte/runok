@@ -37,8 +37,10 @@ pub struct Pattern {
 /// Individual tokens within a pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatternToken {
-    /// Fixed string (e.g., "git", "status")
+    /// Fixed string (e.g., "git", "status"). `*` is treated as a glob wildcard.
     Literal(String),
+    /// Quoted literal string where `*` is not a glob wildcard (e.g., `"WIP*"`).
+    QuotedLiteral(String),
     /// Alternation (e.g., -X|--request -> ["-X", "--request"])
     Alternation(Vec<String>),
     /// Flag with its value (e.g., -X|--request POST -> aliases + value)
@@ -147,7 +149,7 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
     use super::PatternParseError;
 
     let command = match &lex_tokens[0] {
-        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Literal(s) | LexToken::QuotedLiteral(s) => CommandPattern::Literal(s.clone()),
         LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
         other => {
@@ -185,8 +187,7 @@ fn build_pattern_tokens(
                 // alternation so that flag-with-value and order-independent
                 // matching work the same as for `-X|--request` style patterns.
                 if let Some(&(j, next)) = iter.peek() {
-                    if should_consume_as_value_strict(next, j + 1 < lex_tokens.len(), inside_group)
-                    {
+                    if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
                         let (_, next_token) = iter.next().ok_or(
                             PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                         )?;
@@ -205,6 +206,10 @@ fn build_pattern_tokens(
 
             LexToken::Literal(s) => {
                 result.push(PatternToken::Literal(s.clone()));
+            }
+
+            LexToken::QuotedLiteral(s) => {
+                result.push(PatternToken::QuotedLiteral(s.clone()));
             }
 
             LexToken::Alternation(alts) => {
@@ -287,6 +292,7 @@ fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::Pattern
     match token {
         LexToken::Wildcard => Ok(PatternToken::Wildcard),
         LexToken::Literal(s) => Ok(PatternToken::Literal(s.clone())),
+        LexToken::QuotedLiteral(s) => Ok(PatternToken::QuotedLiteral(s.clone())),
         LexToken::Negation(s) => Ok(PatternToken::Negation(Box::new(PatternToken::Literal(
             s.clone(),
         )))),
@@ -348,31 +354,26 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         // `Literal("]")` rather than `CloseBracket`.  Prevent flags from
         // consuming this closing delimiter as a value.
         LexToken::Literal(s) if s == "]" => false,
-        LexToken::Literal(s) if is_flag(s) => false,
+        // Flags and the bare `--` separator must not be consumed as values.
+        LexToken::Literal(s) if is_flag(s) || s == "--" => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
+        LexToken::Placeholder(_) => false,
         LexToken::Wildcard => inside_group || has_more_after,
+        // A negation whose inner value is a flag (e.g., `!--in-place`) should
+        // not be consumed as a flag value — it is an independent negation token.
+        LexToken::Negation(s) if is_flag(s) => false,
+        LexToken::NegationAlternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         _ => true,
     }
 }
 
-/// Like [`should_consume_as_value`], but stricter: also refuses to consume
-/// placeholder tokens as flag values. Used for bare flags (e.g. `-c`) where
-/// the flag is written without alternation syntax and the next token may be a
-/// wrapper placeholder (e.g. `<cmd>`) rather than a flag value.
-fn should_consume_as_value_strict(
-    next: &LexToken,
-    has_more_after: bool,
-    inside_group: bool,
-) -> bool {
-    match next {
-        LexToken::Placeholder(_) => false,
-        _ => should_consume_as_value(next, has_more_after, inside_group),
-    }
-}
-
 /// Check if a string looks like a flag (starts with `-`).
+///
+/// The bare double-dash `--` is excluded because it is a positional
+/// separator, not a flag.  Treating it as a flag would cause order-
+/// independent matching to ignore its position in the command.
 fn is_flag(s: &str) -> bool {
-    s.starts_with('-')
+    s.starts_with('-') && s != "--"
 }
 
 #[cfg(test)]
@@ -406,14 +407,14 @@ mod tests {
         PatternToken::Literal("commit".into()),
         PatternToken::FlagWithValue {
             aliases: vec!["-m".into()],
-            value: Box::new(PatternToken::Literal("WIP*".into())),
+            value: Box::new(PatternToken::QuotedLiteral("WIP*".into())),
         },
     ])]
     #[case::double_quoted(r#"git commit -m "WIP*""#, "git", vec![
         PatternToken::Literal("commit".into()),
         PatternToken::FlagWithValue {
             aliases: vec!["-m".into()],
-            value: Box::new(PatternToken::Literal("WIP*".into())),
+            value: Box::new(PatternToken::QuotedLiteral("WIP*".into())),
         },
     ])]
     fn parse_literals(
@@ -489,17 +490,13 @@ mod tests {
         PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
         PatternToken::Wildcard,
     ])]
-    #[case::placeholder_value("cmd -o|--option <cmd>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-o".into(), "--option".into()],
-            value: Box::new(PatternToken::Placeholder("cmd".into())),
-        },
+    #[case::placeholder_not_consumed_as_flag_value("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::Alternation(vec!["-o".into(), "--option".into()]),
+        PatternToken::Placeholder("cmd".into()),
     ])]
     #[case::path_ref_value("cmd -c|--config <path:config>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-c".into(), "--config".into()],
-            value: Box::new(PatternToken::PathRef("config".into())),
-        },
+        PatternToken::Alternation(vec!["-c".into(), "--config".into()]),
+        PatternToken::PathRef("config".into()),
     ])]
     fn parse_flag_with_value(
         #[case] input: &str,
@@ -544,6 +541,11 @@ mod tests {
             aliases: vec!["-rf".into()],
             value: Box::new(PatternToken::Literal("/".into())),
         },
+    ])]
+    #[case::flag_not_consuming_flag_negation("git --parse !--in-place *", "git", vec![
+        PatternToken::Alternation(vec!["--parse".into()]),
+        PatternToken::Negation(Box::new(PatternToken::Literal("--in-place".into()))),
+        PatternToken::Wildcard,
     ])]
     fn parse_bare_flag(
         #[case] input: &str,
@@ -634,6 +636,18 @@ mod tests {
     #[case::path_ref("cat <path:sensitive>", "cat", vec![
         PatternToken::PathRef("sensitive".into()),
     ])]
+    #[case::flag_alternation_then_placeholder(
+        r"find * -exec|-execdir|-ok|-okdir <cmd> \;|+",
+        "find",
+        vec![
+            PatternToken::Wildcard,
+            PatternToken::Alternation(vec![
+                "-exec".into(), "-execdir".into(), "-ok".into(), "-okdir".into(),
+            ]),
+            PatternToken::Placeholder("cmd".into()),
+            PatternToken::Alternation(vec![r"\;".into(), "+".into()]),
+        ],
+    )]
     fn parse_placeholder(
         #[case] input: &str,
         #[case] expected_command: &str,
@@ -719,6 +733,38 @@ mod tests {
             debug.starts_with(expected_variant),
             "wrong error variant for {input:?}: expected {expected_variant}, got {debug}"
         );
+    }
+
+    // === Double-dash (--) parsed as Literal, not flag ===
+
+    #[rstest]
+    #[case::double_dash_with_wildcard("git checkout -- *", "git", vec![
+        PatternToken::Literal("checkout".into()),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::flag_before_double_dash("git --force -- *", "git", vec![
+        PatternToken::Alternation(vec!["--force".into()]),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    #[case::double_dash_with_optional("git [-C *] checkout -- *", "git", vec![
+        PatternToken::Optional(vec![
+            PatternToken::FlagWithValue {
+                aliases: vec!["-C".into()],
+                value: Box::new(PatternToken::Wildcard),
+            },
+        ]),
+        PatternToken::Literal("checkout".into()),
+        PatternToken::Literal("--".into()),
+        PatternToken::Wildcard,
+    ])]
+    fn parse_double_dash_as_literal(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
     }
 
     // === Multi-word alternation (parse_multi) ===

@@ -4,4 +4,37 @@
     'github>fohte/renovate-config:base.json5',
     'github>fohte/renovate-config:rust.json5',
   ],
+  packageRules: [
+    // docs/ site dependencies are not part of the runok CLI release.
+    // Override the shared 'deps:' commit type to 'chore:' so that
+    // release-please does not trigger a version bump for docs-only updates.
+    {
+      matchFileNames: ['docs/**'],
+      commitMessagePrefix: 'chore:',
+      semanticCommitScope: null,
+    },
+    // docs/ dependencies: automerge patch for all, minor for devDependencies only.
+    // Production deps (astro, starlight, etc.) need manual review for minor
+    // updates due to potential breaking changes in the framework ecosystem.
+    {
+      matchFileNames: ['docs/**'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+    },
+    {
+      matchFileNames: ['docs/**'],
+      matchDepTypes: ['devDependencies', 'packageManager'],
+      matchUpdateTypes: ['minor'],
+      automerge: true,
+    },
+    // Cargo dev-dependencies use depType 'dev-dependencies' (hyphenated),
+    // but the shared config only matches npm-style 'devDependencies'.
+    // Override here to prevent release-please version bumps for dev-only crates.
+    {
+      matchManagers: ['cargo'],
+      matchDepTypes: ['dev-dependencies'],
+      commitMessagePrefix: 'chore:',
+      semanticCommitScope: null,
+    },
+  ],
 }

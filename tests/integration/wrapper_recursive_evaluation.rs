@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -23,7 +23,7 @@ fn config_with_standard_wrappers() -> &'static str {
 #[rstest]
 #[case::sudo_rm_denied("sudo rm -rf /", assert_deny as ActionAssertion)]
 #[case::sudo_safe_allowed("sudo ls -la", assert_allow as ActionAssertion)]
-#[case::sudo_unmatched_default("sudo hg status", assert_default as ActionAssertion)]
+#[case::sudo_unmatched_default("sudo hg status", assert_ask as ActionAssertion)]
 fn sudo_wrapper_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -188,7 +188,7 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
 
     // Without wrappers, "sudo rm -rf /" is just "sudo" command, not unwrapped
     let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -204,7 +204,7 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
 #[case::env_var_echo_allowed("env FOO=bar echo hello", assert_allow as ActionAssertion)]
 #[case::env_var_rm_denied("env FOO=bar rm -rf /", assert_deny as ActionAssertion)]
 #[case::env_multiple_vars("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
-#[case::env_var_unmatched_default("env FOO=bar hg status", assert_default as ActionAssertion)]
+#[case::env_var_unmatched_default("env FOO=bar hg status", assert_ask as ActionAssertion)]
 fn env_wrapper_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -374,6 +374,413 @@ fn vars_wrapper_consumes_assignments(
         definitions:
           wrappers:
             - 'env <opts> <vars> <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// merge_results: direct rule + wrapper result merging
+// ========================================
+
+#[rstest]
+#[case::direct_allow_wrapper_ask(
+    indoc! {"
+        rules:
+          - allow: 'sudo *'
+          - ask: 'rm *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm file.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::direct_allow_wrapper_deny(
+    indoc! {"
+        rules:
+          - allow: 'sudo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+#[case::direct_ask_wrapper_deny(
+    indoc! {"
+        rules:
+          - ask: 'sudo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+#[case::direct_default_wrapper_allow(
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo echo hello",
+    assert_allow as ActionAssertion,
+)]
+#[case::direct_default_wrapper_deny(
+    indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "},
+    "sudo rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+fn merge_results_all_branches(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// when clause + wrapper combination
+// ========================================
+
+#[rstest]
+fn when_clause_with_wrapper() {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'aws *'
+            when: \"env.AWS_PROFILE == 'prod'\"
+          - allow: 'aws *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "})
+    .unwrap();
+
+    // sudo aws s3 ls in prod -> deny (inner command matches when clause)
+    let prod_ctx = EvalContext {
+        env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
+        cwd: std::path::PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "sudo aws s3 ls", &prod_ctx).unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny in prod, got {:?}",
+        result.action
+    );
+
+    // sudo aws s3 ls in dev -> allow (when clause skipped, allow matches)
+    let dev_ctx = EvalContext {
+        env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
+        cwd: std::path::PathBuf::from("/tmp"),
+    };
+    let result = evaluate_command(&config, "sudo aws s3 ls", &dev_ctx).unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// MAX_WRAPPER_DEPTH boundary value: depth=10 succeeds, depth=11 fails
+// ========================================
+
+#[rstest]
+fn wrapper_depth_exactly_at_limit_succeeds(empty_context: EvalContext) {
+    let config = Config {
+        rules: Some(vec![]),
+        definitions: Some(runok::config::Definitions {
+            wrappers: Some(vec!["a <cmd>".to_string()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // 11 "a" tokens = depth 0 (outer) + 10 wrapper unwraps -> depth 10
+    // depth check is `depth > 10`, so depth=10 should succeed
+    let result = evaluate_command(&config, "a a a a a a a a a a a", &empty_context);
+    assert!(result.is_ok(), "depth=10 should succeed, got {:?}", result);
+}
+
+#[rstest]
+fn wrapper_depth_one_over_limit_fails(empty_context: EvalContext) {
+    let config = Config {
+        rules: Some(vec![]),
+        definitions: Some(runok::config::Definitions {
+            wrappers: Some(vec!["a <cmd>".to_string()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // 12 "a" tokens = 11 wrapper unwraps -> depth 11 > MAX_WRAPPER_DEPTH(10)
+    let result = evaluate_command(&config, "a a a a a a a a a a a a", &empty_context);
+    assert!(
+        matches!(result, Err(RuleError::RecursionDepthExceeded(10))),
+        "depth=11 should fail with RecursionDepthExceeded, got {:?}",
+        result
+    );
+}
+
+// ========================================
+// Wrapper inner compound with sub-wrappers
+// ========================================
+
+#[rstest]
+fn wrapper_inner_compound_with_sub_wrappers(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // bash -c 'sudo echo hello && sudo rm -rf /'
+    // -> compound: [sudo echo hello, sudo rm -rf /]
+    // -> sudo echo hello -> echo hello -> Allow
+    // -> sudo rm -rf / -> rm -rf / -> Deny
+    // -> overall: Deny
+    let result = evaluate_command(
+        &config,
+        "bash -c 'sudo echo hello && sudo rm -rf /'",
+        &empty_context,
+    )
+    .unwrap();
+    assert!(
+        matches!(result.action, Action::Deny(_)),
+        "expected Deny, got {:?}",
+        result.action
+    );
+}
+
+#[rstest]
+fn wrapper_inner_compound_all_sub_wrappers_allowed(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    // bash -c 'sudo echo hello && sudo ls -la'
+    // -> compound: [sudo echo hello, sudo ls -la]
+    // -> both inner commands -> Allow
+    let result = evaluate_command(
+        &config,
+        "bash -c 'sudo echo hello && sudo ls -la'",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
+}
+
+// ========================================
+// Wrapper + sandbox: inner command's sandbox preset survives
+// when no direct rule matches the wrapper command
+// ========================================
+
+#[rstest]
+fn wrapper_preserves_inner_sandbox_preset(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: restricted
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+          sandbox:
+            restricted:
+              fs:
+                writable: [/tmp]
+                deny: [/etc]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    // sudo python3 script.py -> no direct rule for "sudo *",
+    // wrapper unwraps to "python3 script.py" -> allow with sandbox "restricted"
+    let result = evaluate_command(&config, "sudo python3 script.py", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.sandbox_preset.as_deref(), Some("restricted"));
+}
+
+// ========================================
+// Wrapper + sandbox: direct rule overrides inner sandbox
+// when direct rule has higher priority
+// ========================================
+
+#[rstest]
+fn wrapper_direct_rule_overrides_inner_sandbox(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'sudo *'
+          - allow: 'python3 *'
+            sandbox: restricted
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+          sandbox:
+            restricted:
+              fs:
+                writable: [/tmp]
+                deny: [/etc]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    // sudo python3 script.py:
+    // - direct: "sudo *" -> Ask (priority 2)
+    // - wrapper: "python3 *" -> Allow (priority 1) with sandbox "restricted"
+    // - merge_results: Ask wins (higher priority), its sandbox_preset (None) is used
+    let result = evaluate_command(&config, "sudo python3 script.py", &empty_context).unwrap();
+    assert!(
+        matches!(result.action, Action::Ask(_)),
+        "expected Ask, got {:?}",
+        result.action
+    );
+    assert_eq!(result.sandbox_preset, None);
+}
+
+// ========================================
+// bash -c with double quotes: same behavior as single quotes
+// ========================================
+
+#[rstest]
+#[case::single_quoted(r#"bash -c 'echo hello'"#, assert_allow as ActionAssertion)]
+#[case::double_quoted(r#"bash -c "echo hello""#, assert_allow as ActionAssertion)]
+fn bash_c_double_vs_single_quotes(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Wrapper without <cmd> placeholder: no recursive evaluation
+// ========================================
+
+#[rstest]
+fn wrapper_without_cmd_placeholder_no_recurse(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'time *'
+    "})
+    .unwrap();
+
+    // "time ls -la": time * matches as wrapper but has no <cmd>,
+    // so no recursive evaluation occurs. "time" itself has no rule -> Default
+    let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Ask(None));
+}
+
+// ========================================
+// Wrapper + compound + sandbox: merge_results picks sandbox_preset
+// from the sub-command with the highest action priority.
+// Both sub-commands have Allow (same priority), so the first one's
+// sandbox_preset is kept.
+// ========================================
+
+#[rstest]
+fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'python3 *'
+            sandbox: py_sandbox
+          - allow: 'node *'
+            sandbox: node_sandbox
+        definitions:
+          wrappers:
+            - 'bash -c <cmd>'
+          sandbox:
+            py_sandbox:
+              fs:
+                writable: [/tmp, /var/lib/python]
+                deny: [/etc]
+              network:
+                allow: false
+            node_sandbox:
+              fs:
+                writable: [/tmp, /var/lib/node]
+                deny: [/etc, /sys]
+              network:
+                allow: false
+    "})
+    .unwrap();
+
+    // bash -c 'python3 a.py && node b.js'
+    // -> compound inside wrapper: merge_results picks one sandbox_preset
+    //    based on action priority (both Allow -> first wins: py_sandbox)
+    let result = evaluate_command(
+        &config,
+        "bash -c 'python3 a.py && node b.js'",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.sandbox_preset.as_deref(), Some("py_sandbox"));
+}
+
+// ========================================
+// find -exec/-execdir wrapper: flag alternation followed by <cmd>
+// placeholder is parsed correctly, enabling recursive evaluation
+// ========================================
+
+#[rstest]
+#[case::find_exec_rm_denied_semicolon("find . -exec rm -rf / \\;", assert_deny as ActionAssertion)]
+#[case::find_exec_rm_denied_plus("find . -exec rm -rf / +", assert_deny as ActionAssertion)]
+#[case::find_execdir_echo_allowed("find . -execdir echo hello +", assert_allow as ActionAssertion)]
+#[case::find_ok_rm_denied("find /tmp -ok rm -rf / \\;", assert_deny as ActionAssertion)]
+#[case::find_okdir_ls_allowed("find . -okdir ls -la +", assert_allow as ActionAssertion)]
+#[case::find_exec_unmatched_default("find . -exec hg status +", assert_ask as ActionAssertion)]
+fn find_exec_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'echo *'
+          - allow: 'ls *'
+        definitions:
+          wrappers:
+            - 'find * -exec|-execdir|-ok|-okdir <cmd> \\;|+'
     "})
     .unwrap();
 

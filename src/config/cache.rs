@@ -1,6 +1,8 @@
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::PresetError;
@@ -48,22 +50,12 @@ impl PresetCache {
     }
 
     fn resolve_cache_dir() -> Result<PathBuf, PresetError> {
-        let base = std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .filter(|h| !h.is_empty())
-                    .map(|h| PathBuf::from(h).join(".cache"))
-            })
-            .ok_or_else(|| {
-                PresetError::Cache(
-                    "cannot determine cache directory: neither XDG_CACHE_HOME nor HOME is set"
-                        .to_string(),
-                )
-            })?;
+        let base = super::dirs::cache_dir().ok_or_else(|| {
+            PresetError::Cache(
+                "cannot determine cache directory: neither XDG_CACHE_HOME nor HOME is set"
+                    .to_string(),
+            )
+        })?;
         Ok(base.join("runok").join("presets"))
     }
 
@@ -122,6 +114,33 @@ impl PresetCache {
         serde_json::from_str(&content).ok()
     }
 
+    /// Return the lock file path for a given reference.
+    ///
+    /// The lock file is placed alongside the cache directory (not inside it)
+    /// so it exists before the cache directory is created by `git clone`.
+    pub fn lock_path(&self, reference: &str) -> PathBuf {
+        self.cache_root
+            .join(format!("{}.lock", Self::cache_key(reference)))
+    }
+
+    /// Acquire an exclusive file lock for the given reference.
+    ///
+    /// Creates the lock file and parent directories if they don't exist.
+    /// Blocks until the lock is acquired. The returned `File` holds the lock;
+    /// dropping it releases the lock.
+    pub fn acquire_lock(&self, reference: &str) -> Result<File, PresetError> {
+        let lock_path = self.lock_path(reference);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PresetError::Cache(format!("failed to create lock directory: {e}")))?;
+        }
+        let file = File::create(&lock_path)
+            .map_err(|e| PresetError::Cache(format!("failed to create lock file: {e}")))?;
+        file.lock_exclusive()
+            .map_err(|e| PresetError::Cache(format!("failed to acquire lock: {e}")))?;
+        Ok(file)
+    }
+
     /// Write metadata to a `metadata.json` file inside `cache_dir`.
     pub fn write_metadata(cache_dir: &Path, metadata: &CacheMetadata) -> Result<(), PresetError> {
         let path = cache_dir.join("metadata.json");
@@ -138,6 +157,21 @@ mod tests {
     use super::*;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
+
+    /// Bundles a `TempDir` with a `PresetCache` so the temporary directory
+    /// lives as long as the cache (preventing premature cleanup).
+    struct CacheFixture {
+        cache: PresetCache,
+        // Held to keep the temporary directory alive for the test's lifetime.
+        _tmp: TempDir,
+    }
+
+    #[fixture]
+    fn cache_fixture() -> CacheFixture {
+        let tmp = TempDir::new().unwrap();
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+        CacheFixture { cache, _tmp: tmp }
+    }
 
     #[fixture]
     fn tmp() -> TempDir {
@@ -165,18 +199,16 @@ mod tests {
     }
 
     #[rstest]
-    fn miss_when_no_cache_dir(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+    fn miss_when_no_cache_dir(cache_fixture: CacheFixture) {
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Miss
         ));
     }
 
     #[rstest]
-    fn hit_when_fresh_cache(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn hit_when_fresh_cache(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
         let now = SystemTime::now()
@@ -192,15 +224,14 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Hit(_)
         ));
     }
 
     #[rstest]
-    fn stale_when_ttl_exceeded(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn stale_when_ttl_exceeded(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
 
         let metadata = CacheMetadata {
@@ -212,15 +243,14 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Stale(_)
         ));
     }
 
     #[rstest]
-    fn immutable_never_stale(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let dir = cache.cache_dir("github:org/repo@abc123");
+    fn immutable_never_stale(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@abc123");
         std::fs::create_dir_all(&dir).unwrap();
 
         let metadata = CacheMetadata {
@@ -232,22 +262,58 @@ mod tests {
         PresetCache::write_metadata(&dir, &metadata).unwrap();
 
         assert!(matches!(
-            cache.check("github:org/repo@abc123", true),
+            cache_fixture.cache.check("github:org/repo@abc123", true),
             CacheStatus::Hit(_)
         ));
     }
 
     #[rstest]
-    fn stale_when_no_metadata(tmp: TempDir) {
-        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
-        let dir = cache.cache_dir("github:org/repo@v1");
+    fn stale_when_no_metadata(cache_fixture: CacheFixture) {
+        let dir = cache_fixture.cache.cache_dir("github:org/repo@v1");
         std::fs::create_dir_all(&dir).unwrap();
         // No metadata.json written
 
         assert!(matches!(
-            cache.check("github:org/repo@v1", false),
+            cache_fixture.cache.check("github:org/repo@v1", false),
             CacheStatus::Stale(_)
         ));
+    }
+
+    #[rstest]
+    fn lock_path_is_beside_cache_dir(cache_fixture: CacheFixture) {
+        let reference = "github:org/repo@v1";
+        let cache_dir = cache_fixture.cache.cache_dir(reference);
+        let lock_path = cache_fixture.cache.lock_path(reference);
+
+        // Lock file should be in the same parent as the cache dir
+        assert_eq!(lock_path.parent(), cache_dir.parent());
+        // Lock file name = cache_key + ".lock"
+        assert_eq!(
+            lock_path.file_name().unwrap().to_str().unwrap(),
+            format!("{}.lock", PresetCache::cache_key(reference))
+        );
+    }
+
+    #[rstest]
+    fn acquire_lock_creates_file(cache_fixture: CacheFixture) {
+        let reference = "github:org/repo@v1";
+        let lock_path = cache_fixture.cache.lock_path(reference);
+
+        assert!(!lock_path.exists());
+        let _lock = cache_fixture.cache.acquire_lock(reference).unwrap();
+        assert!(lock_path.exists());
+    }
+
+    #[rstest]
+    fn lock_is_released_on_drop(cache_fixture: CacheFixture) {
+        let reference = "github:org/repo@v1";
+
+        {
+            let _lock = cache_fixture.cache.acquire_lock(reference).unwrap();
+            // Lock is held here
+        }
+        // After drop, another lock should be acquirable immediately
+        let _lock2 = cache_fixture.cache.acquire_lock(reference).unwrap();
     }
 
     #[rstest]

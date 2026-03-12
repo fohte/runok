@@ -56,6 +56,27 @@ If the same assertion chain appears in 3+ tests, extract it into a helper.
 
 Tests must verify production code. Tests that only assert on test helpers, fixtures, or mocks are unnecessary. Remove them.
 
+### Integration tests for rule evaluation logic
+
+Write integration tests in `tests/integration/`. Integration tests verify the end-to-end path: YAML config -> `parse_config` -> `evaluate_command`/`evaluate_compound`. Unit tests focus on internal algorithm correctness (pattern matching, command parsing, expression evaluation). Both may exercise the same code paths from different perspectives (ripgrep-style test separation).
+
+## Documentation rules
+
+### Keep docs and README up to date
+
+When adding, changing, or removing user-facing features, CLI options, configuration fields, or behavior, update the relevant documentation:
+
+- **README.md** -- Update if the change affects the project overview, feature list, or getting-started instructions.
+- **docs/ (Starlight site)** -- Update the corresponding page(s) under `docs/src/content/docs/`. Common areas:
+  - CLI changes: `cli/`
+  - Configuration changes: `configuration/`
+  - Pattern syntax changes: `pattern-syntax/`
+  - Rule evaluation changes: `rule-evaluation/`
+  - Sandbox changes: `sandbox/`
+  - New recipes or examples: `recipes/`
+
+Do not create new doc pages unless the change introduces an entirely new concept. Prefer updating existing pages first.
+
 ## Code rules
 
 ### Use the `shlex` crate for shell quoting and splitting

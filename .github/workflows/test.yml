@@ -12,6 +12,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
 
     steps:
       - uses: actions/create-github-app-token@v2
@@ -45,10 +48,12 @@ jobs:
       # causing "could not rename downloaded file" errors.
       - run: rustup show
 
-      - uses: jdx/mise-action@v3
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@v3
 
       - run: cargo fetch
 
@@ -67,7 +72,7 @@ jobs:
 
       - name: Commit formatted files
         if: ${{ !cancelled() && steps.check-prev.outputs.skip_commit != 'true' }}
-        uses: suzuki-shunsuke/commit-action@v0.1.0
+        uses: suzuki-shunsuke/commit-action@v0.1.1
         with:
           commit_message: 'style: auto-format'
           workflow: deny
@@ -84,9 +89,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: 'sccache'
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # Allow unprivileged user namespaces for bubblewrap on Ubuntu 24.04+
       # where AppArmor restricts them by default
@@ -96,10 +106,12 @@ jobs:
 
       - run: rustup show
 
-      - uses: jdx/mise-action@v3
+      # Run sccache-action before mise-action so that sccache binary is
+      # available when mise installs cargo tools (RUSTC_WRAPPER=sccache).
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@v3
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -107,15 +119,8 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
-      # On Linux, test the full workspace including the Linux sandbox helper.
-      # On macOS, exclude the Linux-only sandbox crate (depends on landlock/seccompiler).
       - name: Run tests with coverage
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cargo llvm-cov --workspace --lcov --output-path lcov.info
-          else
-            cargo llvm-cov --workspace --exclude runok-linux-sandbox --lcov --output-path lcov.info
-          fi
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

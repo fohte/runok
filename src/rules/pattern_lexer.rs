@@ -7,6 +7,8 @@ use super::PatternParseError;
 pub enum LexToken {
     /// A plain literal string (e.g. "git", "status", "-f")
     Literal(String),
+    /// A quoted literal string where `*` is not a glob wildcard (e.g. `"WIP*"`)
+    QuotedLiteral(String),
     /// A pipe-separated alternation (e.g. "-X|--request" -> ["-X", "--request"])
     Alternation(Vec<String>),
     /// The wildcard token `*`
@@ -57,7 +59,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                     let token = consume_alternation_continuation(&mut chars, first_words)?;
                     tokens.push(token);
                 } else {
-                    tokens.push(LexToken::Literal(value));
+                    tokens.push(LexToken::QuotedLiteral(value));
                 }
             }
 
@@ -500,11 +502,11 @@ mod tests {
         LexToken::Literal("git".into()),
         LexToken::Literal("commit".into()),
         LexToken::Literal("-m".into()),
-        LexToken::Literal("WIP*".into()),
+        LexToken::QuotedLiteral("WIP*".into()),
     ])]
     #[case("echo 'hello world'", vec![
         LexToken::Literal("echo".into()),
-        LexToken::Literal("hello world".into()),
+        LexToken::QuotedLiteral("hello world".into()),
     ])]
     fn tokenize_quoted(#[case] input: &str, #[case] expected: Vec<LexToken>) {
         assert_eq!(tokenize(input).unwrap(), expected);

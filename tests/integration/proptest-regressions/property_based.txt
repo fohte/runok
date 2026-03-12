@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d5363e4d5e0ef6758ebc9f371b4bc4c21c6ff03bec0f1a5990fd11823de855fe # shrinks to cmd_name = "git", (glob_pat, _matching, non_matching) = ("*il*", "ilil", "il00")
+cc 8a3d917c92316892ff42803932e9d78bebfa2d0da4147e9ebec4e64140fa4d74 # shrinks to cmd_name = "git", alternatives = ["foo", "/tmp/data"], outsider = "bar", suffix = []
+cc cc1adc40f89d860eca9d1b0892053e41d754f559f82fb41f4ce7a228afd32d16 # shrinks to cmd_name = "curl", other_cmd = "git", tokens = []
+cc 13a9538eb55d97a8fa8aa98d8b1e0aa342e954a81883ecf3a3ab5c99f43cfcda # shrinks to cmd_name = "git", negated_flag = "--force", positionals = []
