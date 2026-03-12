@@ -1158,6 +1158,11 @@ mod tests {
         serde_json::from_str(lines[0]).unwrap()
     }
 
+    fn assert_no_audit_log(audit_dir: &TempDir) {
+        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
+        assert!(entries.is_empty(), "no audit log should be written");
+    }
+
     #[rstest]
     fn audit_log_written_for_auditable_endpoint_on_match(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
@@ -1185,11 +1190,7 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
-        assert!(
-            entries.is_empty(),
-            "no audit log should be written for non-auditable endpoint"
-        );
+        assert_no_audit_log(&audit_dir);
     }
 
     #[rstest]
@@ -1206,11 +1207,7 @@ mod tests {
         };
         run_with_options(&endpoint, &config, &options);
 
-        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
-        assert!(
-            entries.is_empty(),
-            "no audit log should be written in dry-run mode"
-        );
+        assert_no_audit_log(&audit_dir);
     }
 
     #[rstest]
@@ -1227,11 +1224,7 @@ mod tests {
         };
         run(&endpoint, &config);
 
-        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
-        assert!(
-            entries.is_empty(),
-            "no audit log should be written when disabled"
-        );
+        assert_no_audit_log(&audit_dir);
     }
 
     #[rstest]
