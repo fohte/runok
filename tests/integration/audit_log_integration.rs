@@ -101,6 +101,14 @@ fn allow_echo_audit_config(audit_dir: TempDir) -> AuditTestConfig {
     AuditTestConfig { config, audit_dir }
 }
 
+fn echo_hello_endpoint() -> ExecAdapter {
+    ExecAdapter::new(
+        vec!["echo".into(), "hello".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    )
+}
+
 fn audit_file_exists(dir: &std::path::Path) -> bool {
     if !dir.exists() {
         return false;
@@ -248,11 +256,7 @@ fn audit_disabled_does_not_generate_log(audit_dir: TempDir) {
     ))
     .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
 
-    let endpoint = ExecAdapter::new(
-        vec!["echo".into(), "hello".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
+    let endpoint = echo_hello_endpoint();
     let options = RunOptions::default();
 
     let exit_code = adapter::run_with_options(&endpoint, &config, &options);
@@ -269,11 +273,7 @@ fn no_audit_section_uses_default_behavior() {
     "})
     .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
 
-    let endpoint = ExecAdapter::new(
-        vec!["echo".into(), "hello".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
+    let endpoint = echo_hello_endpoint();
     let options = RunOptions::default();
 
     // Should succeed without errors even without an audit section
@@ -283,11 +283,7 @@ fn no_audit_section_uses_default_behavior() {
 
 #[rstest]
 fn dry_run_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig) {
-    let endpoint = ExecAdapter::new(
-        vec!["echo".into(), "hello".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
+    let endpoint = echo_hello_endpoint();
     let options = RunOptions {
         dry_run: true,
         verbose: false,
@@ -301,11 +297,7 @@ fn dry_run_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig)
 
 #[rstest]
 fn audit_log_records_matched_rules(allow_echo_audit_config: AuditTestConfig) {
-    let endpoint = ExecAdapter::new(
-        vec!["echo".into(), "hello".into()],
-        None,
-        Box::new(MockExecutor::new(0)),
-    );
+    let endpoint = echo_hello_endpoint();
     let options = RunOptions::default();
 
     adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
