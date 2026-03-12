@@ -982,224 +982,196 @@ mod tests {
         PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
     }
 
-    #[rstest]
-    fn run_with_upgraded_updates_config_file(tmp: TempDir) {
-        let config_path = tmp.path().join("runok.yml");
-        fs::write(
-            &config_path,
-            indoc! {"
-                extends:
-                  - github:org/repo@v1.0.0
-                rules:
-                  - allow: 'git status'
-            "},
-        )
-        .unwrap();
-
-        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
-
-        // Set up old version cache
-        setup_cache_with_sha(&cache, "github:org/repo@v1.0.0", "aaa111");
-
-        // Set up new version cache so it's a cache Hit (no fetch needed)
-        setup_cache_with_sha(&cache, "github:org/repo@v1.2.0", "bbb222");
-
-        let git_client = MockGitClient::new();
-        git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.2.0", T)])));
-
-        let tracked = vec![TrackedReference {
-            reference: "github:org/repo@v1.0.0".to_string(),
-            source_file: config_path.clone(),
-        }];
-
-        let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_ok());
-
-        let updated = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(
-            updated,
-            indoc! {"
-                extends:
-                  - github:org/repo@v1.2.0
-                rules:
-                  - allow: 'git status'
-            "}
-        );
+    /// Expected outcome for `run_with` scenario tests.
+    #[derive(Debug)]
+    enum RunWithExpected {
+        /// Config file should be updated to contain `new_content`.
+        ConfigUpdated(&'static str),
+        /// Config file should remain unchanged.
+        ConfigUnchanged,
+        /// `run_with` should return an error.
+        Error,
     }
 
-    #[rstest]
-    fn run_with_updated_does_not_modify_config(tmp: TempDir) {
-        let config_path = tmp.path().join("runok.yml");
-        let original_content = indoc! {"
-            extends:
-              - github:org/repo@main
-            rules:
-              - allow: 'git status'
-        "};
-        fs::write(&config_path, original_content).unwrap();
-
-        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
-        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
-
-        let git_client = MockGitClient::new();
-        // SHA changes → Updated
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("def456".to_string()));
-
-        let tracked = vec![TrackedReference {
-            reference: "github:org/repo@main".to_string(),
-            source_file: config_path.clone(),
-        }];
-
-        let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_ok());
-
-        let after = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(after, original_content);
+    /// Scenario definition for `run_with` tests.
+    struct RunWithScenario {
+        /// Initial config file content.
+        config_content: &'static str,
+        /// References to track (reference string, same config file).
+        references: Vec<&'static str>,
+        /// Cache entries to pre-create: (reference, sha).
+        cache_entries: Vec<(&'static str, &'static str)>,
+        /// Remote refs for ls-remote mock.
+        remote_refs: Vec<(&'static str, RefKind)>,
+        /// Mock results for fetch calls (Ok or Err).
+        fetch_results: Vec<Result<(), crate::config::PresetError>>,
+        /// Mock results for checkout calls.
+        checkout_results: Vec<Result<(), crate::config::PresetError>>,
+        /// Mock results for rev-parse calls.
+        rev_parse_results: Vec<Result<String, crate::config::PresetError>>,
     }
 
-    #[rstest]
-    fn run_with_up_to_date_does_not_modify_config(tmp: TempDir) {
+    /// Run a `run_with` scenario and return (result, final config content).
+    fn run_run_with_scenario(
+        tmp: &TempDir,
+        scenario: RunWithScenario,
+    ) -> (Result<(), anyhow::Error>, String) {
         let config_path = tmp.path().join("runok.yml");
-        let original_content = indoc! {"
-            extends:
-              - github:org/repo@main
-        "};
-        fs::write(&config_path, original_content).unwrap();
-
-        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
-        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
-
-        let git_client = MockGitClient::new();
-        // Same SHA → UpToDate
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("abc123".to_string()));
-
-        let tracked = vec![TrackedReference {
-            reference: "github:org/repo@main".to_string(),
-            source_file: config_path.clone(),
-        }];
-
-        let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_ok());
-
-        let after = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(after, original_content);
-    }
-
-    #[rstest]
-    fn run_with_skipped_does_not_modify_config(tmp: TempDir) {
-        let config_path = tmp.path().join("runok.yml");
-        let original_content = indoc! {"
-            extends:
-              - github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        "};
-        fs::write(&config_path, original_content).unwrap();
-
-        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
-        let git_client = MockGitClient::new();
-
-        let tracked = vec![TrackedReference {
-            reference: "github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-            source_file: config_path.clone(),
-        }];
-
-        let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_ok());
-
-        let after = fs::read_to_string(&config_path).unwrap();
-        assert_eq!(after, original_content);
-    }
-
-    #[rstest]
-    fn run_with_error_returns_err(tmp: TempDir) {
-        let config_path = tmp.path().join("runok.yml");
-        fs::write(
-            &config_path,
-            indoc! {"
-                extends:
-                  - github:org/repo@main
-            "},
-        )
-        .unwrap();
-
-        let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
-        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
-
-        let git_client = MockGitClient::new();
-        git_client.on_fetch(Err(crate::config::PresetError::GitClone {
-            reference: "mock".to_string(),
-            message: "network error".to_string(),
-        }));
-
-        let tracked = vec![TrackedReference {
-            reference: "github:org/repo@main".to_string(),
-            source_file: config_path.clone(),
-        }];
-
-        let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("1 preset(s) failed to update")
-        );
-    }
-
-    #[rstest]
-    fn run_with_mixed_results_counts_errors(tmp: TempDir) {
-        let config_path = tmp.path().join("runok.yml");
-        fs::write(
-            &config_path,
-            indoc! {"
-                extends:
-                  - github:org/repo@main
-                  - github:org/other@develop
-            "},
-        )
-        .unwrap();
+        fs::write(&config_path, scenario.config_content).unwrap();
 
         let cache = PresetCache::with_config(tmp.path().join("cache"), Duration::from_secs(3600));
 
-        // First reference: UpToDate (same SHA)
-        setup_cache_with_sha(&cache, "github:org/repo@main", "abc123");
-
-        // Second reference: Error (fetch fails)
-        setup_cache_with_sha(&cache, "github:org/other@develop", "xyz789");
+        for (reference, sha) in &scenario.cache_entries {
+            setup_cache_with_sha(&cache, reference, sha);
+        }
 
         let git_client = MockGitClient::new();
-        // First: success path
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("abc123".to_string()));
-        // Second: fetch error
-        git_client.on_fetch(Err(crate::config::PresetError::GitClone {
-            reference: "mock".to_string(),
-            message: "timeout".to_string(),
-        }));
 
-        let tracked = vec![
-            TrackedReference {
-                reference: "github:org/repo@main".to_string(),
+        if !scenario.remote_refs.is_empty() {
+            git_client.on_ls_remote_refs(Ok(refs(&scenario.remote_refs)));
+        }
+
+        for r in scenario.fetch_results {
+            git_client.on_fetch(r);
+        }
+        for r in scenario.checkout_results {
+            git_client.on_checkout(r);
+        }
+        for r in scenario.rev_parse_results {
+            git_client.on_rev_parse(r);
+        }
+
+        let tracked: Vec<TrackedReference> = scenario
+            .references
+            .iter()
+            .map(|r| TrackedReference {
+                reference: r.to_string(),
                 source_file: config_path.clone(),
-            },
-            TrackedReference {
-                reference: "github:org/other@develop".to_string(),
-                source_file: config_path.clone(),
-            },
-        ];
+            })
+            .collect();
 
         let result = run_with(tracked, &cache, &git_client);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("1 preset(s) failed to update")
-        );
+        let final_content = fs::read_to_string(&config_path).unwrap();
+        (result, final_content)
+    }
+
+    #[rstest]
+    // -- Upgraded: config file is rewritten with new version --
+    #[case::upgraded_updates_config(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@v1.0.0\nrules:\n  - allow: 'git status'\n",
+            references: vec!["github:org/repo@v1.0.0"],
+            cache_entries: vec![
+                ("github:org/repo@v1.0.0", "aaa111"),
+                ("github:org/repo@v1.2.0", "bbb222"),
+            ],
+            remote_refs: vec![("v1.0.0", T), ("v1.2.0", T)],
+            fetch_results: vec![],
+            checkout_results: vec![],
+            rev_parse_results: vec![],
+        },
+        RunWithExpected::ConfigUpdated(
+            "extends:\n  - github:org/repo@v1.2.0\nrules:\n  - allow: 'git status'\n",
+        ),
+    )]
+    // -- Updated (SHA changed): config file unchanged --
+    #[case::updated_does_not_modify_config(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@main\nrules:\n  - allow: 'git status'\n",
+            references: vec!["github:org/repo@main"],
+            cache_entries: vec![("github:org/repo@main", "abc123")],
+            remote_refs: vec![],
+            fetch_results: vec![Ok(())],
+            checkout_results: vec![Ok(())],
+            rev_parse_results: vec![Ok("def456".to_string())],
+        },
+        RunWithExpected::ConfigUnchanged,
+    )]
+    // -- UpToDate (same SHA): config file unchanged --
+    #[case::up_to_date_does_not_modify_config(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@main\n",
+            references: vec!["github:org/repo@main"],
+            cache_entries: vec![("github:org/repo@main", "abc123")],
+            remote_refs: vec![],
+            fetch_results: vec![Ok(())],
+            checkout_results: vec![Ok(())],
+            rev_parse_results: vec![Ok("abc123".to_string())],
+        },
+        RunWithExpected::ConfigUnchanged,
+    )]
+    // -- Skipped (commit SHA): config file unchanged --
+    #[case::skipped_does_not_modify_config(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            references: vec!["github:org/repo@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            cache_entries: vec![],
+            remote_refs: vec![],
+            fetch_results: vec![],
+            checkout_results: vec![],
+            rev_parse_results: vec![],
+        },
+        RunWithExpected::ConfigUnchanged,
+    )]
+    // -- Error (fetch fails): returns Err --
+    #[case::error_returns_err(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@main\n",
+            references: vec!["github:org/repo@main"],
+            cache_entries: vec![("github:org/repo@main", "abc123")],
+            remote_refs: vec![],
+            fetch_results: vec![Err(crate::config::PresetError::GitClone {
+                reference: "mock".to_string(),
+                message: "network error".to_string(),
+            })],
+            checkout_results: vec![],
+            rev_parse_results: vec![],
+        },
+        RunWithExpected::Error,
+    )]
+    // -- Mixed: one success + one error → returns Err --
+    #[case::mixed_results_counts_errors(
+        RunWithScenario {
+            config_content: "extends:\n  - github:org/repo@main\n  - github:org/other@develop\n",
+            references: vec!["github:org/repo@main", "github:org/other@develop"],
+            cache_entries: vec![
+                ("github:org/repo@main", "abc123"),
+                ("github:org/other@develop", "xyz789"),
+            ],
+            remote_refs: vec![],
+            fetch_results: vec![
+                Ok(()),
+                Err(crate::config::PresetError::GitClone {
+                    reference: "mock".to_string(),
+                    message: "timeout".to_string(),
+                }),
+            ],
+            checkout_results: vec![Ok(())],
+            rev_parse_results: vec![Ok("abc123".to_string())],
+        },
+        RunWithExpected::Error,
+    )]
+    fn run_with_scenarios(
+        tmp: TempDir,
+        #[case] scenario: RunWithScenario,
+        #[case] expected: RunWithExpected,
+    ) {
+        let original_content = scenario.config_content;
+        let (result, final_content) = run_run_with_scenario(&tmp, scenario);
+
+        match expected {
+            RunWithExpected::ConfigUpdated(new_content) => {
+                assert!(result.is_ok(), "expected Ok, got {result:?}");
+                assert_eq!(final_content, new_content);
+            }
+            RunWithExpected::ConfigUnchanged => {
+                assert!(result.is_ok(), "expected Ok, got {result:?}");
+                assert_eq!(final_content, original_content);
+            }
+            RunWithExpected::Error => {
+                assert!(result.is_err(), "expected Err, got Ok");
+            }
+        }
     }
 
     impl std::fmt::Debug for UpdateResult {
