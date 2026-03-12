@@ -2,7 +2,7 @@
 title: Denial feedback
 description: Provide helpful messages and fix suggestions when commands are denied.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 When a rule denies a command, runok can display a human-readable message explaining why, and optionally suggest an alternative command. This is configured with the `message` and `fix_suggestion` fields in [rule entries](/configuration/schema/).
