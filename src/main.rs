@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{AuditArgs, CheckRoute, Cli, Commands, route_check};
+use cli::{AuditArgs, CheckRoute, Cli, Commands, route_check, validate_no_unknown_flags};
 use runok::adapter::{self, RunOptions};
 use runok::audit::filter::{AuditFilter, TimeSpec};
 use runok::audit::reader::AuditReader;
@@ -46,6 +46,19 @@ fn create_executor() -> Box<dyn CommandExecutor> {
 }
 
 fn main() -> ExitCode {
+    let raw_args: Vec<String> = std::env::args().collect();
+
+    // Validate unknown flags before clap parsing absorbs them into `command` Vec
+    let subcommand_name = raw_args.get(1).map(|s| s.as_str()).unwrap_or("");
+    if matches!(subcommand_name, "exec" | "check")
+        && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name)
+    {
+        // check uses exit code 2 for errors; exec uses 1
+        let code: u8 = if subcommand_name == "check" { 2 } else { 1 };
+        eprintln!("runok: {e}");
+        return ExitCode::from(code);
+    }
+
     let cli = Cli::parse();
 
     #[cfg(feature = "config-schema")]

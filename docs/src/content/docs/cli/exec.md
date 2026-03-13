@@ -13,7 +13,7 @@ sidebar:
 runok exec [options] -- <command> [arguments...]
 ```
 
-The `--` separator distinguishes runok flags from the command's own flags.
+The `--` separator distinguishes runok flags from the command's own flags. Any unrecognized flag before `--` is rejected with an error to prevent typos from being silently absorbed into the command arguments.
 
 A single argument after `--` is interpreted as a shell command (passed to the shell). Multiple arguments are interpreted as an argv array (executed directly).
 
