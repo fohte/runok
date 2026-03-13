@@ -9,6 +9,7 @@ pub struct ExprContext {
     pub flags: HashMap<String, Option<String>>,
     pub args: Vec<String>,
     pub paths: HashMap<String, Vec<String>>,
+    pub vars: HashMap<String, String>,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -41,6 +42,8 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         .add_variable("paths", &context.paths)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
+    cel_context.add_variable_from_value("vars", context.vars.clone());
+
     let result = program
         .execute(&cel_context)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
@@ -62,6 +65,7 @@ mod tests {
             flags: HashMap::new(),
             args: Vec::new(),
             paths: HashMap::new(),
+            vars: HashMap::new(),
         }
     }
 
@@ -160,6 +164,45 @@ mod tests {
         assert!(!evaluate("'.bashrc' in paths.sensitive", &context).unwrap());
     }
 
+    // === Variable reference access ===
+
+    #[rstest]
+    #[case::exact_match("vars['instance-ids'] == 'i-abc123'", "instance-ids", "i-abc123", true)]
+    #[case::no_match(
+        "vars['instance-ids'] == 'i-abc123'",
+        "instance-ids",
+        "i-xyz999",
+        false
+    )]
+    fn vars_access(
+        #[case] expr: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            vars: HashMap::from([(key.to_string(), value.to_string())]),
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    #[test]
+    fn vars_has_check() {
+        let context = ExprContext {
+            vars: HashMap::from([("region".to_string(), "us-east-1".to_string())]),
+            ..empty_context()
+        };
+        assert!(evaluate("has(vars.region)", &context).unwrap());
+        assert!(evaluate("vars.region == 'us-east-1'", &context).unwrap());
+    }
+
+    #[test]
+    fn vars_empty_when_no_var_captured() {
+        let context = empty_context();
+        assert!(evaluate("vars.size() == 0", &context).unwrap());
+    }
+
     // === Logical operators ===
 
     #[test]
@@ -204,6 +247,7 @@ mod tests {
             flags: HashMap::from([("method".to_string(), Some("POST".to_string()))]),
             args: vec!["https://prod.example.com/api".to_string()],
             paths: HashMap::new(),
+            vars: HashMap::new(),
         };
         assert!(
             evaluate(
