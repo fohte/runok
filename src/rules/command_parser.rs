@@ -313,8 +313,8 @@ fn collect_commands(
             let len = children.len();
             for (i, child) in children.iter().enumerate() {
                 let child_pipe = PipeInfo {
-                    stdin: i > 0,
-                    stdout: i < len - 1,
+                    stdin: pipe_info.stdin || i > 0,
+                    stdout: pipe_info.stdout || i < len - 1,
                 };
                 collect_commands(*child, source, commands, &child_pipe, redirects);
             }
@@ -1354,6 +1354,11 @@ mod tests {
         PipeInfo { stdin: true, stdout: false },
     ])]
     #[case::three_stage_pipeline("echo hello | grep foo | wc -l", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    #[case::nested_pipeline_in_subshell("cmd1 | (cmd2 | cmd3)", vec![
         PipeInfo { stdin: false, stdout: true },
         PipeInfo { stdin: true, stdout: true },
         PipeInfo { stdin: true, stdout: false },
