@@ -1,3 +1,40 @@
+/// Flag definition: name and whether it takes a value argument.
+struct FlagDef {
+    name: &'static str,
+    takes_value: bool,
+}
+
+/// Known flags for each subcommand.
+const EXEC_FLAGS: &[FlagDef] = &[
+    FlagDef {
+        name: "--sandbox",
+        takes_value: true,
+    },
+    FlagDef {
+        name: "--dry-run",
+        takes_value: false,
+    },
+    FlagDef {
+        name: "--verbose",
+        takes_value: false,
+    },
+];
+
+const CHECK_FLAGS: &[FlagDef] = &[
+    FlagDef {
+        name: "--input-format",
+        takes_value: true,
+    },
+    FlagDef {
+        name: "--output-format",
+        takes_value: true,
+    },
+    FlagDef {
+        name: "--verbose",
+        takes_value: false,
+    },
+];
+
 /// Validate that no unknown flags appear before `--` in the raw CLI arguments
 /// for `exec` and `check` subcommands.
 ///
@@ -5,16 +42,9 @@
 /// to silently absorb unknown flags into the `command` Vec, we must perform this
 /// check ourselves using the raw process arguments.
 pub fn validate_no_unknown_flags(raw_args: &[String], subcommand: &str) -> Result<(), String> {
-    let known_flags = match subcommand {
-        "exec" => &["--sandbox", "--dry-run", "--verbose"] as &[&str],
-        "check" => &["--input-format", "--output-format", "--verbose"] as &[&str],
-        _ => return Ok(()),
-    };
-
-    // Flags that take a value argument (the next token is consumed as a value)
-    let flags_with_value = match subcommand {
-        "exec" => &["--sandbox"] as &[&str],
-        "check" => &["--input-format", "--output-format"] as &[&str],
+    let flags = match subcommand {
+        "exec" => EXEC_FLAGS,
+        "check" => CHECK_FLAGS,
         _ => return Ok(()),
     };
 
@@ -36,45 +66,36 @@ pub fn validate_no_unknown_flags(raw_args: &[String], subcommand: &str) -> Resul
         None => after_sub,
     };
 
-    // Walk the region, skipping values of known flags
-    let mut i = 0;
-    // Track whether we've seen a non-flag token (the command name).
-    // Once we see a command name, subsequent tokens are command arguments, not runok flags.
-    let mut seen_command_name = false;
+    // Walk the region using an iterator, skipping values of known flags.
+    // Once we see a non-flag token (the command name), stop checking.
+    let mut tokens = region.iter();
 
-    while i < region.len() {
-        let token = &region[i];
-
-        if seen_command_name {
-            // After the command name, everything is a command argument
+    while let Some(token) = tokens.next() {
+        if !token.starts_with('-') {
+            // Non-flag token: this is the start of the command
             break;
         }
 
-        if token.starts_with('-') {
-            // Check if it's a known flag (exact match or `--flag=value` form)
-            let is_known = known_flags
-                .iter()
-                .any(|f| token == *f || token.starts_with(&format!("{f}=")));
+        // Check if it's a known flag (exact match or `--flag=value` form)
+        let matched_flag = flags
+            .iter()
+            .find(|f| token == f.name || token.starts_with(&format!("{}=", f.name)));
 
-            if !is_known {
+        match matched_flag {
+            Some(flag) => {
+                // If this known flag takes a value and isn't `--flag=value` form, skip the next token
+                if flag.takes_value && !token.contains('=') {
+                    tokens.next(); // skip value
+                }
+            }
+            None => {
                 return Err(format!(
                     "unknown flag '{token}' for 'runok {subcommand}'. \
                      Use '--' to separate runok flags from the command: \
                      runok {subcommand} [OPTIONS] -- <COMMAND>"
                 ));
             }
-
-            // If this known flag takes a value and isn't `--flag=value` form, skip the next token
-            let takes_value = flags_with_value.iter().any(|f| token == *f);
-            if takes_value && !token.contains('=') {
-                i += 1; // skip value
-            }
-        } else {
-            // Non-flag token: this is the start of the command
-            seen_command_name = true;
         }
-
-        i += 1;
     }
 
     Ok(())

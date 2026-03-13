@@ -53,8 +53,10 @@ fn main() -> ExitCode {
     if matches!(subcommand_name, "exec" | "check")
         && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name)
     {
+        // check uses exit code 2 for errors; exec uses 1
+        let code: u8 = if subcommand_name == "check" { 2 } else { 1 };
         eprintln!("runok: {e}");
-        return ExitCode::FAILURE;
+        return ExitCode::from(code);
     }
 
     let cli = Cli::parse();
