@@ -21,7 +21,7 @@ impl AuditReader {
 
     /// Read audit log entries matching the given filter.
     ///
-    /// Returns entries sorted by timestamp in descending order (newest first).
+    /// Returns entries sorted by timestamp in ascending order (oldest first).
     /// Corrupted JSONL lines are skipped with a warning printed to stderr.
     /// If no log files exist, returns an empty list.
     pub fn read(&self, filter: &AuditFilter) -> Result<Vec<AuditEntry>, anyhow::Error> {

@@ -81,12 +81,23 @@ fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
         let action = action_str(&entry.action);
         let command = escape_newlines(&entry.command);
 
-        // Truncate command to fit terminal width
+        // Truncate command to fit terminal width, respecting UTF-8 char boundaries
         let command_max = term_width.saturating_sub(fixed_width);
-        let command_display = if command.len() > command_max && command_max > 3 {
-            format!("{}...", &command[..command_max - 3])
-        } else {
+        let command_display = if command.len() <= command_max {
             command
+        } else if command_max > 3 {
+            let target = command_max - 3;
+            let mut end = target;
+            while !command.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &command[..end])
+        } else {
+            let mut end = command_max;
+            while !command.is_char_boundary(end) {
+                end -= 1;
+            }
+            command[..end].to_string()
         };
 
         // Pad action string first, then colorize to avoid ANSI escape codes
@@ -236,5 +247,22 @@ mod tests {
         assert!(lines[0].contains("TIMESTAMP"));
         assert!(lines[0].contains("ACTION"));
         assert!(lines[0].contains("COMMAND"));
+    }
+
+    #[test]
+    fn test_print_table_multibyte_truncation_does_not_panic() {
+        // "あいうえお" is 15 bytes (3 bytes per char), truncating at a byte
+        // offset that falls mid-character must not panic
+        let entries = vec![make_entry(
+            "2026-03-13T10:30:00Z",
+            "echo あいうえお",
+            SerializableAction::Allow,
+        )];
+
+        let mut buf = Vec::new();
+        // This should not panic even with a very narrow terminal width
+        print_table(&mut buf, &entries);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(!output.is_empty());
     }
 }
