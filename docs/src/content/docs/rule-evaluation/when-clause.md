@@ -124,7 +124,7 @@ Type classification:
 ```
 
 :::note
-The `redirects` variable is only populated when the command is evaluated through `evaluate_compound` (e.g., compound commands with pipes, `&&`, or redirects). For simple commands without redirects or pipes, the list is empty.
+The `redirects` list is empty when the command has no redirects attached. Both single commands (e.g., `renovate-dryrun > /tmp/log.txt`) and compound commands (e.g., `cmd > file && cmd2`) populate redirect metadata correctly.
 :::
 
 ### `pipe` — Pipeline position
