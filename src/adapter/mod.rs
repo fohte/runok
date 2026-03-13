@@ -7,7 +7,7 @@ use crate::audit::{
     SubEvaluation,
 };
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
-use crate::rules::command_parser::extract_commands_with_metadata;
+use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 use crate::rules::rule_engine::{
     Action, EvalContext, RuleMatchInfo, default_action, evaluate_command_with_metadata,
     evaluate_compound,
@@ -230,7 +230,13 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     let context = EvalContext::from_env();
 
     // Determine if the command is compound (contains pipes, &&, ||, ;)
-    let extracted_commands = extract_commands_with_metadata(&command).unwrap_or_else(|_| vec![]);
+    let extracted_commands = extract_commands_with_metadata(&command).unwrap_or_else(|_| {
+        vec![ExtractedCommand {
+            command: command.clone(),
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+        }]
+    });
     let commands: Vec<String> = extracted_commands
         .iter()
         .map(|ec| ec.command.clone())
@@ -312,7 +318,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         // even for single commands with redirects (e.g., `cmd > /tmp/log.txt`).
         let first_extracted = extracted_commands.first();
         let empty_redirects = vec![];
-        let default_pipe = crate::rules::command_parser::PipeInfo::default();
+        let default_pipe = PipeInfo::default();
         let (redirects, pipe) = first_extracted
             .map(|ec| (ec.redirects.as_slice(), &ec.pipe))
             .unwrap_or((empty_redirects.as_slice(), &default_pipe));
