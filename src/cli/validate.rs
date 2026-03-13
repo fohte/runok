@@ -112,7 +112,7 @@ mod tests {
     use rstest::rstest;
 
     fn args(s: &str) -> Vec<String> {
-        s.split_whitespace().map(String::from).collect()
+        shlex::split(s).expect("invalid shell syntax in test input")
     }
 
     // === Valid cases (should pass) ===
