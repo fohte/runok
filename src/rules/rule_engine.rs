@@ -100,7 +100,39 @@ pub fn evaluate_command(
     command: &str,
     context: &EvalContext,
 ) -> Result<EvalResult, RuleError> {
+    // For single commands, extract redirect/pipe metadata so that `when`
+    // clauses referencing `redirects` or `pipe` work correctly.
+    // Compound commands (multiple extracted commands) are left to the
+    // compound guard inside evaluate_command_inner.
+    if let Ok(extracted) = extract_commands_with_metadata(command)
+        && extracted.len() == 1
+    {
+        let first = &extracted[0];
+        return evaluate_command_inner(
+            config,
+            &first.command,
+            context,
+            0,
+            &first.redirects,
+            &first.pipe,
+        );
+    }
     evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default())
+}
+
+/// Like `evaluate_command`, but with pre-extracted redirect and pipe metadata.
+///
+/// Use this when the caller has already parsed the original command for
+/// redirect/pipe information (e.g., the adapter extracts metadata from the
+/// original input before stripping redirects for pattern matching).
+pub fn evaluate_command_with_metadata(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+    redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
+) -> Result<EvalResult, RuleError> {
+    evaluate_command_inner(config, command, context, 0, redirects, pipe)
 }
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)

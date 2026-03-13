@@ -472,7 +472,31 @@ fn when_clause_with_path_ref(
 }
 
 // ========================================
-// Redirect conditions in when clause
+// Redirect conditions in when clause (via evaluate_command)
+// ========================================
+
+#[rstest]
+#[case::output_redirect_denied("renovate-dryrun > /tmp/log.txt", assert_deny as ActionAssertion)]
+#[case::no_redirect_default("renovate-dryrun", assert_ask as ActionAssertion)]
+fn redirect_output_exists_via_evaluate_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'renovate-dryrun'
+            when: 'redirects.exists(r, r.type == "output")'
+    "#})
+    .unwrap();
+
+    // evaluate_command (not evaluate_compound) must also propagate redirect metadata
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirect conditions in when clause (via evaluate_compound)
 // ========================================
 
 #[rstest]
