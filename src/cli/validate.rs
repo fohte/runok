@@ -76,6 +76,11 @@ pub fn validate_no_unknown_flags(raw_args: &[String], subcommand: &str) -> Resul
             break;
         }
 
+        // clap automatically adds these flags to every subcommand; let clap handle them
+        if matches!(token.as_str(), "--help" | "-h" | "--version" | "-V") {
+            continue;
+        }
+
         // Check if it's a known flag (exact match or `--flag=value` form)
         let matched_flag = flags
             .iter()
@@ -128,6 +133,12 @@ mod tests {
     #[case::check_no_args("runok check")]
     #[case::unknown_after_double_dash("runok exec -- --unknown-flag ls")]
     #[case::check_unknown_after_double_dash("runok check -- --config foo break")]
+    #[case::exec_help("runok exec --help")]
+    #[case::exec_help_short("runok exec -h")]
+    #[case::check_help("runok check --help")]
+    #[case::check_help_short("runok check -h")]
+    #[case::exec_version("runok exec --version")]
+    #[case::exec_version_short("runok exec -V")]
     fn valid_args(#[case] input: &str) {
         let raw = args(input);
         let subcommand = if input.contains("exec") {
