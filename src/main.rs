@@ -291,15 +291,7 @@ fn run_audit(args: AuditArgs, cwd: &std::path::Path) -> i32 {
             }
         }
     } else {
-        for entry in &entries {
-            let action_str = match &entry.action {
-                runok::audit::SerializableAction::Allow => "allow",
-                runok::audit::SerializableAction::Deny { .. } => "deny",
-                runok::audit::SerializableAction::Ask { .. } => "ask",
-                runok::audit::SerializableAction::Default => "default",
-            };
-            println!("{} [{}] {}", entry.timestamp, action_str, entry.command);
-        }
+        runok::audit::formatter::print_entries(&entries);
     }
 
     0
