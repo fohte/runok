@@ -356,16 +356,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn match_var_ref_undefined() {
-        let definitions = Definitions::default();
-        assert!(!match_single_token(
-            &PatternToken::VarRef("nonexistent".into()),
-            "anything",
-            &definitions,
-        ));
-    }
-
     #[rstest]
     #[case::exact_match("tests/run", true)]
     #[case::dot_prefix("./tests/run", true)]
@@ -391,9 +381,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn match_var_ref_empty_values() {
-        let definitions = Definitions {
+    #[rstest]
+    #[case::undefined_var(Definitions::default(), "nonexistent", "anything")]
+    #[case::empty_values(
+        Definitions {
             vars: Some(HashMap::from([(
                 "empty".to_string(),
                 VarDefinition {
@@ -402,23 +393,26 @@ mod tests {
                 },
             )])),
             ..Default::default()
-        };
-        assert!(!match_single_token(
-            &PatternToken::VarRef("empty".into()),
-            "anything",
-            &definitions,
-        ));
-    }
-
-    #[test]
-    fn match_var_ref_no_vars_section() {
-        let definitions = Definitions {
+        },
+        "empty",
+        "anything",
+    )]
+    #[case::no_vars_section(
+        Definitions {
             vars: None,
             ..Default::default()
-        };
+        },
+        "anything",
+        "value",
+    )]
+    fn match_var_ref_negative_cases(
+        #[case] definitions: Definitions,
+        #[case] var_name: &str,
+        #[case] cmd_token: &str,
+    ) {
         assert!(!match_single_token(
-            &PatternToken::VarRef("anything".into()),
-            "value",
+            &PatternToken::VarRef(var_name.into()),
+            cmd_token,
             &definitions,
         ));
     }

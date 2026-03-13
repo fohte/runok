@@ -2197,9 +2197,9 @@ mod tests {
         assert!(vars.contains_key("instance-ids"));
     }
 
-    #[test]
-    fn validate_rejects_var_ref_in_definitions_vars() {
-        let mut config = parse_config(indoc! {"
+    #[rstest]
+    #[case::var_ref(
+        indoc! {"
             definitions:
               vars:
                 ids:
@@ -2209,24 +2209,11 @@ mod tests {
                 other-ids:
                   values:
                     - i-xyz999
-        "})
-        .unwrap();
-        let err = config.validate().unwrap_err();
-        assert!(
-            err.to_string().contains("definitions.vars.ids"),
-            "error should mention the var key: {}",
-            err
-        );
-        assert!(
-            err.to_string().contains("concrete values, not references"),
-            "error should explain the constraint: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn validate_rejects_path_ref_in_definitions_vars() {
-        let mut config = parse_config(indoc! {"
+        "},
+        "definitions.vars.ids",
+    )]
+    #[case::path_ref(
+        indoc! {"
             definitions:
               vars:
                 scripts:
@@ -2237,12 +2224,23 @@ mod tests {
               paths:
                 sensitive:
                   - /etc/passwd
-        "})
-        .unwrap();
+        "},
+        "definitions.vars.scripts",
+    )]
+    fn validate_rejects_placeholder_in_definitions_vars(
+        #[case] yaml: &str,
+        #[case] expected_key_msg: &str,
+    ) {
+        let mut config = parse_config(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(
-            err.to_string().contains("definitions.vars.scripts"),
+            err.to_string().contains(expected_key_msg),
             "error should mention the var key: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("concrete values, not references"),
+            "error should explain the constraint: {}",
             err
         );
     }
