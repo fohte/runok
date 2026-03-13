@@ -4,6 +4,17 @@
   "description": "Top-level runok configuration.",
   "type": "object",
   "properties": {
+    "audit": {
+      "description": "Audit log settings.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "defaults": {
       "description": "Default settings applied when no rule matches.",
       "anyOf": [
@@ -56,6 +67,37 @@
         "ask",
         "deny"
       ]
+    },
+    "AuditConfig": {
+      "description": "Audit log configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether audit logging is enabled (default: true).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Directory path for audit log files (default: ~/.local/share/runok/).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rotation": {
+          "description": "Log rotation settings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RotationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "Defaults": {
       "description": "Default settings applied when no rule matches a command.",
@@ -166,6 +208,21 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "RotationConfig": {
+      "description": "Log rotation configuration.",
+      "type": "object",
+      "properties": {
+        "retention_days": {
+          "description": "Number of days to retain log files (default: 7).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },

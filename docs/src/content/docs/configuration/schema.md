@@ -19,7 +19,7 @@ rules:
   - ask: 'npm *'
 ```
 
-The top-level keys are `extends`, `defaults`, `rules`, and `definitions`. All are optional.
+The top-level keys are `extends`, `defaults`, `rules`, `definitions`, and `audit`. All are optional.
 
 ### JSON Schema
 
@@ -311,6 +311,50 @@ definitions:
     - mycustomtool
 ```
 
+### `audit`
+
+Audit log settings. Controls whether command evaluations are recorded and where log files are stored. Audit settings can only be configured in the **global** `runok.yml` — audit sections in project or local override configs are silently ignored.
+
+**Type:** `object`\
+**Default:** `{ enabled: true }`\
+**Required:** No
+
+```yaml title="~/.config/runok/runok.yml"
+audit:
+  enabled: true
+  path: ~/.local/share/runok/
+  rotation:
+    retention_days: 30
+```
+
+#### `audit.enabled`
+
+Whether audit logging is enabled.
+
+**Type:** `bool`\
+**Default:** `true`
+
+#### `audit.path`
+
+Directory path for audit log files.
+
+**Type:** `str`\
+**Default:** `~/.local/share/runok/` (or `$XDG_DATA_HOME/runok/`)
+
+#### `audit.rotation`
+
+Log rotation settings.
+
+**Type:** `object`\
+**Default:** `{}`
+
+#### `audit.rotation.retention_days`
+
+Number of days to retain log files. Files older than this are automatically deleted during log writes.
+
+**Type:** `int`\
+**Default:** `7`
+
 ## Complete Example
 
 ```yaml title="runok.yml"
@@ -347,6 +391,11 @@ definitions:
     - 'sudo <cmd>'
   commands:
     - mycustomtool
+
+audit:
+  enabled: true
+  rotation:
+    retention_days: 30
 
 rules:
   - allow: 'git *'

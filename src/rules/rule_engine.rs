@@ -64,6 +64,8 @@ pub struct SubCommandDetail {
 pub struct CompoundEvalResult {
     pub action: Action,
     pub sandbox_policy: Option<MergedSandboxPolicy>,
+    /// Per-sub-command evaluation results for audit logging.
+    pub sub_results: Vec<EvalResult>,
     /// Per-sub-command evaluation details, for verbose logging.
     pub sub_command_details: Vec<SubCommandDetail>,
 }
@@ -124,27 +126,30 @@ pub fn evaluate_compound(
 
     let mut merged_action: Option<Action> = None;
     let mut preset_names: Vec<String> = Vec::new();
+    let mut sub_results: Vec<EvalResult> = Vec::new();
     let mut sub_command_details: Vec<SubCommandDetail> = Vec::new();
 
     for cmd in &commands {
         let result = evaluate_command(config, cmd, context)?;
 
         // Collect sandbox preset names
-        if let Some(name) = result.sandbox_preset {
-            preset_names.push(name);
+        if let Some(ref name) = result.sandbox_preset {
+            preset_names.push(name.clone());
         }
 
         sub_command_details.push(SubCommandDetail {
             command: cmd.clone(),
             action: result.action.clone(),
-            matched_rules: result.matched_rules,
+            matched_rules: result.matched_rules.clone(),
         });
 
         // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
-            Some(prev) => merge_actions(prev, result.action),
-            None => result.action,
+            Some(prev) => merge_actions(prev, result.action.clone()),
+            None => result.action.clone(),
         });
+
+        sub_results.push(result);
     }
 
     let action = merged_action.unwrap_or_else(|| default_action(config));
@@ -189,6 +194,7 @@ pub fn evaluate_compound(
     Ok(CompoundEvalResult {
         action: final_action,
         sandbox_policy: final_policy,
+        sub_results,
         sub_command_details,
     })
 }

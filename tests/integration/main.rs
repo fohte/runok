@@ -1,3 +1,4 @@
+mod audit_log_integration;
 mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod extends_resolution;

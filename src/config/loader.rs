@@ -114,6 +114,19 @@ impl DefaultConfigLoader {
     }
 }
 
+/// Strip audit settings from a config, emitting a warning.
+/// Audit settings can only be configured in the global config.
+fn strip_audit(mut config: Config, source: &str) -> Config {
+    if config.audit.is_some() {
+        eprintln!(
+            "warning: 'audit' section in {source} is ignored \
+             (audit settings can only be configured in the global config)"
+        );
+        config.audit = None;
+    }
+    config
+}
+
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
         // Resolve paths in each config file with its own base_dir before merging
@@ -128,8 +141,10 @@ impl ConfigLoader for DefaultConfigLoader {
         let project_dir = self.find_project_dir(cwd);
         let (local, local_override) = match &project_dir {
             Some(dir) => (
-                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?,
-                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?
+                    .map(|c| strip_audit(c, "project config")),
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?
+                    .map(|c| strip_audit(c, "local override config")),
             ),
             None => (None, None),
         };
@@ -604,6 +619,104 @@ mod tests {
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
+    }
+
+    #[test]
+    fn load_audit_global_only_ignores_local_overrides() {
+        let env = TestEnv::new();
+        env.write_global(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: true
+                  path: /global/audit/
+                  rotation:
+                    retention_days: 30
+            "},
+        );
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: false
+                  path: /local/audit/
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                audit:
+                  rotation:
+                    retention_days: 7
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // global values are preserved; local overrides are ignored
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
+
+    #[test]
+    fn load_audit_stripped_from_extended_project_config() {
+        let env = TestEnv::new();
+        env.write_global(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: true
+                  path: /global/audit/
+            "},
+        );
+        // Preset file referenced by project config contains audit settings
+        fs::write(
+            env.cwd.join("preset.yml"),
+            indoc! {"
+                audit:
+                  enabled: false
+                  path: /preset/audit/
+                rules:
+                  - allow: 'echo preset'
+            "},
+        )
+        .unwrap();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                extends:
+                  - ./preset.yml
+                rules:
+                  - allow: 'echo local'
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // Audit from the extended preset is stripped; global audit is preserved
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        // Rules from the preset are still merged
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("echo preset"));
+        assert_eq!(rules[1].allow.as_deref(), Some("echo local"));
+    }
+
+    #[test]
+    fn load_audit_absent_returns_none() {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        assert_eq!(config.audit, None);
     }
 
     // -- Parse error tests --
