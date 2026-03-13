@@ -6,7 +6,8 @@ use crate::config::{
 };
 use crate::rules::RuleError;
 use crate::rules::command_parser::{
-    FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
+    ExtractedCommand, FlagSchema, ParsedCommand, PipeInfo, RedirectInfo, extract_commands,
+    extract_commands_with_metadata, parse_command, shell_quote_join,
 };
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
 use crate::rules::pattern_matcher::{extract_placeholder, matches_with_captures};
@@ -99,7 +100,7 @@ pub fn evaluate_command(
     command: &str,
     context: &EvalContext,
 ) -> Result<EvalResult, RuleError> {
-    evaluate_command_inner(config, command, context, 0)
+    evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default())
 }
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
@@ -118,7 +119,13 @@ pub fn evaluate_compound(
     command: &str,
     context: &EvalContext,
 ) -> Result<CompoundEvalResult, RuleError> {
-    let commands = extract_commands(command).unwrap_or_else(|_| vec![command.to_string()]);
+    let extracted = extract_commands_with_metadata(command).unwrap_or_else(|_| {
+        vec![ExtractedCommand {
+            command: command.to_string(),
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+        }]
+    });
 
     let default_definitions = Definitions::default();
     let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
@@ -129,8 +136,15 @@ pub fn evaluate_compound(
     let mut sub_results: Vec<EvalResult> = Vec::new();
     let mut sub_command_details: Vec<SubCommandDetail> = Vec::new();
 
-    for cmd in &commands {
-        let result = evaluate_command(config, cmd, context)?;
+    for ext_cmd in &extracted {
+        let result = evaluate_command_inner(
+            config,
+            &ext_cmd.command,
+            context,
+            0,
+            &ext_cmd.redirects,
+            &ext_cmd.pipe,
+        )?;
 
         // Collect sandbox preset names
         if let Some(ref name) = result.sandbox_preset {
@@ -138,7 +152,7 @@ pub fn evaluate_compound(
         }
 
         sub_command_details.push(SubCommandDetail {
-            command: cmd.clone(),
+            command: ext_cmd.command.clone(),
             action: result.action.clone(),
             matched_rules: result.matched_rules.clone(),
         });
@@ -249,6 +263,8 @@ fn evaluate_command_inner(
     command: &str,
     context: &EvalContext,
     depth: usize,
+    redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
 ) -> Result<EvalResult, RuleError> {
     if depth > MAX_WRAPPER_DEPTH {
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
@@ -270,13 +286,13 @@ fn evaluate_command_inner(
     // command falls through to simple-command rule evaluation below. Both
     // results are merged so that rules matching the outer command (e.g.
     // `rm *` for `rm $(echo hello)`) are not skipped.
-    if let Ok(sub_commands) = extract_commands(command)
+    if let Ok(sub_commands) = extract_commands_with_metadata(command)
         && sub_commands.len() > 1
     {
         let normalized_command = normalize_whitespace(command);
-        let nested_subs: Vec<&String> = sub_commands
+        let nested_subs: Vec<&ExtractedCommand> = sub_commands
             .iter()
-            .filter(|sub| normalize_whitespace(sub) != normalized_command)
+            .filter(|sub| normalize_whitespace(&sub.command) != normalized_command)
             .collect();
         let had_self_reference = nested_subs.len() < sub_commands.len();
 
@@ -284,7 +300,14 @@ fn evaluate_command_inner(
             // Pure compound (no self-reference): evaluate all sub-commands and return.
             let mut merged: Option<EvalResult> = None;
             for sub in &nested_subs {
-                let result = evaluate_command_inner(config, sub, context, depth + 1)?;
+                let result = evaluate_command_inner(
+                    config,
+                    &sub.command,
+                    context,
+                    depth + 1,
+                    &sub.redirects,
+                    &sub.pipe,
+                )?;
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
                     None => result,
@@ -302,7 +325,14 @@ fn evaluate_command_inner(
         if !nested_subs.is_empty() {
             let mut nested_merged: Option<EvalResult> = None;
             for sub in &nested_subs {
-                let result = evaluate_command_inner(config, sub, context, depth + 1)?;
+                let result = evaluate_command_inner(
+                    config,
+                    &sub.command,
+                    context,
+                    depth + 1,
+                    &sub.redirects,
+                    &sub.pipe,
+                )?;
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
                     None => result,
@@ -315,7 +345,8 @@ fn evaluate_command_inner(
             if let Some(nested_result) = nested_merged {
                 // Evaluate the original command as a simple command (skip the
                 // compound guard by calling the remaining logic directly).
-                let simple_result = evaluate_simple_command(config, command, context, depth)?;
+                let simple_result =
+                    evaluate_simple_command(config, command, context, depth, redirects, pipe)?;
                 return Ok(merge_results(nested_result, simple_result));
             }
         }
@@ -323,7 +354,7 @@ fn evaluate_command_inner(
         // simple-command evaluation.
     }
 
-    evaluate_simple_command(config, command, context, depth)
+    evaluate_simple_command(config, command, context, depth, redirects, pipe)
 }
 
 /// Evaluate a single (non-compound) command against rules and wrappers.
@@ -338,6 +369,8 @@ fn evaluate_simple_command(
     command: &str,
     context: &EvalContext,
     depth: usize,
+    redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
 ) -> Result<EvalResult, RuleError> {
     let rules = match &config.rules {
         Some(rules) => rules,
@@ -378,7 +411,8 @@ fn evaluate_simple_command(
 
             // Evaluate when clause if present
             if let Some(when_expr) = &rule.when {
-                let expr_context = build_expr_context(&parsed_command, context, definitions);
+                let expr_context =
+                    build_expr_context(&parsed_command, context, definitions, redirects, pipe);
                 match evaluate(when_expr, &expr_context) {
                     Ok(true) => {}
                     Ok(false) => continue,
@@ -513,7 +547,14 @@ fn try_unwrap_wrapper(
 
             let mut result: Option<EvalResult> = None;
             for cmd in &sub_commands {
-                let sub_result = evaluate_command_inner(config, cmd, context, depth + 1)?;
+                let sub_result = evaluate_command_inner(
+                    config,
+                    cmd,
+                    context,
+                    depth + 1,
+                    &[],
+                    &PipeInfo::default(),
+                )?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
                     None => sub_result,
@@ -641,6 +682,8 @@ fn build_expr_context(
     parsed_command: &ParsedCommand,
     eval_context: &EvalContext,
     definitions: &Definitions,
+    redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
 ) -> ExprContext {
     let flags: HashMap<String, Option<String>> = parsed_command
         .flags
@@ -659,6 +702,8 @@ fn build_expr_context(
         flags,
         args: parsed_command.args.clone(),
         paths,
+        redirects: redirects.to_vec(),
+        pipe: pipe.clone(),
     }
 }
 
