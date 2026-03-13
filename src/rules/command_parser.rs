@@ -1342,71 +1342,45 @@ mod tests {
     }
 
     // ========================================
-    // extract_commands_with_metadata: simple command (no pipe/redirect)
+    // extract_commands_with_metadata: pipeline position
     // ========================================
 
-    #[test]
-    fn extract_commands_metadata_simple_command() {
-        let commands = extract_commands_with_metadata("echo hello").unwrap();
-        assert_eq!(commands.len(), 1);
+    #[rstest]
+    #[case::simple_command("echo hello", vec![
+        PipeInfo { stdin: false, stdout: false },
+    ])]
+    #[case::two_stage_pipeline("echo hello | grep foo", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    #[case::three_stage_pipeline("echo hello | grep foo | wc -l", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    fn extract_commands_metadata_pipelines(
+        #[case] input: &str,
+        #[case] expected_pipes: Vec<PipeInfo>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
         assert_eq!(
-            commands[0].pipe,
-            PipeInfo {
-                stdin: false,
-                stdout: false
-            }
+            commands.len(),
+            expected_pipes.len(),
+            "command count mismatch for: {}",
+            input
         );
-        assert!(commands[0].redirects.is_empty());
-    }
-
-    // ========================================
-    // extract_commands_with_metadata: pipelines
-    // ========================================
-
-    #[test]
-    fn extract_commands_metadata_two_stage_pipeline() {
-        let commands = extract_commands_with_metadata("echo hello | grep foo").unwrap();
-        assert_eq!(commands.len(), 2);
-        assert_eq!(
-            commands[0].pipe,
-            PipeInfo {
-                stdin: false,
-                stdout: true
-            }
-        );
-        assert_eq!(
-            commands[1].pipe,
-            PipeInfo {
-                stdin: true,
-                stdout: false
-            }
-        );
-    }
-
-    #[test]
-    fn extract_commands_metadata_three_stage_pipeline() {
-        let commands = extract_commands_with_metadata("echo hello | grep foo | wc -l").unwrap();
-        assert_eq!(commands.len(), 3);
-        assert_eq!(
-            commands[0].pipe,
-            PipeInfo {
-                stdin: false,
-                stdout: true
-            }
-        );
-        assert_eq!(
-            commands[1].pipe,
-            PipeInfo {
-                stdin: true,
-                stdout: true
-            }
-        );
-        assert_eq!(
-            commands[2].pipe,
-            PipeInfo {
-                stdin: true,
-                stdout: false
-            }
-        );
+        for (i, expected_pipe) in expected_pipes.iter().enumerate() {
+            assert_eq!(
+                commands[i].pipe, *expected_pipe,
+                "PipeInfo mismatch for command #{} in: {}",
+                i, input
+            );
+            assert!(
+                commands[i].redirects.is_empty(),
+                "redirects should be empty for command #{} in: {}",
+                i,
+                input
+            );
+        }
     }
 }

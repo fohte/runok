@@ -98,12 +98,12 @@ The `paths` variable is most useful for checking properties of the defined path 
 
 A list of redirect operators attached to the command. Each element is an object with the following fields:
 
-| Field        | Type            | Description                          | Example                                                             |
-| ------------ | --------------- | ------------------------------------ | ------------------------------------------------------------------- | --- |
-| `type`       | `string`        | `"input"`, `"output"`, or `"dup"`    | `"output"`                                                          |
-| `operator`   | `string`        | The redirect operator                | `">"`, `">>"`, `"<"`, `"<<<"`, `">&"`, `"<&"`, `"&>"`, `"&>>"`, `"> | "`  |
-| `target`     | `string`        | The redirect destination             | `"/tmp/log.txt"`, `"/dev/null"`                                     |
-| `descriptor` | `int` or `null` | File descriptor number, if specified | `2` (for `2>`)                                                      |
+| Field        | Type            | Description                          | Example                                                                 |
+| ------------ | --------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `type`       | `string`        | `"input"`, `"output"`, or `"dup"`    | `"output"`                                                              |
+| `operator`   | `string`        | The redirect operator                | `">"`, `">>"`, `"<"`, `"<<<"`, `">&"`, `"<&"`, `"&>"`, `"&>>"`, `">\|"` |
+| `target`     | `string`        | The redirect destination             | `"/tmp/log.txt"`, `"/dev/null"`                                         |
+| `descriptor` | `int` or `null` | File descriptor number, if specified | `2` (for `2>`)                                                          |
 
 Type classification:
 
