@@ -13,6 +13,8 @@ sidebar:
 runok check [options] -- <command> [arguments...]
 ```
 
+Any unrecognized flag before `--` is rejected with an error to prevent typos from being silently absorbed into the command arguments.
+
 When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for Claude Code hooks, `command` for generic checks), and anything else is treated as plaintext with one command per line.
 
 Use `--input-format claude-code-hook` to force Claude Code hook parsing.
