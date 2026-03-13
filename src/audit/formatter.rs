@@ -41,8 +41,10 @@ fn format_timestamp_local(ts: &str) -> String {
         .unwrap_or_else(|_| ts.to_owned())
 }
 
-fn escape_newlines(s: &str) -> String {
-    s.replace('\n', "\\n").replace('\r', "\\r")
+fn escape_control_chars(s: &str) -> String {
+    s.replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
@@ -79,7 +81,7 @@ fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
     for entry in entries {
         let ts = format_timestamp_local(&entry.timestamp);
         let action = action_str(&entry.action);
-        let command = escape_newlines(&entry.command);
+        let command = escape_control_chars(&entry.command);
 
         // Truncate command to fit terminal width, respecting UTF-8 char boundaries
         let command_max = term_width.saturating_sub(fixed_width);
@@ -133,7 +135,7 @@ fn print_tsv(out: &mut impl Write, entries: &[AuditEntry]) {
     for entry in entries {
         let ts = format_timestamp_local(&entry.timestamp);
         let action = action_str(&entry.action);
-        let command = escape_newlines(&entry.command);
+        let command = escape_control_chars(&entry.command);
         let _ = writeln!(out, "{}\t{}\t{}", ts, action, command);
     }
 }
@@ -168,11 +170,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_newlines("echo hello", "echo hello")]
+    #[case::no_control_chars("echo hello", "echo hello")]
     #[case::with_newline("echo\nhello", "echo\\nhello")]
     #[case::with_cr("echo\r\nhello", "echo\\r\\nhello")]
-    fn test_escape_newlines(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(escape_newlines(input), expected);
+    #[case::with_tab("echo\thello", "echo\\thello")]
+    fn test_escape_control_chars(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(escape_control_chars(input), expected);
     }
 
     #[test]
