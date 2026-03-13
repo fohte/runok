@@ -185,7 +185,7 @@ Name of a sandbox preset (defined in `definitions.sandbox`) to apply when this r
 
 ### `definitions`
 
-Reusable definitions for paths, sandbox presets, wrappers, and commands.
+Reusable definitions for paths, variables, sandbox presets, wrappers, and commands.
 
 **Type:** `object`\
 **Default:** `{}`\
@@ -311,6 +311,51 @@ definitions:
     - mycustomtool
 ```
 
+#### `definitions.vars`
+
+Typed variable definitions referenced by `<var:name>` in rule patterns. Each variable has a `type` (controlling how values are matched) and a list of `values`.
+
+**Type:** `map[str, VarDefinition]`\
+**Default:** `{}`
+
+```yaml title="runok.yml"
+definitions:
+  vars:
+    instance-ids:
+      values:
+        - i-abc123
+        - i-def456
+    test-script:
+      type: path
+      values:
+        - ./tests/run
+```
+
+##### Variable Definition Fields
+
+###### `type`
+
+Controls how the variable's values are matched against command arguments.
+
+**Type:** `"literal" | "path"`\
+**Default:** `"literal"`
+
+| Type      | Matching behavior                                                         |
+| --------- | ------------------------------------------------------------------------- |
+| `literal` | Exact string match                                                        |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+
+###### `values`
+
+List of allowed values for this variable.
+
+**Type:** `list[str]`\
+**Required:** Yes
+
+:::note
+Variable definitions must contain concrete values. `<var:name>` or `<path:name>` references inside `definitions.vars` values are not allowed.
+:::
+
 ### `audit`
 
 Audit log settings. Controls whether command evaluations are recorded and where log files are stored. Audit settings can only be configured in the **global** `runok.yml` — audit sections in project or local override configs are silently ignored.
@@ -370,6 +415,12 @@ definitions:
     secrets:
       - ~/.ssh
       - ~/.gnupg
+  vars:
+    safe-scripts:
+      type: path
+      values:
+        - ./tests/run
+        - ./scripts/lint.sh
   sandbox:
     standard:
       fs:

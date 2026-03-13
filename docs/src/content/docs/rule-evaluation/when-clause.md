@@ -23,7 +23,7 @@ CEL expressions must evaluate to a **boolean** (`true` or `false`). If the expre
 
 ## Context variables
 
-Six context variables are available inside `when` expressions:
+The following context variables are available inside `when` expressions:
 
 ### `env` — Environment variables
 
@@ -145,6 +145,48 @@ Both fields are `false` when the command is not part of a pipeline.
 - deny: 'bash'
   when: 'pipe.stdin'
 ```
+
+### `vars` -- Captured variable values
+
+A map of values captured by `<var:name>` placeholders in the matched pattern. When a pattern contains `<var:name>` and matches a command token, the matched token value is stored in `vars` under the variable name.
+
+```yaml
+definitions:
+  vars:
+    instance-ids:
+      values:
+        - i-abc123
+        - i-prod-001
+
+rules:
+  # Deny terminating production instances, allow others
+  - deny: 'aws ec2 terminate-instances --instance-ids <var:instance-ids>'
+    when: "vars['instance-ids'] == 'i-prod-001'"
+  - allow: 'aws ec2 terminate-instances --instance-ids <var:instance-ids>'
+```
+
+In this example, when the command matches `<var:instance-ids>`, the actual token value (e.g., `i-prod-001`) is captured into `vars['instance-ids']`. The `when` clause can then inspect this value to make conditional decisions.
+
+```yaml
+definitions:
+  vars:
+    regions:
+      type: literal
+      values:
+        - us-east-1
+        - eu-west-1
+        - ap-southeast-1
+
+rules:
+  # Deny AWS operations in US regions, allow others
+  - deny: 'aws --region <var:regions> *'
+    when: "has(vars.regions) && vars.regions.startsWith('us-')"
+  - allow: 'aws --region <var:regions> *'
+```
+
+:::note
+The `vars` map only contains entries for `<var:name>` placeholders that were present in the matched pattern. If the pattern doesn't use `<var:name>`, the `vars` map is empty. Use `has(vars.name)` to safely check for a variable before accessing it.
+:::
 
 ## Operators
 

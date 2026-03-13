@@ -69,12 +69,19 @@ runok audit --since 2026-03-01 --until 2026-03-07 --limit 100
 
 ## Output format
 
-In text mode (default), each entry is printed as:
+In text mode (default), the output adapts to the terminal:
+
+- **TTY** (interactive terminal): a column-aligned table with colored action labels. Commands are truncated to fit the terminal width. Entries are sorted oldest-first so the most recent entry appears at the bottom.
 
 ```
-2026-03-13T10:30:00Z [allow] git status
-2026-03-13T10:31:00Z [deny] rm -rf /
+TIMESTAMP            ACTION   COMMAND
+2026-03-13 19:30:00  allow    git status
+2026-03-13 19:31:00  deny     rm -rf /
 ```
+
+- **Non-TTY** (piped): tab-separated values without colors or truncation, suitable for further processing.
+
+Timestamps are displayed in local time in both modes.
 
 In JSON mode (`--json`), each entry is a complete JSON object containing the command, action, matched rules, sandbox preset, metadata, and sub-evaluations (for compound commands).
 

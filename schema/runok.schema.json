@@ -160,6 +160,16 @@
             "$ref": "#/$defs/SandboxPreset"
           }
         },
+        "vars": {
+          "description": "Typed variable definitions referenced by `<var:name>` in rule patterns.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/VarDefinition"
+          }
+        },
         "wrappers": {
           "description": "Wrapper command patterns for recursive evaluation (e.g., `sudo <cmd>`).",
           "type": [
@@ -374,6 +384,41 @@
           ]
         }
       }
+    },
+    "VarDefinition": {
+      "description": "A typed variable definition with a list of allowed values.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "The type of this variable (default: `literal`).",
+          "$ref": "#/$defs/VarType"
+        },
+        "values": {
+          "description": "Allowed values for this variable.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "values"
+      ]
+    },
+    "VarType": {
+      "description": "Type of a variable definition, controlling how values are matched.",
+      "oneOf": [
+        {
+          "description": "Exact string match (default).",
+          "type": "string",
+          "const": "literal"
+        },
+        {
+          "description": "Path match: canonicalize both sides before comparison,\nfalling back to `normalize_path` when the file does not exist.",
+          "type": "string",
+          "const": "path"
+        }
+      ]
     }
   }
 }

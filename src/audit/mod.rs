@@ -1,5 +1,6 @@
 mod error;
 pub mod filter;
+pub mod formatter;
 mod log_rotator;
 mod model;
 pub mod reader;

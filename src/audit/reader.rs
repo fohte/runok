@@ -21,7 +21,7 @@ impl AuditReader {
 
     /// Read audit log entries matching the given filter.
     ///
-    /// Returns entries sorted by timestamp in descending order (newest first).
+    /// Returns entries sorted by timestamp in ascending order (oldest first).
     /// Corrupted JSONL lines are skipped with a warning printed to stderr.
     /// If no log files exist, returns an empty list.
     pub fn read(&self, filter: &AuditFilter) -> Result<Vec<AuditEntry>, anyhow::Error> {
@@ -52,13 +52,14 @@ impl AuditReader {
             )?;
         }
 
-        // Partial sort: find the top `limit` entries without sorting everything
-        let cmp = |a: &AuditEntry, b: &AuditEntry| b.timestamp.cmp(&a.timestamp);
+        // Partial sort: find the newest `limit` entries, then sort ascending (oldest first)
+        let newest_first = |a: &AuditEntry, b: &AuditEntry| b.timestamp.cmp(&a.timestamp);
         if entries.len() > filter.limit {
-            entries.select_nth_unstable_by(filter.limit, cmp);
+            entries.select_nth_unstable_by(filter.limit, newest_first);
             entries.truncate(filter.limit);
         }
-        entries.sort_by(cmp);
+        let oldest_first = |a: &AuditEntry, b: &AuditEntry| a.timestamp.cmp(&b.timestamp);
+        entries.sort_by(oldest_first);
 
         Ok(entries)
     }
@@ -265,7 +266,7 @@ mod tests {
     }
 
     #[rstest]
-    fn read_entries_sorted_descending(temp_log_dir: TempDir) {
+    fn read_entries_sorted_ascending(temp_log_dir: TempDir) {
         let entries = vec![
             make_entry(
                 "2026-02-25T10:00:00Z",
@@ -290,9 +291,9 @@ mod tests {
         let result = reader.read(&filter).unwrap();
 
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].command, "echo third");
+        assert_eq!(result[0].command, "echo first");
         assert_eq!(result[1].command, "echo second");
-        assert_eq!(result[2].command, "echo first");
+        assert_eq!(result[2].command, "echo third");
     }
 
     #[rstest]
@@ -355,8 +356,8 @@ mod tests {
         let result = reader.read(&filter).unwrap();
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].command, "git pull");
-        assert_eq!(result[1].command, "git push origin main");
+        assert_eq!(result[0].command, "git push origin main");
+        assert_eq!(result[1].command, "git pull");
     }
 
     #[rstest]
@@ -512,8 +513,8 @@ mod tests {
         let result = reader.read(&filter).unwrap();
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].command, "echo day2");
-        assert_eq!(result[1].command, "echo day1");
+        assert_eq!(result[0].command, "echo day1");
+        assert_eq!(result[1].command, "echo day2");
     }
 
     #[rstest]

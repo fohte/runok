@@ -7,8 +7,8 @@
 mod flag_utils;
 mod token_matching;
 
-use std::cell::Cell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 
 use crate::config::Definitions;
 use crate::rules::RuleError;
@@ -20,6 +20,16 @@ use token_matching::{
     literal_matches, match_flag_token_with_equals, match_single_token, normalize_path,
     resolve_paths,
 };
+
+/// Result of a successful pattern match, containing both wildcard captures
+/// and variable reference captures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchCaptures {
+    /// Tokens captured by wildcards (`*`) in the pattern.
+    pub wildcards: Vec<String>,
+    /// Values captured by `<var:name>` references, keyed by variable name.
+    pub vars: HashMap<String, String>,
+}
 
 /// Maximum number of recursive steps allowed during pattern matching.
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
@@ -108,6 +118,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     for skip in skip_range {
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
+        let var_captures = RefCell::new(HashMap::new());
         if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -116,6 +127,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
             None,
             None,
             &after_dd,
+            &var_captures,
         )
         .unwrap_or(false)
         {
@@ -125,14 +137,15 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
     false
 }
 
-/// Like `matches`, but also returns the tokens captured by wildcards (`*`).
+/// Like `matches`, but also returns the tokens captured by wildcards (`*`)
+/// and `<var:name>` references.
 ///
-/// Returns `Some(captured_tokens)` if the pattern matches, `None` otherwise.
+/// Returns `Some(MatchCaptures)` if the pattern matches, `None` otherwise.
 pub fn matches_with_captures(
     pattern: &Pattern,
     command: &ParsedCommand,
     definitions: &Definitions,
-) -> Option<Vec<String>> {
+) -> Option<MatchCaptures> {
     if !pattern.command.matches(&command.command) {
         return None;
     }
@@ -142,6 +155,7 @@ pub fn matches_with_captures(
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let mut captures = Vec::new();
+        let var_captures = RefCell::new(HashMap::new());
         if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -150,10 +164,14 @@ pub fn matches_with_captures(
             Some(&mut captures),
             None,
             &after_dd,
+            &var_captures,
         )
         .unwrap_or(false)
         {
-            return Some(captures.into_iter().map(|s| s.to_string()).collect());
+            return Some(MatchCaptures {
+                wildcards: captures.into_iter().map(|s| s.to_string()).collect(),
+                vars: var_captures.into_inner(),
+            });
         }
     }
     None
@@ -182,6 +200,7 @@ pub fn extract_placeholder(
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let mut captured = Vec::new();
+        let var_captures = RefCell::new(HashMap::new());
         match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -190,6 +209,7 @@ pub fn extract_placeholder(
             None,
             Some((&mut captured, &mut all_candidates)),
             &after_dd,
+            &var_captures,
         )?;
     }
     Ok(all_candidates
@@ -218,6 +238,10 @@ pub fn extract_placeholder(
 ///   is ignored in this mode.
 ///
 /// Returns `Err` if the pattern contains unsupported tokens for the current mode.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recursive engine needs all context threaded through"
+)]
 fn match_engine<'a>(
     pattern_tokens: &[PatternToken],
     cmd_tokens: &[&'a str],
@@ -226,6 +250,7 @@ fn match_engine<'a>(
     mut captures: Option<&mut Vec<&'a str>>,
     mut extract: Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
     after_double_dash: &Cell<bool>,
+    var_captures: &RefCell<HashMap<String, String>>,
 ) -> Result<bool, RuleError> {
     let count = steps.get() + 1;
     steps.set(count);
@@ -250,6 +275,7 @@ fn match_engine<'a>(
         PatternToken::Wildcard => {
             for skip in 0..=cmd_tokens.len() {
                 let saved_dd = after_double_dash.get();
+                let saved_vc = var_captures.borrow().clone();
                 if let Some((captured, all_candidates)) = &mut extract {
                     match_engine(
                         rest,
@@ -259,6 +285,7 @@ fn match_engine<'a>(
                         None,
                         Some((captured, all_candidates)),
                         after_double_dash,
+                        var_captures,
                     )?;
                 } else if let Some(caps) = &mut captures {
                     let saved_len = caps.len();
@@ -271,6 +298,7 @@ fn match_engine<'a>(
                         Some(*caps),
                         None,
                         after_double_dash,
+                        var_captures,
                     )? {
                         return Ok(true);
                     }
@@ -283,10 +311,12 @@ fn match_engine<'a>(
                     None,
                     None,
                     after_double_dash,
+                    var_captures,
                 )? {
                     return Ok(true);
                 }
                 after_double_dash.set(saved_dd);
+                *var_captures.borrow_mut() = saved_vc;
             }
             Ok(false)
         }
@@ -309,6 +339,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     );
                 }
                 return Ok(false);
@@ -326,6 +357,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     );
                 }
                 return Ok(false);
@@ -350,6 +382,7 @@ fn match_engine<'a>(
                     captures,
                     extract,
                     after_double_dash,
+                    var_captures,
                 )
             } else {
                 Ok(false)
@@ -368,6 +401,7 @@ fn match_engine<'a>(
                 captures,
                 extract,
                 after_double_dash,
+                var_captures,
             )
         }
 
@@ -390,6 +424,7 @@ fn match_engine<'a>(
                     if alts.iter().any(|a| literal_matches(a, cmd_tokens[i])) {
                         let remaining = remove_indices(cmd_tokens, &[i]);
                         let saved_dd = after_double_dash.get();
+                        let saved_vc = var_captures.borrow().clone();
                         if let Some(caps) = &mut captures {
                             let saved_len = caps.len();
                             if match_engine(
@@ -400,6 +435,7 @@ fn match_engine<'a>(
                                 Some(*caps),
                                 None,
                                 after_double_dash,
+                                var_captures,
                             )? {
                                 return Ok(true);
                             }
@@ -412,10 +448,12 @@ fn match_engine<'a>(
                             None,
                             None,
                             after_double_dash,
+                            var_captures,
                         )? {
                             return Ok(true);
                         }
                         after_double_dash.set(saved_dd);
+                        *var_captures.borrow_mut() = saved_vc;
                     }
 
                     // `=`-joined match: e.g. `--output=/tmp/out` where
@@ -427,6 +465,7 @@ fn match_engine<'a>(
                         let mut remaining = remove_indices(cmd_tokens, &[i]);
                         remaining.insert(i.min(remaining.len()), value_part);
                         let saved_dd = after_double_dash.get();
+                        let saved_vc = var_captures.borrow().clone();
                         if let Some(caps) = &mut captures {
                             let saved_len = caps.len();
                             if match_engine(
@@ -437,6 +476,7 @@ fn match_engine<'a>(
                                 Some(*caps),
                                 None,
                                 after_double_dash,
+                                var_captures,
                             )? {
                                 return Ok(true);
                             }
@@ -449,10 +489,12 @@ fn match_engine<'a>(
                             None,
                             None,
                             after_double_dash,
+                            var_captures,
                         )? {
                             return Ok(true);
                         }
                         after_double_dash.set(saved_dd);
+                        *var_captures.borrow_mut() = saved_vc;
                     }
                 }
                 return Ok(false);
@@ -470,6 +512,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     );
                 }
                 return Ok(false);
@@ -493,6 +536,7 @@ fn match_engine<'a>(
                     captures,
                     extract,
                     after_double_dash,
+                    var_captures,
                 )
             } else {
                 Ok(false)
@@ -510,6 +554,7 @@ fn match_engine<'a>(
                     let capture_val =
                         matches!(**value, PatternToken::Wildcard).then_some(cmd_tokens[i + 1]);
                     let saved_dd = after_double_dash.get();
+                    let saved_vc = var_captures.borrow().clone();
                     if try_recurse_flag_value(
                         rest,
                         &remaining,
@@ -519,10 +564,12 @@ fn match_engine<'a>(
                         &mut extract,
                         capture_val,
                         after_double_dash,
+                        var_captures,
                     )? {
                         return Ok(true);
                     }
                     after_double_dash.set(saved_dd);
+                    *var_captures.borrow_mut() = saved_vc;
                 }
 
                 // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
@@ -534,6 +581,7 @@ fn match_engine<'a>(
                     let capture_val =
                         matches!(**value, PatternToken::Wildcard).then_some(value_part);
                     let saved_dd = after_double_dash.get();
+                    let saved_vc = var_captures.borrow().clone();
                     if try_recurse_flag_value(
                         rest,
                         &remaining,
@@ -543,10 +591,12 @@ fn match_engine<'a>(
                         &mut extract,
                         capture_val,
                         after_double_dash,
+                        var_captures,
                     )? {
                         return Ok(true);
                     }
                     after_double_dash.set(saved_dd);
+                    *var_captures.borrow_mut() = saved_vc;
                 }
             }
             Ok(false)
@@ -567,6 +617,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     )
                 } else {
                     Ok(false)
@@ -586,6 +637,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     )
                 } else {
                     Ok(false)
@@ -612,6 +664,7 @@ fn match_engine<'a>(
                         captures,
                         extract,
                         after_double_dash,
+                        var_captures,
                     )
                 } else {
                     Ok(false)
@@ -632,6 +685,7 @@ fn match_engine<'a>(
                 .chain(rest.iter().cloned())
                 .collect();
             let saved_dd = after_double_dash.get();
+            let saved_vc = var_captures.borrow().clone();
             // extract is always None here (early return above for is_extract)
             if let Some(caps) = &mut captures {
                 let saved_len = caps.len();
@@ -643,6 +697,7 @@ fn match_engine<'a>(
                     Some(*caps),
                     None,
                     after_double_dash,
+                    var_captures,
                 )? {
                     return Ok(true);
                 }
@@ -655,10 +710,12 @@ fn match_engine<'a>(
                 None,
                 None,
                 after_double_dash,
+                var_captures,
             )? {
                 return Ok(true);
             }
             after_double_dash.set(saved_dd);
+            *var_captures.borrow_mut() = saved_vc;
             // Try without the optional tokens
             if optional_flags_absent(inner_tokens, cmd_tokens) {
                 return match_engine(
@@ -669,6 +726,7 @@ fn match_engine<'a>(
                     captures,
                     None,
                     after_double_dash,
+                    var_captures,
                 );
             }
             Ok(false)
@@ -695,6 +753,37 @@ fn match_engine<'a>(
                     captures,
                     None,
                     after_double_dash,
+                    var_captures,
+                )
+            } else {
+                Ok(false)
+            }
+        }
+
+        PatternToken::VarRef(name) => {
+            if is_extract {
+                return Err(RuleError::UnsupportedWrapperToken(format!(
+                    "VarRef (<var:{name}>)"
+                )));
+            }
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            if token_matching::match_var_ref(name, cmd_tokens[0], definitions) {
+                // Capture the matched command token for this var reference.
+                // For path-type vars, store the actual matched token (as-is).
+                var_captures
+                    .borrow_mut()
+                    .insert(name.clone(), cmd_tokens[0].to_string());
+                match_engine(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    None,
+                    after_double_dash,
+                    var_captures,
                 )
             } else {
                 Ok(false)
@@ -734,6 +823,7 @@ fn match_engine<'a>(
                             None,
                             Some((captured, all_candidates)),
                             after_double_dash,
+                            var_captures,
                         )?;
                         captured.truncate(saved_len);
                     }
@@ -752,6 +842,7 @@ fn match_engine<'a>(
                     captures,
                     None,
                     after_double_dash,
+                    var_captures,
                 )
             }
         }
@@ -766,6 +857,7 @@ fn match_engine<'a>(
                 captures,
                 extract,
                 after_double_dash,
+                var_captures,
             )
         }
 
@@ -779,6 +871,7 @@ fn match_engine<'a>(
                 captures,
                 extract,
                 after_double_dash,
+                var_captures,
             )
         }
     }
@@ -799,6 +892,7 @@ fn try_recurse_flag_value<'a>(
     extract: &mut Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
     capture_val: Option<&'a str>,
     after_double_dash: &Cell<bool>,
+    var_captures: &RefCell<HashMap<String, String>>,
 ) -> Result<bool, RuleError> {
     if let Some((captured, all_candidates)) = extract {
         match_engine(
@@ -809,6 +903,7 @@ fn try_recurse_flag_value<'a>(
             None,
             Some((captured, all_candidates)),
             after_double_dash,
+            var_captures,
         )?;
         // In extract mode, always continue scanning (don't return true)
         Ok(false)
@@ -825,6 +920,7 @@ fn try_recurse_flag_value<'a>(
             Some(*caps),
             None,
             after_double_dash,
+            var_captures,
         )? {
             return Ok(true);
         }
@@ -839,6 +935,7 @@ fn try_recurse_flag_value<'a>(
             None,
             None,
             after_double_dash,
+            var_captures,
         )
     }
 }
@@ -924,7 +1021,18 @@ mod tests {
         let pattern = parse_pattern(pattern_str).unwrap();
         let schema = build_schema_from_pattern(&pattern);
         let command = parse_command(command_str, &schema).unwrap();
-        matches_with_captures(&pattern, &command, definitions)
+        matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
+    }
+
+    fn check_var_captures(
+        pattern_str: &str,
+        command_str: &str,
+        definitions: &Definitions,
+    ) -> Option<HashMap<String, String>> {
+        let pattern = parse_pattern(pattern_str).unwrap();
+        let schema = build_schema_from_pattern(&pattern);
+        let command = parse_command(command_str, &schema).unwrap();
+        matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
     }
 
     /// Build a FlagSchema from a pattern's FlagWithValue tokens.
@@ -1530,6 +1638,90 @@ mod tests {
         assert_eq!(
             check_captures(pattern_str, command_str, &empty_defs),
             expected
+        );
+    }
+
+    // ========================================
+    // var_captures from matches_with_captures
+    // ========================================
+
+    #[rstest]
+    #[case::literal_var_captured(
+        "aws ec2 terminate-instances --instance-ids <var:instance-ids>",
+        "aws ec2 terminate-instances --instance-ids i-abc123",
+        Some(HashMap::from([("instance-ids".to_string(), "i-abc123".to_string())])),
+    )]
+    #[case::no_match_returns_none(
+        "aws ec2 terminate-instances --instance-ids <var:instance-ids>",
+        "aws ec2 terminate-instances --instance-ids i-UNKNOWN",
+        None
+    )]
+    #[case::path_var_captured(
+        "bash <var:test-script>",
+        "bash ./tests/run",
+        Some(HashMap::from([("test-script".to_string(), "./tests/run".to_string())])),
+    )]
+    fn var_captures_returns_expected(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: Option<HashMap<String, String>>,
+    ) {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([
+                (
+                    "instance-ids".to_string(),
+                    crate::config::VarDefinition {
+                        var_type: crate::config::VarType::Literal,
+                        values: vec!["i-abc123".into(), "i-def456".into()],
+                    },
+                ),
+                (
+                    "test-script".to_string(),
+                    crate::config::VarDefinition {
+                        var_type: crate::config::VarType::Path,
+                        values: vec!["./tests/run".into()],
+                    },
+                ),
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(
+            check_var_captures(pattern_str, command_str, &definitions),
+            expected,
+        );
+    }
+
+    // ========================================
+    // var_captures backtracking: stale entries must not persist
+    // ========================================
+
+    #[test]
+    fn var_captures_not_stale_after_optional_backtrack() {
+        // Pattern: `cmd [<var:name>] other`
+        // Command: `cmd other`
+        //
+        // Optional "with" branch tries `<var:name> other` against ["other"].
+        // <var:name> matches "other" (it's in values) and captures name=other,
+        // but then the remaining `other` pattern has no tokens left → fails.
+        // On backtrack, the stale capture name=other must be removed.
+        // Optional "without" branch matches `other` against ["other"] → success.
+        // Final vars should be empty (no <var:name> was matched in the
+        // successful branch).
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "name".to_string(),
+                crate::config::VarDefinition {
+                    var_type: crate::config::VarType::Literal,
+                    values: vec!["other".into(), "val".into()],
+                },
+            )])),
+            ..Default::default()
+        };
+        let result = check_var_captures("cmd [<var:name>] other", "cmd other", &definitions);
+        assert_eq!(
+            result,
+            Some(HashMap::new()),
+            "var_captures should be empty when <var:name> only matched in a backtracked branch",
         );
     }
 

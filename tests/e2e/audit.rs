@@ -200,25 +200,16 @@ fn audit_subcommand_human_format(audit_view_env: AuditTestEnv) {
     let json_entries = parse_json_stdout(&json_assert);
     assert_eq!(json_entries.len(), 3);
 
-    // Verify human format output contains expected lines
+    // Verify human format output contains expected lines (TSV in non-TTY)
     let output = &assert.get_output().stdout;
     let stdout = String::from_utf8_lossy(output);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3);
-    // Each line follows the format: <timestamp> [<action>] <command>
-    // Newest first: echo second, rm -rf /tmp, echo first
-    assert_eq!(
-        lines.iter().filter(|l| l.ends_with("echo second")).count(),
-        1,
-    );
-    assert_eq!(
-        lines.iter().filter(|l| l.ends_with("rm -rf /tmp")).count(),
-        1,
-    );
-    assert_eq!(
-        lines.iter().filter(|l| l.ends_with("echo first")).count(),
-        1,
-    );
+    // Non-TTY output is TSV: <timestamp>\t<action>\t<command>
+    // Oldest first (ascending order)
+    assert!(lines[0].ends_with("echo first"));
+    assert!(lines[1].ends_with("rm -rf /tmp"));
+    assert!(lines[2].ends_with("echo second"));
 }
 
 #[rstest]
@@ -232,9 +223,9 @@ fn audit_subcommand_json_format(audit_view_env: AuditTestEnv) {
     let json_entries = parse_json_stdout(&assert);
     assert_eq!(json_entries.len(), 3);
 
-    // Entries are in descending order (newest first)
-    assert_eq!(json_entries[0]["command"], "echo second");
-    assert_eq!(json_entries[2]["command"], "echo first");
+    // Entries are in ascending order (oldest first, newest last)
+    assert_eq!(json_entries[0]["command"], "echo first");
+    assert_eq!(json_entries[2]["command"], "echo second");
 }
 
 // ========================================
@@ -273,8 +264,8 @@ fn audit_filter_by_command(audit_view_env: AuditTestEnv) {
     let json_entries = parse_json_stdout(&assert);
     assert_eq!(json_entries.len(), 2);
     // Both entries should be echo commands
-    assert_eq!(json_entries[0]["command"], "echo second");
-    assert_eq!(json_entries[1]["command"], "echo first");
+    assert_eq!(json_entries[0]["command"], "echo first");
+    assert_eq!(json_entries[1]["command"], "echo second");
 }
 
 #[rstest]
