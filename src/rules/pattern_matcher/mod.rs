@@ -701,6 +701,30 @@ fn match_engine<'a>(
             }
         }
 
+        PatternToken::VarRef(name) => {
+            if is_extract {
+                return Err(RuleError::UnsupportedWrapperToken(format!(
+                    "VarRef (<var:{name}>)"
+                )));
+            }
+            if cmd_tokens.is_empty() {
+                return Ok(false);
+            }
+            if token_matching::match_var_ref(name, cmd_tokens[0], definitions) {
+                match_engine(
+                    rest,
+                    &cmd_tokens[1..],
+                    definitions,
+                    steps,
+                    captures,
+                    None,
+                    after_double_dash,
+                )
+            } else {
+                Ok(false)
+            }
+        }
+
         PatternToken::Placeholder(name) => {
             if let Some((captured, all_candidates)) = &mut extract {
                 // Wrapper placeholder extraction mode

@@ -56,6 +56,8 @@ pub enum PatternToken {
     Wildcard,
     /// Path variable reference (e.g., <path:sensitive>)
     PathRef(String),
+    /// Typed variable reference (e.g., <var:instance-ids>)
+    VarRef(String),
     /// Wrapper placeholder (e.g., <cmd>)
     Placeholder(String),
     /// Options placeholder for wrapper patterns (e.g., <opts>).
@@ -73,6 +75,7 @@ pub enum PatternToken {
 /// Remaining tokens are converted to PatternToken variants based on syntax:
 /// - `*` -> Wildcard
 /// - `<path:name>` -> PathRef
+/// - `<var:name>` -> VarRef
 /// - `<cmd>` -> Placeholder (single word, no pipe, no colon)
 /// - `!value` -> Negation
 /// - `[...]` -> Optional group
@@ -326,6 +329,10 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 
     if let Some(name) = content.strip_prefix("path:") {
         return Ok(PatternToken::PathRef(name.to_string()));
+    }
+
+    if let Some(name) = content.strip_prefix("var:") {
+        return Ok(PatternToken::VarRef(name.to_string()));
     }
 
     if content == "opts" {
@@ -648,6 +655,16 @@ mod tests {
             PatternToken::Alternation(vec![r"\;".into(), "+".into()]),
         ],
     )]
+    #[case::var_ref("cat <var:instance-ids>", "cat", vec![
+        PatternToken::VarRef("instance-ids".into()),
+    ])]
+    #[case::var_ref_after_flag("aws ec2 terminate-instances --instance-ids <var:instance-ids> *", "aws", vec![
+        PatternToken::Literal("ec2".into()),
+        PatternToken::Literal("terminate-instances".into()),
+        PatternToken::Alternation(vec!["--instance-ids".into()]),
+        PatternToken::VarRef("instance-ids".into()),
+        PatternToken::Wildcard,
+    ])]
     fn parse_placeholder(
         #[case] input: &str,
         #[case] expected_command: &str,

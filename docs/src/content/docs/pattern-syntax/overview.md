@@ -11,30 +11,31 @@ Patterns are parsed exactly as written, with no hidden rewriting or implicit tra
 
 ## Syntax Elements
 
-| Syntax                                                                        | Example                         | Description                                                  |
-| ----------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------ |
-| Literal                                                                       | `git status`                    | Exact token match                                            |
-| [Wildcard](/pattern-syntax/wildcards/)                                        | `git *`                         | Zero or more tokens                                          |
-| [Glob](/pattern-syntax/wildcards/#glob-patterns)                              | `list-*`, `*.txt`               | `*` inside a literal matches zero or more characters         |
-| [Alternation](/pattern-syntax/alternation/)                                   | `-X\|--request`, `main\|master` | Pipe-separated alternatives                                  |
-| [Negation](/pattern-syntax/alternation/#negation)                             | `!GET`, `!describe\|get`        | Matches anything except the specified value(s)               |
-| [Optional group](/pattern-syntax/optional-groups/)                            | `[-f]`, `[-X POST]`             | Matches with or without the group                            |
-| [Flag with value](/pattern-syntax/matching-behavior/#flag-schema-inference)   | `-X\|--request POST`            | A flag-value pair matched in any order                       |
-| [Placeholder](/pattern-syntax/placeholders/)                                  | `<cmd>`, `<opts>`, `<path:...>` | Special tokens in `<...>` with various behaviors (see below) |
-| Backslash escape                                                              | `\;`                            | Literal match after removing the backslash                   |
-| Quoted literal                                                                | `"WIP*"`, `'hello'`             | Exact match without glob expansion                           |
-| [Multi-word alternation](/pattern-syntax/alternation/#multi-word-alternation) | `"npx prettier"\|prettier`      | Alternatives that include multi-word commands                |
+| Syntax                                                                        | Example                                      | Description                                                  |
+| ----------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------ |
+| Literal                                                                       | `git status`                                 | Exact token match                                            |
+| [Wildcard](/pattern-syntax/wildcards/)                                        | `git *`                                      | Zero or more tokens                                          |
+| [Glob](/pattern-syntax/wildcards/#glob-patterns)                              | `list-*`, `*.txt`                            | `*` inside a literal matches zero or more characters         |
+| [Alternation](/pattern-syntax/alternation/)                                   | `-X\|--request`, `main\|master`              | Pipe-separated alternatives                                  |
+| [Negation](/pattern-syntax/alternation/#negation)                             | `!GET`, `!describe\|get`                     | Matches anything except the specified value(s)               |
+| [Optional group](/pattern-syntax/optional-groups/)                            | `[-f]`, `[-X POST]`                          | Matches with or without the group                            |
+| [Flag with value](/pattern-syntax/matching-behavior/#flag-schema-inference)   | `-X\|--request POST`                         | A flag-value pair matched in any order                       |
+| [Placeholder](/pattern-syntax/placeholders/)                                  | `<cmd>`, `<opts>`, `<path:...>`, `<var:...>` | Special tokens in `<...>` with various behaviors (see below) |
+| Backslash escape                                                              | `\;`                                         | Literal match after removing the backslash                   |
+| Quoted literal                                                                | `"WIP*"`, `'hello'`                          | Exact match without glob expansion                           |
+| [Multi-word alternation](/pattern-syntax/alternation/#multi-word-alternation) | `"npx prettier"\|prettier`                   | Alternatives that include multi-word commands                |
 
 ### Placeholders
 
 Tokens wrapped in `<...>` are **placeholders** — special tokens that match dynamically rather than by exact string comparison. Each placeholder type has different matching behavior:
 
-| Placeholder   | Example                | Description                                               | Details                                                                   |
-| ------------- | ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `<cmd>`       | `sudo <cmd>`           | Captures the wrapped command for further rule evaluation  | [Command](/pattern-syntax/placeholders/#command-cmd)                      |
-| `<opts>`      | `env <opts> <cmd>`     | Absorbs zero or more flag-like tokens (starting with `-`) | [Options](/pattern-syntax/placeholders/#options-opts)                     |
-| `<vars>`      | `env <vars> <cmd>`     | Absorbs zero or more `KEY=VALUE` tokens                   | [Variables](/pattern-syntax/placeholders/#variables-vars)                 |
-| `<path:name>` | `cat <path:sensitive>` | Matches against a named list of paths from `definitions`  | [Path References](/pattern-syntax/placeholders/#path-references-pathname) |
+| Placeholder   | Example                | Description                                               | Details                                                                          |
+| ------------- | ---------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `<cmd>`       | `sudo <cmd>`           | Captures the wrapped command for further rule evaluation  | [Command](/pattern-syntax/placeholders/#command-cmd)                             |
+| `<opts>`      | `env <opts> <cmd>`     | Absorbs zero or more flag-like tokens (starting with `-`) | [Options](/pattern-syntax/placeholders/#options-opts)                            |
+| `<vars>`      | `env <vars> <cmd>`     | Absorbs zero or more `KEY=VALUE` tokens                   | [Variables](/pattern-syntax/placeholders/#variables-vars)                        |
+| `<path:name>` | `cat <path:sensitive>` | Matches against a named list of paths from `definitions`  | [Path References](/pattern-syntax/placeholders/#path-references-pathname)        |
+| `<var:name>`  | `cmd <var:ids>`        | Matches against a typed variable definition               | [Variable References](/pattern-syntax/placeholders/#variable-references-varname) |
 
 ## Pattern Structure
 

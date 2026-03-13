@@ -88,6 +88,32 @@ pub struct Definitions {
     pub wrappers: Option<Vec<String>>,
     /// Additional command patterns to recognize.
     pub commands: Option<Vec<String>>,
+    /// Typed variable definitions referenced by `<var:name>` in rule patterns.
+    pub vars: Option<HashMap<String, VarDefinition>>,
+}
+
+/// Type of a variable definition, controlling how values are matched.
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum VarType {
+    /// Exact string match (default).
+    #[default]
+    Literal,
+    /// Path match: canonicalize both sides before comparison,
+    /// falling back to `normalize_path` when the file does not exist.
+    Path,
+}
+
+/// A typed variable definition with a list of allowed values.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct VarDefinition {
+    /// The type of this variable (default: `literal`).
+    #[serde(default, rename = "type")]
+    pub var_type: VarType,
+    /// Allowed values for this variable.
+    pub values: Vec<String>,
 }
 
 /// Sandbox preset defining filesystem and network restrictions.
@@ -270,6 +296,24 @@ impl Config {
             }
         }
 
+        // Reject <var:name> and <path:name> references inside definitions.vars values.
+        if let Some(defs) = &self.definitions
+            && let Some(vars) = &defs.vars
+        {
+            for (key, var_def) in vars {
+                for value in &var_def.values {
+                    if (value.starts_with("<var:") || value.starts_with("<path:"))
+                        && value.ends_with('>')
+                    {
+                        errors.push(format!(
+                            "definitions.vars.{key}: value '{value}' contains a placeholder \
+                             reference. Variable definitions must contain concrete values, not references"
+                        ));
+                    }
+                }
+            }
+        }
+
         let rules = match &self.rules {
             Some(rules) => rules,
             None => {
@@ -367,6 +411,7 @@ impl Config {
                 sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
                 wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
                 commands: Self::merge_vecs(b.commands, o.commands),
+                vars: Self::merge_vars(b.vars, o.vars),
             }),
         }
     }
@@ -383,6 +428,20 @@ impl Config {
                     let existing: HashSet<String> = entry.iter().cloned().collect();
                     entry.extend(over_values.into_iter().filter(|v| !existing.contains(v)));
                 }
+                Some(b)
+            }
+            (b, o) => b.or(o),
+        }
+    }
+
+    /// Merge vars with per-key override strategy: the override wins for each key.
+    fn merge_vars(
+        base: Option<HashMap<String, VarDefinition>>,
+        over: Option<HashMap<String, VarDefinition>>,
+    ) -> Option<HashMap<String, VarDefinition>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                b.extend(o);
                 Some(b)
             }
             (b, o) => b.or(o),
@@ -2064,6 +2123,228 @@ mod tests {
         assert_eq!(result.writable, vec!["/tmp"]);
         assert_eq!(result.deny, vec!["/etc"]);
         assert!(result.network_allowed);
+    }
+
+    // === definitions.vars ===
+
+    #[test]
+    fn parse_definitions_vars_literal() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                instance-ids:
+                  type: literal
+                  values:
+                    - i-abc123
+                    - i-def456
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["instance-ids"];
+        assert_eq!(var_def.var_type, VarType::Literal);
+        assert_eq!(var_def.values, vec!["i-abc123", "i-def456"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_path() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                test-scripts:
+                  type: path
+                  values:
+                    - ./tests/run
+                    - ./scripts/test.sh
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["test-scripts"];
+        assert_eq!(var_def.var_type, VarType::Path);
+        assert_eq!(var_def.values, vec!["./tests/run", "./scripts/test.sh"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_default_type_is_literal() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                regions:
+                  values:
+                    - us-east-1
+                    - eu-west-1
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["regions"];
+        assert_eq!(var_def.var_type, VarType::Literal);
+        assert_eq!(var_def.values, vec!["us-east-1", "eu-west-1"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_multiple_vars() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                regions:
+                  values: [us-east-1]
+                instance-ids:
+                  type: literal
+                  values: [i-abc123]
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        assert!(vars.contains_key("regions"));
+        assert!(vars.contains_key("instance-ids"));
+    }
+
+    #[test]
+    fn validate_rejects_var_ref_in_definitions_vars() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              vars:
+                ids:
+                  values:
+                    - i-abc123
+                    - '<var:other-ids>'
+                other-ids:
+                  values:
+                    - i-xyz999
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("definitions.vars.ids"),
+            "error should mention the var key: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("concrete values, not references"),
+            "error should explain the constraint: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_path_ref_in_definitions_vars() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              vars:
+                scripts:
+                  type: path
+                  values:
+                    - ./run.sh
+                    - '<path:sensitive>'
+              paths:
+                sensitive:
+                  - /etc/passwd
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("definitions.vars.scripts"),
+            "error should mention the var key: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_vars() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              vars:
+                ids:
+                  values:
+                    - i-abc123
+                    - i-def456
+        "})
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn merge_definitions_vars_override_per_key() {
+        let base = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([
+                    (
+                        "ids".to_string(),
+                        VarDefinition {
+                            var_type: VarType::Literal,
+                            values: vec!["i-abc123".to_string()],
+                        },
+                    ),
+                    (
+                        "regions".to_string(),
+                        VarDefinition {
+                            var_type: VarType::Literal,
+                            values: vec!["us-east-1".to_string()],
+                        },
+                    ),
+                ])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Literal,
+                        values: vec!["i-xyz999".to_string()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let vars = result.definitions.unwrap().vars.unwrap();
+        // "ids" is overridden by the override config
+        assert_eq!(vars["ids"].values, vec!["i-xyz999"]);
+        // "regions" is preserved from base
+        assert_eq!(vars["regions"].values, vec!["us-east-1"]);
+    }
+
+    #[test]
+    fn merge_definitions_vars_base_only() {
+        let base = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Literal,
+                        values: vec!["i-abc123".to_string()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(Config::default());
+        let vars = result.definitions.unwrap().vars.unwrap();
+        assert_eq!(vars["ids"].values, vec!["i-abc123"]);
+    }
+
+    #[test]
+    fn merge_definitions_vars_override_only() {
+        let over = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Path,
+                        values: vec!["./run.sh".to_string()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = Config::default().merge(over);
+        let vars = result.definitions.unwrap().vars.unwrap();
+        assert_eq!(vars["ids"].var_type, VarType::Path);
+        assert_eq!(vars["ids"].values, vec!["./run.sh"]);
     }
 
     // === JSON Schema ===

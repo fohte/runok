@@ -7,12 +7,13 @@ sidebar:
 
 Tokens wrapped in `<...>` are **placeholders** — special tokens that match dynamically rather than by exact string comparison.
 
-| Placeholder                                | Description                                              |
-| ------------------------------------------ | -------------------------------------------------------- |
-| [`<cmd>`](#command-cmd)                    | Captures the wrapped command for further rule evaluation |
-| [`<opts>`](#options-opts)                  | Absorbs zero or more flag-like tokens                    |
-| [`<vars>`](#variables-vars)                | Absorbs zero or more `KEY=VALUE` tokens                  |
-| [`<path:name>`](#path-references-pathname) | Matches against a named list of paths                    |
+| Placeholder                                  | Description                                              |
+| -------------------------------------------- | -------------------------------------------------------- |
+| [`<cmd>`](#command-cmd)                      | Captures the wrapped command for further rule evaluation |
+| [`<opts>`](#options-opts)                    | Absorbs zero or more flag-like tokens                    |
+| [`<vars>`](#variables-vars)                  | Absorbs zero or more `KEY=VALUE` tokens                  |
+| [`<path:name>`](#path-references-pathname)   | Matches against a named list of paths                    |
+| [`<var:name>`](#variable-references-varname) | Matches against a typed variable definition              |
 
 ## Command (`<cmd>`)
 
@@ -146,6 +147,76 @@ If a pattern references a path name that is not defined in `definitions.paths`, 
 - deny: 'cat <path:sensitive>'
 ```
 
+## Variable References (`<var:name>`)
+
+The `<var:name>` placeholder matches a command argument against a **typed variable definition** in the [`definitions.vars`](/configuration/schema/#definitionsvars) block.
+
+### Defining Variables
+
+Each variable has an optional `type` (default: `literal`) and a list of `values`:
+
+```yaml
+definitions:
+  vars:
+    instance-ids:
+      values:
+        - i-abc123
+        - i-def456
+        - i-ghi789
+    test-script:
+      type: path
+      values:
+        - ./tests/run
+```
+
+### Variable Types
+
+| Type      | Matching behavior                                                         |
+| --------- | ------------------------------------------------------------------------- |
+| `literal` | Exact string match (default)                                              |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+
+### Using Variable References
+
+```yaml
+rules:
+  - allow: aws ec2 terminate-instances --instance-ids <var:instance-ids>
+  - allow: bash <var:test-script>
+```
+
+| Command                                                | Rule                                             | Result                       |
+| ------------------------------------------------------ | ------------------------------------------------ | ---------------------------- |
+| `aws ec2 terminate-instances --instance-ids i-abc123`  | `allow: "... --instance-ids <var:instance-ids>"` | Allowed                      |
+| `aws ec2 terminate-instances --instance-ids i-UNKNOWN` | `allow: "... --instance-ids <var:instance-ids>"` | No match                     |
+| `bash ./tests/run`                                     | `allow: "bash <var:test-script>"`                | Allowed                      |
+| `bash tests/run`                                       | `allow: "bash <var:test-script>"`                | Allowed (path normalization) |
+
+### Path Type Normalization
+
+When `type: path` is set, both the command argument and the defined values are **canonicalized** (resolved to absolute paths via the filesystem). If the path does not exist on disk, logical normalization is used as a fallback (`.` removal and `..` resolution).
+
+This handles cases where the same file is referenced with different path forms:
+
+```yaml
+definitions:
+  vars:
+    test-script:
+      type: path
+      values:
+        - ./tests/run
+```
+
+| Command                     | Matches `<var:test-script>` |
+| --------------------------- | --------------------------- |
+| `bash tests/run`            | Yes                         |
+| `bash ./tests/run`          | Yes                         |
+| `bash ./tests/../tests/run` | Yes                         |
+| `bash ./scripts/deploy`     | No                          |
+
+### Undefined Variable Names
+
+If a pattern references a variable name that is not defined in `definitions.vars`, the pattern **never matches**.
+
 ## Combining Placeholders
 
 Placeholders can be combined to handle complex wrapper patterns:
@@ -173,7 +244,7 @@ In the `find` wrapper example, `\\;` is a backslash-escaped semicolon in YAML. T
 ## Restrictions
 
 - `<cmd>` captures one or more tokens; it tries all possible split points to find a valid wrapped command
-- Optional groups and path references are not supported inside wrapper patterns
+- Optional groups, path references, and variable references are not supported inside wrapper patterns
 
 ## Related
 

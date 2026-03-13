@@ -9,6 +9,7 @@ pub struct ExprContext {
     pub flags: HashMap<String, Option<String>>,
     pub args: Vec<String>,
     pub paths: HashMap<String, Vec<String>>,
+    pub vars: HashMap<String, String>,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -41,6 +42,8 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         .add_variable("paths", &context.paths)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
+    cel_context.add_variable_from_value("vars", context.vars.clone());
+
     let result = program
         .execute(&cel_context)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
@@ -62,6 +65,7 @@ mod tests {
             flags: HashMap::new(),
             args: Vec::new(),
             paths: HashMap::new(),
+            vars: HashMap::new(),
         }
     }
 
@@ -204,6 +208,7 @@ mod tests {
             flags: HashMap::from([("method".to_string(), Some("POST".to_string()))]),
             args: vec!["https://prod.example.com/api".to_string()],
             paths: HashMap::new(),
+            vars: HashMap::new(),
         };
         assert!(
             evaluate(

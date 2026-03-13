@@ -659,6 +659,7 @@ fn build_expr_context(
         flags,
         args: parsed_command.args.clone(),
         paths,
+        vars: HashMap::new(),
     }
 }
 

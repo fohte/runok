@@ -148,6 +148,7 @@ pub(crate) fn match_single_token(
             let normalized_cmd = normalize_path(cmd_token);
             paths.iter().any(|p| normalize_path(p) == normalized_cmd)
         }
+        PatternToken::VarRef(name) => match_var_ref(name, cmd_token, definitions),
         PatternToken::Placeholder(_) => true,
         // FlagWithValue, Optional, Opts, and Vars don't make sense as single-token matches
         PatternToken::FlagWithValue { .. }
@@ -219,6 +220,45 @@ pub(crate) fn resolve_paths<'a>(name: &str, definitions: &'a Definitions) -> &'a
         .unwrap_or(&[])
 }
 
+/// Resolve a variable definition from `definitions.vars`.
+pub(crate) fn resolve_var<'a>(
+    name: &str,
+    definitions: &'a Definitions,
+) -> Option<&'a crate::config::VarDefinition> {
+    definitions.vars.as_ref().and_then(|vars| vars.get(name))
+}
+
+/// Match a `<var:name>` reference against a command token.
+///
+/// Matching strategy depends on the variable's type:
+/// - `literal`: exact string match against each value.
+/// - `path`: canonicalize both sides (falling back to `normalize_path` when
+///   the file does not exist) and compare.
+pub(crate) fn match_var_ref(name: &str, cmd_token: &str, definitions: &Definitions) -> bool {
+    let Some(var_def) = resolve_var(name, definitions) else {
+        return false;
+    };
+    match var_def.var_type {
+        crate::config::VarType::Literal => var_def.values.iter().any(|v| v == cmd_token),
+        crate::config::VarType::Path => {
+            let cmd_canonical = canonicalize_or_normalize(cmd_token);
+            var_def
+                .values
+                .iter()
+                .any(|v| canonicalize_or_normalize(v) == cmd_canonical)
+        }
+    }
+}
+
+/// Try to canonicalize a path via the filesystem; fall back to logical
+/// normalization when the path does not exist.
+fn canonicalize_or_normalize(path: &str) -> String {
+    match std::fs::canonicalize(path) {
+        Ok(p) => p.to_string_lossy().into_owned(),
+        Err(_) => normalize_path(path),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +323,103 @@ mod tests {
     #[case::leading_double_dotdot("../../etc/passwd", "../../etc/passwd")]
     fn normalize_path_cases(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(normalize_path(input), expected);
+    }
+
+    // === match_var_ref / match_single_token with VarRef ===
+
+    use crate::config::{Definitions, VarDefinition, VarType};
+    use std::collections::HashMap;
+
+    #[rstest]
+    #[case::literal_match("i-abc123", true)]
+    #[case::literal_match_second_value("i-def456", true)]
+    #[case::literal_no_match("i-xyz999", false)]
+    #[case::literal_empty_string("", false)]
+    fn match_var_ref_literal(#[case] cmd_token: &str, #[case] expected: bool) {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "instance-ids".to_string(),
+                VarDefinition {
+                    var_type: VarType::Literal,
+                    values: vec!["i-abc123".into(), "i-def456".into()],
+                },
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(
+            match_single_token(
+                &PatternToken::VarRef("instance-ids".into()),
+                cmd_token,
+                &definitions
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn match_var_ref_undefined() {
+        let definitions = Definitions::default();
+        assert!(!match_single_token(
+            &PatternToken::VarRef("nonexistent".into()),
+            "anything",
+            &definitions,
+        ));
+    }
+
+    #[rstest]
+    #[case::exact_match("tests/run", true)]
+    #[case::dot_prefix("./tests/run", true)]
+    #[case::no_match("other/file", false)]
+    fn match_var_ref_path(#[case] cmd_token: &str, #[case] expected: bool) {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "test-script".to_string(),
+                VarDefinition {
+                    var_type: VarType::Path,
+                    values: vec!["./tests/run".into()],
+                },
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(
+            match_single_token(
+                &PatternToken::VarRef("test-script".into()),
+                cmd_token,
+                &definitions
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn match_var_ref_empty_values() {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "empty".to_string(),
+                VarDefinition {
+                    var_type: VarType::Literal,
+                    values: vec![],
+                },
+            )])),
+            ..Default::default()
+        };
+        assert!(!match_single_token(
+            &PatternToken::VarRef("empty".into()),
+            "anything",
+            &definitions,
+        ));
+    }
+
+    #[test]
+    fn match_var_ref_no_vars_section() {
+        let definitions = Definitions {
+            vars: None,
+            ..Default::default()
+        };
+        assert!(!match_single_token(
+            &PatternToken::VarRef("anything".into()),
+            "value",
+            &definitions,
+        ));
     }
 }
