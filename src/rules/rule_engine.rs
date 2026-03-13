@@ -9,7 +9,7 @@ use crate::rules::command_parser::{
     FlagSchema, ParsedCommand, extract_commands, parse_command, shell_quote_join,
 };
 use crate::rules::expr_evaluator::{ExprContext, evaluate};
-use crate::rules::pattern_matcher::{extract_placeholder, matches_with_captures};
+use crate::rules::pattern_matcher::{MatchCaptures, extract_placeholder, matches_with_captures};
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
 
 /// Context for rule evaluation, providing environment variables and
@@ -371,14 +371,15 @@ fn evaluate_simple_command(
             let schema = build_flag_schema(pattern);
             let parsed_command = parse_command(command, &schema)?;
 
-            let captures = matches_with_captures(pattern, &parsed_command, definitions);
-            if captures.is_none() {
+            let match_captures = matches_with_captures(pattern, &parsed_command, definitions);
+            let Some(match_captures) = match_captures else {
                 continue;
-            }
+            };
 
             // Evaluate when clause if present
             if let Some(when_expr) = &rule.when {
-                let expr_context = build_expr_context(&parsed_command, context, definitions);
+                let expr_context =
+                    build_expr_context(&parsed_command, context, definitions, &match_captures);
                 match evaluate(when_expr, &expr_context) {
                     Ok(true) => {}
                     Ok(false) => continue,
@@ -389,7 +390,7 @@ fn evaluate_simple_command(
             match_infos.push(RuleMatchInfo {
                 action_kind,
                 pattern: pattern_str.to_string(),
-                matched_tokens: captures.unwrap_or_default(),
+                matched_tokens: match_captures.wildcards,
             });
 
             matched.push(MatchedRule {
@@ -641,6 +642,7 @@ fn build_expr_context(
     parsed_command: &ParsedCommand,
     eval_context: &EvalContext,
     definitions: &Definitions,
+    match_captures: &MatchCaptures,
 ) -> ExprContext {
     let flags: HashMap<String, Option<String>> = parsed_command
         .flags
@@ -659,7 +661,7 @@ fn build_expr_context(
         flags,
         args: parsed_command.args.clone(),
         paths,
-        vars: HashMap::new(),
+        vars: match_captures.vars.clone(),
     }
 }
 

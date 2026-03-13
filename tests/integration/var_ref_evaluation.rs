@@ -229,3 +229,87 @@ fn var_ref_and_path_ref_coexist(empty_context: EvalContext) {
         runok::rules::rule_engine::Action::Allow
     );
 }
+
+// ========================================
+// <var:name> captured values in when clause via vars context
+// ========================================
+
+#[rstest]
+#[case::var_value_matches_when_condition(
+    indoc! {"
+        definitions:
+          vars:
+            instance-ids:
+              values:
+                - i-abc123
+                - i-prod-001
+        rules:
+          - deny: aws ec2 terminate-instances --instance-ids <var:instance-ids>
+            when: \"vars['instance-ids'] == 'i-prod-001'\"
+          - allow: aws ec2 terminate-instances --instance-ids <var:instance-ids>
+    "},
+    "aws ec2 terminate-instances --instance-ids i-prod-001",
+    assert_deny as ActionAssertion,
+)]
+#[case::var_value_does_not_match_when_falls_through(
+    indoc! {"
+        definitions:
+          vars:
+            instance-ids:
+              values:
+                - i-abc123
+                - i-prod-001
+        rules:
+          - deny: aws ec2 terminate-instances --instance-ids <var:instance-ids>
+            when: \"vars['instance-ids'] == 'i-prod-001'\"
+          - allow: aws ec2 terminate-instances --instance-ids <var:instance-ids>
+    "},
+    "aws ec2 terminate-instances --instance-ids i-abc123",
+    assert_allow as ActionAssertion,
+)]
+#[case::var_with_has_guard_and_starts_with(
+    indoc! {"
+        definitions:
+          vars:
+            regions:
+              type: literal
+              values:
+                - us-east-1
+                - eu-west-1
+                - ap-southeast-1
+        rules:
+          - deny: aws --region <var:regions> *
+            when: \"has(vars.regions) && vars.regions.startsWith('us-')\"
+          - allow: aws --region <var:regions> *
+    "},
+    "aws --region us-east-1 s3 ls",
+    assert_deny as ActionAssertion,
+)]
+#[case::var_with_has_guard_non_us_region_allowed(
+    indoc! {"
+        definitions:
+          vars:
+            regions:
+              type: literal
+              values:
+                - us-east-1
+                - eu-west-1
+                - ap-southeast-1
+        rules:
+          - deny: aws --region <var:regions> *
+            when: \"has(vars.regions) && vars.regions.startsWith('us-')\"
+          - allow: aws --region <var:regions> *
+    "},
+    "aws --region eu-west-1 s3 ls",
+    assert_allow as ActionAssertion,
+)]
+fn var_ref_when_clause_with_vars(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
