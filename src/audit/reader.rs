@@ -198,8 +198,7 @@ impl AuditReader {
         if let Some(filter_cwd) = filter.cwd {
             match &entry.metadata.cwd {
                 Some(entry_cwd) => {
-                    if entry_cwd != filter_cwd && !entry_cwd.starts_with(&format!("{filter_cwd}/"))
-                    {
+                    if !Path::new(entry_cwd).starts_with(filter_cwd) {
                         return false;
                     }
                 }
@@ -627,6 +626,34 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].command, "echo project");
+        assert_eq!(result[1].command, "echo subdir");
+    }
+
+    #[rstest]
+    fn filter_by_cwd_root_directory(temp_log_dir: TempDir) {
+        let entries = vec![
+            make_entry_with_cwd(
+                "2026-02-25T10:00:00Z",
+                "echo root",
+                SerializableAction::Allow,
+                Some("/"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T11:00:00Z",
+                "echo subdir",
+                SerializableAction::Allow,
+                Some("/home/user"),
+            ),
+        ];
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let mut filter = AuditFilter::new();
+        filter.cwd = Some("/".to_owned());
+        let result = reader.read(&filter).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].command, "echo root");
         assert_eq!(result[1].command, "echo subdir");
     }
 
