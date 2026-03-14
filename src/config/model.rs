@@ -404,6 +404,7 @@ impl Config {
     ///   contradictory constraints.)
     /// - audit: override (local wins at merge level; loader enforces
     ///   global-only by stripping audit from project/local layers)
+    /// - tests: override (local wins; test definitions are not merged across layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
