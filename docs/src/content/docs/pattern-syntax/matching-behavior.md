@@ -96,6 +96,23 @@ Standalone flag alternations (without an explicit value pattern) also recognize 
 | `curl -o=/tmp/out https://example.com`       | `ask`   |
 | `curl https://example.com`                   | `allow` |
 
+### Fused Short Flag Values
+
+Flag-value patterns also match fused short flags, where the value is directly attached to the flag character without a space or `=`. A pattern like `-n *` matches `-n 3` (space-separated), `-n=3` (`=`-joined), and `-n3` (fused):
+
+```yaml
+- allow: 'git tag [-n *] *'
+```
+
+| Command           | Result  |
+| ----------------- | ------- |
+| `git tag -n 3 v1` | Matches |
+| `git tag -n=3 v1` | Matches |
+| `git tag -n3 v1`  | Matches |
+| `git tag v1`      | Matches |
+
+Fused splitting only applies to short flags (single `-` followed by a single ASCII character). It is only attempted when the pattern declares a `FlagWithValue` for that flag (e.g. `-n *`), so combined boolean flags like `-rf` are not falsely split.
+
 ### Flag-only Negation
 
 Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):
