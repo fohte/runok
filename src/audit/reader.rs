@@ -9,6 +9,15 @@ use super::log_rotator::parse_log_date;
 use super::model::{AuditEntry, SerializableAction};
 use crate::config::ActionKind;
 
+/// Time-resolved filter criteria ready for matching against entries.
+struct ResolvedFilter<'a> {
+    action: &'a Option<ActionKind>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    command_pattern: &'a Option<String>,
+    cwd: &'a Option<String>,
+}
+
 /// Reads and filters audit log entries from JSONL date-partitioned files.
 pub struct AuditReader {
     log_dir: PathBuf,
@@ -34,22 +43,20 @@ impl AuditReader {
         filter: &AuditFilter,
         now: DateTime<Utc>,
     ) -> Result<Vec<AuditEntry>, anyhow::Error> {
-        let since = filter.since.as_ref().map(|ts| ts.resolve(now));
-        let until = filter.until.as_ref().map(|ts| ts.resolve(now));
+        let resolved = ResolvedFilter {
+            action: &filter.action,
+            since: filter.since.as_ref().map(|ts| ts.resolve(now)),
+            until: filter.until.as_ref().map(|ts| ts.resolve(now)),
+            command_pattern: &filter.command_pattern,
+            cwd: &filter.cwd,
+        };
 
-        let date_files = self.collect_date_files(since)?;
+        let date_files = self.collect_date_files(resolved.since)?;
 
         let mut entries = Vec::new();
 
         for path in &date_files {
-            self.read_file(
-                path,
-                &filter.action,
-                since,
-                until,
-                &filter.command_pattern,
-                &mut entries,
-            )?;
+            self.read_file(path, &resolved, &mut entries)?;
         }
 
         // Partial sort: find the newest `limit` entries, then sort ascending (oldest first)
@@ -106,10 +113,7 @@ impl AuditReader {
     fn read_file(
         &self,
         path: &Path,
-        action_filter: &Option<ActionKind>,
-        since: Option<DateTime<Utc>>,
-        until: Option<DateTime<Utc>>,
-        command_pattern: &Option<String>,
+        resolved: &ResolvedFilter,
         entries: &mut Vec<AuditEntry>,
     ) -> Result<(), anyhow::Error> {
         let file = fs::File::open(path)?;
@@ -146,7 +150,7 @@ impl AuditReader {
                 }
             };
 
-            if !Self::matches_filter(&entry, action_filter, since, until, command_pattern) {
+            if !Self::matches_filter(&entry, resolved) {
                 continue;
             }
 
@@ -156,23 +160,17 @@ impl AuditReader {
         Ok(())
     }
 
-    fn matches_filter(
-        entry: &AuditEntry,
-        action_filter: &Option<ActionKind>,
-        since: Option<DateTime<Utc>>,
-        until: Option<DateTime<Utc>>,
-        command_pattern: &Option<String>,
-    ) -> bool {
+    fn matches_filter(entry: &AuditEntry, filter: &ResolvedFilter) -> bool {
         // Check timestamp filters; malformed timestamps cannot satisfy time filters
-        if since.is_some() || until.is_some() {
+        if filter.since.is_some() || filter.until.is_some() {
             match entry.timestamp.parse::<DateTime<Utc>>() {
                 Ok(ts) => {
-                    if let Some(since_dt) = since
+                    if let Some(since_dt) = filter.since
                         && ts < since_dt
                     {
                         return false;
                     }
-                    if let Some(until_dt) = until
+                    if let Some(until_dt) = filter.until
                         && ts > until_dt
                     {
                         return false;
@@ -183,17 +181,29 @@ impl AuditReader {
         }
 
         // Check action filter
-        if let Some(action_kind) = action_filter
+        if let Some(action_kind) = filter.action
             && !Self::action_matches(&entry.action, action_kind)
         {
             return false;
         }
 
         // Check command pattern (substring match)
-        if let Some(pattern) = command_pattern
+        if let Some(pattern) = filter.command_pattern
             && !entry.command.contains(pattern.as_str())
         {
             return false;
+        }
+
+        // Check cwd filter (prefix match, includes subdirectories)
+        if let Some(filter_cwd) = filter.cwd {
+            match &entry.metadata.cwd {
+                Some(entry_cwd) => {
+                    if !Path::new(entry_cwd).starts_with(filter_cwd) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
 
         true
@@ -237,6 +247,21 @@ mod tests {
             default_action: None,
             metadata: AuditMetadata::default(),
             sub_evaluations: None,
+        }
+    }
+
+    fn make_entry_with_cwd(
+        timestamp: &str,
+        command: &str,
+        action: SerializableAction,
+        cwd: Option<&str>,
+    ) -> AuditEntry {
+        AuditEntry {
+            metadata: AuditMetadata {
+                cwd: cwd.map(|s| s.to_owned()),
+                ..AuditMetadata::default()
+            },
+            ..make_entry(timestamp, command, action)
         }
     }
 
@@ -562,6 +587,101 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].command, "echo good");
+    }
+
+    #[rstest]
+    fn filter_by_cwd(temp_log_dir: TempDir) {
+        let entries = vec![
+            make_entry_with_cwd(
+                "2026-02-25T10:00:00Z",
+                "echo project",
+                SerializableAction::Allow,
+                Some("/home/user/project"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T11:00:00Z",
+                "echo subdir",
+                SerializableAction::Allow,
+                Some("/home/user/project/src"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T12:00:00Z",
+                "echo other",
+                SerializableAction::Allow,
+                Some("/home/user/other"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T13:00:00Z",
+                "echo no-cwd",
+                SerializableAction::Allow,
+                None,
+            ),
+        ];
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let mut filter = AuditFilter::new();
+        filter.cwd = Some("/home/user/project".to_owned());
+        let result = reader.read(&filter).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].command, "echo project");
+        assert_eq!(result[1].command, "echo subdir");
+    }
+
+    #[rstest]
+    fn filter_by_cwd_root_directory(temp_log_dir: TempDir) {
+        let entries = vec![
+            make_entry_with_cwd(
+                "2026-02-25T10:00:00Z",
+                "echo root",
+                SerializableAction::Allow,
+                Some("/"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T11:00:00Z",
+                "echo subdir",
+                SerializableAction::Allow,
+                Some("/home/user"),
+            ),
+        ];
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let mut filter = AuditFilter::new();
+        filter.cwd = Some("/".to_owned());
+        let result = reader.read(&filter).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].command, "echo root");
+        assert_eq!(result[1].command, "echo subdir");
+    }
+
+    #[rstest]
+    fn filter_by_cwd_no_false_prefix_match(temp_log_dir: TempDir) {
+        let entries = vec![
+            make_entry_with_cwd(
+                "2026-02-25T10:00:00Z",
+                "echo project",
+                SerializableAction::Allow,
+                Some("/home/user/project"),
+            ),
+            make_entry_with_cwd(
+                "2026-02-25T11:00:00Z",
+                "echo project2",
+                SerializableAction::Allow,
+                Some("/home/user/project2"),
+            ),
+        ];
+        write_jsonl(temp_log_dir.path(), "audit-2026-02-25.jsonl", &entries);
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let mut filter = AuditFilter::new();
+        filter.cwd = Some("/home/user/project".to_owned());
+        let result = reader.read(&filter).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].command, "echo project");
     }
 
     #[rstest]

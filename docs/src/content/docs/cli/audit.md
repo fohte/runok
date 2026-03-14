@@ -31,6 +31,10 @@ Show only entries before the given time. Same format as `--since`.
 
 Filter entries whose command string contains the given substring.
 
+### `--dir <path>`
+
+Filter entries by working directory. Only shows entries executed in the given directory or its subdirectories. The path is resolved to its canonical (absolute, symlink-resolved) form before matching.
+
 ### `--limit <n>`
 
 Maximum number of entries to display.
