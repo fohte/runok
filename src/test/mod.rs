@@ -97,6 +97,8 @@ pub struct TestResult {
     pub test_case: TestCase,
     pub actual: ActionKind,
     pub passed: bool,
+    /// Set when rule evaluation itself errored out.
+    pub error: Option<String>,
 }
 
 /// Aggregated test results.
@@ -213,19 +215,26 @@ pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
     let context = EvalContext::from_env();
     let results = test_cases
         .iter()
-        .map(|tc| {
-            let actual = match evaluate_compound(config, &tc.command, &context) {
-                Ok(result) => action_to_kind(&result.action),
-                // On evaluation error, treat as default ActionKind (Ask)
-                Err(_) => ActionKind::default(),
-            };
-            let expected_kind: ActionKind = tc.expected.into();
-            TestResult {
-                test_case: tc.clone(),
-                actual,
-                passed: actual == expected_kind,
-            }
-        })
+        .map(
+            |tc| match evaluate_compound(config, &tc.command, &context) {
+                Ok(result) => {
+                    let actual = action_to_kind(&result.action);
+                    let expected_kind: ActionKind = tc.expected.into();
+                    TestResult {
+                        test_case: tc.clone(),
+                        actual,
+                        passed: actual == expected_kind,
+                        error: None,
+                    }
+                }
+                Err(e) => TestResult {
+                    test_case: tc.clone(),
+                    actual: ActionKind::default(),
+                    passed: false,
+                    error: Some(e.to_string()),
+                },
+            },
+        )
         .collect();
     TestResults { results }
 }
@@ -244,6 +253,15 @@ pub fn report(results: &TestResults, writer: &mut impl Write) {
                 "PASS".if_supports_color(Stdout, |t| t.green()),
                 result.test_case.command,
                 action_kind_label(result.actual),
+            )
+            .ok();
+        } else if let Some(err) = &result.error {
+            writeln!(
+                writer,
+                "{}: {} => evaluation error: {}",
+                "FAIL".if_supports_color(Stdout, |t| t.red()),
+                result.test_case.command,
+                err,
             )
             .ok();
         } else {
@@ -456,6 +474,7 @@ mod tests {
                 ActionKind::Deny
             },
             passed,
+            error: None,
         }
     }
 
@@ -686,6 +705,33 @@ mod tests {
         assert!(results.is_success());
     }
 
+    #[rstest]
+    fn run_tests_eval_error_is_failure_not_false_positive() {
+        // A wrapper pattern with an unsupported token causes an eval error.
+        // Even though the expected decision is "ask" (matching the default),
+        // the test must fail because the rule was never actually evaluated.
+        let config = Config {
+            rules: Some(vec![]),
+            definitions: Some(crate::config::Definitions {
+                wrappers: Some(vec!["sudo [-u root] <cmd>".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let test_cases = vec![TestCase {
+            command: "sudo rm foo".to_string(),
+            expected: ExpectedDecision::Ask,
+            source: TestCaseSource::TopLevel {
+                file: PathBuf::from("test.yml"),
+            },
+        }];
+
+        let results = run_tests(&config, &test_cases);
+        assert!(!results.is_success());
+        assert_eq!(results.failed_count(), 1);
+        assert!(results.results[0].error.is_some());
+    }
+
     // -----------------------------------------------------------------------
     // report / report_summary
     // -----------------------------------------------------------------------
@@ -723,6 +769,7 @@ mod tests {
                 },
                 actual,
                 passed,
+                error: None,
             }],
         };
 
