@@ -36,11 +36,16 @@ pub(crate) fn split_short_flag_value<'a>(
     token: &'a str,
     aliases: &[String],
 ) -> Option<(&'a str, &'a str)> {
-    // Token must start with `-`, be longer than 2 chars, and not start with `--`.
-    if token.len() <= 2 || !token.starts_with('-') || token.starts_with("--") {
+    // Token must start with `-`, be longer than 2 bytes, not start with `--`,
+    // and byte index 2 must be a char boundary (i.e. the second char is ASCII).
+    if token.len() <= 2
+        || !token.starts_with('-')
+        || token.starts_with("--")
+        || !token.is_char_boundary(2)
+    {
         return None;
     }
-    // Check if the first two characters (e.g. `-n`) match any alias.
+    // Extract the first two bytes (e.g. `-n`) as the flag part.
     let flag_part = &token[..2];
     if aliases.iter().any(|a| a.as_str() == flag_part) {
         Some((flag_part, &token[2..]))
@@ -136,6 +141,7 @@ mod tests {
     #[case::dash_only("-", &["-n"], None)]
     #[case::empty("", &["-n"], None)]
     #[case::multiple_aliases("-n3", &["-n", "--num"], Some(("-n", "3")))]
+    #[case::non_ascii_after_dash("-é3", &["-é"], None)]
     fn split_short_flag_value_cases(
         #[case] input: &str,
         #[case] aliases: &[&str],
