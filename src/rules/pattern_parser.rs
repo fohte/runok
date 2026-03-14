@@ -14,15 +14,22 @@ pub enum CommandPattern {
     Alternation(Vec<String>),
     /// Matches any command name (`*`).
     Wildcard,
+    /// Matches command name(s) via a `<var:name>` variable reference.
+    /// Multi-word var values consume multiple leading tokens.
+    VarRef(String),
 }
 
 impl CommandPattern {
     /// Check if this command pattern matches the given command name.
+    ///
+    /// For `VarRef`, always returns `true` — actual matching is deferred to
+    /// the pattern matcher which handles multi-word values and type-aware comparison.
     pub fn matches(&self, command: &str) -> bool {
         match self {
             CommandPattern::Literal(s) => s == command,
             CommandPattern::Alternation(alts) => alts.iter().any(|s| s == command),
             CommandPattern::Wildcard => true,
+            CommandPattern::VarRef(_) => true,
         }
     }
 }
@@ -155,6 +162,9 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
         LexToken::Literal(s) | LexToken::QuotedLiteral(s) => CommandPattern::Literal(s.clone()),
         LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
+        LexToken::Placeholder(name) if name.starts_with("var:") => {
+            CommandPattern::VarRef(name["var:".len()..].to_string())
+        }
         other => {
             return Err(PatternParseError::InvalidSyntax(format!(
                 "expected command name, got {other:?}"
@@ -851,5 +861,30 @@ mod tests {
             "expected {expected_count} patterns for {input:?}, got {}",
             result.len()
         );
+    }
+
+    // === <var:name> in command position ===
+
+    #[test]
+    fn parse_var_ref_command_position() {
+        let result = parse("<var:runok> check").unwrap();
+        assert_eq!(result.command, CommandPattern::VarRef("runok".to_string()));
+        assert_eq!(result.tokens, vec![PatternToken::Literal("check".into())]);
+    }
+
+    #[test]
+    fn parse_var_ref_command_position_with_wildcard() {
+        let result = parse("<var:prettier> *").unwrap();
+        assert_eq!(
+            result.command,
+            CommandPattern::VarRef("prettier".to_string())
+        );
+        assert_eq!(result.tokens, vec![PatternToken::Wildcard]);
+    }
+
+    #[test]
+    fn parse_path_ref_command_position_rejected() {
+        let result = parse("<path:foo> bar");
+        assert!(result.is_err());
     }
 }

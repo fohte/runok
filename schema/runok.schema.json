@@ -517,7 +517,7 @@
           "description": "Allowed values for this variable.",
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/VarValue"
           }
         }
       },
@@ -537,6 +537,30 @@
           "description": "Path match: canonicalize both sides before comparison,\nfalling back to `normalize_path` when the file does not exist.",
           "type": "string",
           "const": "path"
+        }
+      ]
+    },
+    "VarValue": {
+      "description": "A variable value: either a plain string (inherits definition-level type) or an object with explicit `type` and `value` fields.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/VarType"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
         }
       ]
     }

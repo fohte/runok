@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(any(feature = "config-schema", test))]
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::de::Deserializer;
 
 /// Top-level runok configuration.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
@@ -134,6 +135,114 @@ pub enum VarType {
     Path,
 }
 
+/// A single value in a variable definition, optionally carrying its own type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarValue {
+    /// A plain string that inherits the definition-level type.
+    Plain(String),
+    /// A value with an explicit per-value type override.
+    Typed { var_type: VarType, value: String },
+}
+
+impl VarValue {
+    /// Return the string value.
+    pub fn value(&self) -> &str {
+        match self {
+            VarValue::Plain(s) => s,
+            VarValue::Typed { value, .. } => value,
+        }
+    }
+
+    /// Return the effective type, falling back to the given definition-level type.
+    pub fn effective_type(&self, definition_type: VarType) -> VarType {
+        match self {
+            VarValue::Plain(_) => definition_type,
+            VarValue::Typed { var_type, .. } => *var_type,
+        }
+    }
+}
+
+#[cfg(any(feature = "config-schema", test))]
+impl JsonSchema for VarValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "VarValue".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use schemars::json_schema;
+
+        // A VarValue is either a plain string or a { type, value } mapping.
+        json_schema!({
+            "description": "A variable value: either a plain string (inherits definition-level type) \
+                or an object with explicit `type` and `value` fields.",
+            "oneOf": [
+                { "type": "string" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": generator.subschema_for::<VarType>(),
+                        "value": { "type": "string" }
+                    },
+                    "required": ["type", "value"],
+                    "additionalProperties": false
+                }
+            ]
+        })
+    }
+}
+
+impl From<&str> for VarValue {
+    fn from(s: &str) -> Self {
+        VarValue::Plain(s.to_string())
+    }
+}
+
+impl From<String> for VarValue {
+    fn from(s: String) -> Self {
+        VarValue::Plain(s)
+    }
+}
+
+impl PartialEq<&str> for VarValue {
+    fn eq(&self, other: &&str) -> bool {
+        match self {
+            VarValue::Plain(s) => s == *other,
+            VarValue::Typed { value, .. } => value == *other,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VarValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        /// Helper struct for deserializing `{ type: ..., value: ... }` form.
+        #[derive(Deserialize)]
+        struct TypedForm {
+            #[serde(rename = "type")]
+            var_type: VarType,
+            value: String,
+        }
+
+        /// Internal untagged enum to handle both string and mapping forms.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawVarValue {
+            Plain(String),
+            Typed(TypedForm),
+        }
+
+        match RawVarValue::deserialize(deserializer)? {
+            RawVarValue::Plain(s) => Ok(VarValue::Plain(s)),
+            RawVarValue::Typed(t) => Ok(VarValue::Typed {
+                var_type: t.var_type,
+                value: t.value,
+            }),
+        }
+    }
+}
+
 /// A typed variable definition with a list of allowed values.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
@@ -142,7 +251,7 @@ pub struct VarDefinition {
     #[serde(default, rename = "type")]
     pub var_type: VarType,
     /// Allowed values for this variable.
-    pub values: Vec<String>,
+    pub values: Vec<VarValue>,
 }
 
 /// Sandbox preset defining filesystem and network restrictions.
@@ -330,12 +439,11 @@ impl Config {
             && let Some(vars) = &defs.vars
         {
             for (key, var_def) in vars {
-                for value in &var_def.values {
-                    if (value.starts_with("<var:") || value.starts_with("<path:"))
-                        && value.ends_with('>')
-                    {
+                for var_value in &var_def.values {
+                    let v = var_value.value();
+                    if (v.starts_with("<var:") || v.starts_with("<path:")) && v.ends_with('>') {
                         errors.push(format!(
-                            "definitions.vars.{key}: value '{value}' contains a placeholder \
+                            "definitions.vars.{key}: value '{v}' contains a placeholder \
                              reference. Variable definitions must contain concrete values, not references"
                         ));
                     }
@@ -2361,14 +2469,14 @@ mod tests {
                         "ids".to_string(),
                         VarDefinition {
                             var_type: VarType::Literal,
-                            values: vec!["i-abc123".to_string()],
+                            values: vec!["i-abc123".into()],
                         },
                     ),
                     (
                         "regions".to_string(),
                         VarDefinition {
                             var_type: VarType::Literal,
-                            values: vec!["us-east-1".to_string()],
+                            values: vec!["us-east-1".into()],
                         },
                     ),
                 ])),
@@ -2382,7 +2490,7 @@ mod tests {
                     "ids".to_string(),
                     VarDefinition {
                         var_type: VarType::Literal,
-                        values: vec!["i-xyz999".to_string()],
+                        values: vec!["i-xyz999".into()],
                     },
                 )])),
                 ..Definitions::default()
@@ -2405,7 +2513,7 @@ mod tests {
                     "ids".to_string(),
                     VarDefinition {
                         var_type: VarType::Literal,
-                        values: vec!["i-abc123".to_string()],
+                        values: vec!["i-abc123".into()],
                     },
                 )])),
                 ..Definitions::default()
@@ -2425,7 +2533,7 @@ mod tests {
                     "ids".to_string(),
                     VarDefinition {
                         var_type: VarType::Path,
-                        values: vec!["./run.sh".to_string()],
+                        values: vec!["./run.sh".into()],
                     },
                 )])),
                 ..Definitions::default()

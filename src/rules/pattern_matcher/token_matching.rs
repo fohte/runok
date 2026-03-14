@@ -228,9 +228,24 @@ pub(crate) fn resolve_var<'a>(
     definitions.vars.as_ref().and_then(|vars| vars.get(name))
 }
 
+/// Match a single value against a command token, using the given effective type.
+fn match_value_with_type(
+    value: &str,
+    cmd_token: &str,
+    effective_type: crate::config::VarType,
+) -> bool {
+    match effective_type {
+        crate::config::VarType::Literal => value == cmd_token,
+        crate::config::VarType::Path => {
+            canonicalize_or_normalize(value) == canonicalize_or_normalize(cmd_token)
+        }
+    }
+}
+
 /// Match a `<var:name>` reference against a command token.
 ///
-/// Matching strategy depends on the variable's type:
+/// Matching strategy depends on the variable's type (per-value type overrides
+/// the definition-level type):
 /// - `literal`: exact string match against each value.
 /// - `path`: canonicalize both sides (falling back to `normalize_path` when
 ///   the file does not exist) and compare.
@@ -238,16 +253,42 @@ pub(crate) fn match_var_ref(name: &str, cmd_token: &str, definitions: &Definitio
     let Some(var_def) = resolve_var(name, definitions) else {
         return false;
     };
-    match var_def.var_type {
-        crate::config::VarType::Literal => var_def.values.iter().any(|v| v == cmd_token),
-        crate::config::VarType::Path => {
-            let cmd_canonical = canonicalize_or_normalize(cmd_token);
-            var_def
-                .values
-                .iter()
-                .any(|v| canonicalize_or_normalize(v) == cmd_canonical)
+    var_def.values.iter().any(|v| {
+        let effective_type = v.effective_type(var_def.var_type);
+        match_value_with_type(v.value(), cmd_token, effective_type)
+    })
+}
+
+/// Match a `<var:name>` reference against multiple consecutive command tokens.
+///
+/// Tries each value in the variable definition. Multi-word values (containing
+/// spaces) are split into words and matched against consecutive tokens.
+/// Returns `Some(n)` with the number of tokens consumed on success, `None` on failure.
+pub(crate) fn match_var_ref_multi(
+    name: &str,
+    cmd_tokens: &[&str],
+    definitions: &Definitions,
+) -> Option<usize> {
+    let var_def = resolve_var(name, definitions)?;
+    for v in &var_def.values {
+        let effective_type = v.effective_type(var_def.var_type);
+        let value_str = v.value();
+        let words: Vec<&str> = value_str.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        if words.len() > cmd_tokens.len() {
+            continue;
+        }
+        let all_match = words
+            .iter()
+            .zip(&cmd_tokens[..words.len()])
+            .all(|(word, token)| match_value_with_type(word, token, effective_type));
+        if all_match {
+            return Some(words.len());
         }
     }
+    None
 }
 
 /// Try to canonicalize a path via the filesystem; fall back to logical
@@ -414,6 +455,92 @@ mod tests {
             &PatternToken::VarRef(var_name.into()),
             cmd_token,
             &definitions,
+        ));
+    }
+
+    // === per-value type ===
+
+    use crate::config::VarValue;
+
+    #[rstest]
+    #[case::plain_literal_match("runok", Some(1))]
+    #[case::typed_path_match("./target/debug/runok", Some(1))]
+    #[case::multi_word_literal("cargo", None)] // partial match of multi-word value
+    #[case::no_match("node", None)]
+    fn match_var_ref_multi_per_value_type(
+        #[case] first_token: &str,
+        #[case] expected: Option<usize>,
+    ) {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "runok".to_string(),
+                VarDefinition {
+                    var_type: VarType::Literal,
+                    values: vec![
+                        VarValue::Plain("runok".to_string()),
+                        VarValue::Plain("cargo run --".to_string()),
+                        VarValue::Typed {
+                            var_type: VarType::Path,
+                            value: "target/debug/runok".to_string(),
+                        },
+                    ],
+                },
+            )])),
+            ..Default::default()
+        };
+        let tokens = vec![first_token];
+        assert_eq!(
+            match_var_ref_multi("runok", &tokens, &definitions),
+            expected
+        );
+    }
+
+    #[test]
+    fn match_var_ref_multi_multi_word() {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "runok".to_string(),
+                VarDefinition {
+                    var_type: VarType::Literal,
+                    values: vec![
+                        VarValue::Plain("runok".to_string()),
+                        VarValue::Plain("cargo run --".to_string()),
+                    ],
+                },
+            )])),
+            ..Default::default()
+        };
+        let tokens = vec!["cargo", "run", "--", "check"];
+        assert_eq!(match_var_ref_multi("runok", &tokens, &definitions), Some(3));
+    }
+
+    #[test]
+    fn match_var_ref_per_value_type_overrides_definition() {
+        let definitions = Definitions {
+            vars: Some(HashMap::from([(
+                "scripts".to_string(),
+                VarDefinition {
+                    var_type: VarType::Literal,
+                    values: vec![
+                        VarValue::Plain("run-tests".to_string()),
+                        VarValue::Typed {
+                            var_type: VarType::Path,
+                            value: "./scripts/deploy".to_string(),
+                        },
+                    ],
+                },
+            )])),
+            ..Default::default()
+        };
+        // Literal match
+        assert!(match_var_ref("scripts", "run-tests", &definitions));
+        // Path match (normalized)
+        assert!(match_var_ref("scripts", "scripts/deploy", &definitions));
+        // Should not match literal "scripts/deploy" via literal comparison
+        assert!(!match_var_ref(
+            "scripts",
+            "./scripts/deploy-other",
+            &definitions
         ));
     }
 }

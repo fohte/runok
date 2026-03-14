@@ -19,8 +19,8 @@ use flag_utils::{
     is_flag_only_negation, optional_flags_absent, split_flag_equals, split_short_flag_value,
 };
 use token_matching::{
-    literal_matches, match_flag_token_with_equals, match_single_token, normalize_path,
-    resolve_paths,
+    literal_matches, match_flag_token_with_equals, match_single_token, match_var_ref_multi,
+    normalize_path, resolve_paths,
 };
 
 /// Result of a successful pattern match, containing both wildcard captures
@@ -91,14 +91,28 @@ fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &HashSet<&str>
 fn prepare_wildcard_iteration<'a>(
     pattern: &Pattern,
     command: &'a ParsedCommand,
-) -> (Vec<&'a str>, std::ops::RangeInclusive<usize>) {
-    if matches!(pattern.command, CommandPattern::Wildcard) {
-        let tokens = command.raw_tokens.iter().map(|s| s.as_str()).collect();
-        let len = command.raw_tokens.len();
-        (tokens, 1..=len)
-    } else {
-        let tokens = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
-        (tokens, 0..=0)
+    definitions: &Definitions,
+) -> (Vec<&'a str>, Vec<usize>) {
+    match &pattern.command {
+        CommandPattern::Wildcard => {
+            let tokens = command.raw_tokens.iter().map(|s| s.as_str()).collect();
+            let len = command.raw_tokens.len();
+            (tokens, (1..=len).collect())
+        }
+        CommandPattern::VarRef(name) => {
+            // Try matching var values against the leading tokens to determine
+            // how many tokens the command name consumes.
+            let all_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
+            let mut skip_values = Vec::new();
+            if let Some(consumed) = match_var_ref_multi(name, &all_tokens, definitions) {
+                skip_values.push(consumed);
+            }
+            (all_tokens, skip_values)
+        }
+        _ => {
+            let tokens = command.raw_tokens[1..].iter().map(|s| s.as_str()).collect();
+            (tokens, vec![0])
+        }
     }
 }
 
@@ -116,8 +130,8 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
         return false;
     }
 
-    let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
-    for skip in skip_range {
+    let (cmd_tokens, skip_values) = prepare_wildcard_iteration(pattern, command, definitions);
+    for skip in skip_values {
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let var_captures = RefCell::new(HashMap::new());
@@ -152,12 +166,22 @@ pub fn matches_with_captures(
         return None;
     }
 
-    let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
-    for skip in skip_range {
+    let (cmd_tokens, skip_values) = prepare_wildcard_iteration(pattern, command, definitions);
+    for skip in skip_values {
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let mut captures = Vec::new();
         let var_captures = RefCell::new(HashMap::new());
+
+        // Capture command-position var ref value.
+        if let CommandPattern::VarRef(name) = &pattern.command {
+            let matched_tokens = &cmd_tokens[..skip];
+            let matched_value = matched_tokens.join(" ");
+            var_captures
+                .borrow_mut()
+                .insert(name.clone(), matched_value);
+        }
+
         if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -196,9 +220,9 @@ pub fn extract_placeholder(
         return Ok(Vec::new());
     }
 
-    let (cmd_tokens, skip_range) = prepare_wildcard_iteration(pattern, command);
+    let (cmd_tokens, skip_values) = prepare_wildcard_iteration(pattern, command, definitions);
     let mut all_candidates: Vec<Vec<&str>> = Vec::new();
-    for skip in skip_range {
+    for skip in skip_values {
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let mut captured = Vec::new();

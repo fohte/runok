@@ -343,13 +343,19 @@ definitions:
       type: path
       values:
         - ./tests/run
+    runok:
+      values:
+        - runok
+        - 'cargo run --'
+        - type: path
+          value: target/debug/runok
 ```
 
 ##### Variable Definition Fields
 
 ###### `type`
 
-Controls how the variable's values are matched against command arguments.
+Controls how the variable's values are matched against command arguments. This is the definition-level default; individual values can override it with per-value type.
 
 **Type:** `"literal" | "path"`\
 **Default:** `"literal"`
@@ -361,10 +367,18 @@ Controls how the variable's values are matched against command arguments.
 
 ###### `values`
 
-List of allowed values for this variable.
+List of allowed values for this variable. Each element can be either a plain string (inherits the definition-level `type`) or an object with explicit `type` and `value` fields.
 
-**Type:** `list[str]`\
+**Type:** `list[str | { type: "literal" | "path", value: str }]`\
 **Required:** Yes
+
+```yaml
+values:
+  - runok # plain string, inherits definition-level type
+  - 'cargo run --' # multi-word value
+  - type: path # per-value type override
+    value: target/debug/runok
+```
 
 :::note
 Variable definitions must contain concrete values. `<var:name>` or `<path:name>` references inside `definitions.vars` values are not allowed.
