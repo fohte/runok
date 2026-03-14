@@ -23,7 +23,7 @@ CEL expressions must evaluate to a **boolean** (`true` or `false`). If the expre
 
 ## Context variables
 
-Five context variables are available inside `when` expressions:
+The following context variables are available inside `when` expressions:
 
 ### `env` — Environment variables
 
@@ -93,6 +93,58 @@ rules:
 ```
 
 The `paths` variable is most useful for checking properties of the defined path list itself (e.g., its size), since the `<path:sensitive>` pattern already handles matching individual files against the list.
+
+### `redirects` — Redirect operators
+
+A list of redirect operators attached to the command. Each element is an object with the following fields:
+
+| Field        | Type            | Description                          | Example                                                                 |
+| ------------ | --------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `type`       | `string`        | `"input"`, `"output"`, or `"dup"`    | `"output"`                                                              |
+| `operator`   | `string`        | The redirect operator                | `">"`, `">>"`, `"<"`, `"<<<"`, `">&"`, `"<&"`, `"&>"`, `"&>>"`, `">\|"` |
+| `target`     | `string`        | The redirect destination             | `"/tmp/log.txt"`, `"/dev/null"`                                         |
+| `descriptor` | `int` or `null` | File descriptor number, if specified | `2` (for `2>`)                                                          |
+
+Type classification:
+
+- `"output"`: `>`, `>>`, `>|`, `&>`, `&>>`
+- `"input"`: `<`, `<<<`, `<<`, `<<-`
+- `"dup"`: `>&`, `<&`
+
+```yaml
+# Require output redirect for renovate-dryrun
+- deny: 'renovate-dryrun'
+  when: '!redirects.exists(r, r.type == "output")'
+  message: 'Please redirect output to a log file'
+  fix_suggestion: 'renovate-dryrun > /tmp/renovate-dryrun.log 2>&1'
+
+# Only allow output redirect to /tmp/
+- allow: 'renovate-dryrun'
+  when: 'redirects.exists(r, r.type == "output" && r.target.startsWith("/tmp/"))'
+```
+
+:::note
+The `redirects` list is empty when the command has no redirects attached. Both single commands (e.g., `renovate-dryrun > /tmp/log.txt`) and compound commands (e.g., `cmd > file && cmd2`) populate redirect metadata correctly.
+:::
+
+### `pipe` — Pipeline position
+
+An object indicating whether the command receives piped input or sends piped output:
+
+| Field    | Type   | Description                                                |
+| -------- | ------ | ---------------------------------------------------------- |
+| `stdin`  | `bool` | `true` if the command receives input from a preceding pipe |
+| `stdout` | `bool` | `true` if the command's output feeds into a following pipe |
+
+Both fields are `false` when the command is not part of a pipeline.
+
+```yaml
+# Block piped execution of sh/bash (e.g., curl | sh)
+- deny: 'sh'
+  when: 'pipe.stdin'
+- deny: 'bash'
+  when: 'pipe.stdin'
+```
 
 ### `vars` -- Captured variable values
 
@@ -167,10 +219,12 @@ CEL supports standard operators for building conditions:
 
 ### Collection
 
-| Expression      | Description                     |
-| --------------- | ------------------------------- |
-| `value in list` | Check if value exists in a list |
-| `size(list)`    | Get the length of a list or map |
+| Expression           | Description                                      |
+| -------------------- | ------------------------------------------------ |
+| `value in list`      | Check if value exists in a list                  |
+| `size(list)`         | Get the length of a list or map                  |
+| `x.exists(e, p)`     | Check if any element satisfies predicate         |
+| `x.exists_one(e, p)` | Check if exactly one element satisfies predicate |
 
 ## Evaluation order
 
@@ -223,6 +277,32 @@ rules:
   # Deny destructive HTTP methods to production APIs
   - deny: 'curl -X|--request * *'
     when: "flags.request == 'POST' && args[0].startsWith('https://prod.')"
+```
+
+### Redirect-based gating
+
+```yaml
+rules:
+  # Require output redirect for commands that produce large output
+  - deny: 'renovate-dryrun'
+    when: '!redirects.exists(r, r.type == "output")'
+    message: 'Please redirect output to a log file'
+    fix_suggestion: 'renovate-dryrun > /tmp/renovate-dryrun.log 2>&1'
+
+  # Allow with output redirect to /tmp/
+  - allow: 'renovate-dryrun'
+    when: 'redirects.exists(r, r.type == "output" && r.target.startsWith("/tmp/"))'
+```
+
+### Pipe safety
+
+```yaml
+rules:
+  # Block curl-pipe-sh attacks
+  - deny: 'sh'
+    when: 'pipe.stdin'
+  - deny: 'bash'
+    when: 'pipe.stdin'
 ```
 
 ## Related
