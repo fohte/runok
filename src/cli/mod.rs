@@ -149,7 +149,7 @@ pub struct AuditArgs {
 
     /// Filter by working directory (includes subdirectories)
     #[arg(long)]
-    pub cwd: Option<String>,
+    pub dir: Option<String>,
 
     /// Maximum number of entries to show
     #[arg(long, default_value_t = 50)]
@@ -214,23 +214,23 @@ mod tests {
     )]
     #[case::audit_default(
         &["runok", "audit"],
-        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, cwd: None, limit: 50, json: false }),
+        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, dir: None, limit: 50, json: false }),
     )]
     #[case::audit_with_action(
         &["runok", "audit", "--action", "deny"],
-        Commands::Audit(AuditArgs { action: Some("deny".into()), since: None, until: None, command: None, cwd: None, limit: 50, json: false }),
+        Commands::Audit(AuditArgs { action: Some("deny".into()), since: None, until: None, command: None, dir: None, limit: 50, json: false }),
     )]
     #[case::audit_with_since(
         &["runok", "audit", "--since", "1h"],
-        Commands::Audit(AuditArgs { action: None, since: Some("1h".into()), until: None, command: None, cwd: None, limit: 50, json: false }),
+        Commands::Audit(AuditArgs { action: None, since: Some("1h".into()), until: None, command: None, dir: None, limit: 50, json: false }),
     )]
-    #[case::audit_with_cwd(
-        &["runok", "audit", "--cwd", "/home/user/project"],
-        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, cwd: Some("/home/user/project".into()), limit: 50, json: false }),
+    #[case::audit_with_dir(
+        &["runok", "audit", "--dir", "/home/user/project"],
+        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, dir: Some("/home/user/project".into()), limit: 50, json: false }),
     )]
     #[case::audit_with_all_options(
         &["runok", "audit", "--action", "allow", "--since", "7d", "--until", "1h", "--command", "git", "--limit", "10", "--json"],
-        Commands::Audit(AuditArgs { action: Some("allow".into()), since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), cwd: None, limit: 10, json: true }),
+        Commands::Audit(AuditArgs { action: Some("allow".into()), since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), dir: None, limit: 10, json: true }),
     )]
     #[case::init_defaults(
         &["runok", "init"],
