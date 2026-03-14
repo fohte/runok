@@ -1249,3 +1249,52 @@ fn flag_equals_value_with_wildcard_pattern(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Fused short flag value matching (e.g. `-n3` for `-n *`)
+// ========================================
+
+#[rstest]
+#[case::fused_short_flag_matches(
+    "git tag -n3 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::space_separated_still_works(
+    "git tag -n 3 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::fused_multichar_value(
+    "git tag -n100 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_flag_absent_still_matches(
+    "git tag v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::fused_in_optional_group(
+    "git log -n5",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_absent(
+    "git log",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_space_separated(
+    "git log -n 10",
+    assert_allow as ActionAssertion,
+)]
+fn fused_short_flag_value(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git tag [-n *] *'
+          - allow: 'git log [-n *]'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
