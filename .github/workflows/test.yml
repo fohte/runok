@@ -95,6 +95,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # Allow unprivileged user namespaces for bubblewrap on Ubuntu 24.04+
       # where AppArmor restricts them by default

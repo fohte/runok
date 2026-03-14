@@ -10,10 +10,12 @@ use super::{Config, ConfigError, PresetError, parse_config};
 pub enum PresetReference {
     /// Local file path (relative, absolute, or `~/`-prefixed).
     Local(PathBuf),
-    /// GitHub shorthand (`github:owner/repo[@version]`).
+    /// GitHub shorthand (`github:owner/repo[/path][@version]`).
     GitHub {
         owner: String,
         repo: String,
+        /// Optional path within the repository to a preset file (without extension).
+        path: Option<String>,
         version: GitHubVersion,
     },
     /// Generic git URL (HTTPS or SSH), optionally with a ref.
@@ -38,11 +40,6 @@ impl GitHubVersion {
     /// Whether this is an immutable reference (only commit SHA).
     pub fn is_immutable(&self) -> bool {
         matches!(self, Self::CommitSha(_))
-    }
-
-    /// Whether this is a mutable reference that should trigger a warning.
-    pub fn is_mutable(&self) -> bool {
-        !self.is_immutable()
     }
 
     /// Convert to a git ref string for `--branch` or `checkout`.
@@ -79,22 +76,43 @@ pub fn parse_preset_reference(reference: &str) -> Result<PresetReference, Preset
     }
 }
 
-/// Parse `owner/repo[@version]` from a GitHub shorthand.
+/// Parse `owner/repo[/path][@version]` from a GitHub shorthand.
+///
+/// The path portion starts after `owner/repo/` and extends until `@` or end of string.
+/// GitHub repository names cannot contain `/`, so there is no ambiguity.
 fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
     let (path_part, version_part) = match rest.split_once('@') {
         Some((path, version)) => (path, Some(version)),
         None => (rest, None),
     };
 
-    let (owner, repo) = path_part.split_once('/').ok_or_else(|| {
+    let (owner, after_owner) = path_part.split_once('/').ok_or_else(|| {
         PresetError::InvalidReference(format!(
             "invalid GitHub shorthand: expected 'github:owner/repo', got 'github:{rest}'"
         ))
     })?;
 
+    // Split repo from optional path: "repo/path/to/preset" → ("repo", Some("path/to/preset"))
+    let (repo, preset_path) = match after_owner.split_once('/') {
+        Some((repo, path)) => (repo, Some(path)),
+        None => (after_owner, None),
+    };
+
     if owner.is_empty() || repo.is_empty() {
         return Err(PresetError::InvalidReference(format!(
             "invalid GitHub shorthand: owner and repo must not be empty in 'github:{rest}'"
+        )));
+    }
+
+    // Validate path: must not be empty, must not contain traversal sequences or absolute paths
+    if let Some(p) = preset_path
+        && (p.is_empty()
+            || p.starts_with('/')
+            || p.split('/')
+                .any(|seg| seg.is_empty() || seg == ".." || seg == "."))
+    {
+        return Err(PresetError::InvalidReference(format!(
+            "invalid GitHub shorthand: invalid path in 'github:{rest}'"
         )));
     }
 
@@ -112,6 +130,7 @@ fn parse_github_shorthand(rest: &str) -> Result<PresetReference, PresetError> {
     Ok(PresetReference::GitHub {
         owner: owner.to_string(),
         repo: repo.to_string(),
+        path: preset_path.map(String::from),
         version,
     })
 }
@@ -197,18 +216,19 @@ fn parse_git_url(reference: &str) -> Result<PresetReference, PresetError> {
 }
 
 /// Resolve git parameters from a `PresetReference`.
-struct GitParams {
-    url: String,
-    git_ref: Option<String>,
-    is_immutable: bool,
+pub struct GitParams {
+    pub url: String,
+    pub git_ref: Option<String>,
+    pub is_immutable: bool,
 }
 
-fn resolve_git_params(reference: &PresetReference) -> GitParams {
+pub fn resolve_git_params(reference: &PresetReference) -> GitParams {
     match reference {
         PresetReference::GitHub {
             owner,
             repo,
             version,
+            ..
         } => {
             let url = format!("https://github.com/{owner}/{repo}.git");
             let git_ref = version.as_git_ref().map(String::from);
@@ -238,40 +258,46 @@ fn resolve_git_params(reference: &PresetReference) -> GitParams {
     }
 }
 
-/// Emit a warning to stderr if the reference is mutable.
-fn emit_mutable_warning(reference: &PresetReference, original: &str) {
-    let is_mutable = match reference {
-        PresetReference::GitHub { version, .. } => version.is_mutable(),
-        PresetReference::GitUrl { git_ref, .. } => {
-            git_ref.as_deref().is_none_or(|r| !is_commit_sha(r))
-        }
-        PresetReference::Local(_) => false,
+/// Resolve the preset file path within a directory.
+///
+/// When `preset_path` is `None`, looks for `runok.yml` (or `runok.yaml`) from the root.
+/// When `preset_path` is `Some("foo/bar")`, looks for `foo/bar.yml` (or `foo/bar.yaml`).
+pub fn resolve_preset_file_path(
+    dir: &Path,
+    preset_path: Option<&str>,
+) -> Result<PathBuf, ConfigError> {
+    let (yml, yaml, not_found_msg) = match preset_path {
+        Some(p) => (
+            dir.join(format!("{p}.yml")),
+            dir.join(format!("{p}.yaml")),
+            format!("preset file '{p}.yml' (or '{p}.yaml') not found in preset repository"),
+        ),
+        None => (
+            dir.join("runok.yml"),
+            dir.join("runok.yaml"),
+            "runok.yml not found in preset repository".to_string(),
+        ),
     };
-    if is_mutable {
-        eprintln!(
-            "warning: Mutable preset reference '{original}'\n  \
-             Consider pinning to a commit SHA for reproducibility"
-        );
+
+    if yml.exists() {
+        Ok(yml)
+    } else if yaml.exists() {
+        Ok(yaml)
+    } else {
+        Err(PresetError::GitClone {
+            reference: dir.display().to_string(),
+            message: not_found_msg,
+        }
+        .into())
     }
 }
 
-/// Read `runok.yml` (or `runok.yaml`) from a directory and parse it as `Config`.
-fn read_preset_from_dir(dir: &Path) -> Result<Config, ConfigError> {
-    let yml = dir.join("runok.yml");
-    let yaml = dir.join("runok.yaml");
-
-    let path = if yml.exists() {
-        yml
-    } else if yaml.exists() {
-        yaml
-    } else {
-        return Err(PresetError::GitClone {
-            reference: dir.display().to_string(),
-            message: "runok.yml not found in preset repository".to_string(),
-        }
-        .into());
-    };
-
+/// Read a preset config file from a directory.
+///
+/// When `preset_path` is `None`, reads `runok.yml` (or `runok.yaml`) from the root.
+/// When `preset_path` is `Some("foo/bar")`, reads `foo/bar.yml` (or `foo/bar.yaml`).
+pub fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config, ConfigError> {
+    let path = resolve_preset_file_path(dir, preset_path)?;
     let content = std::fs::read_to_string(&path)?;
     let config = parse_config(&content)?;
     Ok(config)
@@ -297,6 +323,14 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+/// Extract the preset path from a reference (only GitHub shorthand supports this).
+pub fn preset_path_from_reference(reference: &PresetReference) -> Option<&str> {
+    match reference {
+        PresetReference::GitHub { path, .. } => path.as_deref(),
+        _ => None,
+    }
+}
+
 /// Load a remote preset (GitHub shorthand or git URL) with caching.
 ///
 /// Flow:
@@ -310,17 +344,37 @@ pub fn load_remote_preset<G: GitClient>(
     git_client: &G,
     cache: &PresetCache,
 ) -> Result<Config, ConfigError> {
-    emit_mutable_warning(reference, original_reference);
-
     let params = resolve_git_params(reference);
     let cache_dir = cache.cache_dir(original_reference);
+    let preset_path = preset_path_from_reference(reference);
 
     match cache.check(original_reference, params.is_immutable) {
-        CacheStatus::Hit(dir) => read_preset_from_dir(&dir),
-        CacheStatus::Stale(dir) => {
-            handle_stale_cache(git_client, &dir, &params, original_reference)
+        // Cache hits read without locking. A concurrent checkout could cause
+        // a parse error, but not silent corruption — acceptable trade-off to
+        // avoid lock contention on the common path.
+        CacheStatus::Hit(dir) => read_preset_from_dir(&dir, preset_path),
+        CacheStatus::Stale(_) | CacheStatus::Miss => {
+            // Acquire an exclusive lock to prevent concurrent git operations
+            // on the same cache directory.
+            let _lock = cache.acquire_lock(original_reference)?;
+
+            // Re-check cache status after acquiring the lock, because another
+            // process may have updated it while we were waiting.
+            match cache.check(original_reference, params.is_immutable) {
+                CacheStatus::Hit(dir) => read_preset_from_dir(&dir, preset_path),
+                CacheStatus::Stale(dir) => {
+                    handle_stale_cache(git_client, &dir, &params, original_reference, preset_path)
+                }
+                CacheStatus::Miss => handle_cache_miss(
+                    git_client,
+                    &cache_dir,
+                    &params,
+                    original_reference,
+                    preset_path,
+                ),
+            }
+            // _lock is dropped here, releasing the file lock
         }
-        CacheStatus::Miss => handle_cache_miss(git_client, &cache_dir, &params, original_reference),
     }
 }
 
@@ -329,6 +383,7 @@ fn handle_stale_cache<G: GitClient>(
     dir: &Path,
     params: &GitParams,
     original_reference: &str,
+    preset_path: Option<&str>,
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
@@ -342,7 +397,7 @@ fn handle_stale_cache<G: GitClient>(
                     "warning: checkout failed for '{original_reference}': {e}, \
                      using cached version"
                 );
-                return read_preset_from_dir(dir);
+                return read_preset_from_dir(dir, preset_path);
             }
 
             // Update metadata only after successful fetch + checkout
@@ -355,14 +410,14 @@ fn handle_stale_cache<G: GitClient>(
             };
             let _ = PresetCache::write_metadata(dir, &metadata);
 
-            read_preset_from_dir(dir)
+            read_preset_from_dir(dir, preset_path)
         }
         Err(_) => {
             // Fetch failed: use stale cache with a warning
             eprintln!(
                 "warning: Failed to update preset '{original_reference}', using cached version"
             );
-            read_preset_from_dir(dir)
+            read_preset_from_dir(dir, preset_path)
         }
     }
 }
@@ -372,6 +427,7 @@ fn handle_cache_miss<G: GitClient>(
     cache_dir: &Path,
     params: &GitParams,
     original_reference: &str,
+    preset_path: Option<&str>,
 ) -> Result<Config, ConfigError> {
     // Create parent directory only; let git clone create the target directory itself.
     // Creating cache_dir first would cause `git clone` to fail with
@@ -418,7 +474,7 @@ fn handle_cache_miss<G: GitClient>(
     };
     let _ = PresetCache::write_metadata(cache_dir, &metadata);
 
-    read_preset_from_dir(cache_dir)
+    read_preset_from_dir(cache_dir, preset_path)
 }
 
 #[cfg(test)]
@@ -437,6 +493,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Latest,
         }
     )]
@@ -445,6 +502,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Tag("v1.0.0".into()),
         }
     )]
@@ -453,6 +511,7 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::CommitSha(
                 "abc1234def567890abc1234def567890abc12345".into()
             ),
@@ -463,7 +522,37 @@ mod tests {
         PresetReference::GitHub {
             owner: "org".into(),
             repo: "repo".into(),
+            path: None,
             version: GitHubVersion::Tag("main".into()),
+        }
+    )]
+    #[case::github_with_path(
+        "github:org/repo/presets/readonly",
+        PresetReference::GitHub {
+            owner: "org".into(),
+            repo: "repo".into(),
+            path: Some("presets/readonly".into()),
+            version: GitHubVersion::Latest,
+        }
+    )]
+    #[case::github_with_path_and_tag(
+        "github:fohte/runok-presets/readonly-unix@v1",
+        PresetReference::GitHub {
+            owner: "fohte".into(),
+            repo: "runok-presets".into(),
+            path: Some("readonly-unix".into()),
+            version: GitHubVersion::Tag("v1".into()),
+        }
+    )]
+    #[case::github_with_nested_path_and_sha(
+        "github:org/repo/path/to/preset@abc1234def567890abc1234def567890abc12345",
+        PresetReference::GitHub {
+            owner: "org".into(),
+            repo: "repo".into(),
+            path: Some("path/to/preset".into()),
+            version: GitHubVersion::CommitSha(
+                "abc1234def567890abc1234def567890abc12345".into()
+            ),
         }
     )]
     #[case::https_url_no_ref(
@@ -537,6 +626,12 @@ mod tests {
     #[case::empty_owner("github:/repo", "owner and repo must not be empty")]
     #[case::empty_repo("github:org/", "owner and repo must not be empty")]
     #[case::empty_version("github:org/repo@", "version must not be empty")]
+    #[case::empty_path_with_version("github:org/repo/@v1", "invalid path")]
+    #[case::path_traversal("github:org/repo/../../etc/passwd@v1", "invalid path")]
+    #[case::path_traversal_no_ref("github:org/repo/../secret", "invalid path")]
+    #[case::absolute_path("github:org/repo//etc/passwd@v1", "invalid path")]
+    #[case::dot_segment("github:org/repo/./foo@v1", "invalid path")]
+    #[case::trailing_slash("github:org/repo/foo/bar/@v1", "invalid path")]
     fn parse_reference_errors(#[case] input: &str, #[case] expected_msg: &str) {
         let err = parse_preset_reference(input).unwrap_err();
         assert!(
@@ -559,19 +654,6 @@ mod tests {
         assert_eq!(is_commit_sha(input), expected);
     }
 
-    // === GitHubVersion mutability ===
-
-    #[rstest]
-    #[case::sha_immutable(
-        GitHubVersion::CommitSha("abc1234def567890abc1234def567890abc12345".into()),
-        false
-    )]
-    #[case::tag_mutable(GitHubVersion::Tag("v1.0.0".into()), true)]
-    #[case::latest_mutable(GitHubVersion::Latest, true)]
-    fn version_mutability(#[case] version: GitHubVersion, #[case] expected_mutable: bool) {
-        assert_eq!(version.is_mutable(), expected_mutable);
-    }
-
     // === GitHub shorthand → git URL conversion ===
 
     #[rstest]
@@ -581,6 +663,7 @@ mod tests {
         let reference = PresetReference::GitHub {
             owner: owner.to_string(),
             repo: repo.to_string(),
+            path: None,
             version: GitHubVersion::Latest,
         };
         let params = resolve_git_params(&reference);
@@ -588,6 +671,24 @@ mod tests {
     }
 
     // === load_remote_preset tests ===
+
+    /// Bundles a `TempDir` with a `PresetCache` so the temporary directory
+    /// lives as long as the cache (preventing premature cleanup).
+    struct CacheFixture {
+        cache: PresetCache,
+        // Held to keep the temporary directory alive for the test's lifetime.
+        _tmp: TempDir,
+    }
+
+    #[fixture]
+    fn cache_fixture() -> CacheFixture {
+        let tmp = TempDir::new().unwrap();
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        CacheFixture { cache, _tmp: tmp }
+    }
 
     #[fixture]
     fn tmp() -> TempDir {
@@ -600,11 +701,8 @@ mod tests {
     }
 
     #[rstest]
-    fn clone_miss_calls_clone_with_branch(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn clone_miss_calls_clone_with_branch(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -614,7 +712,7 @@ mod tests {
 
         // Mock clone doesn't create files, so read_preset_from_dir will fail.
         // We verify clone was called with correct --branch.
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_with_branch = calls.iter().any(|c| {
@@ -633,7 +731,7 @@ mod tests {
             "},
         );
 
-        let config = read_preset_from_dir(tmp.path()).unwrap();
+        let config = read_preset_from_dir(tmp.path(), None).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("git status"));
     }
@@ -649,17 +747,62 @@ mod tests {
         )
         .unwrap();
 
-        let config = read_preset_from_dir(tmp.path()).unwrap();
+        let config = read_preset_from_dir(tmp.path(), None).unwrap();
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
     }
 
     #[rstest]
-    fn cache_hit_skips_clone(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
+    #[case::yml("presets/readonly.yml", "presets/readonly", "allow", "cat *")]
+    #[case::yaml("my-preset.yaml", "my-preset", "deny", "rm *")]
+    fn read_preset_from_dir_with_path(
+        tmp: TempDir,
+        #[case] file_path: &str,
+        #[case] preset_path: &str,
+        #[case] rule_kind: &str,
+        #[case] rule_value: &str,
+    ) {
+        let full_path = tmp.path().join(file_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let yaml = format!(
+            indoc! {"
+                rules:
+                  - {kind}: '{value}'
+            "},
+            kind = rule_kind,
+            value = rule_value,
         );
+        std::fs::write(&full_path, yaml).unwrap();
+
+        let config = read_preset_from_dir(tmp.path(), Some(preset_path)).unwrap();
+        let rules = config.rules.unwrap();
+        let actual = match rule_kind {
+            "allow" => rules[0].allow.as_deref(),
+            "deny" => rules[0].deny.as_deref(),
+            _ => panic!("unexpected rule kind: {rule_kind}"),
+        };
+        assert_eq!(actual, Some(rule_value));
+    }
+
+    #[rstest]
+    fn read_preset_from_dir_with_path_not_found(tmp: TempDir) {
+        let err = read_preset_from_dir(tmp.path(), Some("nonexistent")).unwrap_err();
+        match err {
+            ConfigError::Preset(PresetError::GitClone { message, .. }) => {
+                assert_eq!(
+                    message,
+                    "preset file 'nonexistent.yml' (or 'nonexistent.yaml') not found in preset repository"
+                );
+            }
+            other => panic!("expected GitClone error, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn cache_hit_skips_clone(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -683,7 +826,7 @@ mod tests {
         let mock = MockGitClient::new();
         // No clone/fetch results queued — should not be called
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].deny.as_deref(), Some("rm -rf /"));
@@ -693,11 +836,8 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_cache_fetch_success(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_fetch_success(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -723,18 +863,15 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
     }
 
     #[rstest]
-    fn stale_cache_fetch_failure_uses_old_cache(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_fetch_failure_uses_old_cache(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -761,18 +898,15 @@ mod tests {
             message: "network error".to_string(),
         }));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("old cached rule"));
     }
 
     #[rstest]
-    fn clone_failure_no_cache_returns_error(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn clone_failure_no_cache_returns_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
 
@@ -782,7 +916,7 @@ mod tests {
             message: "authentication failed".to_string(),
         }));
 
-        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { reference, .. }) => {
@@ -793,11 +927,8 @@ mod tests {
     }
 
     #[rstest]
-    fn commit_sha_triggers_fetch_and_checkout_after_clone(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn commit_sha_triggers_fetch_and_checkout_after_clone(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let sha = "abc1234def567890abc1234def567890abc12345";
         let reference_str = &format!("github:org/repo@{sha}");
         let parsed = parse_preset_reference(reference_str).unwrap();
@@ -809,7 +940,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -836,11 +967,8 @@ mod tests {
     }
 
     #[rstest]
-    fn git_url_commit_sha_fetches_then_checkouts(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn git_url_commit_sha_fetches_then_checkouts(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let sha = "abc1234def567890abc1234def567890abc12345";
         let reference_str = &format!("https://github.com/org/repo.git@{sha}");
         let parsed = parse_preset_reference(reference_str).unwrap();
@@ -851,7 +979,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok(sha.to_string()));
 
-        let _result = load_remote_preset(&parsed, reference_str, &mock, &cache);
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
         let calls = mock.calls.borrow();
         let has_clone_without_branch = calls.iter().any(|c| {
@@ -872,11 +1000,8 @@ mod tests {
     }
 
     #[rstest]
-    fn stale_cache_latest_checkouts_fetch_head(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn stale_cache_latest_checkouts_fetch_head(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo";
         let parsed = parse_preset_reference(reference_str).unwrap();
         let cache_dir = cache.cache_dir(reference_str);
@@ -902,7 +1027,7 @@ mod tests {
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
 
-        let config = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
         let rules = config.rules.unwrap();
         assert_eq!(rules[0].allow.as_deref(), Some("cargo test"));
@@ -919,23 +1044,323 @@ mod tests {
     }
 
     #[rstest]
-    fn missing_runok_yml_returns_error(tmp: TempDir) {
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
+    fn lock_acquired_for_cache_miss(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
         let reference_str = "github:org/repo@v1.0.0";
         let parsed = parse_preset_reference(reference_str).unwrap();
-        let cache_dir = cache.cache_dir(reference_str);
 
         let mock = MockGitClient::new();
         mock.on_clone(Ok(()));
         mock.on_rev_parse(Ok("abc123".to_string()));
 
-        // Create cache dir but no runok.yml
-        std::fs::create_dir_all(&cache_dir).unwrap();
+        // Cache miss triggers clone (which won't create runok.yml, so it errors).
+        // The important thing: the lock file should exist after the call.
+        let _result = load_remote_preset(&parsed, reference_str, &mock, cache);
 
-        let err = load_remote_preset(&parsed, reference_str, &mock, &cache).unwrap_err();
+        let lock_path = cache.lock_path(reference_str);
+        assert!(lock_path.exists(), "lock file should be created");
+    }
+
+    #[rstest]
+    fn lock_acquired_for_stale_cache(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a stale cache (fetched_at = 0)
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'cargo test'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("def456".to_string()));
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let lock_path = cache.lock_path(reference_str);
+        assert!(lock_path.exists(), "lock file should be created");
+    }
+
+    #[rstest]
+    fn cache_hit_skips_lock(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a fresh cache
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let lock_path = cache.lock_path(reference_str);
+        assert!(
+            !lock_path.exists(),
+            "lock file should not be created for cache hit"
+        );
+    }
+
+    // === Path-based remote preset tests ===
+
+    fn write_preset_file(dir: &Path, path: &str, content: &str) {
+        let full_path = dir.join(format!("{path}.yml"));
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full_path, content).unwrap();
+    }
+
+    #[rstest]
+    fn path_based_preset_loads_correct_file(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Simulate a cloned repo with path-based preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'cat *'
+                  - allow: 'ls *'
+            "},
+        );
+        // Also write runok.yml to verify it is NOT loaded
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - deny: 'rm -rf /'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        // Should load readonly-unix.yml, not runok.yml
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("cat *"));
+        assert_eq!(rules[1].allow.as_deref(), Some("ls *"));
+    }
+
+    #[rstest]
+    fn path_based_preset_with_version(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-git@v2.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-git",
+            indoc! {"
+                rules:
+                  - allow: 'git status *'
+                  - allow: 'git log *'
+                  - allow: 'git diff *'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].allow.as_deref(), Some("git status *"));
+    }
+
+    #[rstest]
+    fn multiple_path_presets_from_same_repo(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+
+        // First preset: readonly-unix
+        let ref1 = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed1 = parse_preset_reference(ref1).unwrap();
+        let cache_dir1 = cache.cache_dir(ref1);
+        std::fs::create_dir_all(&cache_dir1).unwrap();
+        write_preset_file(
+            &cache_dir1,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'cat *'
+            "},
+        );
+        let metadata1 = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: ref1.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir1, &metadata1).unwrap();
+
+        // Second preset: readonly-git
+        let ref2 = "github:fohte/runok-presets/readonly-git@v1";
+        let parsed2 = parse_preset_reference(ref2).unwrap();
+        let cache_dir2 = cache.cache_dir(ref2);
+        std::fs::create_dir_all(&cache_dir2).unwrap();
+        write_preset_file(
+            &cache_dir2,
+            "readonly-git",
+            indoc! {"
+                rules:
+                  - allow: 'git status *'
+            "},
+        );
+        let metadata2 = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: ref2.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir2, &metadata2).unwrap();
+
+        let mock = MockGitClient::new();
+        let config1 = load_remote_preset(&parsed1, ref1, &mock, cache).unwrap();
+        let config2 = load_remote_preset(&parsed2, ref2, &mock, cache).unwrap();
+        let merged = config1.merge(config2);
+
+        let rules = merged.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("cat *"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status *"));
+    }
+
+    #[rstest]
+    fn nonexistent_path_preset_returns_descriptive_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/nonexistent@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Create cache dir but without the expected preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
+
+        match err {
+            ConfigError::Preset(PresetError::GitClone { message, .. }) => {
+                assert_eq!(
+                    message,
+                    "preset file 'nonexistent.yml' (or 'nonexistent.yaml') not found in preset repository"
+                );
+            }
+            other => panic!("expected GitClone error, got: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn path_based_preset_stale_cache_fetches_then_reads_path(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:fohte/runok-presets/readonly-unix@v1";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Create a stale cache with the preset file
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        write_preset_file(
+            &cache_dir,
+            "readonly-unix",
+            indoc! {"
+                rules:
+                  - allow: 'head *'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("abc123".to_string()));
+
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        // Verify fetch was called (stale cache update)
+        let calls = mock.calls.borrow();
+        let has_fetch = calls
+            .iter()
+            .any(|c| matches!(c, crate::config::git_client::mock::GitCall::Fetch));
+        assert!(has_fetch, "expected fetch for stale cache");
+
+        // Verify the path-based file was loaded
+        let rules = config.rules.unwrap();
+        assert_eq!(rules[0].allow.as_deref(), Some("head *"));
+    }
+
+    #[rstest]
+    fn missing_runok_yml_returns_error(cache_fixture: CacheFixture) {
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+
+        let mock = MockGitClient::new();
+        // Cache miss path: clone succeeds but no runok.yml in the cloned dir
+        mock.on_clone(Ok(()));
+        mock.on_rev_parse(Ok("abc123".to_string()));
+
+        let err = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap_err();
 
         match err {
             ConfigError::Preset(PresetError::GitClone { message, .. }) => {

@@ -3,13 +3,14 @@ use std::collections::{HashMap, HashSet};
 #[cfg(any(feature = "config-schema", test))]
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::de::Deserializer;
 
 /// Top-level runok configuration.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Config {
     /// List of configuration files to inherit from. Supports local paths and
-    /// remote Git repositories (`github:<owner>/<repo>@<ref>`).
+    /// remote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).
     pub extends: Option<Vec<String>>,
     /// Default settings applied when no rule matches.
     pub defaults: Option<Defaults>,
@@ -17,6 +18,10 @@ pub struct Config {
     pub rules: Option<Vec<RuleEntry>>,
     /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
     pub definitions: Option<Definitions>,
+    /// Audit log settings.
+    pub audit: Option<AuditConfig>,
+    /// Test section for rule verification.
+    pub tests: Option<TestSection>,
 }
 
 /// Default settings applied when no rule matches a command.
@@ -59,6 +64,8 @@ pub struct RuleEntry {
     pub fix_suggestion: Option<String>,
     /// Sandbox preset name to apply when this rule matches (not allowed for deny rules).
     pub sandbox: Option<String>,
+    /// Inline test cases for this rule.
+    pub tests: Option<Vec<InlineTestEntry>>,
 }
 
 impl RuleEntry {
@@ -74,6 +81,31 @@ impl RuleEntry {
     }
 }
 
+/// A test case entry used in both inline rule tests and top-level test cases.
+/// Exactly one of `allow`, `ask`, or `deny` must be set. The key determines
+/// the expected decision, the value is the command to evaluate.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[cfg_attr(any(feature = "config-schema", test), schemars(transform = inline_test_entry_one_of_transform))]
+pub struct InlineTestEntry {
+    /// Command expected to be allowed.
+    pub allow: Option<String>,
+    /// Command expected to trigger an ask prompt.
+    pub ask: Option<String>,
+    /// Command expected to be denied.
+    pub deny: Option<String>,
+}
+
+/// Top-level test section for cross-rule tests and test-only extends.
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct TestSection {
+    /// Additional config files to merge only during test execution.
+    pub extends: Option<Vec<String>>,
+    /// Test cases to evaluate.
+    pub cases: Option<Vec<InlineTestEntry>>,
+}
+
 /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
@@ -86,6 +118,140 @@ pub struct Definitions {
     pub wrappers: Option<Vec<String>>,
     /// Additional command patterns to recognize.
     pub commands: Option<Vec<String>>,
+    /// Typed variable definitions referenced by `<var:name>` in rule patterns.
+    pub vars: Option<HashMap<String, VarDefinition>>,
+}
+
+/// Type of a variable definition, controlling how values are matched.
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum VarType {
+    /// Exact string match (default).
+    #[default]
+    Literal,
+    /// Path match: canonicalize both sides before comparison,
+    /// falling back to `normalize_path` when the file does not exist.
+    Path,
+}
+
+/// A single value in a variable definition, optionally carrying its own type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarValue {
+    /// A plain string that inherits the definition-level type.
+    Plain(String),
+    /// A value with an explicit per-value type override.
+    Typed { var_type: VarType, value: String },
+}
+
+impl VarValue {
+    /// Return the string value.
+    pub fn value(&self) -> &str {
+        match self {
+            VarValue::Plain(s) => s,
+            VarValue::Typed { value, .. } => value,
+        }
+    }
+
+    /// Return the effective type, falling back to the given definition-level type.
+    pub fn effective_type(&self, definition_type: VarType) -> VarType {
+        match self {
+            VarValue::Plain(_) => definition_type,
+            VarValue::Typed { var_type, .. } => *var_type,
+        }
+    }
+}
+
+#[cfg(any(feature = "config-schema", test))]
+impl JsonSchema for VarValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "VarValue".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use schemars::json_schema;
+
+        // A VarValue is either a plain string or a { type, value } mapping.
+        json_schema!({
+            "description": "A variable value: either a plain string (inherits definition-level type) \
+                or an object with explicit `type` and `value` fields.",
+            "oneOf": [
+                { "type": "string" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": generator.subschema_for::<VarType>(),
+                        "value": { "type": "string" }
+                    },
+                    "required": ["type", "value"],
+                    "additionalProperties": false
+                }
+            ]
+        })
+    }
+}
+
+impl From<&str> for VarValue {
+    fn from(s: &str) -> Self {
+        VarValue::Plain(s.to_string())
+    }
+}
+
+impl From<String> for VarValue {
+    fn from(s: String) -> Self {
+        VarValue::Plain(s)
+    }
+}
+
+impl PartialEq<&str> for VarValue {
+    fn eq(&self, other: &&str) -> bool {
+        match self {
+            VarValue::Plain(s) => s == *other,
+            VarValue::Typed { value, .. } => value == *other,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VarValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        /// Helper struct for deserializing `{ type: ..., value: ... }` form.
+        #[derive(Deserialize)]
+        struct TypedForm {
+            #[serde(rename = "type")]
+            var_type: VarType,
+            value: String,
+        }
+
+        /// Internal untagged enum to handle both string and mapping forms.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawVarValue {
+            Plain(String),
+            Typed(TypedForm),
+        }
+
+        match RawVarValue::deserialize(deserializer)? {
+            RawVarValue::Plain(s) => Ok(VarValue::Plain(s)),
+            RawVarValue::Typed(t) => Ok(VarValue::Typed {
+                var_type: t.var_type,
+                value: t.value,
+            }),
+        }
+    }
+}
+
+/// A typed variable definition with a list of allowed values.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct VarDefinition {
+    /// The type of this variable (default: `literal`).
+    #[serde(default, rename = "type")]
+    pub var_type: VarType,
+    /// Allowed values for this variable.
+    pub values: Vec<VarValue>,
 }
 
 /// Sandbox preset defining filesystem and network restrictions.
@@ -268,6 +434,23 @@ impl Config {
             }
         }
 
+        // Reject <var:name> and <path:name> references inside definitions.vars values.
+        if let Some(defs) = &self.definitions
+            && let Some(vars) = &defs.vars
+        {
+            for (key, var_def) in vars {
+                for var_value in &var_def.values {
+                    let v = var_value.value();
+                    if (v.starts_with("<var:") || v.starts_with("<path:")) && v.ends_with('>') {
+                        errors.push(format!(
+                            "definitions.vars.{key}: value '{v}' contains a placeholder \
+                             reference. Variable definitions must contain concrete values, not references"
+                        ));
+                    }
+                }
+            }
+        }
+
         let rules = match &self.rules {
             Some(rules) => rules,
             None => {
@@ -328,12 +511,17 @@ impl Config {
     ///   (sandbox presets have interdependent fields like fs.writable and
     ///   fs.deny that must stay consistent; partial merging could create
     ///   contradictory constraints.)
+    /// - audit: override (local wins at merge level; loader enforces
+    ///   global-only by stripping audit from project/local layers)
+    /// - tests: override (local wins; test definitions are not merged across layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
             defaults: Self::merge_defaults(self.defaults, other.defaults),
             rules: Self::merge_vecs(self.rules, other.rules),
             definitions: Self::merge_definitions(self.definitions, other.definitions),
+            audit: Self::merge_audit(self.audit, other.audit),
+            tests: other.tests.or(self.tests),
         }
     }
 
@@ -362,6 +550,7 @@ impl Config {
                 sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
                 wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
                 commands: Self::merge_vecs(b.commands, o.commands),
+                vars: Self::merge_vars(b.vars, o.vars),
             }),
         }
     }
@@ -378,6 +567,20 @@ impl Config {
                     let existing: HashSet<String> = entry.iter().cloned().collect();
                     entry.extend(over_values.into_iter().filter(|v| !existing.contains(v)));
                 }
+                Some(b)
+            }
+            (b, o) => b.or(o),
+        }
+    }
+
+    /// Merge vars with per-key override strategy: the override wins for each key.
+    fn merge_vars(
+        base: Option<HashMap<String, VarDefinition>>,
+        over: Option<HashMap<String, VarDefinition>>,
+    ) -> Option<HashMap<String, VarDefinition>> {
+        match (base, over) {
+            (Some(mut b), Some(o)) => {
+                b.extend(o);
                 Some(b)
             }
             (b, o) => b.or(o),
@@ -404,6 +607,33 @@ impl Config {
                 Some(b)
             }
             (b, o) => b.or(o),
+        }
+    }
+
+    fn merge_audit(base: Option<AuditConfig>, over: Option<AuditConfig>) -> Option<AuditConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(AuditConfig {
+                enabled: o.enabled.or(b.enabled),
+                path: o.path.or(b.path),
+                rotation: Self::merge_rotation(b.rotation, o.rotation),
+            }),
+        }
+    }
+
+    fn merge_rotation(
+        base: Option<RotationConfig>,
+        over: Option<RotationConfig>,
+    ) -> Option<RotationConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(RotationConfig {
+                retention_days: o.retention_days.or(b.retention_days),
+            }),
         }
     }
 }
@@ -456,9 +686,9 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
         })
     };
 
-    let deny_variant = make_variant("deny", &[]);
-    let allow_variant = make_variant("allow", &["sandbox"]);
-    let ask_variant = make_variant("ask", &["sandbox"]);
+    let deny_variant = make_variant("deny", &["tests"]);
+    let allow_variant = make_variant("allow", &["sandbox", "tests"]);
+    let ask_variant = make_variant("ask", &["sandbox", "tests"]);
 
     // Replace the schema with oneOf
     let description = schema.get("description").cloned();
@@ -479,6 +709,52 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     }
 }
 
+/// Transform the generated `InlineTestEntry` schema into a `oneOf` with three variants:
+/// - `allow`: requires `allow`, forbids `ask`/`deny`
+/// - `ask`: requires `ask`, forbids `allow`/`deny`
+/// - `deny`: requires `deny`, forbids `allow`/`ask`
+#[cfg(any(feature = "config-schema", test))]
+fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) {
+    let make_variant = |action: &str| -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        let required = vec![serde_json::Value::String(action.to_string())];
+
+        if let Some(prop) = schema
+            .get("properties")
+            .and_then(|p| p.get(action))
+            .cloned()
+        {
+            properties.insert(action.to_string(), prop);
+        }
+
+        serde_json::json!({
+            "type": "object",
+            "properties": serde_json::Value::Object(properties),
+            "required": serde_json::Value::Array(required),
+            "additionalProperties": false
+        })
+    };
+
+    let allow_variant = make_variant("allow");
+    let ask_variant = make_variant("ask");
+    let deny_variant = make_variant("deny");
+
+    let description = schema.get("description").cloned();
+
+    if let Some(obj) = schema.as_object_mut() {
+        obj.clear();
+    }
+
+    schema.insert(
+        "oneOf".to_owned(),
+        serde_json::Value::Array(vec![allow_variant, ask_variant, deny_variant]),
+    );
+
+    if let Some(desc) = description {
+        schema.insert("description".to_owned(), desc);
+    }
+}
+
 /// Print the JSON Schema for the runok configuration to stdout.
 #[cfg(feature = "config-schema")]
 pub fn print_config_schema() -> Result<(), serde_json::Error> {
@@ -486,6 +762,127 @@ pub fn print_config_schema() -> Result<(), serde_json::Error> {
     let json = serde_json::to_string_pretty(&schema)?;
     println!("{json}");
     Ok(())
+}
+
+/// Audit log configuration.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct AuditConfig {
+    /// Whether audit logging is enabled (default: true).
+    pub enabled: Option<bool>,
+    /// Directory path for audit log files (default: ~/.local/share/runok/).
+    pub path: Option<String>,
+    /// Log rotation settings.
+    pub rotation: Option<RotationConfig>,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            path: None,
+            rotation: None,
+        }
+    }
+}
+
+impl AuditConfig {
+    /// Returns whether audit logging is enabled, defaulting to true.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    /// Returns the audit log directory path, defaulting to the XDG data
+    /// directory.
+    pub fn resolved_path(&self) -> String {
+        self.path.clone().unwrap_or_else(|| {
+            if let Ok(data_home) = std::env::var("XDG_DATA_HOME")
+                && !data_home.is_empty()
+            {
+                return format!("{data_home}/runok/");
+            }
+            std::env::var("HOME")
+                .map(|h| format!("{h}/.local/share/runok/"))
+                .unwrap_or_else(|_| ".local/share/runok/".to_string())
+        })
+    }
+
+    /// Returns the audit log directory as a `PathBuf`, expanding `~/` prefixes
+    /// and falling back to a safe default when `HOME` is unavailable.
+    pub fn base_dir(&self) -> std::path::PathBuf {
+        match &self.path {
+            Some(p) => {
+                // Bare "~" would resolve to $HOME itself, causing
+                // set_permissions(0o700) to restrict the home directory.
+                // Treat it the same as "~/" by appending the default subpath.
+                if p == "~" || p == "~/" {
+                    match home_dir() {
+                        Some(home) => home.join(".local/share/runok"),
+                        None => default_audit_dir(),
+                    }
+                } else if let Some(rest) = p.strip_prefix("~/") {
+                    if let Some(home) = home_dir() {
+                        home.join(rest)
+                    } else {
+                        // Using the path literally would create a directory
+                        // named `~`, which is not intended. Fall back to the
+                        // default audit directory as a safe alternative.
+                        default_audit_dir()
+                    }
+                } else {
+                    std::path::PathBuf::from(p)
+                }
+            }
+            None => default_audit_dir(),
+        }
+    }
+
+    /// Returns the rotation config, using defaults for any unset fields.
+    pub fn resolved_rotation(&self) -> RotationConfig {
+        self.rotation.clone().unwrap_or_default()
+    }
+}
+
+/// Log rotation configuration.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct RotationConfig {
+    /// Number of days to retain log files (default: 7).
+    pub retention_days: Option<u32>,
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: Some(7),
+        }
+    }
+}
+
+impl RotationConfig {
+    /// Returns the retention period in days, defaulting to 7.
+    pub fn resolved_retention_days(&self) -> u32 {
+        self.retention_days.unwrap_or(7)
+    }
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+fn default_audit_dir() -> std::path::PathBuf {
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        let data_home = std::path::PathBuf::from(data_home);
+        if !data_home.as_os_str().is_empty() {
+            return data_home.join("runok");
+        }
+    }
+    match home_dir() {
+        Some(home) => home.join(".local/share/runok"),
+        // Writing to a relative path could be surprising for the user.
+        // Fall back to a temporary directory if HOME is not set.
+        None => std::env::temp_dir().join("runok/audit"),
+    }
 }
 
 /// Parse a YAML string into a `Config`.
@@ -509,6 +906,7 @@ mod tests {
         assert_eq!(config.defaults, None);
         assert_eq!(config.rules, None);
         assert_eq!(config.definitions, None);
+        assert_eq!(config.audit, None);
     }
 
     #[test]
@@ -903,6 +1301,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -917,6 +1316,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -931,6 +1331,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -968,8 +1369,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
+            audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -988,8 +1392,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
+            audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1188,6 +1595,7 @@ mod tests {
         let mut config = Config {
             extends: None,
             defaults: None,
+            audit: None,
             rules: Some(vec![
                 // Error 1: no action set
                 RuleEntry {
@@ -1198,6 +1606,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Valid rule (should not appear in errors)
                 RuleEntry {
@@ -1208,6 +1617,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Error 2: deny with sandbox
                 RuleEntry {
@@ -1218,6 +1628,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("restricted".to_string()),
+                    tests: None,
                 },
                 // Error 3: undefined sandbox
                 RuleEntry {
@@ -1228,9 +1639,11 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("nonexistent".to_string()),
+                    tests: None,
                 },
             ]),
             definitions: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
@@ -1262,6 +1675,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1280,6 +1694,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1363,6 +1778,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1375,6 +1791,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1556,6 +1973,202 @@ mod tests {
         assert_eq!(result.extends.unwrap(), vec!["./base.yml", "./local.yml"]);
     }
 
+    // === AuditConfig ===
+
+    #[test]
+    fn audit_config_default() {
+        let config = AuditConfig::default();
+        assert_eq!(config.enabled, Some(true));
+        assert_eq!(config.path, None);
+        assert_eq!(config.rotation, None);
+    }
+
+    #[rstest]
+    #[case::enabled(Some(true), true)]
+    #[case::disabled(Some(false), false)]
+    #[case::default_when_none(None, true)]
+    fn audit_config_is_enabled(#[case] enabled: Option<bool>, #[case] expected: bool) {
+        let config = AuditConfig {
+            enabled,
+            path: None,
+            rotation: None,
+        };
+        assert_eq!(config.is_enabled(), expected);
+    }
+
+    #[test]
+    fn audit_config_resolved_path_custom() {
+        let config = AuditConfig {
+            enabled: None,
+            path: Some("/custom/path/".to_string()),
+            rotation: None,
+        };
+        assert_eq!(config.resolved_path(), "/custom/path/");
+    }
+
+    #[test]
+    fn rotation_config_default() {
+        let config = RotationConfig::default();
+        assert_eq!(config.retention_days, Some(7));
+    }
+
+    #[rstest]
+    #[case::custom(Some(30), 30)]
+    #[case::default_when_none(None, 7)]
+    fn rotation_config_resolved_retention_days(
+        #[case] retention_days: Option<u32>,
+        #[case] expected: u32,
+    ) {
+        let config = RotationConfig { retention_days };
+        assert_eq!(config.resolved_retention_days(), expected);
+    }
+
+    // === AuditConfig parsing ===
+
+    #[test]
+    fn parse_audit_full() {
+        let config = parse_config(indoc! {"
+            audit:
+              enabled: false
+              path: /tmp/audit/
+              rotation:
+                retention_days: 30
+        "})
+        .unwrap();
+        let audit = config.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/tmp/audit/"));
+        let rotation = audit.rotation.unwrap();
+        assert_eq!(rotation.retention_days, Some(30));
+    }
+
+    #[test]
+    fn parse_audit_partial() {
+        let config = parse_config(indoc! {"
+            audit:
+              enabled: true
+        "})
+        .unwrap();
+        let audit = config.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path, None);
+        assert_eq!(audit.rotation, None);
+    }
+
+    #[test]
+    fn parse_audit_absent_returns_none() {
+        let config = parse_config(indoc! {"
+            defaults:
+              action: allow
+        "})
+        .unwrap();
+        assert_eq!(config.audit, None);
+    }
+
+    // === Merge: audit ===
+
+    #[test]
+    fn merge_audit_both_none() {
+        let base = Config::default();
+        let over = Config::default();
+        let result = base.merge(over);
+        assert_eq!(result.audit, None);
+    }
+
+    #[test]
+    fn merge_audit_base_preserved() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(false),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(14),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config::default();
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
+    }
+
+    #[test]
+    fn merge_audit_override_only() {
+        let base = Config::default();
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/over/".to_string()),
+                rotation: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/over/"));
+        assert_eq!(audit.rotation, None);
+    }
+
+    #[test]
+    fn merge_audit_override_wins() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(7),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(false),
+                path: None,
+                rotation: Some(RotationConfig {
+                    retention_days: Some(30),
+                }),
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(false));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
+
+    #[test]
+    fn merge_audit_partial_override_preserves_base_fields() {
+        let base = Config {
+            audit: Some(AuditConfig {
+                enabled: Some(true),
+                path: Some("/base/".to_string()),
+                rotation: Some(RotationConfig {
+                    retention_days: Some(14),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            audit: Some(AuditConfig {
+                enabled: None,
+                path: None,
+                rotation: None,
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let audit = result.audit.unwrap();
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/base/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
+    }
+
     // === Config::validate ===
 
     #[test]
@@ -1711,6 +2324,226 @@ mod tests {
         assert_eq!(result.writable, vec!["/tmp"]);
         assert_eq!(result.deny, vec!["/etc"]);
         assert!(result.network_allowed);
+    }
+
+    // === definitions.vars ===
+
+    #[test]
+    fn parse_definitions_vars_literal() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                instance-ids:
+                  type: literal
+                  values:
+                    - i-abc123
+                    - i-def456
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["instance-ids"];
+        assert_eq!(var_def.var_type, VarType::Literal);
+        assert_eq!(var_def.values, vec!["i-abc123", "i-def456"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_path() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                test-scripts:
+                  type: path
+                  values:
+                    - ./tests/run
+                    - ./scripts/test.sh
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["test-scripts"];
+        assert_eq!(var_def.var_type, VarType::Path);
+        assert_eq!(var_def.values, vec!["./tests/run", "./scripts/test.sh"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_default_type_is_literal() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                regions:
+                  values:
+                    - us-east-1
+                    - eu-west-1
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        let var_def = &vars["regions"];
+        assert_eq!(var_def.var_type, VarType::Literal);
+        assert_eq!(var_def.values, vec!["us-east-1", "eu-west-1"]);
+    }
+
+    #[test]
+    fn parse_definitions_vars_multiple_vars() {
+        let config = parse_config(indoc! {"
+            definitions:
+              vars:
+                regions:
+                  values: [us-east-1]
+                instance-ids:
+                  type: literal
+                  values: [i-abc123]
+        "})
+        .unwrap();
+        let vars = config.definitions.unwrap().vars.unwrap();
+        assert!(vars.contains_key("regions"));
+        assert!(vars.contains_key("instance-ids"));
+    }
+
+    #[rstest]
+    #[case::var_ref(
+        indoc! {"
+            definitions:
+              vars:
+                ids:
+                  values:
+                    - i-abc123
+                    - '<var:other-ids>'
+                other-ids:
+                  values:
+                    - i-xyz999
+        "},
+        "definitions.vars.ids",
+    )]
+    #[case::path_ref(
+        indoc! {"
+            definitions:
+              vars:
+                scripts:
+                  type: path
+                  values:
+                    - ./run.sh
+                    - '<path:sensitive>'
+              paths:
+                sensitive:
+                  - /etc/passwd
+        "},
+        "definitions.vars.scripts",
+    )]
+    fn validate_rejects_placeholder_in_definitions_vars(
+        #[case] yaml: &str,
+        #[case] expected_key_msg: &str,
+    ) {
+        let mut config = parse_config(yaml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains(expected_key_msg),
+            "error should mention the var key: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("concrete values, not references"),
+            "error should explain the constraint: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_accepts_valid_vars() {
+        let mut config = parse_config(indoc! {"
+            definitions:
+              vars:
+                ids:
+                  values:
+                    - i-abc123
+                    - i-def456
+        "})
+        .unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn merge_definitions_vars_override_per_key() {
+        let base = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([
+                    (
+                        "ids".to_string(),
+                        VarDefinition {
+                            var_type: VarType::Literal,
+                            values: vec!["i-abc123".into()],
+                        },
+                    ),
+                    (
+                        "regions".to_string(),
+                        VarDefinition {
+                            var_type: VarType::Literal,
+                            values: vec!["us-east-1".into()],
+                        },
+                    ),
+                ])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Literal,
+                        values: vec!["i-xyz999".into()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        let vars = result.definitions.unwrap().vars.unwrap();
+        // "ids" is overridden by the override config
+        assert_eq!(vars["ids"].values, vec!["i-xyz999"]);
+        // "regions" is preserved from base
+        assert_eq!(vars["regions"].values, vec!["us-east-1"]);
+    }
+
+    #[test]
+    fn merge_definitions_vars_base_only() {
+        let base = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Literal,
+                        values: vec!["i-abc123".into()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(Config::default());
+        let vars = result.definitions.unwrap().vars.unwrap();
+        assert_eq!(vars["ids"].values, vec!["i-abc123"]);
+    }
+
+    #[test]
+    fn merge_definitions_vars_override_only() {
+        let over = Config {
+            definitions: Some(Definitions {
+                vars: Some(HashMap::from([(
+                    "ids".to_string(),
+                    VarDefinition {
+                        var_type: VarType::Path,
+                        values: vec!["./run.sh".into()],
+                    },
+                )])),
+                ..Definitions::default()
+            }),
+            ..Config::default()
+        };
+        let result = Config::default().merge(over);
+        let vars = result.definitions.unwrap().vars.unwrap();
+        assert_eq!(vars["ids"].var_type, VarType::Path);
+        assert_eq!(vars["ids"].values, vec!["./run.sh"]);
     }
 
     // === JSON Schema ===

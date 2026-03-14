@@ -14,15 +14,22 @@ pub enum CommandPattern {
     Alternation(Vec<String>),
     /// Matches any command name (`*`).
     Wildcard,
+    /// Matches command name(s) via a `<var:name>` variable reference.
+    /// Multi-word var values consume multiple leading tokens.
+    VarRef(String),
 }
 
 impl CommandPattern {
     /// Check if this command pattern matches the given command name.
+    ///
+    /// For `VarRef`, always returns `true` — actual matching is deferred to
+    /// the pattern matcher which handles multi-word values and type-aware comparison.
     pub fn matches(&self, command: &str) -> bool {
         match self {
             CommandPattern::Literal(s) => s == command,
             CommandPattern::Alternation(alts) => alts.iter().any(|s| s == command),
             CommandPattern::Wildcard => true,
+            CommandPattern::VarRef(_) => true,
         }
     }
 }
@@ -54,6 +61,8 @@ pub enum PatternToken {
     Wildcard,
     /// Path variable reference (e.g., <path:sensitive>)
     PathRef(String),
+    /// Typed variable reference (e.g., <var:instance-ids>)
+    VarRef(String),
     /// Wrapper placeholder (e.g., <cmd>)
     Placeholder(String),
     /// Options placeholder for wrapper patterns (e.g., <opts>).
@@ -71,6 +80,7 @@ pub enum PatternToken {
 /// Remaining tokens are converted to PatternToken variants based on syntax:
 /// - `*` -> Wildcard
 /// - `<path:name>` -> PathRef
+/// - `<var:name>` -> VarRef
 /// - `<cmd>` -> Placeholder (single word, no pipe, no colon)
 /// - `!value` -> Negation
 /// - `[...]` -> Optional group
@@ -150,6 +160,9 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
         LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
         LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
+        LexToken::Placeholder(name) if name.starts_with("var:") => {
+            CommandPattern::VarRef(name["var:".len()..].to_string())
+        }
         other => {
             return Err(PatternParseError::InvalidSyntax(format!(
                 "expected command name, got {other:?}"
@@ -185,8 +198,7 @@ fn build_pattern_tokens(
                 // alternation so that flag-with-value and order-independent
                 // matching work the same as for `-X|--request` style patterns.
                 if let Some(&(j, next)) = iter.peek() {
-                    if should_consume_as_value_strict(next, j + 1 < lex_tokens.len(), inside_group)
-                    {
+                    if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
                         let (_, next_token) = iter.next().ok_or(
                             PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                         )?;
@@ -322,6 +334,10 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
         return Ok(PatternToken::PathRef(name.to_string()));
     }
 
+    if let Some(name) = content.strip_prefix("var:") {
+        return Ok(PatternToken::VarRef(name.to_string()));
+    }
+
     if content == "opts" {
         return Ok(PatternToken::Opts);
     }
@@ -351,23 +367,13 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         // Flags and the bare `--` separator must not be consumed as values.
         LexToken::Literal(s) if is_flag(s) || s == "--" => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
-        LexToken::Wildcard => inside_group || has_more_after,
-        _ => true,
-    }
-}
-
-/// Like [`should_consume_as_value`], but stricter: also refuses to consume
-/// placeholder tokens as flag values. Used for bare flags (e.g. `-c`) where
-/// the flag is written without alternation syntax and the next token may be a
-/// wrapper placeholder (e.g. `<cmd>`) rather than a flag value.
-fn should_consume_as_value_strict(
-    next: &LexToken,
-    has_more_after: bool,
-    inside_group: bool,
-) -> bool {
-    match next {
         LexToken::Placeholder(_) => false,
-        _ => should_consume_as_value(next, has_more_after, inside_group),
+        LexToken::Wildcard => inside_group || has_more_after,
+        // A negation whose inner value is a flag (e.g., `!--in-place`) should
+        // not be consumed as a flag value — it is an independent negation token.
+        LexToken::Negation(s) if is_flag(s) => false,
+        LexToken::NegationAlternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
+        _ => true,
     }
 }
 
@@ -494,17 +500,13 @@ mod tests {
         PatternToken::Alternation(vec!["-f".into(), "--force".into()]),
         PatternToken::Wildcard,
     ])]
-    #[case::placeholder_value("cmd -o|--option <cmd>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-o".into(), "--option".into()],
-            value: Box::new(PatternToken::Placeholder("cmd".into())),
-        },
+    #[case::placeholder_not_consumed_as_flag_value("cmd -o|--option <cmd>", "cmd", vec![
+        PatternToken::Alternation(vec!["-o".into(), "--option".into()]),
+        PatternToken::Placeholder("cmd".into()),
     ])]
     #[case::path_ref_value("cmd -c|--config <path:config>", "cmd", vec![
-        PatternToken::FlagWithValue {
-            aliases: vec!["-c".into(), "--config".into()],
-            value: Box::new(PatternToken::PathRef("config".into())),
-        },
+        PatternToken::Alternation(vec!["-c".into(), "--config".into()]),
+        PatternToken::PathRef("config".into()),
     ])]
     fn parse_flag_with_value(
         #[case] input: &str,
@@ -549,6 +551,11 @@ mod tests {
             aliases: vec!["-rf".into()],
             value: Box::new(PatternToken::Literal("/".into())),
         },
+    ])]
+    #[case::flag_not_consuming_flag_negation("git --parse !--in-place *", "git", vec![
+        PatternToken::Alternation(vec!["--parse".into()]),
+        PatternToken::Negation(Box::new(PatternToken::Literal("--in-place".into()))),
+        PatternToken::Wildcard,
     ])]
     fn parse_bare_flag(
         #[case] input: &str,
@@ -638,6 +645,28 @@ mod tests {
     ])]
     #[case::path_ref("cat <path:sensitive>", "cat", vec![
         PatternToken::PathRef("sensitive".into()),
+    ])]
+    #[case::flag_alternation_then_placeholder(
+        r"find * -exec|-execdir|-ok|-okdir <cmd> \;|+",
+        "find",
+        vec![
+            PatternToken::Wildcard,
+            PatternToken::Alternation(vec![
+                "-exec".into(), "-execdir".into(), "-ok".into(), "-okdir".into(),
+            ]),
+            PatternToken::Placeholder("cmd".into()),
+            PatternToken::Alternation(vec![r"\;".into(), "+".into()]),
+        ],
+    )]
+    #[case::var_ref("cat <var:instance-ids>", "cat", vec![
+        PatternToken::VarRef("instance-ids".into()),
+    ])]
+    #[case::var_ref_after_flag("aws ec2 terminate-instances --instance-ids <var:instance-ids> *", "aws", vec![
+        PatternToken::Literal("ec2".into()),
+        PatternToken::Literal("terminate-instances".into()),
+        PatternToken::Alternation(vec!["--instance-ids".into()]),
+        PatternToken::VarRef("instance-ids".into()),
+        PatternToken::Wildcard,
     ])]
     fn parse_placeholder(
         #[case] input: &str,
@@ -825,5 +854,34 @@ mod tests {
             "expected {expected_count} patterns for {input:?}, got {}",
             result.len()
         );
+    }
+
+    // === <var:name> in command position ===
+
+    #[rstest]
+    #[case::with_literal_arg(
+        "<var:runok> check",
+        CommandPattern::VarRef("runok".to_string()),
+        vec![PatternToken::Literal("check".into())],
+    )]
+    #[case::with_wildcard_arg(
+        "<var:prettier> *",
+        CommandPattern::VarRef("prettier".to_string()),
+        vec![PatternToken::Wildcard],
+    )]
+    fn parse_var_ref_command_position(
+        #[case] input: &str,
+        #[case] expected_command: CommandPattern,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, expected_command);
+        assert_eq!(result.tokens, expected_tokens);
+    }
+
+    #[test]
+    fn parse_path_ref_command_position_rejected() {
+        let result = parse("<path:foo> bar");
+        assert!(result.is_err());
     }
 }

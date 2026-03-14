@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.1.5](https://github.com/fohte/runok/compare/v0.1.4...v0.1.5) (2026-03-12)
+
+
+### Bug Fixes
+
+* **rules:** handle `=`-joined flag tokens in Alternation matching ([#196](https://github.com/fohte/runok/issues/196)) ([15fe774](https://github.com/fohte/runok/commit/15fe77484a6df1fe07f3edc1e9d6f470838c4284))
+* **rules:** prevent flag negation from being consumed as preceding flag's value ([#191](https://github.com/fohte/runok/issues/191)) ([31b76a8](https://github.com/fohte/runok/commit/31b76a827be23f1bb62d9ba031222e04d444b10b))
+
+## [0.1.4](https://github.com/fohte/runok/compare/v0.1.3...v0.1.4) (2026-03-11)
+
+
+### Features
+
+* **init:** warn when other PreToolUse hooks conflict with runok sandbox ([#186](https://github.com/fohte/runok/issues/186)) ([94a506f](https://github.com/fohte/runok/commit/94a506faa5601019e36a2855563f4720aa1f8052))
+* **rules:** apply order-independent matching to literal tokens ([#177](https://github.com/fohte/runok/issues/177)) ([e257cad](https://github.com/fohte/runok/commit/e257cadb91d097583448136d78c30a4945efbeb0))
+
+
+### Bug Fixes
+
+* **rules:** allow flag-only negation to pass with empty command tokens ([#179](https://github.com/fohte/runok/issues/179)) ([1d6c757](https://github.com/fohte/runok/commit/1d6c757106fe2b9bd021c9fb88301954c0c2c059))
+* **rules:** match `FlagWithValue` patterns against `=`-joined tokens ([#180](https://github.com/fohte/runok/issues/180)) ([6ebb296](https://github.com/fohte/runok/commit/6ebb2962929dcfd381e0a61e1b939f43fa577d22))
+* **rules:** match flag-only negation patterns against `=`-joined tokens ([#175](https://github.com/fohte/runok/issues/175)) ([7cf8eaa](https://github.com/fohte/runok/commit/7cf8eaaa34fa67b2a7d192f61102b507df105d79))
+* **rules:** resolve unmatched sub-commands to concrete actions in compound evaluation ([#178](https://github.com/fohte/runok/issues/178)) ([377f83d](https://github.com/fohte/runok/commit/377f83d5936544987ba17d7d0fcdac6514863d1e))
+
+## [0.1.3](https://github.com/fohte/runok/compare/v0.1.2...v0.1.3) (2026-03-09)
+
+
+### Features
+
+* **config:** resolve relative paths based on config file parent directory ([#166](https://github.com/fohte/runok/issues/166)) ([ee1a7c3](https://github.com/fohte/runok/commit/ee1a7c33042631b28b651af34ad1aa63af414a5d))
+* **preset:** add file-based locking for concurrent preset cache access ([#168](https://github.com/fohte/runok/issues/168)) ([27c31f4](https://github.com/fohte/runok/commit/27c31f46fba8adc4fe015b61264aef8a62ec6dc0))
+* **preset:** support path specification in GitHub shorthand references ([#167](https://github.com/fohte/runok/issues/167)) ([eff4b56](https://github.com/fohte/runok/commit/eff4b56fdb28ae717811edbc551abace11fb2b81))
+
+
+### Bug Fixes
+
+* **config:** resolve preset rules referenced via `extends` ([#174](https://github.com/fohte/runok/issues/174)) ([abc5e41](https://github.com/fohte/runok/commit/abc5e412a57854485ff497037b45415afa9f86dc))
+* **config:** traverse ancestor directories to find project config ([#165](https://github.com/fohte/runok/issues/165)) ([a49f916](https://github.com/fohte/runok/commit/a49f916bb2c49c9b6efdaa71ada36b663b03f5ab))
+* **preset:** remove unnecessary mutable reference warning ([#169](https://github.com/fohte/runok/issues/169)) ([c1d9d3c](https://github.com/fohte/runok/commit/c1d9d3cee1bb729400e567324118a7b0bfc0d950))
+* **rules:** apply order-independent matching to flag-only negation patterns ([#171](https://github.com/fohte/runok/issues/171)) ([9c43c91](https://github.com/fohte/runok/commit/9c43c91fbc6e8a5196fe5d15b33121afa3f4d483))
+
+
+### Dependencies
+
+* update rust crate serde-saphyr to v0.0.21 ([#162](https://github.com/fohte/runok/issues/162)) ([56c0827](https://github.com/fohte/runok/commit/56c0827f97900583b89a5b2f162f0fa87eacfd5f))
+
+## [0.1.2](https://github.com/fohte/runok/compare/v0.1.1...v0.1.2) (2026-03-06)
+
+
+### Features
+
+* **init:** add `runok init` subcommand ([#152](https://github.com/fohte/runok/issues/152)) ([176d9b6](https://github.com/fohte/runok/commit/176d9b6c12ccb0a987ed721b264dcb6971d42278))
+
+
+### Bug Fixes
+
+* evaluate command substitutions nested in quoted strings ([#151](https://github.com/fohte/runok/issues/151)) ([af784b6](https://github.com/fohte/runok/commit/af784b6c6e5325da97bf8e69465f1d4a59519a66))
+* resolve stack overflow in compound command evaluation with command substitutions ([#149](https://github.com/fohte/runok/issues/149)) ([97b46a7](https://github.com/fohte/runok/commit/97b46a7ae1903598f068cabbb3250ff3a2c3933a))
+* **rules:** stop flag alternation from consuming placeholder as flag value ([#154](https://github.com/fohte/runok/issues/154)) ([24a951a](https://github.com/fohte/runok/commit/24a951a00ef83adc4748b9e260dd2889b92edb81))
+* treat `--` as a positional literal instead of a flag ([#153](https://github.com/fohte/runok/issues/153)) ([c2f6d72](https://github.com/fohte/runok/commit/c2f6d726f2ca697b89e4ba993c5b36fd68a1f02e))
+
+
+### Dependencies
+
+* update rust crate dialoguer to v0.12.0 ([#158](https://github.com/fohte/runok/issues/158)) ([9e3cd2e](https://github.com/fohte/runok/commit/9e3cd2e44ed4b88bde8eff800fd96592339ef381))
+* update rust crate tempfile to v3.26.0 ([#147](https://github.com/fohte/runok/issues/147)) ([02fba8a](https://github.com/fohte/runok/commit/02fba8a6909cf363a1a4c52db5f0a60e1447353d))
+* update rust crate tree-sitter to v0.26.6 ([#156](https://github.com/fohte/runok/issues/156)) ([f44c9a6](https://github.com/fohte/runok/commit/f44c9a652e81121e50df8dd7de42dd5c758f2a25))
+
 ## [0.1.1](https://github.com/fohte/runok/compare/v0.1.0...v0.1.1) (2026-03-02)
 
 

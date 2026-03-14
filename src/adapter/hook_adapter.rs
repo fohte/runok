@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
+use crate::audit::AuditMetadata;
 use crate::config::{ActionKind, Defaults};
 use crate::rules::rule_engine::{Action, DenyResponse};
 
@@ -61,7 +62,11 @@ pub struct ClaudeCodeHookAdapter {
 /// Build a combined reason string from a `DenyResponse`, including
 /// the matched rule, optional message, and optional fix suggestion.
 fn build_deny_reason(deny: &DenyResponse) -> String {
-    let mut reason = format!("denied: {}", deny.matched_rule);
+    let mut reason = if deny.matched_rule.is_empty() {
+        "command denied by default policy".to_string()
+    } else {
+        format!("denied: {}", deny.matched_rule)
+    };
     if let Some(ref message) = deny.message {
         reason.push_str(&format!(" ({})", message));
     }
@@ -99,10 +104,6 @@ impl ClaudeCodeHookAdapter {
                 // command, so we need to wrap it with the sandbox just like allow.
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("ask", message.clone(), updated)
-            }
-            Action::Default => {
-                // run() dispatches Default to handle_no_match, but handle safely.
-                ("allow", None, None)
             }
         };
 
@@ -191,6 +192,20 @@ impl ClaudeCodeHookAdapter {
 }
 
 impl Endpoint for ClaudeCodeHookAdapter {
+    fn audit_metadata(&self) -> AuditMetadata {
+        AuditMetadata {
+            endpoint_type: "hook".to_owned(),
+            session_id: Some(self.input.session_id.clone()),
+            cwd: Some(self.input.cwd.clone()),
+            tool_name: Some(self.input.tool_name.clone()),
+            hook_event_name: Some(self.input.hook_event_name.clone()),
+        }
+    }
+
+    fn is_auditable(&self) -> bool {
+        true
+    }
+
     fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
         if self.input.tool_name != "Bash" {
             return Ok(None);
@@ -349,7 +364,12 @@ mod tests {
     ) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
-        let result = ActionResult { action, sandbox };
+        let result = ActionResult {
+            action,
+            sandbox,
+            matched_rules: vec![],
+            sub_evaluations: None,
+        };
         let output = adapter
             .build_action_output(&result)
             .unwrap_or_else(|e| panic!("build_action_output failed: {e}"));
@@ -436,6 +456,8 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
         assert_eq!(exit_code, 0);
@@ -582,5 +604,25 @@ mod tests {
     fn wrap_with_sandbox_rejects_nul_byte() {
         let command = "echo \0hello";
         assert!(ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command).is_err());
+    }
+
+    // --- audit metadata ---
+
+    #[rstest]
+    fn audit_metadata_returns_hook_endpoint_type() {
+        let adapter =
+            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
+        let metadata = adapter.audit_metadata();
+        assert_eq!(metadata.endpoint_type, "hook");
+        assert_eq!(metadata.session_id.as_deref(), Some("test-session"));
+        assert_eq!(metadata.cwd.as_deref(), Some("/tmp"));
+        assert_eq!(metadata.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(metadata.hook_event_name.as_deref(), Some("PreToolUse"));
+    }
+
+    #[rstest]
+    fn is_auditable_returns_true() {
+        let adapter = ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("ls")));
+        assert!(adapter.is_auditable());
     }
 }

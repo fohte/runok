@@ -32,6 +32,39 @@ pub struct ParsedCommand {
     pub raw_tokens: Vec<String>,
 }
 
+/// Information about a single redirect operator attached to a command.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedirectInfo {
+    /// Redirect category: "input", "output", or "dup".
+    pub redirect_type: String,
+    /// The redirect operator (e.g., ">", ">>", "<", "<<<", ">&", "<&", "&>", "&>>", ">|").
+    pub operator: String,
+    /// The redirect target (e.g., "/dev/null", "&1", "file.txt").
+    pub target: String,
+    /// File descriptor number, if explicitly specified (e.g., `2` in `2>`).
+    pub descriptor: Option<i64>,
+}
+
+/// Information about a command's position in a pipeline.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PipeInfo {
+    /// Whether stdin comes from a preceding pipe.
+    pub stdin: bool,
+    /// Whether stdout feeds into a following pipe.
+    pub stdout: bool,
+}
+
+/// A command extracted from a compound shell expression, with metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedCommand {
+    /// The command string (redirects stripped, as before).
+    pub command: String,
+    /// Redirect operators that were attached to this command.
+    pub redirects: Vec<RedirectInfo>,
+    /// Pipeline position information.
+    pub pipe: PipeInfo,
+}
+
 /// Parse a command string into a structured `ParsedCommand`.
 ///
 /// Uses `FlagSchema` to determine whether a flag consumes the next token
@@ -191,6 +224,19 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// Uses tree-sitter-bash to correctly handle quoting and nesting.
 /// Returns `SyntaxError` if the input contains parse errors.
 pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
+    Ok(extract_commands_with_metadata(input)?
+        .into_iter()
+        .map(|ec| ec.command)
+        .collect())
+}
+
+/// Extract individual commands with redirect and pipe metadata.
+///
+/// Like `extract_commands`, but each command includes information about
+/// attached redirects and pipeline position.
+pub fn extract_commands_with_metadata(
+    input: &str,
+) -> Result<Vec<ExtractedCommand>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CommandParseError::EmptyCommand);
@@ -212,7 +258,13 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
     }
 
     let mut commands = Vec::new();
-    collect_commands(root, trimmed.as_bytes(), &mut commands);
+    collect_commands(
+        root,
+        trimmed.as_bytes(),
+        &mut commands,
+        &PipeInfo::default(),
+        &[],
+    );
 
     Ok(commands)
 }
@@ -222,13 +274,21 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// Compound constructs (pipeline, list, subshell, control structures) are split
 /// into their constituent commands. Conditions and value lists are also recursed
 /// into so that commands within them (including command substitutions) are extracted.
-fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<String>) {
+///
+/// `pipe_info` carries the current pipeline position context.
+/// `redirects` carries redirect info inherited from a parent `redirected_statement`.
+fn collect_commands(
+    node: tree_sitter::Node,
+    source: &[u8],
+    commands: &mut Vec<ExtractedCommand>,
+    pipe_info: &PipeInfo,
+    redirects: &[RedirectInfo],
+) {
     match node.kind() {
-        // Transparent containers: recurse into all named children.
-        // Skips anonymous tokens like `;`, `&&`, `||`, `|`, `(`, `)`,
+        // Transparent containers (except pipeline): recurse into all named children.
+        // Skips anonymous tokens like `;`, `&&`, `||`, `(`, `)`,
         // `do`, `done`, `then`, `fi`, `esac`, keywords, etc.
         "program"
-        | "pipeline"
         | "list"
         | "subshell"
         | "do_group"
@@ -241,7 +301,22 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         | "elif_clause" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands);
+                collect_commands(child, source, commands, pipe_info, redirects);
+            }
+        }
+        // pipeline: compute pipe position for each child command.
+        "pipeline" => {
+            let children: Vec<_> = {
+                let mut cursor = node.walk();
+                node.named_children(&mut cursor).collect()
+            };
+            let len = children.len();
+            for (i, child) in children.iter().enumerate() {
+                let child_pipe = PipeInfo {
+                    stdin: pipe_info.stdin || i > 0,
+                    stdout: pipe_info.stdout || i < len - 1,
+                };
+                collect_commands(*child, source, commands, &child_pipe, redirects);
             }
         }
         // for_statement: recurse into body (do_group) and any command_substitution
@@ -251,7 +326,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "do_group" | "command_substitution" => {
-                        collect_commands(child, source, commands);
+                        collect_commands(child, source, commands, pipe_info, redirects);
                     }
                     // Recurse into value list items (e.g. string nodes)
                     // to find nested command substitutions like
@@ -271,10 +346,10 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "case_item" => {
-                        collect_commands(child, source, commands);
+                        collect_commands(child, source, commands, pipe_info, redirects);
                     }
                     "command_substitution" => {
-                        collect_commands(child, source, commands);
+                        collect_commands(child, source, commands, pipe_info, redirects);
                     }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
@@ -295,19 +370,30 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                 if node.field_name_for_child(i as u32) == Some("value") {
                     collect_substitutions_recursive(child, source, commands);
                 } else {
-                    collect_commands(child, source, commands);
+                    collect_commands(child, source, commands, pipe_info, redirects);
                 }
             }
         }
-        // redirected_statement: recurse into the body (the actual command),
-        // stripping redirect operators (>, >>, <, 2>&1, etc.).
+        // redirected_statement: extract redirect info, then recurse into the body.
         // Redirect target paths are left to the OS-level sandbox to enforce.
         // Also recurse into redirect children to extract nested commands
         // (e.g. process substitutions: `cmd > >(nested_cmd)`).
         "redirected_statement" => {
-            if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands);
+            let mut all_redirects = redirects.to_vec();
+            // First pass: extract redirect metadata only
+            for i in 0..node.child_count() {
+                if node.field_name_for_child(i as u32) == Some("redirect")
+                    && let Some(child) = node.child(i as u32)
+                    && let Some(info) = extract_redirect_info(child, source)
+                {
+                    all_redirects.push(info);
+                }
             }
+            // Process body first (preserves original command ordering)
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_commands(body, source, commands, pipe_info, &all_redirects);
+            }
+            // Second pass: recurse into redirect children for nested substitutions
             for i in 0..node.child_count() {
                 if node.field_name_for_child(i as u32) == Some("redirect")
                     && let Some(child) = node.child(i as u32)
@@ -328,7 +414,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands);
+                collect_commands(body, source, commands, pipe_info, redirects);
             }
         }
         // command node: strip leading variable_assignment children
@@ -337,6 +423,7 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
         // attaches directly to a command node), extract nested
         // command_substitution nodes, and emit the remaining text.
         "command" => {
+            let mut cmd_redirects = redirects.to_vec();
             for i in 0..node.child_count() {
                 let Some(child) = node.child(i as u32) else {
                     continue;
@@ -345,13 +432,17 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
                     continue;
                 }
                 if node.field_name_for_child(i as u32) == Some("redirect") {
+                    // Extract redirect info from command-level redirects
+                    if let Some(info) = extract_redirect_info(child, source) {
+                        cmd_redirects.push(info);
+                    }
                     // Recurse into redirect children for nested substitutions
                     // (e.g. `cat <<< $(secret_cmd)`)
                     collect_substitutions_recursive(child, source, commands);
                 } else {
                     match child.kind() {
                         "command_substitution" => {
-                            collect_commands(child, source, commands);
+                            collect_commands(child, source, commands, &PipeInfo::default(), &[]);
                         }
                         "variable_assignment" => {
                             collect_substitutions_recursive(child, source, commands);
@@ -387,7 +478,11 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             let text = parts.join(" ");
             let text = text.trim();
             if !text.is_empty() {
-                commands.push(text.to_string());
+                commands.push(ExtractedCommand {
+                    command: text.to_string(),
+                    redirects: cmd_redirects,
+                    pipe: pipe_info.clone(),
+                });
             }
         }
         // Leaf command nodes — extract the source text, and recurse into
@@ -397,9 +492,106 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
             let text = &source[node.start_byte()..node.end_byte()];
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
-                commands.push(text.to_string());
+                commands.push(ExtractedCommand {
+                    command: text.to_string(),
+                    redirects: redirects.to_vec(),
+                    pipe: pipe_info.clone(),
+                });
             }
         }
+    }
+}
+
+/// Classify a redirect operator into "input", "output", or "dup".
+fn classify_redirect(operator: &str) -> &'static str {
+    match operator {
+        ">" | ">>" | ">|" | "&>" | "&>>" => "output",
+        "<" | "<<<" | "<<" | "<<-" => "input",
+        ">&" | "<&" => "dup",
+        _ => "output",
+    }
+}
+
+/// Extract redirect information from a tree-sitter redirect node.
+///
+/// Handles `file_redirect`, `heredoc_redirect`, and `herestring_redirect` nodes.
+fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<RedirectInfo> {
+    match node.kind() {
+        "file_redirect" => {
+            // Extract the operator from anonymous children
+            let mut operator = String::new();
+            let mut descriptor: Option<i64> = None;
+            let mut target = String::new();
+
+            for i in 0..node.child_count() {
+                let child = node.child(i as u32)?;
+                if child.kind() == "file_descriptor" {
+                    let text =
+                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    descriptor = text.parse::<i64>().ok();
+                } else if !child.is_named() {
+                    // Anonymous node = operator token (>, >>, <, >&, <&, &>, &>>, >|)
+                    let text =
+                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    operator = text.to_string();
+                } else if node.field_name_for_child(i as u32) == Some("destination") {
+                    let text =
+                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    target = text.to_string();
+                }
+            }
+
+            if operator.is_empty() {
+                return None;
+            }
+
+            Some(RedirectInfo {
+                redirect_type: classify_redirect(&operator).to_string(),
+                operator,
+                target,
+                descriptor,
+            })
+        }
+        "herestring_redirect" => {
+            // <<< 'content'
+            let mut target = String::new();
+            for i in 0..node.child_count() {
+                let child = node.child(i as u32)?;
+                if child.is_named() {
+                    let text =
+                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    target = text.to_string();
+                    break;
+                }
+            }
+            Some(RedirectInfo {
+                redirect_type: "input".to_string(),
+                operator: "<<<".to_string(),
+                target,
+                descriptor: None,
+            })
+        }
+        "heredoc_redirect" => {
+            // << or <<-
+            let mut operator = "<<".to_string();
+            for i in 0..node.child_count() {
+                let child = node.child(i as u32)?;
+                if !child.is_named() {
+                    let text =
+                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    if text == "<<-" || text == "<<" {
+                        operator = text.to_string();
+                    }
+                }
+            }
+            Some(RedirectInfo {
+                redirect_type: "input".to_string(),
+                operator,
+                target: String::new(),
+                descriptor: None,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -410,13 +602,13 @@ fn collect_commands(node: tree_sitter::Node, source: &[u8], commands: &mut Vec<S
 fn collect_substitutions_recursive(
     node: tree_sitter::Node,
     source: &[u8],
-    commands: &mut Vec<String>,
+    commands: &mut Vec<ExtractedCommand>,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
             "command_substitution" | "process_substitution" => {
-                collect_commands(child, source, commands);
+                collect_commands(child, source, commands, &PipeInfo::default(), &[]);
             }
             _ => {
                 collect_substitutions_recursive(child, source, commands);
@@ -1061,5 +1253,139 @@ mod tests {
     fn shell_quote_join_cases(#[case] tokens: &[&str], #[case] expected: &str) {
         let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
         assert_eq!(shell_quote_join(&owned).unwrap(), expected);
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: redirects
+    // ========================================
+
+    #[rstest]
+    #[case::output_redirect(
+        "echo hello > /tmp/log.txt",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::append_redirect(
+        "echo hello >> /tmp/log.txt",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">>".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::dup_redirect_2_to_1(
+        "echo hello 2>&1",
+        vec![RedirectInfo {
+            redirect_type: "dup".to_string(),
+            operator: ">&".to_string(),
+            target: "1".to_string(),
+            descriptor: Some(2),
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::input_redirect(
+        "cat < input.txt",
+        vec![RedirectInfo {
+            redirect_type: "input".to_string(),
+            operator: "<".to_string(),
+            target: "input.txt".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::herestring_redirect(
+        "cat <<< 'hello'",
+        vec![RedirectInfo {
+            redirect_type: "input".to_string(),
+            operator: "<<<".to_string(),
+            target: "'hello'".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::ampersand_redirect(
+        "echo hello &>/dev/null",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: "&>".to_string(),
+            target: "/dev/null".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    #[case::clobber_redirect(
+        "echo hello >| /tmp/log.txt",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">|".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        PipeInfo { stdin: false, stdout: false },
+    )]
+    fn extract_commands_metadata_single(
+        #[case] input: &str,
+        #[case] expected_redirects: Vec<RedirectInfo>,
+        #[case] expected_pipe: PipeInfo,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(commands.len(), 1, "expected 1 command for input: {}", input);
+        assert_eq!(commands[0].redirects, expected_redirects);
+        assert_eq!(commands[0].pipe, expected_pipe);
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: pipeline position
+    // ========================================
+
+    #[rstest]
+    #[case::simple_command("echo hello", vec![
+        PipeInfo { stdin: false, stdout: false },
+    ])]
+    #[case::two_stage_pipeline("echo hello | grep foo", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    #[case::three_stage_pipeline("echo hello | grep foo | wc -l", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    #[case::nested_pipeline_in_subshell("cmd1 | (cmd2 | cmd3)", vec![
+        PipeInfo { stdin: false, stdout: true },
+        PipeInfo { stdin: true, stdout: true },
+        PipeInfo { stdin: true, stdout: false },
+    ])]
+    fn extract_commands_metadata_pipelines(
+        #[case] input: &str,
+        #[case] expected_pipes: Vec<PipeInfo>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(
+            commands.len(),
+            expected_pipes.len(),
+            "command count mismatch for: {}",
+            input
+        );
+        for (i, expected_pipe) in expected_pipes.iter().enumerate() {
+            assert_eq!(
+                commands[i].pipe, *expected_pipe,
+                "PipeInfo mismatch for command #{} in: {}",
+                i, input
+            );
+            assert!(
+                commands[i].redirects.is_empty(),
+                "redirects should be empty for command #{} in: {}",
+                i,
+                input
+            );
+        }
     }
 }

@@ -1,0 +1,42 @@
+name: Renovate copier
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  copier-update:
+    runs-on: ubuntu-slim
+    if: >-
+      github.actor == 'renovate[bot]' &&
+      startsWith(github.head_ref, 'renovate/https-github.com-fohte-generic-boilerplate-')
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Restore executable bit on scripts/bootstrap
+        run: |
+          if [ -f scripts/bootstrap ]; then
+            chmod +x scripts/bootstrap
+          fi
+
+      - name: Commit and push changes
+        uses: suzuki-shunsuke/commit-action@v0.1.0
+        with:
+          commit_message: 'chore: restore executable bit on scripts/bootstrap'
+          workflow: deny
+          github_token: ${{ steps.app-token.outputs.token }}

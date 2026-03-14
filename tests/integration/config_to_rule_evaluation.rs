@@ -1,6 +1,4 @@
-use super::{
-    ActionAssertion, assert_allow, assert_ask, assert_default, assert_deny, empty_context,
-};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use indoc::{formatdoc, indoc};
 use rstest::rstest;
@@ -42,7 +40,7 @@ use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
           - allow: 'git status'
     "},
     "hg status",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn yaml_config_evaluates_commands(
     #[case] yaml: &str,
@@ -244,6 +242,7 @@ fn preset_merge_wrappers_appended() {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }]),
         ..Config::default()
     },
@@ -298,6 +297,7 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             },
             RuleEntry {
                 deny: Some("curl *".to_string()),
@@ -307,6 +307,7 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
+                tests: None,
             },
         ]),
         ..Config::default()
@@ -351,7 +352,7 @@ fn allow_rule_with_sandbox_propagates_preset(empty_context: EvalContext) {
 #[case::allowed_command("git status", assert_allow as ActionAssertion)]
 #[case::denied_command("rm -rf /", assert_deny as ActionAssertion)]
 #[case::asked_command("git push origin main", assert_ask as ActionAssertion)]
-#[case::unmatched_command("hg status", assert_default as ActionAssertion)]
+#[case::unmatched_command("hg status", assert_ask as ActionAssertion)]
 fn full_config_evaluates_correctly(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -394,7 +395,7 @@ fn full_config_evaluates_correctly(
 )]
 #[case::unrelated_command_default(
     "yarn prettier --write .",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn multi_word_alternation_config(
     #[case] command: &str,
@@ -451,7 +452,7 @@ fn multi_word_alternation_allow_and_deny(
 )]
 #[case::glob_alt_delete_blocked(
     "aws s3api delete-bucket my-bucket",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn alternation_glob_wildcard_config(
     #[case] command: &str,
@@ -647,7 +648,7 @@ fn rule_order_independence(
           - allow: '* --help'
     "},
     "git status",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn wildcard_command_patterns(
     #[case] yaml: &str,
@@ -675,7 +676,7 @@ fn wildcard_command_patterns(
 )]
 #[case::unrelated_command_not_affected(
     "echo hello",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn wildcard_deny_beats_specific_allow(
     #[case] command: &str,
@@ -785,7 +786,7 @@ fn ask_without_message_has_none(empty_context: EvalContext) {
 
 #[rstest]
 #[case::unicode_arg_allowed("echo こんにちは", assert_allow as ActionAssertion)]
-#[case::unicode_in_path("cat /tmp/日本語.txt", assert_default as ActionAssertion)]
+#[case::unicode_in_path("cat /tmp/日本語.txt", assert_ask as ActionAssertion)]
 fn unicode_in_commands(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -807,7 +808,7 @@ fn unicode_in_commands(
 
 #[rstest]
 #[case::equals_flag_matches("java -Denv=prod Main", assert_allow as ActionAssertion)]
-#[case::different_value_no_match("java -Denv=staging Main", assert_default as ActionAssertion)]
+#[case::different_value_no_match("java -Denv=staging Main", assert_ask as ActionAssertion)]
 fn equals_sign_in_flag_token(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -853,7 +854,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -875,7 +876,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 #[case::quoted_star_glob_no_match(
     r#"git commit -m "WIP*""#,
     "git commit -m 'DONE: release'",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 // `\*` is literal
 #[case::escaped_star_exact_match(
@@ -886,7 +887,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 #[case::escaped_star_no_glob(
     r#"git commit -m "WIP\*""#,
     "git commit -m 'WIP: fixup'",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn quoted_and_escaped_star_matching(
     #[case] pattern: &str,
@@ -915,7 +916,7 @@ fn quoted_and_escaped_star_matching(
 )]
 #[case::quoted_glob_with_space_no_match(
     "npx --package renovate -c 'other-tool foo.json'",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn quoted_glob_with_space(
     #[case] command: &str,
@@ -947,11 +948,11 @@ fn quoted_glob_with_space(
 )]
 #[case::checkout_ref_then_double_dash_rejected(
     "git checkout HEAD~1 -- README.md",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 #[case::checkout_ref_then_double_dash_with_c_rejected(
     "git -C /tmp checkout HEAD~1 -- README.md",
-    assert_default as ActionAssertion,
+    assert_ask as ActionAssertion,
 )]
 fn double_dash_positional_matching(
     #[case] command: &str,
@@ -961,6 +962,383 @@ fn double_dash_positional_matching(
     let config = parse_config(indoc! {"
         rules:
           - allow: 'git [-C *] checkout -- *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Flag-only negation: order-independent matching
+// ========================================
+
+#[rstest]
+#[case::flag_negation_rejects_at_any_position(
+    "find . -delete",
+    assert_ask as ActionAssertion,
+)]
+#[case::flag_negation_rejects_alt_at_any_position(
+    "find . -type f -fprint output.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::flag_negation_allows_safe_command(
+    "find . -name foo -type f",
+    assert_allow as ActionAssertion,
+)]
+fn flag_negation_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'find !-delete|-fprint|-fprint0|-fprintf|-fls *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Order-independent literal matching
+// ========================================
+
+#[rstest]
+#[case::flag_before_literal(
+    "gh -X GET api /repos",
+    assert_allow as ActionAssertion,
+)]
+#[case::literal_at_normal_position(
+    "gh api -X GET /repos",
+    assert_allow as ActionAssertion,
+)]
+#[case::flag_after_literal(
+    "gh api /repos -X GET",
+    assert_allow as ActionAssertion,
+)]
+#[case::literal_mismatch(
+    "gh -X GET issues /repos",
+    assert_ask as ActionAssertion,
+)]
+fn literal_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'gh api -X GET *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::double_dash_correct_position(
+    "cmd foo -- bar",
+    assert_allow as ActionAssertion,
+)]
+#[case::double_dash_wrong_position(
+    "cmd -- foo bar",
+    assert_ask as ActionAssertion,
+)]
+fn double_dash_remains_positional(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'cmd foo -- bar'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::non_flag_alt_skips_flags(
+    "git push -v main origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_second_variant(
+    "git push -v master origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_no_flag(
+    "git push main origin",
+    assert_allow as ActionAssertion,
+)]
+#[case::non_flag_alt_mismatch(
+    "git push -v develop origin",
+    assert_ask as ActionAssertion,
+)]
+fn alternation_order_independent(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git push main|master *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Flag-only negation with `=`-joined tokens
+// ========================================
+
+#[rstest]
+#[case::equals_form_rejected(
+    "rg --pre=pdftotext pattern",
+    assert_ask as ActionAssertion,
+)]
+#[case::space_form_rejected(
+    "rg --pre pdftotext pattern",
+    assert_ask as ActionAssertion,
+)]
+#[case::different_flag_equals_allowed(
+    "rg --color=always pattern",
+    assert_allow as ActionAssertion,
+)]
+#[case::no_flag_allowed(
+    "rg pattern file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::alt_negation_equals_rejected(
+    "sort --output=result.txt file.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::alt_negation_equals_different_flag_allowed(
+    "sort --reverse file.txt",
+    assert_allow as ActionAssertion,
+)]
+fn flag_negation_equals_form(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'rg !--pre *'
+          - allow: 'sort !-o|--output|--compress-program *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Flag-only negation with empty tokens (no arguments after command)
+// ========================================
+
+#[rstest]
+#[case::sort_no_args_allowed(
+    "sort",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_safe_flag_allowed(
+    "sort -r",
+    assert_allow as ActionAssertion,
+)]
+#[case::sort_banned_flag_rejected(
+    "sort -o result.txt",
+    assert_ask as ActionAssertion,
+)]
+#[case::find_no_args_allowed(
+    "find",
+    assert_allow as ActionAssertion,
+)]
+#[case::find_safe_args_allowed(
+    "find . -name foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::find_banned_flag_rejected(
+    "find . -delete",
+    assert_ask as ActionAssertion,
+)]
+fn flag_negation_empty_tokens(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'sort !-o|--output|--compress-program *'
+          - allow: 'find !-delete *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Long flag negation with preceding literal tokens (no trailing arguments)
+// ========================================
+
+#[rstest]
+#[case::no_trailing_args_allowed(
+    "git interpret-trailers --parse",
+    assert_allow as ActionAssertion,
+)]
+#[case::safe_trailing_arg_allowed(
+    "git interpret-trailers --parse file.txt",
+    assert_allow as ActionAssertion,
+)]
+#[case::banned_flag_rejected(
+    "git interpret-trailers --parse --in-place",
+    assert_ask as ActionAssertion,
+)]
+#[case::banned_flag_with_arg_rejected(
+    "git interpret-trailers --parse --in-place file.txt",
+    assert_ask as ActionAssertion,
+)]
+fn long_flag_negation_with_preceding_literals(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git interpret-trailers --parse !--in-place *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Boolean flag with trailing wildcard is not broken by equals splitting
+// ========================================
+
+#[rstest]
+#[case::boolean_flag_space_separated(
+    "git push --force origin",
+    assert_deny as ActionAssertion,
+)]
+#[case::boolean_flag_with_multiple_args(
+    "git push --force origin main",
+    assert_deny as ActionAssertion,
+)]
+#[case::no_flag_allowed(
+    "git push origin main",
+    assert_allow as ActionAssertion,
+)]
+#[case::boolean_flag_equals_not_split(
+    "git push --force=unexpected origin",
+    assert_deny as ActionAssertion,
+)]
+fn boolean_flag_not_broken_by_equals_splitting(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'git push -f|--force *'
+          - allow: 'git push *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Flag with equals-joined value matches wildcard value pattern
+// ========================================
+
+#[rstest]
+#[case::space_separated_flag_matches(
+    "curl --output /tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::equals_joined_flag_matches(
+    "curl --output=/tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::short_flag_space_separated(
+    "curl -o /tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::short_flag_equals_joined(
+    "curl -o=/tmp/out https://example.com",
+    assert_ask as ActionAssertion,
+)]
+#[case::no_output_flag_allowed(
+    "curl https://example.com",
+    assert_allow as ActionAssertion,
+)]
+fn flag_equals_value_with_wildcard_pattern(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - ask: 'curl * -o|--output *'
+          - allow: 'curl *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Fused short flag value matching (e.g. `-n3` for `-n *`)
+// ========================================
+
+#[rstest]
+#[case::fused_short_flag_matches(
+    "git tag -n3 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::space_separated_still_works(
+    "git tag -n 3 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::fused_multichar_value(
+    "git tag -n100 v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_flag_absent_still_matches(
+    "git tag v1.0",
+    assert_allow as ActionAssertion,
+)]
+#[case::fused_in_optional_group(
+    "git log -n5",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_absent(
+    "git log",
+    assert_allow as ActionAssertion,
+)]
+#[case::optional_space_separated(
+    "git log -n 10",
+    assert_allow as ActionAssertion,
+)]
+fn fused_short_flag_value(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'git tag [-n *] *'
+          - allow: 'git log [-n *]'
     "})
     .unwrap();
 

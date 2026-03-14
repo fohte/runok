@@ -11,12 +11,11 @@ When multiple rules match a single command, runok must decide which action to ta
 
 Each action has a fixed restriction level. When multiple rules match, the **most restrictive** action wins:
 
-| Priority    | Action    | Meaning                                |
-| ----------- | --------- | -------------------------------------- |
-| 3 (highest) | `deny`    | Block the command                      |
-| 2           | `ask`     | Prompt the user for confirmation       |
-| 1           | `allow`   | Permit the command                     |
-| 0           | (default) | No rule matched; use `defaults.action` |
+| Priority    | Action  | Meaning                          |
+| ----------- | ------- | -------------------------------- |
+| 2 (highest) | `deny`  | Block the command                |
+| 1           | `ask`   | Prompt the user for confirmation |
+| 0           | `allow` | Permit the command               |
 
 This priority is defined in `action_priority()` in the rule engine (`src/rules/rule_engine.rs`).
 
@@ -28,11 +27,11 @@ This priority is defined in `action_priority()` in the rule engine (`src/rules/r
 
 ```yaml
 rules:
-  - allow: 'git *' # priority 1
-  - deny: 'git push -f|--force *' # priority 3 — always wins
+  - allow: 'git *' # priority 0
+  - deny: 'git push -f|--force *' # priority 2 — always wins
 ```
 
-In this example, `git push --force main` matches both rules. The `deny` (priority 3) overrides the `allow` (priority 1), so the command is blocked.
+In this example, `git push --force main` matches both rules. The `deny` (priority 2) overrides the `allow` (priority 0), so the command is blocked.
 
 ## Comparison with AWS IAM
 
@@ -47,16 +46,16 @@ The key difference is that runok adds an `ask` tier between `allow` and `deny`, 
 
 ## The default action
 
-When no rule matches a command, the result is `Default`. You can configure what happens in this case with [`defaults.action`](/configuration/schema/#defaultsaction):
+When no rule matches a command, the action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction):
 
 ```yaml
 defaults:
   action: ask # "allow", "deny", or "ask"
 ```
 
-If `defaults.action` is not set, the adapter layer (e.g., Claude Code integration) determines the behavior.
+If `defaults.action` is not set, it defaults to `ask`.
 
-During [compound command evaluation](/rule-evaluation/compound-commands/), `Default` is resolved to the configured `defaults.action` **before** merging with other sub-command results. This ensures that unmatched sub-commands participate in the Explicit Deny Wins comparison at their effective restriction level, rather than being silently ignored.
+Because unmatched commands are resolved at evaluation time, they participate directly in the Explicit Deny Wins comparison at their effective restriction level. For example, during [compound command evaluation](/rule-evaluation/compound-commands/), an unmatched sub-command resolved to `ask` (priority 1) will correctly outrank an `allow` (priority 0) sub-command.
 
 ## Wrapped command interactions
 
@@ -76,10 +75,10 @@ rules:
 
 When evaluating `sudo rm -rf /`:
 
-1. `allow: "sudo *"` matches directly (priority 1).
+1. `allow: "sudo *"` matches directly (priority 0).
 2. `sudo <cmd>` extracts the wrapped command `rm -rf /` and evaluates it recursively.
-3. `deny: "rm -rf /"` matches the wrapped command (priority 3).
-4. The results are merged: `deny` (priority 3) wins over `allow` (priority 1).
+3. `deny: "rm -rf /"` matches the wrapped command (priority 2).
+4. The results are merged: `deny` (priority 2) wins over `allow` (priority 0).
 
 The command is denied.
 

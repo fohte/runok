@@ -19,7 +19,7 @@ rules:
   - ask: 'npm *'
 ```
 
-The top-level keys are `extends`, `defaults`, `rules`, and `definitions`. All are optional.
+The top-level keys are `extends`, `defaults`, `rules`, `definitions`, `audit`, and `tests`. All are optional.
 
 ### JSON Schema
 
@@ -47,9 +47,10 @@ List of configuration files to inherit from. Supports local paths and remote Git
 extends:
   - ./base.yml
   - github:example-org/example-presets@v1.0.0
+  - github:example-org/runok-presets/readonly-unix@v1
 ```
 
-See [Extends (Presets)](/configuration/extends/) for full details on local paths, GitHub shorthand, and Git URLs.
+See [Extends (Presets)](/configuration/extends/) for full details on local paths, GitHub shorthand, and Git URLs. For the official preset collection, see [Official Presets (runok-presets)](/configuration/official-presets/).
 
 ### `defaults`
 
@@ -182,9 +183,23 @@ Name of a sandbox preset (defined in `definitions.sandbox`) to apply when this r
   sandbox: strict
 ```
 
+##### `tests`
+
+Inline test cases for this rule. Each entry specifies the expected decision and the command to evaluate. Used by [`runok test`](/cli/test/) to verify the rule behaves as expected.
+
+**Type:** `list[TestEntry]`\
+**Default:** `[]`
+
+```yaml title="runok.yml"
+- allow: 'git status'
+  tests:
+    - allow: 'git status'
+    - allow: 'git status --short'
+```
+
 ### `definitions`
 
-Reusable definitions for paths, sandbox presets, wrappers, and commands.
+Reusable definitions for paths, variables, sandbox presets, wrappers, and commands.
 
 **Type:** `object`\
 **Default:** `{}`\
@@ -310,6 +325,140 @@ definitions:
     - mycustomtool
 ```
 
+#### `definitions.vars`
+
+Typed variable definitions referenced by `<var:name>` in rule patterns. Each variable has a `type` (controlling how values are matched) and a list of `values`.
+
+**Type:** `map[str, VarDefinition]`\
+**Default:** `{}`
+
+```yaml title="runok.yml"
+definitions:
+  vars:
+    instance-ids:
+      values:
+        - i-abc123
+        - i-def456
+    test-script:
+      type: path
+      values:
+        - ./tests/run
+    runok:
+      values:
+        - runok
+        - 'cargo run --'
+        - type: path
+          value: target/debug/runok
+```
+
+##### Variable Definition Fields
+
+###### `type`
+
+Controls how the variable's values are matched against command arguments. This is the definition-level default; individual values can override it with per-value type.
+
+**Type:** `"literal" | "path"`\
+**Default:** `"literal"`
+
+| Type      | Matching behavior                                                         |
+| --------- | ------------------------------------------------------------------------- |
+| `literal` | Exact string match                                                        |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+
+###### `values`
+
+List of allowed values for this variable. Each element can be either a plain string (inherits the definition-level `type`) or an object with explicit `type` and `value` fields.
+
+**Type:** `list[str | { type: "literal" | "path", value: str }]`\
+**Required:** Yes
+
+```yaml
+values:
+  - runok # plain string, inherits definition-level type
+  - 'cargo run --' # multi-word value
+  - type: path # per-value type override
+    value: target/debug/runok
+```
+
+:::note
+Variable definitions must contain concrete values. `<var:name>` or `<path:name>` references inside `definitions.vars` values are not allowed.
+:::
+
+### `audit`
+
+Audit log settings. Controls whether command evaluations are recorded and where log files are stored. Audit settings can only be configured in the **global** `runok.yml` — audit sections in project or local override configs are silently ignored.
+
+**Type:** `object`\
+**Default:** `{ enabled: true }`\
+**Required:** No
+
+```yaml title="~/.config/runok/runok.yml"
+audit:
+  enabled: true
+  path: ~/.local/share/runok/
+  rotation:
+    retention_days: 30
+```
+
+#### `audit.enabled`
+
+Whether audit logging is enabled.
+
+**Type:** `bool`\
+**Default:** `true`
+
+#### `audit.path`
+
+Directory path for audit log files.
+
+**Type:** `str`\
+**Default:** `~/.local/share/runok/` (or `$XDG_DATA_HOME/runok/`)
+
+#### `audit.rotation`
+
+Log rotation settings.
+
+**Type:** `object`\
+**Default:** `{}`
+
+#### `audit.rotation.retention_days`
+
+Number of days to retain log files. Files older than this are automatically deleted during log writes.
+
+**Type:** `int`\
+**Default:** `7`
+
+### `tests`
+
+Top-level test section for cross-rule test cases and test-only configuration. Used by [`runok test`](/cli/test/).
+
+**Type:** `object`\
+**Default:** `{}`\
+**Required:** No
+
+```yaml title="runok.yml"
+tests:
+  extends:
+    - ./test-fixtures/extra-rules.yml
+  cases:
+    - allow: 'git push origin main'
+    - deny: 'git push --force origin main'
+```
+
+#### `tests.extends`
+
+Additional configuration files to merge only during test execution. These files are not loaded during normal `runok check` or `runok exec`.
+
+**Type:** `list[str]`\
+**Default:** `[]`
+
+#### `tests.cases`
+
+Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, or `deny`) and the command to evaluate.
+
+**Type:** `list[TestEntry]`\
+**Default:** `[]`
+
 ## Complete Example
 
 ```yaml title="runok.yml"
@@ -325,6 +474,12 @@ definitions:
     secrets:
       - ~/.ssh
       - ~/.gnupg
+  vars:
+    safe-scripts:
+      type: path
+      values:
+        - ./tests/run
+        - ./scripts/lint.sh
   sandbox:
     standard:
       fs:
@@ -346,6 +501,11 @@ definitions:
     - 'sudo <cmd>'
   commands:
     - mycustomtool
+
+audit:
+  enabled: true
+  rotation:
+    retention_days: 30
 
 rules:
   - allow: 'git *'

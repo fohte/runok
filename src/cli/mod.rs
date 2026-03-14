@@ -1,11 +1,13 @@
 mod route;
+mod validate;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 pub use route::{CheckRoute, route_check};
+pub use validate::validate_no_unknown_flags;
 
 #[derive(Parser)]
-#[command(name = "runok", version)]
+#[command(name = "runok", version = env!("RUNOK_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -18,8 +20,14 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// View audit log entries
+    Audit(AuditArgs),
+    /// Run tests defined in the config to verify rules
+    Test(TestArgs),
     /// Initialize runok configuration
     Init(InitArgs),
+    /// Force-update all remote presets referenced via extends
+    UpdatePresets,
     /// Print the JSON Schema for runok.yml to stdout
     #[cfg(feature = "config-schema")]
     ConfigSchema,
@@ -74,6 +82,14 @@ pub struct SandboxExecArgs {
 
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct TestArgs {
+    /// Path to the config file to test
+    #[arg(short = 'c', long)]
+    pub config: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct ExecArgs {
     /// Sandbox preset name
     #[arg(long)]
@@ -110,6 +126,38 @@ pub struct CheckArgs {
     /// Command and arguments to check (skips stdin)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct AuditArgs {
+    /// Filter by action kind (allow, deny, ask)
+    #[arg(long)]
+    pub action: Option<String>,
+
+    /// Show entries since this time (e.g., "1h", "7d", "2026-02-25")
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Show entries until this time (e.g., "1h", "7d", "2026-02-25")
+    #[arg(long)]
+    pub until: Option<String>,
+
+    /// Filter by command substring
+    #[arg(long)]
+    pub command: Option<String>,
+
+    /// Filter by working directory (includes subdirectories)
+    #[arg(long)]
+    pub dir: Option<String>,
+
+    /// Maximum number of entries to show
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
@@ -164,6 +212,26 @@ mod tests {
         &["runok", "check", "--verbose", "--", "git", "status"],
         Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
     )]
+    #[case::audit_default(
+        &["runok", "audit"],
+        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, dir: None, limit: 50, json: false }),
+    )]
+    #[case::audit_with_action(
+        &["runok", "audit", "--action", "deny"],
+        Commands::Audit(AuditArgs { action: Some("deny".into()), since: None, until: None, command: None, dir: None, limit: 50, json: false }),
+    )]
+    #[case::audit_with_since(
+        &["runok", "audit", "--since", "1h"],
+        Commands::Audit(AuditArgs { action: None, since: Some("1h".into()), until: None, command: None, dir: None, limit: 50, json: false }),
+    )]
+    #[case::audit_with_dir(
+        &["runok", "audit", "--dir", "/home/user/project"],
+        Commands::Audit(AuditArgs { action: None, since: None, until: None, command: None, dir: Some("/home/user/project".into()), limit: 50, json: false }),
+    )]
+    #[case::audit_with_all_options(
+        &["runok", "audit", "--action", "allow", "--since", "7d", "--until", "1h", "--command", "git", "--limit", "10", "--json"],
+        Commands::Audit(AuditArgs { action: Some("allow".into()), since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), dir: None, limit: 10, json: true }),
+    )]
     #[case::init_defaults(
         &["runok", "init"],
         Commands::Init(InitArgs { scope: None, yes: false }),
@@ -187,6 +255,22 @@ mod tests {
     #[case::init_all_flags(
         &["runok", "init", "--scope", "user", "-y"],
         Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
+    )]
+    #[case::test_default(
+        &["runok", "test"],
+        Commands::Test(TestArgs { config: None }),
+    )]
+    #[case::test_with_config_short(
+        &["runok", "test", "-c", "path/to/config.yml"],
+        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("path/to/config.yml")) }),
+    )]
+    #[case::test_with_config_long(
+        &["runok", "test", "--config", "runok.yml"],
+        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("runok.yml")) }),
+    )]
+    #[case::update_presets(
+        &["runok", "update-presets"],
+        Commands::UpdatePresets,
     )]
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);

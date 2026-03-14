@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
 use super::ExprError;
+use super::command_parser::{PipeInfo, RedirectInfo};
 
 /// Context for CEL expression evaluation, providing access to
-/// environment variables, parsed flags, positional arguments, and path lists.
+/// environment variables, parsed flags, positional arguments, path lists,
+/// redirect operators, and pipeline position.
 pub struct ExprContext {
     pub env: HashMap<String, String>,
     pub flags: HashMap<String, Option<String>>,
     pub args: Vec<String>,
     pub paths: HashMap<String, Vec<String>>,
+    pub redirects: Vec<RedirectInfo>,
+    pub pipe: PipeInfo,
+    pub vars: HashMap<String, String>,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -41,6 +46,51 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         .add_variable("paths", &context.paths)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
+    // Register redirects: list of maps with type, operator, target, descriptor
+    let redirects_value: Vec<HashMap<String, cel_interpreter::Value>> = context
+        .redirects
+        .iter()
+        .map(|r| {
+            let mut m = HashMap::new();
+            m.insert(
+                "type".to_string(),
+                cel_interpreter::Value::String(r.redirect_type.clone().into()),
+            );
+            m.insert(
+                "operator".to_string(),
+                cel_interpreter::Value::String(r.operator.clone().into()),
+            );
+            m.insert(
+                "target".to_string(),
+                cel_interpreter::Value::String(r.target.clone().into()),
+            );
+            m.insert(
+                "descriptor".to_string(),
+                match r.descriptor {
+                    Some(fd) => cel_interpreter::Value::Int(fd),
+                    None => cel_interpreter::Value::Null,
+                },
+            );
+            m
+        })
+        .collect();
+    cel_context.add_variable_from_value("redirects", redirects_value);
+
+    // Register pipe: map with stdin and stdout booleans
+    let pipe_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
+        (
+            "stdin".to_string(),
+            cel_interpreter::Value::Bool(context.pipe.stdin),
+        ),
+        (
+            "stdout".to_string(),
+            cel_interpreter::Value::Bool(context.pipe.stdout),
+        ),
+    ]);
+    cel_context.add_variable_from_value("pipe", pipe_value);
+
+    cel_context.add_variable_from_value("vars", context.vars.clone());
+
     let result = program
         .execute(&cel_context)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
@@ -62,6 +112,9 @@ mod tests {
             flags: HashMap::new(),
             args: Vec::new(),
             paths: HashMap::new(),
+            redirects: Vec::new(),
+            pipe: PipeInfo::default(),
+            vars: HashMap::new(),
         }
     }
 
@@ -160,6 +213,45 @@ mod tests {
         assert!(!evaluate("'.bashrc' in paths.sensitive", &context).unwrap());
     }
 
+    // === Variable reference access ===
+
+    #[rstest]
+    #[case::exact_match("vars['instance-ids'] == 'i-abc123'", "instance-ids", "i-abc123", true)]
+    #[case::no_match(
+        "vars['instance-ids'] == 'i-abc123'",
+        "instance-ids",
+        "i-xyz999",
+        false
+    )]
+    fn vars_access(
+        #[case] expr: &str,
+        #[case] key: &str,
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            vars: HashMap::from([(key.to_string(), value.to_string())]),
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    #[test]
+    fn vars_has_check() {
+        let context = ExprContext {
+            vars: HashMap::from([("region".to_string(), "us-east-1".to_string())]),
+            ..empty_context()
+        };
+        assert!(evaluate("has(vars.region)", &context).unwrap());
+        assert!(evaluate("vars.region == 'us-east-1'", &context).unwrap());
+    }
+
+    #[test]
+    fn vars_empty_when_no_var_captured() {
+        let context = empty_context();
+        assert!(evaluate("vars.size() == 0", &context).unwrap());
+    }
+
     // === Logical operators ===
 
     #[test]
@@ -203,7 +295,7 @@ mod tests {
             env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
             flags: HashMap::from([("method".to_string(), Some("POST".to_string()))]),
             args: vec!["https://prod.example.com/api".to_string()],
-            paths: HashMap::new(),
+            ..empty_context()
         };
         assert!(
             evaluate(
@@ -255,5 +347,80 @@ mod tests {
             ExprError::TypeError(_) => {}
             other => panic!("expected ExprError::TypeError, got {:?}", other),
         }
+    }
+
+    // === Redirect variable access ===
+
+    #[rstest]
+    #[case::exists_output_redirect_present(
+        "redirects.exists(r, r.type == \"output\")",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        true
+    )]
+    #[case::exists_output_redirect_absent(
+        "redirects.exists(r, r.type == \"output\")",
+        vec![],
+        false
+    )]
+    #[case::size_redirects_with_entry(
+        "size(redirects) > 0",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        true
+    )]
+    #[case::redirect_target_starts_with(
+        "redirects[0].target.startsWith(\"/tmp/\")",
+        vec![RedirectInfo {
+            redirect_type: "output".to_string(),
+            operator: ">".to_string(),
+            target: "/tmp/log.txt".to_string(),
+            descriptor: None,
+        }],
+        true
+    )]
+    #[case::redirect_descriptor_equals_2(
+        "redirects[0].descriptor == 2",
+        vec![RedirectInfo {
+            redirect_type: "dup".to_string(),
+            operator: ">&".to_string(),
+            target: "&1".to_string(),
+            descriptor: Some(2),
+        }],
+        true
+    )]
+    fn redirects_variable_access(
+        #[case] expr: &str,
+        #[case] redirects: Vec<RedirectInfo>,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            redirects,
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    // === Pipe variable access ===
+
+    #[rstest]
+    #[case::pipe_stdin_true("pipe.stdin == true", PipeInfo { stdin: true, stdout: false }, true)]
+    #[case::pipe_stdin_false("pipe.stdin == true", PipeInfo { stdin: false, stdout: false }, false)]
+    #[case::pipe_stdout_true("pipe.stdout == true", PipeInfo { stdin: false, stdout: true }, true)]
+    #[case::pipe_stdout_false("pipe.stdout == true", PipeInfo { stdin: false, stdout: false }, false)]
+    fn pipe_variable_access(#[case] expr: &str, #[case] pipe: PipeInfo, #[case] expected: bool) {
+        let context = ExprContext {
+            pipe,
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
     }
 }

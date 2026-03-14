@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use super::cache::PresetCache;
+use super::preset::resolve_extends;
 use super::{Config, ConfigError, parse_config};
 
 /// Trait for loading and merging configuration files.
@@ -10,6 +12,7 @@ pub trait ConfigLoader {
 /// Default implementation that reads from the filesystem.
 pub struct DefaultConfigLoader {
     global_dir: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
 }
 
 impl Default for DefaultConfigLoader {
@@ -27,14 +30,49 @@ const LOCAL_OVERRIDE_FILENAMES: &[&str] = &["runok.local.yml", "runok.local.yaml
 impl DefaultConfigLoader {
     pub fn new() -> Self {
         let global_dir = super::dirs::config_dir().map(|dir| dir.join("runok"));
-        Self { global_dir }
+        let home_dir = super::dirs::home_dir();
+        Self {
+            global_dir,
+            home_dir,
+        }
     }
 
     /// Create a loader with an explicit global config directory (for testing).
     pub fn with_global_dir(dir: PathBuf) -> Self {
         Self {
             global_dir: Some(dir),
+            home_dir: super::dirs::home_dir(),
         }
+    }
+
+    /// Create a loader with explicit global and home directories (for testing).
+    #[cfg(test)]
+    fn with_dirs(global_dir: PathBuf, home_dir: PathBuf) -> Self {
+        Self {
+            global_dir: Some(global_dir),
+            home_dir: Some(home_dir),
+        }
+    }
+
+    /// Walk up from `start` looking for a directory that contains a config file
+    /// (`runok.yml`, `runok.yaml`, `runok.local.yml`, or `runok.local.yaml`).
+    /// Stop before reaching `home_dir` (i.e. `~/runok.yml` is ignored).
+    fn find_project_dir(&self, start: &Path) -> Option<PathBuf> {
+        for ancestor in start.ancestors() {
+            if let Some(home) = &self.home_dir
+                && ancestor == home
+            {
+                break;
+            }
+            let has_config = CONFIG_FILENAMES
+                .iter()
+                .chain(LOCAL_OVERRIDE_FILENAMES)
+                .any(|name| ancestor.join(name).exists());
+            if has_config {
+                return Some(ancestor.to_path_buf());
+            }
+        }
+        None
     }
 
     /// Find the first existing file from `filenames` inside `dir`.
@@ -45,9 +83,28 @@ impl DefaultConfigLoader {
             .find(|path| path.exists())
     }
 
-    fn find_and_parse(dir: &Path, filenames: &[&str]) -> Result<Option<Config>, ConfigError> {
+    /// Read, parse, resolve paths, and resolve extends in a config file using its own base_dir.
+    /// Resolving paths and extends before merging prevents global config paths from being
+    /// incorrectly re-resolved with the local base_dir.
+    fn find_parse_and_resolve(
+        dir: &Path,
+        filenames: &[&str],
+    ) -> Result<Option<Config>, ConfigError> {
         Self::find_config(dir, filenames)
-            .map(|p| Self::read_and_parse(&p))
+            .map(|p| {
+                let mut config = Self::read_and_parse(&p)?;
+                let base_dir = p.parent().unwrap_or(dir);
+                super::path_resolver::resolve_config_paths(&mut config, base_dir)?;
+                if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
+                    let source_name = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("runok.yml");
+                    let cache = PresetCache::from_env()?;
+                    config = resolve_extends(config, base_dir, source_name, &cache)?;
+                }
+                Ok(config)
+            })
             .transpose()
     }
 
@@ -57,18 +114,40 @@ impl DefaultConfigLoader {
     }
 }
 
+/// Strip audit settings from a config, emitting a warning.
+/// Audit settings can only be configured in the global config.
+fn strip_audit(mut config: Config, source: &str) -> Config {
+    if config.audit.is_some() {
+        eprintln!(
+            "warning: 'audit' section in {source} is ignored \
+             (audit settings can only be configured in the global config)"
+        );
+        config.audit = None;
+    }
+    config
+}
+
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
+        // Resolve paths in each config file with its own base_dir before merging
         let (global, global_local_override) = match &self.global_dir {
             Some(dir) => (
-                Self::find_and_parse(dir, CONFIG_FILENAMES)?,
-                Self::find_and_parse(dir, LOCAL_OVERRIDE_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?,
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?,
             ),
             None => (None, None),
         };
 
-        let local = Self::find_and_parse(cwd, CONFIG_FILENAMES)?;
-        let local_override = Self::find_and_parse(cwd, LOCAL_OVERRIDE_FILENAMES)?;
+        let project_dir = self.find_project_dir(cwd);
+        let (local, local_override) = match &project_dir {
+            Some(dir) => (
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?
+                    .map(|c| strip_audit(c, "project config")),
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?
+                    .map(|c| strip_audit(c, "local override config")),
+            ),
+            None => (None, None),
+        };
 
         // Merge priority: global < global local override < project < project local override
         let mut config = global
@@ -86,7 +165,7 @@ impl ConfigLoader for DefaultConfigLoader {
 mod tests {
     use super::*;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
 
@@ -94,19 +173,23 @@ mod tests {
     struct TestEnv {
         _tmp: TempDir,
         global_dir: PathBuf,
+        home_dir: PathBuf,
         cwd: PathBuf,
     }
 
     impl TestEnv {
         fn new() -> Self {
             let tmp = TempDir::new().unwrap();
+            let home_dir = tmp.path().join("home");
             let global_dir = tmp.path().join("global");
-            let cwd = tmp.path().join("project");
+            let cwd = home_dir.join("project");
+            fs::create_dir_all(&home_dir).unwrap();
             fs::create_dir_all(&global_dir).unwrap();
             fs::create_dir_all(&cwd).unwrap();
             Self {
                 _tmp: tmp,
                 global_dir,
+                home_dir,
                 cwd,
             }
         }
@@ -120,7 +203,7 @@ mod tests {
         }
 
         fn loader(&self) -> DefaultConfigLoader {
-            DefaultConfigLoader::with_global_dir(self.global_dir.clone())
+            DefaultConfigLoader::with_dirs(self.global_dir.clone(), self.home_dir.clone())
         }
 
         fn load(&self) -> Result<Config, ConfigError> {
@@ -128,7 +211,10 @@ mod tests {
         }
 
         fn loader_without_global(&self) -> DefaultConfigLoader {
-            DefaultConfigLoader { global_dir: None }
+            DefaultConfigLoader {
+                global_dir: None,
+                home_dir: Some(self.home_dir.clone()),
+            }
         }
 
         fn load_without_global(&self) -> Result<Config, ConfigError> {
@@ -136,9 +222,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn load_no_config_files_returns_default() {
-        let env = TestEnv::new();
+    #[fixture]
+    fn env() -> TestEnv {
+        TestEnv::new()
+    }
+
+    #[rstest]
+    fn load_no_config_files_returns_default(env: TestEnv) {
         assert_eq!(env.load_without_global().unwrap(), Config::default());
     }
 
@@ -147,8 +237,7 @@ mod tests {
     #[rstest]
     #[case::yml("runok.yml")]
     #[case::yaml_fallback("runok.yaml")]
-    fn load_global_only(#[case] filename: &str) {
-        let env = TestEnv::new();
+    fn load_global_only(env: TestEnv, #[case] filename: &str) {
         env.write_global(
             filename,
             indoc! {"
@@ -167,8 +256,11 @@ mod tests {
     #[rstest]
     #[case::global("runok.yml", "runok.yaml")]
     #[case::global_local_override("runok.local.yml", "runok.local.yaml")]
-    fn load_global_yml_takes_priority_over_yaml(#[case] yml_file: &str, #[case] yaml_file: &str) {
-        let env = TestEnv::new();
+    fn load_global_yml_takes_priority_over_yaml(
+        env: TestEnv,
+        #[case] yml_file: &str,
+        #[case] yaml_file: &str,
+    ) {
         env.write_global(
             yml_file,
             indoc! {"
@@ -196,8 +288,7 @@ mod tests {
     #[rstest]
     #[case::global_local_yml("runok.local.yml")]
     #[case::global_local_yaml_fallback("runok.local.yaml")]
-    fn load_global_local_override(#[case] filename: &str) {
-        let env = TestEnv::new();
+    fn load_global_local_override(env: TestEnv, #[case] filename: &str) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -225,8 +316,7 @@ mod tests {
     #[rstest]
     #[case::yml("runok.yml")]
     #[case::yaml_fallback("runok.yaml")]
-    fn load_local_only(#[case] filename: &str) {
-        let env = TestEnv::new();
+    fn load_local_only(env: TestEnv, #[case] filename: &str) {
         env.write_local(
             filename,
             indoc! {"
@@ -245,8 +335,11 @@ mod tests {
     #[rstest]
     #[case::project("runok.yml", "runok.yaml")]
     #[case::project_local_override("runok.local.yml", "runok.local.yaml")]
-    fn load_project_yml_takes_priority_over_yaml(#[case] yml_file: &str, #[case] yaml_file: &str) {
-        let env = TestEnv::new();
+    fn load_project_yml_takes_priority_over_yaml(
+        env: TestEnv,
+        #[case] yml_file: &str,
+        #[case] yaml_file: &str,
+    ) {
         env.write_local(
             yml_file,
             indoc! {"
@@ -274,8 +367,7 @@ mod tests {
     #[rstest]
     #[case::local_yml("runok.local.yml")]
     #[case::local_yaml_fallback("runok.local.yaml")]
-    fn load_local_override(#[case] filename: &str) {
-        let env = TestEnv::new();
+    fn load_local_override(env: TestEnv, #[case] filename: &str) {
         env.write_local(
             "runok.yml",
             indoc! {"
@@ -300,9 +392,8 @@ mod tests {
 
     // -- Merge priority tests --
 
-    #[test]
-    fn load_merges_global_and_local() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_merges_global_and_local(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -335,9 +426,8 @@ mod tests {
         assert_eq!(rules[1].allow.as_deref(), Some("git status"));
     }
 
-    #[test]
-    fn load_merges_definitions() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_merges_definitions(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {r#"
@@ -371,16 +461,26 @@ mod tests {
         let defs = config.definitions.unwrap();
 
         let paths = defs.paths.unwrap();
-        assert_eq!(paths["sensitive"], vec![".env*", "~/.ssh/**"]);
+        // .env* is resolved relative to the global config's base_dir
+        let global_env = format!("{}/.env*", env.global_dir.display());
+        // ~/ is expanded using the HOME environment variable
+        let sensitive = &paths["sensitive"];
+        assert_eq!(sensitive[0], global_env);
+        assert!(
+            !sensitive[1].starts_with("~/"),
+            "tilde should be expanded: {}",
+            sensitive[1]
+        );
+        assert!(sensitive[1].ends_with("/.ssh/**"));
+        // Absolute paths are kept as-is
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
         assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);
         assert_eq!(defs.commands.unwrap(), vec!["git commit", "git push"]);
     }
 
-    #[test]
-    fn load_project_overrides_global_local_override() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_project_overrides_global_local_override(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -410,9 +510,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn load_merges_all_three_layers() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_merges_all_three_layers(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -455,9 +554,8 @@ mod tests {
         assert_eq!(rules[2].allow.as_deref(), Some("cargo test"));
     }
 
-    #[test]
-    fn load_merges_all_four_layers() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_merges_all_four_layers(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -507,9 +605,8 @@ mod tests {
         assert_eq!(rules[3].allow.as_deref(), Some("cargo test"));
     }
 
-    #[test]
-    fn load_local_override_only_without_project_config() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_local_override_only_without_project_config(env: TestEnv) {
         env.write_local(
             "runok.local.yml",
             indoc! {"
@@ -524,11 +621,108 @@ mod tests {
         assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
     }
 
-    // -- Parse error tests --
+    #[test]
+    fn load_audit_global_only_ignores_local_overrides() {
+        let env = TestEnv::new();
+        env.write_global(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: true
+                  path: /global/audit/
+                  rotation:
+                    retention_days: 30
+            "},
+        );
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: false
+                  path: /local/audit/
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                audit:
+                  rotation:
+                    retention_days: 7
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // global values are preserved; local overrides are ignored
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        assert_eq!(audit.rotation.unwrap().retention_days, Some(30));
+    }
 
     #[test]
-    fn load_validation_error_propagated() {
+    fn load_audit_stripped_from_extended_project_config() {
         let env = TestEnv::new();
+        env.write_global(
+            "runok.yml",
+            indoc! {"
+                audit:
+                  enabled: true
+                  path: /global/audit/
+            "},
+        );
+        // Preset file referenced by project config contains audit settings
+        fs::write(
+            env.cwd.join("preset.yml"),
+            indoc! {"
+                audit:
+                  enabled: false
+                  path: /preset/audit/
+                rules:
+                  - allow: 'echo preset'
+            "},
+        )
+        .unwrap();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                extends:
+                  - ./preset.yml
+                rules:
+                  - allow: 'echo local'
+            "},
+        );
+
+        let config = env.load().unwrap();
+        let audit = config.audit.unwrap();
+        // Audit from the extended preset is stripped; global audit is preserved
+        assert_eq!(audit.enabled, Some(true));
+        assert_eq!(audit.path.as_deref(), Some("/global/audit/"));
+        // Rules from the preset are still merged
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].allow.as_deref(), Some("echo preset"));
+        assert_eq!(rules[1].allow.as_deref(), Some("echo local"));
+    }
+
+    #[test]
+    fn load_audit_absent_returns_none() {
+        let env = TestEnv::new();
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+
+        let config = env.load_without_global().unwrap();
+        assert_eq!(config.audit, None);
+    }
+
+    // -- Parse error tests --
+
+    #[rstest]
+    fn load_validation_error_propagated(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -546,8 +740,11 @@ mod tests {
     #[rstest]
     #[case::global_parse_error(true, false)]
     #[case::local_parse_error(false, true)]
-    fn load_yaml_parse_error(#[case] global_invalid: bool, #[case] local_invalid: bool) {
-        let env = TestEnv::new();
+    fn load_yaml_parse_error(
+        env: TestEnv,
+        #[case] global_invalid: bool,
+        #[case] local_invalid: bool,
+    ) {
         if global_invalid {
             env.write_global("runok.yml", "rules: [invalid yaml\n  broken:");
         }
@@ -563,21 +760,125 @@ mod tests {
         assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
     }
 
-    #[test]
-    fn load_global_local_override_parse_error() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_global_local_override_parse_error(env: TestEnv) {
         env.write_global("runok.local.yml", "rules: [invalid yaml\n  broken:");
 
         let result = env.load();
         assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
     }
 
-    #[test]
-    fn load_local_override_parse_error() {
-        let env = TestEnv::new();
+    #[rstest]
+    fn load_local_override_parse_error(env: TestEnv) {
         env.write_local("runok.local.yml", "rules: [invalid yaml\n  broken:");
 
         let result = env.load_without_global();
         assert!(matches!(result.unwrap_err(), ConfigError::Yaml(_)));
+    }
+
+    // -- Ancestor directory traversal tests --
+
+    #[rstest]
+    fn load_finds_config_in_parent_directory(env: TestEnv) {
+        // Config is in the project dir (parent of subdirectory)
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        // cwd is a subdirectory
+        let subdir = env.cwd.join("src").join("lib");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Deny)
+        );
+    }
+
+    #[rstest]
+    fn load_finds_config_and_local_override_in_parent(env: TestEnv) {
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        env.write_local(
+            "runok.local.yml",
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        );
+        let subdir = env.cwd.join("src");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Allow)
+        );
+    }
+
+    #[rstest]
+    fn load_stops_at_home_dir(env: TestEnv) {
+        // Place config in home dir — should be ignored
+        fs::write(
+            env.home_dir.join("runok.yml"),
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        )
+        .unwrap();
+        let subdir = env.home_dir.join("projects").join("myapp");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[rstest]
+    fn load_nearest_config_wins(env: TestEnv) {
+        // Outer config at project level
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                defaults:
+                  action: deny
+            "},
+        );
+        // Inner config in subproject
+        let inner = env.cwd.join("packages").join("sub");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(
+            inner.join("runok.yml"),
+            indoc! {"
+                defaults:
+                  action: allow
+            "},
+        )
+        .unwrap();
+
+        let config = env.loader_without_global().load(&inner).unwrap();
+        assert_eq!(
+            config.defaults.unwrap().action,
+            Some(crate::config::ActionKind::Allow)
+        );
+    }
+
+    #[rstest]
+    fn load_no_config_in_ancestor_returns_default(env: TestEnv) {
+        // No config files anywhere
+        let subdir = env.cwd.join("deep").join("path");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let config = env.loader_without_global().load(&subdir).unwrap();
+        assert_eq!(config, Config::default());
     }
 }

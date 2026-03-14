@@ -15,6 +15,7 @@ struct Summary {
     hook_registered: bool,
     converted_rules: Option<String>,
     permissions_removed: bool,
+    conflicting_hook_count: usize,
 }
 
 /// Scope for init configuration.
@@ -86,6 +87,7 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
     summary.hook_registered = result.hook_registered;
     summary.converted_rules = result.converted_rules;
     summary.permissions_removed = result.permissions_removed;
+    summary.conflicting_hook_count = result.conflicting_hook_count;
 }
 
 /// Run the init wizard.
@@ -123,6 +125,7 @@ pub fn run_wizard_with_paths(
         hook_registered: false,
         converted_rules: None,
         permissions_removed: false,
+        conflicting_hook_count: 0,
     };
 
     match scope {
@@ -699,6 +702,120 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[rstest]
+    fn wizard_warns_when_conflicting_hooks_exist() {
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(indoc! {r#"
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "runok check --input-format claude-code-hook"
+                                }
+                            ]
+                        },
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "some-other-hook"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        "#});
+
+        // Hook already registered, no migratable rules -> no prompts needed
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        // Verify that the settings are unchanged (hook already exists)
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        // The other hook entry should still be present
+        assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 2,);
+    }
+
+    #[rstest]
+    fn wizard_no_warning_when_no_conflicting_hooks() {
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(indoc! {r#"
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "runok check --input-format claude-code-hook"
+                                }
+                            ]
+                        },
+                        {
+                            "matcher": "Read",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "some-read-hook"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        "#});
+
+        // Hook already registered, non-Bash matcher -> no conflict
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+    }
+
+    #[rstest]
+    fn wizard_warns_after_registering_hook_with_existing_conflicting_entry() {
+        let env = TestEnv::new();
+        // Has a non-runok Bash-matching hook and permissions to trigger the flow
+        env.setup_user_claude_settings(indoc! {r#"
+            {
+                "permissions": {
+                    "allow": ["Bash(git status)"]
+                },
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "other-tool"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        "#});
+
+        // Confirm(true) for migration, Confirm(true) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        // Verify runok hook was added alongside existing hook
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 2,);
     }
 
     #[rstest]

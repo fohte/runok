@@ -66,11 +66,95 @@ Flags (tokens starting with `-`) in patterns are matched **regardless of their p
 | `git push origin --force main` | Matches |
 | `git push origin main --force` | Matches |
 
-This applies to both standalone flags ([alternation](/pattern-syntax/alternation/)) and [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
+This applies to standalone flags ([alternation](/pattern-syntax/alternation/)), [flag-value pairs](/pattern-syntax/matching-behavior/#flag-schema-inference), and flag-only [negations](/pattern-syntax/alternation/#negation). The matcher scans the entire command token list to find a matching flag, removes it, and continues matching the remaining tokens.
 
-### Non-flag Tokens are Position-dependent
+### `=`-joined Flag Values
 
-Tokens that do not start with `-` are matched **in order**:
+Flag-value patterns also match `=`-joined forms. A pattern like `-X POST` matches both the space-separated `curl -X POST` and the `=`-joined `curl -X=POST`:
+
+```yaml
+- deny: 'curl -X|--request POST *'
+```
+
+| Command                                   | Result  |
+| ----------------------------------------- | ------- |
+| `curl -X POST https://example.com`        | Matches |
+| `curl -X=POST https://example.com`        | Matches |
+| `curl --request=POST https://example.com` | Matches |
+
+Standalone flag alternations (without an explicit value pattern) also recognize `=`-joined tokens. The flag part is matched against the alternation and the value part becomes a separate token for subsequent pattern matching:
+
+```yaml
+- ask: 'curl * -o|--output *'
+- allow: 'curl *'
+```
+
+| Command                                      | Result  |
+| -------------------------------------------- | ------- |
+| `curl --output /tmp/out https://example.com` | `ask`   |
+| `curl --output=/tmp/out https://example.com` | `ask`   |
+| `curl -o=/tmp/out https://example.com`       | `ask`   |
+| `curl https://example.com`                   | `allow` |
+
+### Fused Short Flag Values
+
+Flag-value patterns also match fused short flags, where the value is directly attached to the flag character without a space or `=`. A pattern like `-n *` matches `-n 3` (space-separated), `-n=3` (`=`-joined), and `-n3` (fused):
+
+```yaml
+- allow: 'git tag [-n *] *'
+```
+
+| Command           | Result  |
+| ----------------- | ------- |
+| `git tag -n 3 v1` | Matches |
+| `git tag -n=3 v1` | Matches |
+| `git tag -n3 v1`  | Matches |
+| `git tag v1`      | Matches |
+
+Fused splitting only applies to short flags (single `-` followed by a single ASCII character). It is only attempted when the pattern declares a `FlagWithValue` for that flag (e.g. `-n *`), so combined boolean flags like `-rf` are not falsely split.
+
+### Flag-only Negation
+
+Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):
+
+```yaml
+- allow: 'find !-delete|-fprint|-fls *'
+```
+
+| Command                    | Result         |
+| -------------------------- | -------------- |
+| `find . -name foo -type f` | Matches        |
+| `find`                     | Matches        |
+| `find . -delete`           | Does not match |
+| `find -fprint output .`    | Does not match |
+
+This also works with `=`-joined flags. For example, `!--pre` rejects both `--pre value` (space-separated) and `--pre=value` (`=`-joined):
+
+```yaml
+- allow: 'rg !--pre *'
+```
+
+| Command                  | Result         |
+| ------------------------ | -------------- |
+| `rg pattern file.txt`    | Matches        |
+| `rg --pre pdftotext pat` | Does not match |
+| `rg --pre=pdftotext pat` | Does not match |
+
+### Positional Arguments Skip Over Flags
+
+Non-flag positional tokens — both literals and [alternations](/pattern-syntax/alternation/) — also benefit from order-independent matching. When matching a positional token, the matcher skips over any leading flag tokens in the command to find the first positional argument. This means flags can appear before positional arguments without breaking the match:
+
+```yaml
+- allow: 'gh api -X GET *'
+```
+
+| Command                | Result  |
+| ---------------------- | ------- |
+| `gh api -X GET /repos` | Matches |
+| `gh -X GET api /repos` | Matches |
+| `gh api /repos -X GET` | Matches |
+
+Positional arguments are still matched **in order relative to each other**:
 
 ```yaml
 - allow: 'git push origin main'
@@ -80,6 +164,19 @@ Tokens that do not start with `-` are matched **in order**:
 | ---------------------- | -------------- |
 | `git push origin main` | Matches        |
 | `git push main origin` | Does not match |
+
+The bare `--` separator is treated as a positional token, not a flag. It is always matched at its exact position to preserve the distinction between arguments before and after `--`.
+
+## Backslash Escapes
+
+A backslash (`\`) in a pattern escapes the following character. During matching, the backslash is stripped and the remaining character is compared literally. This is useful for characters that have special meaning in shells, such as `;`:
+
+```yaml
+# \; in the pattern matches ; in the command
+- "find * -exec <cmd> \\;|+"
+```
+
+The shell resolves `\;` to `;` before runok sees the command, so the pattern's `\;` (after unescape) matches the command's `;`.
 
 ## Combined Short Flags
 

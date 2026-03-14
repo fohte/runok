@@ -3,6 +3,20 @@ use std::process::Command;
 
 use super::PresetError;
 
+/// Whether a remote ref is a tag or a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    Tag,
+    Branch,
+}
+
+/// A remote ref returned by `ls-remote`, with its name and kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRef {
+    pub name: String,
+    pub kind: RefKind,
+}
+
 /// Abstraction for git command execution.
 ///
 /// Enables testing with `MockGitClient` while `ProcessGitClient` runs real git processes.
@@ -23,6 +37,10 @@ pub trait GitClient {
 
     /// Run `git rev-parse HEAD` in `repo_dir` and return the commit SHA.
     fn rev_parse_head(&self, repo_dir: &Path) -> Result<String, PresetError>;
+
+    /// Run `git ls-remote --tags --heads --refs <url>` and return remote refs
+    /// with their kind (tag or branch).
+    fn ls_remote_refs(&self, url: &str) -> Result<Vec<RemoteRef>, PresetError>;
 }
 
 /// Strip credentials from a URL for safe use in error messages.
@@ -149,6 +167,49 @@ impl GitClient for ProcessGitClient {
             })
         }
     }
+
+    fn ls_remote_refs(&self, url: &str) -> Result<Vec<RemoteRef>, PresetError> {
+        let mut cmd = Command::new("git");
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_INDEX_FILE");
+        // --tags --heads: list both tags and branches; --refs excludes peeled refs (^{})
+        cmd.args(["ls-remote", "--tags", "--heads", "--refs", "--", url]);
+
+        let output = cmd.output().map_err(|e| PresetError::GitClone {
+            reference: sanitize_url(url),
+            message: format!("failed to execute git ls-remote: {e}"),
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PresetError::GitClone {
+                reference: sanitize_url(url),
+                message: format!("git ls-remote failed: {}", stderr.trim()),
+            });
+        }
+
+        // Output format: "<sha>\trefs/tags/<name>" or "<sha>\trefs/heads/<name>"
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let refs = stdout
+            .lines()
+            .filter_map(|line| {
+                let (_sha, refname) = line.split_once('\t')?;
+                if let Some(name) = refname.strip_prefix("refs/tags/") {
+                    Some(RemoteRef {
+                        name: name.to_string(),
+                        kind: RefKind::Tag,
+                    })
+                } else {
+                    refname.strip_prefix("refs/heads/").map(|name| RemoteRef {
+                        name: name.to_string(),
+                        kind: RefKind::Branch,
+                    })
+                }
+            })
+            .collect();
+
+        Ok(refs)
+    }
 }
 
 #[cfg(test)]
@@ -157,7 +218,7 @@ pub mod mock {
     use std::collections::VecDeque;
     use std::path::Path;
 
-    use super::{GitClient, PresetError};
+    use super::{GitClient, PresetError, RemoteRef};
 
     /// Records of calls made to MockGitClient methods.
     #[derive(Debug, Clone)]
@@ -166,6 +227,7 @@ pub mod mock {
         Fetch,
         Checkout { git_ref: String },
         RevParseHead,
+        LsRemoteRefs { url: String },
     }
 
     /// Test double for `GitClient` that returns pre-configured results.
@@ -174,6 +236,7 @@ pub mod mock {
         fetch_results: RefCell<VecDeque<Result<(), PresetError>>>,
         checkout_results: RefCell<VecDeque<Result<(), PresetError>>>,
         rev_parse_results: RefCell<VecDeque<Result<String, PresetError>>>,
+        ls_remote_refs_results: RefCell<VecDeque<Result<Vec<RemoteRef>, PresetError>>>,
         pub calls: RefCell<Vec<GitCall>>,
     }
 
@@ -190,6 +253,7 @@ pub mod mock {
                 fetch_results: RefCell::new(VecDeque::new()),
                 checkout_results: RefCell::new(VecDeque::new()),
                 rev_parse_results: RefCell::new(VecDeque::new()),
+                ls_remote_refs_results: RefCell::new(VecDeque::new()),
                 calls: RefCell::new(Vec::new()),
             }
         }
@@ -215,6 +279,12 @@ pub mod mock {
         /// Queue a result for the next `rev_parse_head` call.
         pub fn on_rev_parse(&self, result: Result<String, PresetError>) -> &Self {
             self.rev_parse_results.borrow_mut().push_back(result);
+            self
+        }
+
+        /// Queue a result for the next `ls_remote_refs` call.
+        pub fn on_ls_remote_refs(&self, result: Result<Vec<RemoteRef>, PresetError>) -> &Self {
+            self.ls_remote_refs_results.borrow_mut().push_back(result);
             self
         }
 
@@ -258,6 +328,13 @@ pub mod mock {
         fn rev_parse_head(&self, _repo_dir: &Path) -> Result<String, PresetError> {
             self.calls.borrow_mut().push(GitCall::RevParseHead);
             Self::pop_result(&self.rev_parse_results)
+        }
+
+        fn ls_remote_refs(&self, url: &str) -> Result<Vec<RemoteRef>, PresetError> {
+            self.calls.borrow_mut().push(GitCall::LsRemoteRefs {
+                url: url.to_string(),
+            });
+            Self::pop_result(&self.ls_remote_refs_results)
         }
     }
 }

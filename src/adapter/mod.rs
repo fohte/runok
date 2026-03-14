@@ -2,10 +2,15 @@ pub mod check_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
 
+use crate::audit::{
+    AuditEntry, AuditMetadata, AuditWriter, SerializableAction, SerializableRuleMatch,
+    SubEvaluation,
+};
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
-use crate::rules::command_parser::extract_commands;
+use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 use crate::rules::rule_engine::{
-    Action, EvalContext, RuleMatchInfo, evaluate_command, evaluate_compound,
+    Action, EvalContext, RuleMatchInfo, default_action, evaluate_command_with_metadata,
+    evaluate_compound,
 };
 
 /// Unified evaluation result for the adapter layer.
@@ -16,6 +21,19 @@ use crate::rules::rule_engine::{
 pub struct ActionResult {
     pub action: Action,
     pub sandbox: SandboxInfo,
+    /// Rules that matched during evaluation (for audit logging).
+    pub matched_rules: Vec<RuleMatchInfo>,
+    /// Sub-evaluation results for compound commands (for audit logging).
+    pub sub_evaluations: Option<Vec<SubEvalResult>>,
+}
+
+/// Intermediate sub-evaluation result carrying raw `Action` (not yet serialized).
+#[derive(Debug)]
+pub struct SubEvalResult {
+    pub command: String,
+    pub action: Action,
+    pub matched_rules: Vec<RuleMatchInfo>,
+    pub eval_type: String,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -34,19 +52,6 @@ pub struct RunOptions {
     pub dry_run: bool,
     /// When true, output detailed rule matching information to stderr.
     pub verbose: bool,
-}
-
-/// Describes what should happen after command evaluation.
-/// Separates the "what happened" decision from "how to handle it",
-/// ensuring dry-run is checked at exactly one point.
-enum Dispatch {
-    /// A rule matched and produced an action (Allow/Deny/Ask).
-    Matched(ActionResult),
-    /// No rule matched; fall back to defaults.
-    NoMatch {
-        action_result: ActionResult,
-        defaults: Defaults,
-    },
 }
 
 /// Abstracts protocol-specific input/output differences across
@@ -70,6 +75,18 @@ pub trait Endpoint {
     /// Default implementation delegates to `handle_action`.
     fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
         self.handle_action(result)
+    }
+
+    /// Return audit metadata for this endpoint. Used to populate the
+    /// `metadata` field of `AuditEntry`.
+    fn audit_metadata(&self) -> AuditMetadata {
+        AuditMetadata::default()
+    }
+
+    /// Whether this endpoint should produce audit log entries.
+    /// Returns `false` for endpoints like `check` where logging is not desired.
+    fn is_auditable(&self) -> bool {
+        false
     }
 }
 
@@ -99,25 +116,6 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
     }
 }
 
-/// Resolve an `Action::Default` against the user's configured defaults,
-/// producing a concrete action (Allow/Ask/Deny) for dry-run reporting.
-/// When no default is configured (`None`), leaves the action as `Default`
-/// so each adapter's `handle_dry_run` can apply its own interpretation.
-fn resolve_no_match(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
-    use crate::config::ActionKind;
-    action_result.action = match defaults.action {
-        Some(ActionKind::Allow) => Action::Allow,
-        Some(ActionKind::Deny) => Action::Deny(crate::rules::rule_engine::DenyResponse {
-            message: None,
-            fix_suggestion: None,
-            matched_rule: String::new(),
-        }),
-        Some(ActionKind::Ask) => Action::Ask(None),
-        None => return action_result, // keep Action::Default
-    };
-    action_result
-}
-
 /// Apply `defaults.sandbox` as a fallback when the rule evaluation produced
 /// no sandbox information. This ensures that `defaults.sandbox` acts as a
 /// true default: it is used whenever the matched rule does not specify its
@@ -134,6 +132,69 @@ fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) 
         other => other,
     };
     action_result
+}
+
+/// Write an audit log entry for the given evaluation result.
+/// Failures are reported to stderr but do not affect the exit code (fail-open).
+fn write_audit_log(
+    endpoint: &dyn Endpoint,
+    config: &Config,
+    command: &str,
+    action_result: &ActionResult,
+    defaults: &Defaults,
+) {
+    let audit_config = config.audit.clone().unwrap_or_default();
+    if !audit_config.is_enabled() {
+        return;
+    }
+
+    let writer = AuditWriter::new(audit_config);
+    let metadata = endpoint.audit_metadata();
+
+    let sandbox_preset = match &action_result.sandbox {
+        SandboxInfo::Preset(p) => p.clone(),
+        SandboxInfo::MergedPolicy(_) => None,
+    };
+
+    let default_action = defaults.action.map(|a| match a {
+        crate::config::ActionKind::Allow => "allow".to_owned(),
+        crate::config::ActionKind::Ask => "ask".to_owned(),
+        crate::config::ActionKind::Deny => "deny".to_owned(),
+    });
+
+    let entry = AuditEntry {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        command: command.to_owned(),
+        action: SerializableAction::from(action_result.action.clone()),
+        matched_rules: action_result
+            .matched_rules
+            .iter()
+            .cloned()
+            .map(SerializableRuleMatch::from)
+            .collect(),
+        sandbox_preset,
+        default_action,
+        metadata,
+        sub_evaluations: action_result.sub_evaluations.as_ref().map(|subs| {
+            subs.iter()
+                .map(|s| SubEvaluation {
+                    command: s.command.clone(),
+                    action: SerializableAction::from(s.action.clone()),
+                    matched_rules: s
+                        .matched_rules
+                        .iter()
+                        .cloned()
+                        .map(SerializableRuleMatch::from)
+                        .collect(),
+                    eval_type: s.eval_type.clone(),
+                })
+                .collect()
+        }),
+    };
+
+    if let Err(e) = writer.write(&entry) {
+        eprintln!("runok: warning: audit log write failed: {e}");
+    }
 }
 
 /// Run the common evaluation flow for any endpoint.
@@ -169,7 +230,17 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     let context = EvalContext::from_env();
 
     // Determine if the command is compound (contains pipes, &&, ||, ;)
-    let commands = extract_commands(&command).unwrap_or_else(|_| vec![command.clone()]);
+    let extracted_commands = extract_commands_with_metadata(&command).unwrap_or_else(|_| {
+        vec![ExtractedCommand {
+            command: command.clone(),
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+        }]
+    });
+    let commands: Vec<String> = extracted_commands
+        .iter()
+        .map(|ec| ec.command.clone())
+        .collect();
 
     if options.verbose && commands.len() > 1 {
         eprintln!(
@@ -199,14 +270,36 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         match evaluate_compound(config, &command, &context) {
             Ok(compound_result) => {
                 if options.verbose {
+                    for detail in &compound_result.sub_command_details {
+                        log_matched_rules(&detail.matched_rules);
+                        eprintln!(
+                            "[verbose]   sub-command {:?}: {:?}",
+                            detail.command, detail.action
+                        );
+                    }
                     eprintln!(
                         "[verbose] Compound evaluation result: {:?}",
                         compound_result.action
                     );
                 }
+
+                let sub_evaluations: Vec<SubEvalResult> = compound_result
+                    .sub_results
+                    .into_iter()
+                    .zip(commands.iter())
+                    .map(|(result, cmd)| SubEvalResult {
+                        command: cmd.clone(),
+                        action: result.action,
+                        matched_rules: result.matched_rules,
+                        eval_type: "compound".to_owned(),
+                    })
+                    .collect();
+
                 ActionResult {
                     action: compound_result.action,
                     sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+                    matched_rules: vec![],
+                    sub_evaluations: Some(sub_evaluations),
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -214,11 +307,22 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     } else if commands.is_empty() {
         // No executable commands (e.g. comment-only input) — use default action
         ActionResult {
-            action: Action::Default,
+            action: default_action(config),
             sandbox: SandboxInfo::Preset(None),
+            matched_rules: vec![],
+            sub_evaluations: None,
         }
     } else {
-        match evaluate_command(config, effective_command, &context) {
+        // Pass redirect/pipe metadata from the first extracted command so that
+        // `when` clauses referencing `redirects` or `pipe` work correctly
+        // even for single commands with redirects (e.g., `cmd > /tmp/log.txt`).
+        let first_extracted = extracted_commands.first();
+        let empty_redirects = vec![];
+        let default_pipe = PipeInfo::default();
+        let (redirects, pipe) = first_extracted
+            .map(|ec| (ec.redirects.as_slice(), &ec.pipe))
+            .unwrap_or((empty_redirects.as_slice(), &default_pipe));
+        match evaluate_command_with_metadata(config, effective_command, &context, redirects, pipe) {
             Ok(result) => {
                 if options.verbose {
                     log_matched_rules(&result.matched_rules);
@@ -230,6 +334,8 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 ActionResult {
                     action: result.action,
                     sandbox: SandboxInfo::Preset(result.sandbox_preset),
+                    matched_rules: result.matched_rules,
+                    sub_evaluations: None,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -239,45 +345,23 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     // Apply defaults.sandbox fallback when the matched rule has no sandbox
     let action_result = apply_sandbox_fallback(action_result, &defaults);
 
-    // Determine dispatch target
-    let dispatch = if matches!(action_result.action, Action::Default) {
-        if options.verbose {
-            eprintln!("[verbose] No matching rule, using default behavior");
-        }
-        Dispatch::NoMatch {
-            action_result,
-            defaults,
-        }
-    } else {
-        Dispatch::Matched(action_result)
-    };
+    // Record audit log entry (exec/hook only, not dry-run or check)
+    if endpoint.is_auditable() && !options.dry_run {
+        write_audit_log(endpoint, config, &command, &action_result, &defaults);
+    }
 
-    // Single dry-run checkpoint: all dispatch paths are covered here
     if options.dry_run {
         if options.verbose {
             eprintln!("[verbose] Dry-run mode: skipping execution");
         }
-        let action_result = match dispatch {
-            Dispatch::Matched(ar) => ar,
-            Dispatch::NoMatch {
-                action_result,
-                defaults,
-            } => resolve_no_match(action_result, &defaults),
-        };
         return endpoint
             .handle_dry_run(action_result)
             .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
-    // Normal execution
-    match dispatch {
-        Dispatch::Matched(action_result) => endpoint
-            .handle_action(action_result)
-            .unwrap_or_else(|e| endpoint.handle_error(e)),
-        Dispatch::NoMatch { defaults, .. } => endpoint
-            .handle_no_match(&defaults)
-            .unwrap_or_else(|e| endpoint.handle_error(e)),
-    }
+    endpoint
+        .handle_action(action_result)
+        .unwrap_or_else(|e| endpoint.handle_error(e))
 }
 
 #[cfg(test)]
@@ -407,6 +491,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -419,6 +504,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -446,6 +532,7 @@ mod tests {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -520,26 +607,31 @@ mod tests {
         );
     }
 
-    // --- no matching rule -> handle_no_match ---
+    // --- no matching rule -> handle_action with default action ---
 
     #[rstest]
     #[case::no_matching_rule("unknown-command", make_config(vec![allow_rule("git status")]))]
     #[case::empty_config("git status", Config::default())]
-    fn no_match_calls_handle_no_match(#[case] command: &str, #[case] config: Config) {
+    fn no_match_calls_handle_action_with_ask(#[case] command: &str, #[case] config: Config) {
+        // With no defaults.action configured, unmatched commands resolve
+        // to Ask (the safe fallback).
         let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Ask(None))
+        ));
         assert_eq!(exit_code, 0);
     }
 
-    // --- defaults are passed through when no rules match ---
+    // --- defaults.action = allow resolves to Allow ---
 
     #[rstest]
-    fn no_match_uses_config_defaults() {
-        let endpoint =
-            MockEndpoint::new(Ok(Some("unknown-command".to_string()))).with_no_match_exit_code(5);
+    fn no_match_with_defaults_allow_calls_handle_action_with_allow() {
+        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Allow),
@@ -550,12 +642,13 @@ mod tests {
         };
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert_eq!(exit_code, 5);
-        assert_eq!(
-            *endpoint.last_defaults_action.borrow(),
-            Some(Some(ActionKind::Allow))
-        );
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Allow)
+        ));
+        assert_eq!(exit_code, 0);
     }
 
     // --- compound command: deny wins over allow ---
@@ -580,16 +673,20 @@ mod tests {
         ));
     }
 
-    // --- compound command: all default -> handle_no_match ---
+    // --- compound command: all unmatched -> handle_action with Ask ---
 
     #[rstest]
-    fn compound_all_default_calls_handle_no_match() {
+    fn compound_all_unmatched_calls_handle_action_with_ask() {
         let endpoint = MockEndpoint::new(Ok(Some("unknown-cmd1 && unknown-cmd2".to_string())));
         let config = make_config(vec![allow_rule("git status")]);
         let exit_code = run(&endpoint, &config);
 
-        assert!(*endpoint.called_handle_no_match.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
+        assert!(*endpoint.called_handle_action.borrow());
+        assert!(!*endpoint.called_handle_no_match.borrow());
+        assert!(matches!(
+            *endpoint.last_action.borrow(),
+            Some(Action::Ask(None))
+        ));
         assert_eq!(exit_code, 0);
     }
 
@@ -676,12 +773,9 @@ mod tests {
     // --- handle_no_match error falls back to handle_error ---
 
     #[rstest]
-    #[case::extract_none(Ok(None))]
-    #[case::no_matching_rule(Ok(Some("unknown-command".to_string())))]
-    fn handle_no_match_error_delegates_to_handle_error(
-        #[case] command: Result<Option<String>, String>,
-    ) {
-        let endpoint = MockEndpoint::new(command)
+    fn handle_no_match_error_delegates_to_handle_error() {
+        // handle_no_match is only called when extract_command returns None
+        let endpoint = MockEndpoint::new(Ok(None))
             .with_no_match_failure()
             .with_error_exit_code(2);
         let config = Config::default();
@@ -705,6 +799,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: Some("restricted".to_string()),
+            tests: None,
         }]);
         run(&endpoint, &config);
 
@@ -772,11 +867,11 @@ mod tests {
         assert!(!*endpoint.called_handle_no_match.borrow());
         assert_eq!(exit_code, 0);
 
-        // With no configured defaults, Action::Default is preserved
+        // With no configured defaults, defaults fall back to Ask
         let last = endpoint.last_action.borrow();
         assert!(
-            matches!(last.as_ref(), Some(Action::Default)),
-            "expected Action::Default, got {last:?}"
+            matches!(last.as_ref(), Some(Action::Ask(None))),
+            "expected Action::Ask(None), got {last:?}"
         );
     }
 
@@ -865,6 +960,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
+                tests: None,
             }],
             None,
             Some("default-sandbox".to_string()),
@@ -917,8 +1013,8 @@ mod tests {
     #[case::for_loop_no_matching_rule(
         "for f in *.yaml; do echo $f; done",
         allow_rule("git status"),
+        true,  // defaults to Ask -> handle_action
         false,
-        true
     )]
     fn single_extracted_subcommand_evaluates_simplified_form(
         #[case] command: &str,
@@ -966,6 +1062,228 @@ mod tests {
         assert_eq!(exit_code, 0);
     }
 
+    // --- audit log integration tests ---
+
+    struct AuditableMockEndpoint {
+        inner: MockEndpoint,
+    }
+
+    impl AuditableMockEndpoint {
+        fn new(command: Result<Option<String>, String>) -> Self {
+            Self {
+                inner: MockEndpoint::new(command),
+            }
+        }
+    }
+
+    impl Endpoint for AuditableMockEndpoint {
+        fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
+            self.inner.extract_command()
+        }
+
+        fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+            self.inner.handle_action(result)
+        }
+
+        fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
+            self.inner.handle_no_match(defaults)
+        }
+
+        fn handle_error(&self, error: anyhow::Error) -> i32 {
+            self.inner.handle_error(error)
+        }
+
+        fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
+            self.inner.handle_dry_run(result)
+        }
+
+        fn audit_metadata(&self) -> crate::audit::AuditMetadata {
+            crate::audit::AuditMetadata {
+                endpoint_type: "test".to_owned(),
+                cwd: Some("/tmp/test".to_owned()),
+                ..Default::default()
+            }
+        }
+
+        fn is_auditable(&self) -> bool {
+            true
+        }
+    }
+
+    use rstest::fixture;
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn audit_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    fn make_audit_config(dir: &TempDir) -> crate::config::AuditConfig {
+        crate::config::AuditConfig {
+            enabled: Some(true),
+            path: Some(dir.path().to_string_lossy().to_string()),
+            rotation: None,
+        }
+    }
+
+    fn read_single_audit_entry(audit_dir: &TempDir) -> serde_json::Value {
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        assert!(log_path.exists(), "audit log file should be created");
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "expected a single line in the audit log");
+
+        serde_json::from_str(lines[0]).unwrap()
+    }
+
+    fn assert_no_audit_log(audit_dir: &TempDir) {
+        let entries: Vec<_> = std::fs::read_dir(audit_dir.path()).unwrap().collect();
+        assert!(entries.is_empty(), "no audit log should be written");
+    }
+
+    #[rstest]
+    fn audit_log_written_for_auditable_endpoint_on_match(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let entry = read_single_audit_entry(&audit_dir);
+        assert_eq!(entry["command"], "git status");
+        assert_eq!(entry["action"]["type"], "allow");
+        assert_eq!(entry["metadata"]["endpoint_type"], "test");
+        assert_eq!(entry["metadata"]["cwd"], "/tmp/test");
+    }
+
+    #[rstest]
+    fn audit_log_not_written_for_non_auditable_endpoint(audit_dir: TempDir) {
+        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        assert_no_audit_log(&audit_dir);
+    }
+
+    #[rstest]
+    fn audit_log_not_written_in_dry_run_mode(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        let options = RunOptions {
+            dry_run: true,
+            verbose: false,
+        };
+        run_with_options(&endpoint, &config, &options);
+
+        assert_no_audit_log(&audit_dir);
+    }
+
+    #[rstest]
+    fn audit_log_not_written_when_disabled(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(false),
+                path: Some(audit_dir.path().to_string_lossy().to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        assert_no_audit_log(&audit_dir);
+    }
+
+    #[rstest]
+    fn audit_log_records_deny_action(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("rm -rf /".to_string())));
+        let config = Config {
+            rules: Some(vec![deny_rule("rm -rf /")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let entry = read_single_audit_entry(&audit_dir);
+        assert_eq!(entry["action"]["type"], "deny");
+        assert_eq!(entry["command"], "rm -rf /");
+    }
+
+    #[rstest]
+    fn audit_log_records_default_action_for_no_match(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("unknown-command".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Ask),
+                sandbox: None,
+            }),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let entry = read_single_audit_entry(&audit_dir);
+        // When no rule matches, action is resolved to defaults.action (ask)
+        assert_eq!(entry["action"]["type"], "ask");
+        assert_eq!(entry["default_action"], "ask");
+        // No matched rules
+        assert_eq!(entry["matched_rules"].as_array().unwrap().len(), 0);
+    }
+
+    #[rstest]
+    fn audit_log_write_failure_does_not_affect_exit_code() {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status")]),
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(true),
+                path: Some("/proc/nonexistent/impossible/path".to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        };
+        let exit_code = run(&endpoint, &config);
+        assert_eq!(
+            exit_code, 0,
+            "audit log failure should not affect exit code"
+        );
+    }
+
+    #[rstest]
+    fn audit_log_records_compound_sub_evaluations(audit_dir: TempDir) {
+        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status && rm -rf /".to_string())));
+        let config = Config {
+            rules: Some(vec![allow_rule("git status"), deny_rule("rm -rf /")]),
+            audit: Some(make_audit_config(&audit_dir)),
+            ..Default::default()
+        };
+        run(&endpoint, &config);
+
+        let entry = read_single_audit_entry(&audit_dir);
+        assert_eq!(entry["action"]["type"], "deny");
+        let subs = entry["sub_evaluations"].as_array().unwrap();
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0]["command"], "git status");
+        assert_eq!(subs[0]["action"]["type"], "allow");
+        assert_eq!(subs[0]["eval_type"], "compound");
+        assert_eq!(subs[1]["command"], "rm -rf /");
+        assert_eq!(subs[1]["action"]["type"], "deny");
+    }
+
     // --- apply_sandbox_fallback unit tests ---
 
     #[rstest]
@@ -993,6 +1311,8 @@ mod tests {
         let action_result = ActionResult {
             action: Action::Allow,
             sandbox,
+            matched_rules: vec![],
+            sub_evaluations: None,
         };
         let defaults = Defaults {
             action: None,

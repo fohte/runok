@@ -121,7 +121,12 @@ pub fn load_local_preset(reference: &str, base_dir: &Path) -> Result<Config, Con
     }
 
     let yaml = std::fs::read_to_string(&path)?;
-    let config = parse_config(&yaml)?;
+    let mut config = parse_config(&yaml)?;
+
+    // Resolve paths in the preset relative to the preset file's parent directory
+    let preset_base_dir = path.parent().unwrap_or(base_dir);
+    super::path_resolver::resolve_config_paths(&mut config, preset_base_dir)?;
+
     Ok(config)
 }
 
@@ -150,7 +155,13 @@ pub fn load_preset_with<G: GitClient>(
     let parsed = parse_preset_reference(reference)?;
     match parsed {
         PresetReference::Local(_) => load_local_preset(reference, base_dir),
-        _ => load_remote_preset(&parsed, reference, git_client, cache),
+        _ => {
+            let mut config = load_remote_preset(&parsed, reference, git_client, cache)?;
+            // Resolve paths in the remote preset relative to the cache directory
+            let cache_dir = cache.cache_dir(reference);
+            super::path_resolver::resolve_config_paths(&mut config, &cache_dir)?;
+            Ok(config)
+        }
     }
 }
 
@@ -314,10 +325,22 @@ fn determine_preset_base_dir(
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| parent_base_dir.to_path_buf())
         }
+        Ok(PresetReference::GitHub {
+            path: Some(preset_path),
+            ..
+        }) => {
+            // For GitHub shorthand with a path (e.g., github:org/repo/presets/readonly@v1),
+            // the base directory must be the parent of the preset file within the cloned repo
+            // so that relative extends resolve correctly from the preset's location.
+            let cache_dir = cache.cache_dir(reference);
+            let preset_file = Path::new(&preset_path);
+            match preset_file.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => cache_dir.join(parent),
+                _ => cache_dir,
+            }
+        }
         _ => {
-            // For remote presets, use the cache directory where the repo was cloned.
-            // This ensures the preset's own relative extends (e.g., ./sub/rules.yml)
-            // are resolved within the cloned repository, not the parent config's directory.
+            // For remote presets without a path, use the cache directory (repo root).
             cache.cache_dir(reference)
         }
     }
@@ -964,5 +987,30 @@ mod tests {
             }
             other => panic!("expected CircularReference, got: {other:?}"),
         }
+    }
+
+    // === determine_preset_base_dir tests ===
+
+    #[rstest]
+    #[case::github_no_path("github:org/repo@v1", None)]
+    #[case::github_simple_path("github:org/repo/readonly@v1", None)]
+    #[case::github_nested_path("github:org/repo/presets/readonly@v1", Some("presets"))]
+    fn preset_base_dir_for_github_shorthand(
+        tmp: TempDir,
+        #[case] ref_str: &str,
+        #[case] expected_suffix: Option<&str>,
+    ) {
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let expected = match expected_suffix {
+            Some(suffix) => cache.cache_dir(ref_str).join(suffix),
+            None => cache.cache_dir(ref_str),
+        };
+        assert_eq!(
+            determine_preset_base_dir(ref_str, tmp.path(), &cache),
+            expected,
+        );
     }
 }

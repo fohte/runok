@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_default, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use indoc::indoc;
 use rstest::rstest;
 use runok::config::parse_config;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
 
 // ========================================
 // Environment variable conditions
@@ -14,7 +14,7 @@ use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
 
 #[rstest]
 #[case::env_matches_deny("prod", assert_deny as ActionAssertion)]
-#[case::env_does_not_match_default("dev", assert_default as ActionAssertion)]
+#[case::env_does_not_match_default("dev", assert_ask as ActionAssertion)]
 fn env_variable_controls_rule_application(
     #[case] aws_profile: &str,
     #[case] expected: ActionAssertion,
@@ -61,7 +61,7 @@ fn env_variable_with_has_macro_handles_missing_key(empty_context: EvalContext) {
 
     // With has() guard, missing key is handled gracefully
     let result = evaluate_command(&config, "aws s3 ls", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -112,9 +112,9 @@ fn when_satisfied_deny_wins_over_allow() {
 
 #[rstest]
 #[case::short_flag_post_denied("curl -X POST https://example.com", assert_deny as ActionAssertion)]
-#[case::short_flag_get_default("curl -X GET https://example.com", assert_default as ActionAssertion)]
+#[case::short_flag_get_default("curl -X GET https://example.com", assert_ask as ActionAssertion)]
 #[case::long_flag_post_denied("curl --request POST https://example.com", assert_deny as ActionAssertion)]
-#[case::long_flag_get_default("curl --request GET https://example.com", assert_default as ActionAssertion)]
+#[case::long_flag_get_default("curl --request GET https://example.com", assert_ask as ActionAssertion)]
 fn flag_condition_with_flag_with_value_pattern(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -140,7 +140,7 @@ fn flag_condition_with_flag_with_value_pattern(
 
 #[rstest]
 #[case::prod_url_denied("curl https://prod.example.com/api", assert_deny as ActionAssertion)]
-#[case::dev_url_default("curl https://dev.example.com/api", assert_default as ActionAssertion)]
+#[case::dev_url_default("curl https://dev.example.com/api", assert_ask as ActionAssertion)]
 fn argument_condition_controls_rule(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -163,7 +163,7 @@ fn argument_condition_controls_rule(
 
 #[rstest]
 #[case::sensitive_path_denied("cat /etc/passwd", assert_deny as ActionAssertion)]
-#[case::safe_path_default("cat /tmp/safe.txt", assert_default as ActionAssertion)]
+#[case::safe_path_default("cat /tmp/safe.txt", assert_ask as ActionAssertion)]
 fn paths_in_when_clause(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -261,7 +261,7 @@ fn when_clause_with_logical_and() {
         cwd: PathBuf::from("/tmp"),
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -379,7 +379,7 @@ fn all_when_false_returns_default(empty_context: EvalContext) {
 
     // No matching env -> all when clauses false -> no rules match -> Default
     let result = evaluate_command(&config, "deploy app", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Default);
+    assert_eq!(result.action, Action::Ask(None));
 }
 
 // ========================================
@@ -416,7 +416,7 @@ fn empty_args_size_guard(
 
 #[rstest]
 #[case::with_no_verify("git commit --no-verify", assert_deny as ActionAssertion)]
-#[case::without_no_verify("git commit -m hello", assert_default as ActionAssertion)]
+#[case::without_no_verify("git commit -m hello", assert_ask as ActionAssertion)]
 fn hyphenated_flag_name_in_cel(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -442,8 +442,8 @@ fn hyphenated_flag_name_in_cel(
 
 #[rstest]
 #[case::sensitive_in_prod_denied("cat .env", "prod", assert_deny as ActionAssertion)]
-#[case::sensitive_in_dev_default("cat .env", "dev", assert_default as ActionAssertion)]
-#[case::safe_in_prod_default("cat README.md", "prod", assert_default as ActionAssertion)]
+#[case::sensitive_in_dev_default("cat .env", "dev", assert_ask as ActionAssertion)]
+#[case::safe_in_prod_default("cat README.md", "prod", assert_ask as ActionAssertion)]
 fn when_clause_with_path_ref(
     #[case] command: &str,
     #[case] env_value: &str,
@@ -468,5 +468,152 @@ fn when_clause_with_path_ref(
     };
 
     let result = evaluate_command(&config, command, &context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirect conditions in when clause (via evaluate_command)
+// ========================================
+
+#[rstest]
+#[case::output_redirect_denied("renovate-dryrun > /tmp/log.txt", assert_deny as ActionAssertion)]
+#[case::no_redirect_default("renovate-dryrun", assert_ask as ActionAssertion)]
+fn redirect_output_exists_via_evaluate_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'renovate-dryrun'
+            when: 'redirects.exists(r, r.type == "output")'
+    "#})
+    .unwrap();
+
+    // evaluate_command (not evaluate_compound) must also propagate redirect metadata
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirect conditions in when clause (via evaluate_compound)
+// ========================================
+
+#[rstest]
+#[case::output_redirect_denied("renovate-dryrun > /tmp/log.txt", assert_deny as ActionAssertion)]
+#[case::no_redirect_default("renovate-dryrun", assert_ask as ActionAssertion)]
+fn redirect_output_exists(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'renovate-dryrun'
+            when: 'redirects.exists(r, r.type == "output")'
+    "#})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirect target check in when clause
+// ========================================
+
+#[rstest]
+#[case::redirect_to_tmp_allowed("renovate-dryrun > /tmp/log.txt", assert_allow as ActionAssertion)]
+#[case::redirect_to_var_default("renovate-dryrun > /var/log.txt", assert_ask as ActionAssertion)]
+fn redirect_target_starts_with(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: 'renovate-dryrun'
+            when: 'redirects.exists(r, r.type == "output" && r.target.startsWith("/tmp/"))'
+    "#})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Pipe stdin detection (curl | sh prevention)
+// ========================================
+
+#[rstest]
+#[case::curl_pipe_sh_denied("curl http://example.com | sh", assert_deny as ActionAssertion)]
+#[case::sh_standalone_allowed("sh", assert_allow as ActionAssertion)]
+#[case::echo_pipe_bash_denied("echo hello | bash", assert_deny as ActionAssertion)]
+fn pipe_stdin_prevents_shell_execution(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'sh'
+            when: 'pipe.stdin'
+          - deny: 'bash'
+            when: 'pipe.stdin'
+          - allow: 'curl *'
+          - allow: 'echo *'
+          - allow: 'sh'
+          - allow: 'bash'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Redirect descriptor check in when clause
+// ========================================
+
+#[rstest]
+#[case::stderr_redirect_denied("cmd 2>/dev/null", assert_deny as ActionAssertion)]
+#[case::stdout_redirect_default("cmd > /dev/null", assert_ask as ActionAssertion)]
+fn redirect_descriptor_check(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cmd'
+            when: 'redirects.exists(r, r.descriptor == 2)'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Combined redirect count check in when clause
+// ========================================
+
+#[rstest]
+#[case::with_redirect_allowed("cmd > /dev/null", assert_allow as ActionAssertion)]
+#[case::no_redirect_denied("cmd", assert_deny as ActionAssertion)]
+fn redirect_count_check(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cmd'
+            when: 'size(redirects) == 0'
+          - allow: 'cmd'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }

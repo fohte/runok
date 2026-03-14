@@ -4,6 +4,17 @@
   "description": "Top-level runok configuration.",
   "type": "object",
   "properties": {
+    "audit": {
+      "description": "Audit log settings.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "defaults": {
       "description": "Default settings applied when no rule matches.",
       "anyOf": [
@@ -27,7 +38,7 @@
       ]
     },
     "extends": {
-      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>@<ref>`).",
+      "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).",
       "type": [
         "array",
         "null"
@@ -45,6 +56,17 @@
       "items": {
         "$ref": "#/$defs/RuleEntry"
       }
+    },
+    "tests": {
+      "description": "Test section for rule verification.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TestSection"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -56,6 +78,37 @@
         "ask",
         "deny"
       ]
+    },
+    "AuditConfig": {
+      "description": "Audit log configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether audit logging is enabled (default: true).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Directory path for audit log files (default: ~/.local/share/runok/).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rotation": {
+          "description": "Log rotation settings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RotationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "Defaults": {
       "description": "Default settings applied when no rule matches a command.",
@@ -118,6 +171,16 @@
             "$ref": "#/$defs/SandboxPreset"
           }
         },
+        "vars": {
+          "description": "Typed variable definitions referenced by `<var:name>` in rule patterns.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/VarDefinition"
+          }
+        },
         "wrappers": {
           "description": "Wrapper command patterns for recursive evaluation (e.g., `sudo <cmd>`).",
           "type": [
@@ -156,6 +219,59 @@
         }
       }
     },
+    "InlineTestEntry": {
+      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "description": "Command expected to be allowed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "allow"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ask": {
+              "description": "Command expected to trigger an ask prompt.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ask"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "deny": {
+              "description": "Command expected to be denied.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "deny"
+          ]
+        }
+      ]
+    },
     "NetworkPolicy": {
       "description": "Network access policy within a sandbox preset.",
       "type": "object",
@@ -166,6 +282,21 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "RotationConfig": {
+      "description": "Log rotation configuration.",
+      "type": "object",
+      "properties": {
+        "retention_days": {
+          "description": "Number of days to retain log files (default: 7).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },
@@ -192,6 +323,16 @@
                 "string",
                 "null"
               ]
+            },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
@@ -234,6 +375,16 @@
                 "null"
               ]
             },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
+            },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
               "type": [
@@ -274,6 +425,16 @@
                 "string",
                 "null"
               ]
+            },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
@@ -317,6 +478,91 @@
           ]
         }
       }
+    },
+    "TestSection": {
+      "description": "Top-level test section for cross-rule tests and test-only extends.",
+      "type": "object",
+      "properties": {
+        "cases": {
+          "description": "Test cases to evaluate.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/InlineTestEntry"
+          }
+        },
+        "extends": {
+          "description": "Additional config files to merge only during test execution.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "VarDefinition": {
+      "description": "A typed variable definition with a list of allowed values.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "The type of this variable (default: `literal`).",
+          "$ref": "#/$defs/VarType"
+        },
+        "values": {
+          "description": "Allowed values for this variable.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VarValue"
+          }
+        }
+      },
+      "required": [
+        "values"
+      ]
+    },
+    "VarType": {
+      "description": "Type of a variable definition, controlling how values are matched.",
+      "oneOf": [
+        {
+          "description": "Exact string match (default).",
+          "type": "string",
+          "const": "literal"
+        },
+        {
+          "description": "Path match: canonicalize both sides before comparison,\nfalling back to `normalize_path` when the file does not exist.",
+          "type": "string",
+          "const": "path"
+        }
+      ]
+    },
+    "VarValue": {
+      "description": "A variable value: either a plain string (inherits definition-level type) or an object with explicit `type` and `value` fields.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/VarType"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        }
+      ]
     }
   }
 }

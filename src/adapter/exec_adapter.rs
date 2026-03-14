@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
+use crate::audit::AuditMetadata;
 use crate::config::{ActionKind, Defaults, MergedSandboxPolicy, SandboxPreset};
 use crate::exec::command_executor::{CommandExecutor, CommandInput, SandboxPolicy};
 use crate::rules::command_parser::shell_quote_join;
@@ -112,7 +113,11 @@ impl Endpoint for ExecAdapter {
                 Ok(exit_code)
             }
             Action::Deny(deny_response) => {
-                eprintln!("runok: denied: {}", deny_response.matched_rule);
+                if deny_response.matched_rule.is_empty() {
+                    eprintln!("runok: command denied by default policy");
+                } else {
+                    eprintln!("runok: denied: {}", deny_response.matched_rule);
+                }
                 if let Some(ref message) = deny_response.message {
                     eprintln!("  reason: {}", message);
                 }
@@ -126,10 +131,6 @@ impl Endpoint for ExecAdapter {
                 let msg = message.unwrap_or_else(|| "command requires confirmation".to_string());
                 eprintln!("runok: {}", msg);
                 Ok(3)
-            }
-            Action::Default => {
-                // Should not reach here; run() handles Default before calling handle_action
-                Ok(0)
             }
         }
     }
@@ -161,6 +162,20 @@ impl Endpoint for ExecAdapter {
         1
     }
 
+    fn audit_metadata(&self) -> AuditMetadata {
+        AuditMetadata {
+            endpoint_type: "exec".to_owned(),
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string()),
+            ..AuditMetadata::default()
+        }
+    }
+
+    fn is_auditable(&self) -> bool {
+        true
+    }
+
     fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
         match &result.action {
             Action::Allow => {
@@ -181,9 +196,6 @@ impl Endpoint for ExecAdapter {
                     .as_deref()
                     .unwrap_or("command would require confirmation");
                 eprintln!("runok: dry-run: {}", msg);
-            }
-            Action::Default => {
-                eprintln!("runok: dry-run: no matching rule (default behavior)");
             }
         }
         Ok(0)
@@ -331,6 +343,8 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, exit_code);
@@ -347,6 +361,8 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::MergedPolicy(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, 0);
@@ -362,6 +378,8 @@ mod tests {
         let result = adapter.handle_action(ActionResult {
             action: Action::Allow,
             sandbox: SandboxInfo::Preset(None),
+            matched_rules: vec![],
+            sub_evaluations: None,
         });
         let err = result.unwrap_err();
         assert!(
@@ -388,6 +406,8 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -410,6 +430,8 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -430,27 +452,11 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Ask(message),
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, 3);
-    }
-
-    // --- handle_action: Default ---
-
-    #[rstest]
-    fn handle_action_default_returns_exit_0() {
-        let adapter = ExecAdapter::new(
-            vec!["git".into(), "status".into()],
-            None,
-            Box::new(MockExecutor::new(0)),
-        );
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Default,
-                sandbox: SandboxInfo::Preset(None),
-            })
-            .unwrap();
-        assert_eq!(result, 0);
     }
 
     // --- handle_no_match ---
@@ -577,6 +583,8 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
 
@@ -600,7 +608,6 @@ mod tests {
         Action::Ask(Some("please confirm".to_string())),
         0
     )]
-    #[case::default_action(Action::Default, 0)]
     fn handle_dry_run_always_returns_exit_0(
         #[case] action: Action,
         #[case] expected_exit_code: i32,
@@ -614,6 +621,8 @@ mod tests {
             .handle_dry_run(ActionResult {
                 action,
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
         assert_eq!(result, expected_exit_code);
@@ -636,10 +645,35 @@ mod tests {
             .handle_dry_run(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                matched_rules: vec![],
+                sub_evaluations: None,
             })
             .unwrap();
 
         // Command should NOT be executed in dry-run mode
         assert!(captured.lock().unwrap().is_none());
+    }
+
+    // --- audit metadata ---
+
+    #[rstest]
+    fn audit_metadata_returns_exec_endpoint_type() {
+        let adapter = ExecAdapter::new(
+            vec!["git".into(), "status".into()],
+            None,
+            Box::new(MockExecutor::new(0)),
+        );
+        let metadata = adapter.audit_metadata();
+        assert_eq!(metadata.endpoint_type, "exec");
+        assert!(metadata.cwd.is_some());
+        assert!(metadata.session_id.is_none());
+        assert!(metadata.tool_name.is_none());
+        assert!(metadata.hook_event_name.is_none());
+    }
+
+    #[rstest]
+    fn is_auditable_returns_true() {
+        let adapter = ExecAdapter::new(vec![], None, Box::new(MockExecutor::new(0)));
+        assert!(adapter.is_auditable());
     }
 }

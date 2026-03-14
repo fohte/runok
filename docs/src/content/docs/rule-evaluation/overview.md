@@ -28,4 +28,4 @@ When runok receives a command:
    c. Merge direct and wrapped command results using Explicit Deny Wins.
 3. **Aggregate**: Merge all sub-command results (strictest wins).
 4. **Resolve [sandbox](/sandbox/overview/)**: Merge sandbox policies from matched presets.
-5. **Return**: The final action (`allow`, `deny`, `ask`, or `default` if no rule matched) and sandbox policy.
+5. **Return**: The final action (`allow`, `deny`, or `ask`) and sandbox policy. If no rule matched, the action is resolved to the configured `defaults.action` (defaulting to `ask`).

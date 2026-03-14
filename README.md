@@ -118,7 +118,7 @@ See [Why runok?](https://runok.fohte.net/getting-started/why-runok/) for a full 
 - Conditional `when` clauses with CEL expressions for environment-aware decisions
 - OS-level sandboxing (macOS Seatbelt / Linux Landlock) for file and network restrictions
 
-**And more** -- [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/), [Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin) for natural-language configuration assistance
+**And more** -- [rule testing](https://runok.fohte.net/cli/test/), [audit logging](https://runok.fohte.net/cli/audit/), [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/), [Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin) for natural-language configuration assistance
 
 ## Quick start
 
