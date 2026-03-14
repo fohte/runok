@@ -109,7 +109,7 @@ A step counter (`MAX_MATCH_STEPS = 10,000`) prevents exponential blowup on patho
 | `Literal`       | Skips leading flag tokens to find the first positional argument and matches against it. **Order-independent** relative to flags; positional order among non-flag tokens is preserved. After `--`, matches at the current position with no skipping                                                                                             |
 | `Wildcard`      | Matches zero or more remaining tokens (greedy with backtracking)                                                                                                                                                                                                                                                                               |
 | `Alternation`   | Alternations containing any flag alternative (starting with `-`) scan the entire token list (**order-independent**). Purely non-flag alternations skip leading flags like `Literal`. After `--`, matches at the current position                                                                                                               |
-| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. Also matches `=`-joined forms (e.g. `--flag=value`). **Order-independent**: the flag can appear anywhere in the command                                                                                                                                |
+| `FlagWithValue` | Scans the entire token list for the flag, then checks the next token matches the value. Also matches `=`-joined forms (e.g. `--flag=value`) and fused short flag forms (e.g. `-n3`). **Order-independent**: the flag can appear anywhere in the command                                                                                        |
 | `Negation`      | **Positional negation**: skips leading flags to find the first positional token and checks it does **not** equal the value. **Flag-only negation** (all alternatives start with `-`): scans the entire token list for the forbidden flag without consuming a positional token. Passes when the flag is absent, including when no tokens remain |
 | `Optional`      | Tries matching with the optional tokens included, falls back to without                                                                                                                                                                                                                                                                        |
 | `Placeholder`   | Captures remaining tokens for wrapper command re-evaluation                                                                                                                                                                                                                                                                                    |
@@ -133,6 +133,16 @@ The bare `--` separator disables flag-skipping for subsequent `Literal` and `Alt
 - **Long flags**: `--flag=val` (double dash)
 
 Non-standard forms like `-Denv=prod` (Java) or `-DFOO=bar` (GCC) are not split. These are treated as single tokens because the portion before `=` (`-Denv`, `-DFOO`) is not a standard flag name — it is a fused flag-key combination specific to the command.
+
+### Fused short flag splitting
+
+`FlagWithValue` also matches fused short flag tokens where the value is directly attached to the flag character (e.g. `-n3` for a pattern `-n *`). The splitting extracts the first two bytes as the flag part (`-n`) and the remainder as the value (`3`). This is only attempted when:
+
+- The token starts with `-` (not `--`) and is longer than 2 bytes
+- The second byte is an ASCII character (non-ASCII characters are rejected to avoid slicing inside multi-byte UTF-8 characters)
+- The extracted flag matches one of the `FlagWithValue` aliases
+
+This design avoids false splits on combined boolean flags like `-rf`, since splitting only occurs when the pattern explicitly declares the flag takes a value.
 
 ### Wrapper command matching
 

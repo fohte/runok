@@ -26,12 +26,42 @@ pub(crate) fn split_flag_equals(token: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Split a fused short flag token (e.g. `-n3`) into its flag and value parts.
+/// Only recognizes single-character short flags with a value directly attached
+/// (e.g. `-n3` → `("-n", "3")`). Does not split combined boolean flags like
+/// `-rf` since those are indistinguishable without context; the caller must
+/// only invoke this when a `FlagWithValue` pattern declares the flag takes a
+/// value.
+pub(crate) fn split_short_flag_value<'a>(
+    token: &'a str,
+    aliases: &[String],
+) -> Option<(&'a str, &'a str)> {
+    // Token must start with `-`, be longer than 2 bytes, not start with `--`,
+    // and byte index 2 must be a char boundary (i.e. the second char is ASCII).
+    if token.len() <= 2
+        || !token.starts_with('-')
+        || token.starts_with("--")
+        || !token.is_char_boundary(2)
+    {
+        return None;
+    }
+    // Extract the first two bytes (e.g. `-n`) as the flag part.
+    let flag_part = &token[..2];
+    if aliases.iter().any(|a| a.as_str() == flag_part) {
+        Some((flag_part, &token[2..]))
+    } else {
+        None
+    }
+}
+
 /// Check if any of the `aliases` match a command token, considering both
-/// the token itself and the flag portion of an `=`-joined token.
+/// the token itself, the flag portion of an `=`-joined token, and the flag
+/// portion of a fused short flag token (e.g. `-n3`).
 pub(crate) fn flag_aliases_match_token(aliases: &[String], cmd_token: &str) -> bool {
     aliases.iter().any(|a| a.as_str() == cmd_token)
         || split_flag_equals(cmd_token)
             .is_some_and(|(flag_part, _)| aliases.iter().any(|a| a.as_str() == flag_part))
+        || split_short_flag_value(cmd_token, aliases).is_some()
 }
 
 /// Check if a negation's inner pattern is flag-only (all alternatives start
@@ -99,6 +129,29 @@ mod tests {
             split_flag_equals(input),
             expected,
             "split_flag_equals({input:?})",
+        );
+    }
+
+    #[rstest]
+    #[case::fused_value("-n3", &["-n"], Some(("-n", "3")))]
+    #[case::fused_multichar_value("-n100", &["-n"], Some(("-n", "100")))]
+    #[case::no_match("-n3", &["-x"], None)]
+    #[case::long_flag("--num3", &["-n"], None)]
+    #[case::exact_short_flag("-n", &["-n"], None)]
+    #[case::dash_only("-", &["-n"], None)]
+    #[case::empty("", &["-n"], None)]
+    #[case::multiple_aliases("-n3", &["-n", "--num"], Some(("-n", "3")))]
+    #[case::non_ascii_after_dash("-é3", &["-é"], None)]
+    fn split_short_flag_value_cases(
+        #[case] input: &str,
+        #[case] aliases: &[&str],
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        let aliases: Vec<String> = aliases.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            split_short_flag_value(input, &aliases),
+            expected,
+            "split_short_flag_value({input:?}, {aliases:?})",
         );
     }
 }

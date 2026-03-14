@@ -15,7 +15,9 @@ use crate::rules::RuleError;
 use crate::rules::command_parser::ParsedCommand;
 use crate::rules::pattern_parser::{CommandPattern, Pattern, PatternToken};
 
-use flag_utils::{is_flag_only_negation, optional_flags_absent, split_flag_equals};
+use flag_utils::{
+    is_flag_only_negation, optional_flags_absent, split_flag_equals, split_short_flag_value,
+};
 use token_matching::{
     literal_matches, match_flag_token_with_equals, match_single_token, normalize_path,
     resolve_paths,
@@ -575,6 +577,33 @@ fn match_engine<'a>(
                 // Case 2: `=`-joined flag and value (e.g. `--sort=value`)
                 if let Some((flag_part, value_part)) = split_flag_equals(cmd_tokens[i])
                     && aliases.iter().any(|a| a.as_str() == flag_part)
+                    && match_single_token(value, value_part, definitions)
+                {
+                    let remaining = remove_indices(cmd_tokens, &[i]);
+                    let capture_val =
+                        matches!(**value, PatternToken::Wildcard).then_some(value_part);
+                    let saved_dd = after_double_dash.get();
+                    let saved_vc = var_captures.borrow().clone();
+                    if try_recurse_flag_value(
+                        rest,
+                        &remaining,
+                        definitions,
+                        steps,
+                        &mut captures,
+                        &mut extract,
+                        capture_val,
+                        after_double_dash,
+                        var_captures,
+                    )? {
+                        return Ok(true);
+                    }
+                    after_double_dash.set(saved_dd);
+                    *var_captures.borrow_mut() = saved_vc;
+                }
+
+                // Case 3: fused short flag and value (e.g. `-n3` for `-n *`)
+                if let Some((_flag_part, value_part)) =
+                    split_short_flag_value(cmd_tokens[i], aliases)
                     && match_single_token(value, value_part, definitions)
                 {
                     let remaining = remove_indices(cmd_tokens, &[i]);
