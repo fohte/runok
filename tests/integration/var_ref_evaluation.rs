@@ -313,3 +313,165 @@ fn var_ref_when_clause_with_vars(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// <var:name> in command position
+// ========================================
+
+#[rstest]
+#[case::command_position_literal_match(
+    indoc! {"
+        definitions:
+          vars:
+            runok:
+              values:
+                - runok
+                - cargo run --
+        rules:
+          - allow: '<var:runok> check'
+    "},
+    "runok check",
+    assert_allow as ActionAssertion,
+)]
+#[case::command_position_multi_word_match(
+    indoc! {"
+        definitions:
+          vars:
+            runok:
+              values:
+                - runok
+                - cargo run --
+        rules:
+          - allow: '<var:runok> check'
+    "},
+    "cargo run -- check",
+    assert_allow as ActionAssertion,
+)]
+#[case::command_position_no_match(
+    indoc! {"
+        definitions:
+          vars:
+            runok:
+              values:
+                - runok
+                - cargo run --
+        rules:
+          - allow: '<var:runok> check'
+    "},
+    "node check",
+    assert_ask as ActionAssertion,
+)]
+#[case::command_position_path_type(
+    indoc! {"
+        definitions:
+          vars:
+            runok:
+              values:
+                - runok
+                - type: path
+                  value: target/debug/runok
+        rules:
+          - allow: '<var:runok> check'
+    "},
+    "./target/debug/runok check",
+    assert_allow as ActionAssertion,
+)]
+#[case::command_position_with_wildcard_args(
+    indoc! {"
+        definitions:
+          vars:
+            prettier:
+              values:
+                - prettier
+                - npx prettier
+        rules:
+          - allow: '<var:prettier> *'
+    "},
+    "npx prettier --write src/",
+    assert_allow as ActionAssertion,
+)]
+#[case::command_position_shorter_value_listed_first(
+    indoc! {"
+        definitions:
+          vars:
+            tool:
+              values:
+                - a
+                - a b
+        rules:
+          - allow: '<var:tool> c'
+    "},
+    "a b c",
+    assert_allow as ActionAssertion,
+)]
+fn var_ref_command_position(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// per-value type
+// ========================================
+
+#[rstest]
+#[case::per_value_typed_path_in_args(
+    indoc! {"
+        definitions:
+          vars:
+            scripts:
+              values:
+                - run-tests
+                - type: path
+                  value: ./scripts/deploy
+        rules:
+          - allow: bash <var:scripts>
+    "},
+    "bash scripts/deploy",
+    assert_allow as ActionAssertion,
+)]
+#[case::per_value_plain_inherits_definition_type(
+    indoc! {"
+        definitions:
+          vars:
+            scripts:
+              type: path
+              values:
+                - ./scripts/deploy
+                - ./scripts/test
+        rules:
+          - allow: bash <var:scripts>
+    "},
+    "bash scripts/deploy",
+    assert_allow as ActionAssertion,
+)]
+#[case::per_value_type_overrides_definition(
+    indoc! {"
+        definitions:
+          vars:
+            mixed:
+              values:
+                - literal-value
+                - type: path
+                  value: ./some/path
+        rules:
+          - allow: cmd <var:mixed>
+    "},
+    "cmd literal-value",
+    assert_allow as ActionAssertion,
+)]
+fn var_ref_per_value_type(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

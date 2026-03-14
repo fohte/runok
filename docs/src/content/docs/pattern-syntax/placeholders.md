@@ -151,11 +151,11 @@ If a pattern references a path name that is not defined in `definitions.paths`, 
 
 ## Variable References (`<var:name>`)
 
-The `<var:name>` placeholder matches a command argument against a **typed variable definition** in the [`definitions.vars`](/configuration/schema/#definitionsvars) block.
+The `<var:name>` placeholder matches a command token against a **typed variable definition** in the [`definitions.vars`](/configuration/schema/#definitionsvars) block. It can be used in both **argument position** and **command position**.
 
 ### Defining Variables
 
-Each variable has an optional `type` (default: `literal`) and a list of `values`:
+Each variable has an optional `type` (default: `literal`) and a list of `values`. Values can be plain strings (inheriting the definition-level type) or objects with an explicit per-value `type` override:
 
 ```yaml
 definitions:
@@ -169,6 +169,12 @@ definitions:
       type: path
       values:
         - ./tests/run
+    runok:
+      values:
+        - runok # literal (default): exact match
+        - 'cargo run --' # literal: multi-word, consumes multiple tokens
+        - type: path
+          value: target/debug/runok # path: canonicalize before comparison
 ```
 
 ### Variable Types
@@ -178,7 +184,11 @@ definitions:
 | `literal` | Exact string match (default)                                              |
 | `path`    | Canonicalize both sides before comparison, fallback to path normalization |
 
+Each value inherits the definition-level `type` unless it specifies its own `type` via the `{ type, value }` form.
+
 ### Using Variable References
+
+#### In argument position
 
 ```yaml
 rules:
@@ -192,6 +202,32 @@ rules:
 | `aws ec2 terminate-instances --instance-ids i-UNKNOWN` | `allow: "... --instance-ids <var:instance-ids>"` | No match                     |
 | `bash ./tests/run`                                     | `allow: "bash <var:test-script>"`                | Allowed                      |
 | `bash tests/run`                                       | `allow: "bash <var:test-script>"`                | Allowed (path normalization) |
+
+#### In command position
+
+`<var:name>` can also be used as the command name in a pattern. This is useful when the same tool can be invoked in multiple ways:
+
+```yaml
+definitions:
+  vars:
+    runok:
+      values:
+        - runok
+        - 'cargo run --'
+        - type: path
+          value: target/debug/runok
+rules:
+  - allow: '<var:runok> check'
+```
+
+| Command                      | Result                       |
+| ---------------------------- | ---------------------------- |
+| `runok check`                | Allowed                      |
+| `cargo run -- check`         | Allowed (multi-word value)   |
+| `./target/debug/runok check` | Allowed (path normalization) |
+| `node check`                 | No match                     |
+
+Multi-word values (e.g. `"cargo run --"`) consume multiple leading tokens from the input command.
 
 ### Path Type Normalization
 

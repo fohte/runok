@@ -29,13 +29,13 @@ Patterns are parsed exactly as written, with no hidden rewriting or implicit tra
 
 Tokens wrapped in `<...>` are **placeholders** — special tokens that match dynamically rather than by exact string comparison. Each placeholder type has different matching behavior:
 
-| Placeholder   | Example                | Description                                               | Details                                                                          |
-| ------------- | ---------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `<cmd>`       | `sudo <cmd>`           | Captures the wrapped command for further rule evaluation  | [Command](/pattern-syntax/placeholders/#command-cmd)                             |
-| `<opts>`      | `env <opts> <cmd>`     | Absorbs zero or more flag-like tokens (starting with `-`) | [Options](/pattern-syntax/placeholders/#options-opts)                            |
-| `<vars>`      | `env <vars> <cmd>`     | Absorbs zero or more `KEY=VALUE` tokens                   | [Variables](/pattern-syntax/placeholders/#variables-vars)                        |
-| `<path:name>` | `cat <path:sensitive>` | Matches against a named list of paths from `definitions`  | [Path References](/pattern-syntax/placeholders/#path-references-pathname)        |
-| `<var:name>`  | `cmd <var:ids>`        | Matches against a typed variable definition               | [Variable References](/pattern-syntax/placeholders/#variable-references-varname) |
+| Placeholder   | Example                | Description                                                                | Details                                                                          |
+| ------------- | ---------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `<cmd>`       | `sudo <cmd>`           | Captures the wrapped command for further rule evaluation                   | [Command](/pattern-syntax/placeholders/#command-cmd)                             |
+| `<opts>`      | `env <opts> <cmd>`     | Absorbs zero or more flag-like tokens (starting with `-`)                  | [Options](/pattern-syntax/placeholders/#options-opts)                            |
+| `<vars>`      | `env <vars> <cmd>`     | Absorbs zero or more `KEY=VALUE` tokens                                    | [Variables](/pattern-syntax/placeholders/#variables-vars)                        |
+| `<path:name>` | `cat <path:sensitive>` | Matches against a named list of paths from `definitions`                   | [Path References](/pattern-syntax/placeholders/#path-references-pathname)        |
+| `<var:name>`  | `cmd <var:ids>`        | Matches against a typed variable definition (argument or command position) | [Variable References](/pattern-syntax/placeholders/#variable-references-varname) |
 
 ## Pattern Structure
 
