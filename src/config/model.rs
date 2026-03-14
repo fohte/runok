@@ -85,6 +85,7 @@ impl RuleEntry {
 /// the expected decision, the value is the command to evaluate.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[cfg_attr(any(feature = "config-schema", test), schemars(transform = inline_test_entry_one_of_transform))]
 pub struct InlineTestEntry {
     /// Command expected to be allowed.
     pub allow: Option<String>,
@@ -593,6 +594,52 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     schema.insert(
         "oneOf".to_owned(),
         serde_json::Value::Array(vec![deny_variant, allow_variant, ask_variant]),
+    );
+
+    if let Some(desc) = description {
+        schema.insert("description".to_owned(), desc);
+    }
+}
+
+/// Transform the generated `InlineTestEntry` schema into a `oneOf` with three variants:
+/// - `allow`: requires `allow`, forbids `ask`/`deny`
+/// - `ask`: requires `ask`, forbids `allow`/`deny`
+/// - `deny`: requires `deny`, forbids `allow`/`ask`
+#[cfg(any(feature = "config-schema", test))]
+fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) {
+    let make_variant = |action: &str| -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        let required = vec![serde_json::Value::String(action.to_string())];
+
+        if let Some(prop) = schema
+            .get("properties")
+            .and_then(|p| p.get(action))
+            .cloned()
+        {
+            properties.insert(action.to_string(), prop);
+        }
+
+        serde_json::json!({
+            "type": "object",
+            "properties": serde_json::Value::Object(properties),
+            "required": serde_json::Value::Array(required),
+            "additionalProperties": false
+        })
+    };
+
+    let allow_variant = make_variant("allow");
+    let ask_variant = make_variant("ask");
+    let deny_variant = make_variant("deny");
+
+    let description = schema.get("description").cloned();
+
+    if let Some(obj) = schema.as_object_mut() {
+        obj.clear();
+    }
+
+    schema.insert(
+        "oneOf".to_owned(),
+        serde_json::Value::Array(vec![allow_variant, ask_variant, deny_variant]),
     );
 
     if let Some(desc) = description {

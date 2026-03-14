@@ -221,30 +221,56 @@
     },
     "InlineTestEntry": {
       "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
-      "type": "object",
-      "properties": {
-        "allow": {
-          "description": "Command expected to be allowed.",
-          "type": [
-            "string",
-            "null"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "description": "Command expected to be allowed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "allow"
           ]
         },
-        "ask": {
-          "description": "Command expected to trigger an ask prompt.",
-          "type": [
-            "string",
-            "null"
+        {
+          "type": "object",
+          "properties": {
+            "ask": {
+              "description": "Command expected to trigger an ask prompt.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ask"
           ]
         },
-        "deny": {
-          "description": "Command expected to be denied.",
-          "type": [
-            "string",
-            "null"
+        {
+          "type": "object",
+          "properties": {
+            "deny": {
+              "description": "Command expected to be denied.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "deny"
           ]
         }
-      }
+      ]
     },
     "NetworkPolicy": {
       "description": "Network access policy within a sandbox preset.",
