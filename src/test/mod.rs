@@ -360,6 +360,9 @@ pub fn load_test_config(file: &Path) -> Result<Config, TestError> {
                     })?;
             }
 
+            // Strip the tests section from extended configs so they don't
+            // overwrite the main config's test definitions.
+            extend_config.tests = None;
             config = config.merge(extend_config);
         }
     }
@@ -688,47 +691,45 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[rstest]
-    fn report_pass_output() {
+    #[case::pass(
+        "git status",
+        ExpectedDecision::Allow,
+        ActionKind::Allow,
+        true,
+        "PASS: git status => allow\n"
+    )]
+    #[case::fail(
+        "rm -rf /",
+        ExpectedDecision::Deny,
+        ActionKind::Allow,
+        false,
+        "FAIL: rm -rf / => expected deny, got allow\n"
+    )]
+    fn report_output(
+        #[case] command: &str,
+        #[case] expected: ExpectedDecision,
+        #[case] actual: ActionKind,
+        #[case] passed: bool,
+        #[case] expected_output: &str,
+    ) {
         let results = TestResults {
             results: vec![TestResult {
                 test_case: TestCase {
-                    command: "git status".to_string(),
-                    expected: ExpectedDecision::Allow,
+                    command: command.to_string(),
+                    expected,
                     source: TestCaseSource::TopLevel {
                         file: PathBuf::from("test.yml"),
                     },
                 },
-                actual: ActionKind::Allow,
-                passed: true,
+                actual,
+                passed,
             }],
         };
 
         let mut buf = Vec::new();
         report(&results, &mut buf);
         let output = String::from_utf8(buf).expect("invalid utf8");
-        assert_eq!(output, "PASS: git status => allow\n");
-    }
-
-    #[rstest]
-    fn report_fail_output() {
-        let results = TestResults {
-            results: vec![TestResult {
-                test_case: TestCase {
-                    command: "rm -rf /".to_string(),
-                    expected: ExpectedDecision::Deny,
-                    source: TestCaseSource::TopLevel {
-                        file: PathBuf::from("test.yml"),
-                    },
-                },
-                actual: ActionKind::Allow,
-                passed: false,
-            }],
-        };
-
-        let mut buf = Vec::new();
-        report(&results, &mut buf);
-        let output = String::from_utf8(buf).expect("invalid utf8");
-        assert_eq!(output, "FAIL: rm -rf / => expected deny, got allow\n");
+        assert_eq!(output, expected_output);
     }
 
     #[rstest]

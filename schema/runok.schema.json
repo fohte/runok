@@ -298,6 +298,16 @@
                 "null"
               ]
             },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
+            },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
               "type": [
@@ -339,6 +349,16 @@
                 "null"
               ]
             },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
+            },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",
               "type": [
@@ -379,6 +399,16 @@
                 "string",
                 "null"
               ]
+            },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
             },
             "when": {
               "description": "CEL expression that must evaluate to true for this rule to apply.",

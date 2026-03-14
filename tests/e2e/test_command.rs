@@ -233,6 +233,38 @@ fn tests_extends_merges_additional_rules() {
 }
 
 #[rstest]
+fn tests_extends_does_not_overwrite_main_tests() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - allow: 'echo *'
+        tests:
+          extends:
+            - ./extra-rules.yml
+          cases:
+            - allow: 'echo hello'
+    "});
+    // The extended file has its own tests section which should be ignored
+    fs::write(
+        env.cwd.join("extra-rules.yml"),
+        indoc! {"
+            rules:
+              - deny: 'rm *'
+            tests:
+              cases:
+                - deny: 'rm -rf /'
+        "},
+    )
+    .unwrap_or_else(|e| panic!("failed to write extra rules: {e}"));
+
+    // Only the main config's test case should run (1 test, not 2)
+    env.command()
+        .args(["test"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("1 passed, 0 failed, 1 total"));
+}
+
+#[rstest]
 fn global_config_does_not_affect_test() {
     let env = TestEnv::new(indoc! {"
         rules:

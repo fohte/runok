@@ -576,9 +576,9 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
         })
     };
 
-    let deny_variant = make_variant("deny", &[]);
-    let allow_variant = make_variant("allow", &["sandbox"]);
-    let ask_variant = make_variant("ask", &["sandbox"]);
+    let deny_variant = make_variant("deny", &["tests"]);
+    let allow_variant = make_variant("allow", &["sandbox", "tests"]);
+    let ask_variant = make_variant("ask", &["sandbox", "tests"]);
 
     // Replace the schema with oneOf
     let description = schema.get("description").cloned();
