@@ -288,7 +288,7 @@ const CONFIG_FILENAMES: &[&str] = &["runok.yml", "runok.yaml"];
 /// Unlike the normal loader this intentionally skips the global config
 /// (`~/.config/runok/runok.yml`) so that test results are fully determined
 /// by the project config alone.
-pub fn load_test_config(file: &Path) -> Result<Config, TestError> {
+pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
     let path = if file.is_file() {
         file.to_path_buf()
     } else if file.is_dir() {
@@ -368,7 +368,7 @@ pub fn load_test_config(file: &Path) -> Result<Config, TestError> {
     }
 
     config.validate()?;
-    Ok(config)
+    Ok((config, path))
 }
 
 #[cfg(test)]
@@ -758,7 +758,7 @@ mod tests {
             "},
         );
 
-        let config = load_test_config(&env.config_path()).expect("load failed");
+        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].allow.as_deref(), Some("git status"));
@@ -774,7 +774,7 @@ mod tests {
             "},
         );
 
-        let config = load_test_config(&env.dir).expect("load failed");
+        let (config, _) = load_test_config(&env.dir).expect("load failed");
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
     }
@@ -789,7 +789,7 @@ mod tests {
             "},
         );
 
-        let config = load_test_config(&env.dir).expect("load failed");
+        let (config, _) = load_test_config(&env.dir).expect("load failed");
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules[0].deny.as_deref(), Some("rm *"));
     }
@@ -825,7 +825,7 @@ mod tests {
             "},
         );
 
-        let config = load_test_config(&env.config_path()).expect("load failed");
+        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].allow.as_deref(), Some("echo base"));
@@ -854,7 +854,7 @@ mod tests {
             "},
         );
 
-        let config = load_test_config(&env.config_path()).expect("load failed");
+        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
         let rules = config.rules.expect("rules missing");
         // Main rule + rules from tests.extends
         assert_eq!(rules.len(), 2);

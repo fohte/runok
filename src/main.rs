@@ -104,7 +104,7 @@ fn run_test(args: &cli::TestArgs) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config_path = args.config.clone().unwrap_or_else(|| cwd.clone());
 
-    let config = match load_test_config(&config_path) {
+    let (config, resolved_path) = match load_test_config(&config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: {e}");
@@ -112,7 +112,7 @@ fn run_test(args: &cli::TestArgs) -> ExitCode {
         }
     };
 
-    let test_cases = parse_test_cases(&config, &config_path);
+    let test_cases = parse_test_cases(&config, &resolved_path);
     if test_cases.is_empty() {
         eprintln!("runok: {}", TestError::NoTestCases);
         return ExitCode::from(2);
