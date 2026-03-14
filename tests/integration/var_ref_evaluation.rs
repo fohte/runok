@@ -390,6 +390,20 @@ fn var_ref_when_clause_with_vars(
     "npx prettier --write src/",
     assert_allow as ActionAssertion,
 )]
+#[case::command_position_shorter_value_listed_first(
+    indoc! {"
+        definitions:
+          vars:
+            tool:
+              values:
+                - a
+                - a b
+        rules:
+          - allow: '<var:tool> c'
+    "},
+    "a b c",
+    assert_allow as ActionAssertion,
+)]
 fn var_ref_command_position(
     #[case] yaml: &str,
     #[case] command: &str,

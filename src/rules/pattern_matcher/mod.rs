@@ -103,10 +103,7 @@ fn prepare_wildcard_iteration<'a>(
             // Try matching var values against the leading tokens to determine
             // how many tokens the command name consumes.
             let all_tokens: Vec<&str> = command.raw_tokens.iter().map(|s| s.as_str()).collect();
-            let mut skip_values = Vec::new();
-            if let Some(consumed) = match_var_ref_multi(name, &all_tokens, definitions) {
-                skip_values.push(consumed);
-            }
+            let skip_values = match_var_ref_multi(name, &all_tokens, definitions);
             (all_tokens, skip_values)
         }
         _ => {

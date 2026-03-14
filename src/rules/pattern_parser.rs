@@ -865,21 +865,25 @@ mod tests {
 
     // === <var:name> in command position ===
 
-    #[test]
-    fn parse_var_ref_command_position() {
-        let result = parse("<var:runok> check").unwrap();
-        assert_eq!(result.command, CommandPattern::VarRef("runok".to_string()));
-        assert_eq!(result.tokens, vec![PatternToken::Literal("check".into())]);
-    }
-
-    #[test]
-    fn parse_var_ref_command_position_with_wildcard() {
-        let result = parse("<var:prettier> *").unwrap();
-        assert_eq!(
-            result.command,
-            CommandPattern::VarRef("prettier".to_string())
-        );
-        assert_eq!(result.tokens, vec![PatternToken::Wildcard]);
+    #[rstest]
+    #[case::with_literal_arg(
+        "<var:runok> check",
+        CommandPattern::VarRef("runok".to_string()),
+        vec![PatternToken::Literal("check".into())],
+    )]
+    #[case::with_wildcard_arg(
+        "<var:prettier> *",
+        CommandPattern::VarRef("prettier".to_string()),
+        vec![PatternToken::Wildcard],
+    )]
+    fn parse_var_ref_command_position(
+        #[case] input: &str,
+        #[case] expected_command: CommandPattern,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        let result = parse(input).unwrap();
+        assert_eq!(result.command, expected_command);
+        assert_eq!(result.tokens, expected_tokens);
     }
 
     #[test]

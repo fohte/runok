@@ -261,19 +261,22 @@ pub(crate) fn match_var_ref(name: &str, cmd_token: &str, definitions: &Definitio
 
 /// Match a `<var:name>` reference against multiple consecutive command tokens.
 ///
-/// Tries each value in the variable definition. Multi-word values (containing
-/// spaces) are split into words and matched against consecutive tokens.
-/// Returns `Some(n)` with the number of tokens consumed on success, `None` on failure.
+/// Tries each value in the variable definition. Multi-word values are split
+/// via `shlex::split` and matched against consecutive tokens.
+/// Returns all possible consumption lengths (one per matching value).
 pub(crate) fn match_var_ref_multi(
     name: &str,
     cmd_tokens: &[&str],
     definitions: &Definitions,
-) -> Option<usize> {
-    let var_def = resolve_var(name, definitions)?;
+) -> Vec<usize> {
+    let Some(var_def) = resolve_var(name, definitions) else {
+        return Vec::new();
+    };
+    let mut matches = Vec::new();
     for v in &var_def.values {
         let effective_type = v.effective_type(var_def.var_type);
         let value_str = v.value();
-        let words: Vec<&str> = value_str.split_whitespace().collect();
+        let words: Vec<String> = shlex::split(value_str).unwrap_or_default();
         if words.is_empty() {
             continue;
         }
@@ -285,10 +288,10 @@ pub(crate) fn match_var_ref_multi(
             .zip(&cmd_tokens[..words.len()])
             .all(|(word, token)| match_value_with_type(word, token, effective_type));
         if all_match {
-            return Some(words.len());
+            matches.push(words.len());
         }
     }
-    None
+    matches
 }
 
 /// Try to canonicalize a path via the filesystem; fall back to logical
@@ -463,14 +466,11 @@ mod tests {
     use crate::config::VarValue;
 
     #[rstest]
-    #[case::plain_literal_match("runok", Some(1))]
-    #[case::typed_path_match("./target/debug/runok", Some(1))]
-    #[case::multi_word_literal("cargo", None)] // partial match of multi-word value
-    #[case::no_match("node", None)]
-    fn match_var_ref_multi_per_value_type(
-        #[case] first_token: &str,
-        #[case] expected: Option<usize>,
-    ) {
+    #[case::plain_literal_match("runok", vec![1])]
+    #[case::typed_path_match("./target/debug/runok", vec![1])]
+    #[case::multi_word_literal("cargo", vec![])] // partial match of multi-word value
+    #[case::no_match("node", vec![])]
+    fn match_var_ref_multi_per_value_type(#[case] first_token: &str, #[case] expected: Vec<usize>) {
         let definitions = Definitions {
             vars: Some(HashMap::from([(
                 "runok".to_string(),
@@ -511,7 +511,7 @@ mod tests {
             ..Default::default()
         };
         let tokens = vec!["cargo", "run", "--", "check"];
-        assert_eq!(match_var_ref_multi("runok", &tokens, &definitions), Some(3));
+        assert_eq!(match_var_ref_multi("runok", &tokens, &definitions), vec![3]);
     }
 
     #[test]
