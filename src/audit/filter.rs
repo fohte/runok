@@ -93,6 +93,8 @@ pub struct AuditFilter {
     pub until: Option<TimeSpec>,
     /// Filter by command substring match.
     pub command_pattern: Option<String>,
+    /// Filter by working directory (prefix match, includes subdirectories).
+    pub cwd: Option<String>,
     /// Maximum number of entries to return (default: 50).
     pub limit: usize,
 }
@@ -104,6 +106,7 @@ impl Default for AuditFilter {
             since: None,
             until: None,
             command_pattern: None,
+            cwd: None,
             limit: 50,
         }
     }
@@ -187,5 +190,6 @@ mod tests {
         assert!(filter.since.is_none());
         assert!(filter.until.is_none());
         assert!(filter.command_pattern.is_none());
+        assert!(filter.cwd.is_none());
     }
 }

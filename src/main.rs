@@ -325,6 +325,17 @@ fn run_audit(args: AuditArgs, cwd: &std::path::Path) -> i32 {
 
     filter.command_pattern = args.command;
 
+    if let Some(cwd_arg) = args.cwd {
+        let cwd_path = std::path::Path::new(&cwd_arg);
+        match cwd_path.canonicalize() {
+            Ok(canonical) => filter.cwd = Some(canonical.to_string_lossy().into_owned()),
+            Err(e) => {
+                eprintln!("runok: failed to resolve cwd path '{}': {e}", cwd_arg);
+                return 1;
+            }
+        }
+    }
+
     let reader = AuditReader::new(log_dir);
     let entries = match reader.read(&filter) {
         Ok(e) => e,
