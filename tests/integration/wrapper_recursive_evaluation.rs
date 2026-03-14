@@ -757,6 +757,35 @@ fn wrapper_compound_with_sandbox(empty_context: EvalContext) {
 }
 
 // ========================================
+// <cmd> placeholder does not capture flag-starting sequences:
+// `command <cmd>` wrapper should not match `command -v a`,
+// so the direct rule `allow: 'command -v|-V *'` takes effect.
+// ========================================
+
+#[rstest]
+#[case::command_v_allow("command -v a", assert_allow as ActionAssertion)]
+#[case::command_uppercase_v_allow("command -V a", assert_allow as ActionAssertion)]
+#[case::command_ls_wrapper_applies("command ls", assert_allow as ActionAssertion)]
+fn cmd_placeholder_skips_flag_starting_tokens(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'command -v|-V *'
+          - allow: 'ls'
+        definitions:
+          wrappers:
+            - 'command <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // find -exec/-execdir wrapper: flag alternation followed by <cmd>
 // placeholder is parsed correctly, enabling recursive evaluation
 // ========================================
