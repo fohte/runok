@@ -7,3 +7,4 @@ mod error_handling;
 mod exec;
 mod helpers;
 mod init;
+mod test_command;

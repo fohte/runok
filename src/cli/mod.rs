@@ -22,6 +22,8 @@ pub enum Commands {
     Check(CheckArgs),
     /// View audit log entries
     Audit(AuditArgs),
+    /// Run tests defined in the config to verify rules
+    Test(TestArgs),
     /// Initialize runok configuration
     Init(InitArgs),
     /// Force-update all remote presets referenced via extends
@@ -76,6 +78,14 @@ pub struct SandboxExecArgs {
     /// The command and its arguments to execute.
     #[arg(last = true, required = true)]
     pub command: Vec<String>,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct TestArgs {
+    /// Path to the config file to test
+    #[arg(short = 'c', long)]
+    pub config: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -237,6 +247,18 @@ mod tests {
     #[case::init_all_flags(
         &["runok", "init", "--scope", "user", "-y"],
         Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
+    )]
+    #[case::test_default(
+        &["runok", "test"],
+        Commands::Test(TestArgs { config: None }),
+    )]
+    #[case::test_with_config_short(
+        &["runok", "test", "-c", "path/to/config.yml"],
+        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("path/to/config.yml")) }),
+    )]
+    #[case::test_with_config_long(
+        &["runok", "test", "--config", "runok.yml"],
+        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("runok.yml")) }),
     )]
     #[case::update_presets(
         &["runok", "update-presets"],

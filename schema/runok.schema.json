@@ -56,6 +56,17 @@
       "items": {
         "$ref": "#/$defs/RuleEntry"
       }
+    },
+    "tests": {
+      "description": "Test section for rule verification.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TestSection"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -205,6 +216,33 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "InlineTestEntry": {
+      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Command expected to be allowed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ask": {
+          "description": "Command expected to trigger an ask prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny": {
+          "description": "Command expected to be denied.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -382,6 +420,32 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "TestSection": {
+      "description": "Top-level test section for cross-rule tests and test-only extends.",
+      "type": "object",
+      "properties": {
+        "cases": {
+          "description": "Test cases to evaluate.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/InlineTestEntry"
+          }
+        },
+        "extends": {
+          "description": "Additional config files to merge only during test execution.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

@@ -19,6 +19,8 @@ pub struct Config {
     pub definitions: Option<Definitions>,
     /// Audit log settings.
     pub audit: Option<AuditConfig>,
+    /// Test section for rule verification.
+    pub tests: Option<TestSection>,
 }
 
 /// Default settings applied when no rule matches a command.
@@ -61,6 +63,8 @@ pub struct RuleEntry {
     pub fix_suggestion: Option<String>,
     /// Sandbox preset name to apply when this rule matches (not allowed for deny rules).
     pub sandbox: Option<String>,
+    /// Inline test cases for this rule.
+    pub tests: Option<Vec<InlineTestEntry>>,
 }
 
 impl RuleEntry {
@@ -74,6 +78,30 @@ impl RuleEntry {
             _ => None,
         }
     }
+}
+
+/// A test case entry used in both inline rule tests and top-level test cases.
+/// Exactly one of `allow`, `ask`, or `deny` must be set. The key determines
+/// the expected decision, the value is the command to evaluate.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct InlineTestEntry {
+    /// Command expected to be allowed.
+    pub allow: Option<String>,
+    /// Command expected to trigger an ask prompt.
+    pub ask: Option<String>,
+    /// Command expected to be denied.
+    pub deny: Option<String>,
+}
+
+/// Top-level test section for cross-rule tests and test-only extends.
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct TestSection {
+    /// Additional config files to merge only during test execution.
+    pub extends: Option<Vec<String>>,
+    /// Test cases to evaluate.
+    pub cases: Option<Vec<InlineTestEntry>>,
 }
 
 /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
@@ -383,6 +411,7 @@ impl Config {
             rules: Self::merge_vecs(self.rules, other.rules),
             definitions: Self::merge_definitions(self.definitions, other.definitions),
             audit: Self::merge_audit(self.audit, other.audit),
+            tests: other.tests.or(self.tests),
         }
     }
 
@@ -1116,6 +1145,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1130,6 +1160,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1144,6 +1175,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1181,9 +1213,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
             audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1202,9 +1236,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
             audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1414,6 +1450,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Valid rule (should not appear in errors)
                 RuleEntry {
@@ -1424,6 +1461,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Error 2: deny with sandbox
                 RuleEntry {
@@ -1434,6 +1472,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("restricted".to_string()),
+                    tests: None,
                 },
                 // Error 3: undefined sandbox
                 RuleEntry {
@@ -1444,9 +1483,11 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("nonexistent".to_string()),
+                    tests: None,
                 },
             ]),
             definitions: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
@@ -1478,6 +1519,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1496,6 +1538,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1579,6 +1622,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1591,6 +1635,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
