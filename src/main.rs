@@ -81,6 +81,11 @@ fn main() -> ExitCode {
         return run_init(args);
     }
 
+    // Test runs with its own config loading (no global config)
+    if let Commands::Test(ref args) = cli.command {
+        return run_test(args);
+    }
+
     // UpdatePresets reads config files directly (not via DefaultConfigLoader)
     if matches!(cli.command, Commands::UpdatePresets) {
         return run_update_presets();
@@ -89,6 +94,40 @@ fn main() -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exit_code = run_command(cli.command, &cwd, std::io::stdin());
     ExitCode::from(exit_code as u8)
+}
+
+fn run_test(args: &cli::TestArgs) -> ExitCode {
+    use runok::test::{
+        TestError, load_test_config, parse_test_cases, report, report_summary, run_tests,
+    };
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let config_path = args.config.clone().unwrap_or_else(|| cwd.clone());
+
+    let (config, resolved_path) = match load_test_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("runok: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let test_cases = parse_test_cases(&config, &resolved_path);
+    if test_cases.is_empty() {
+        eprintln!("runok: {}", TestError::NoTestCases);
+        return ExitCode::from(2);
+    }
+
+    let results = run_tests(&config, &test_cases);
+    let mut stdout = std::io::stdout();
+    report(&results, &mut stdout);
+    report_summary(&results, &mut stdout);
+
+    if results.is_success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn run_update_presets() -> ExitCode {
@@ -130,6 +169,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         Commands::Exec(_) => 1,
         Commands::Check(_) => 2,
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
         Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
@@ -192,6 +232,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
             }
         }
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
         Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]

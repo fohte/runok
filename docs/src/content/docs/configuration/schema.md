@@ -19,7 +19,7 @@ rules:
   - ask: 'npm *'
 ```
 
-The top-level keys are `extends`, `defaults`, `rules`, `definitions`, and `audit`. All are optional.
+The top-level keys are `extends`, `defaults`, `rules`, `definitions`, `audit`, and `tests`. All are optional.
 
 ### JSON Schema
 
@@ -181,6 +181,20 @@ Name of a sandbox preset (defined in `definitions.sandbox`) to apply when this r
 ```yaml title="runok.yml"
 - allow: 'node *'
   sandbox: strict
+```
+
+##### `tests`
+
+Inline test cases for this rule. Each entry specifies the expected decision and the command to evaluate. Used by [`runok test`](/cli/test/) to verify the rule behaves as expected.
+
+**Type:** `list[TestEntry]`\
+**Default:** `[]`
+
+```yaml title="runok.yml"
+- allow: 'git status'
+  tests:
+    - allow: 'git status'
+    - allow: 'git status --short'
 ```
 
 ### `definitions`
@@ -399,6 +413,37 @@ Number of days to retain log files. Files older than this are automatically dele
 
 **Type:** `int`\
 **Default:** `7`
+
+### `tests`
+
+Top-level test section for cross-rule test cases and test-only configuration. Used by [`runok test`](/cli/test/).
+
+**Type:** `object`\
+**Default:** `{}`\
+**Required:** No
+
+```yaml title="runok.yml"
+tests:
+  extends:
+    - ./test-fixtures/extra-rules.yml
+  cases:
+    - allow: 'git push origin main'
+    - deny: 'git push --force origin main'
+```
+
+#### `tests.extends`
+
+Additional configuration files to merge only during test execution. These files are not loaded during normal `runok check` or `runok exec`.
+
+**Type:** `list[str]`\
+**Default:** `[]`
+
+#### `tests.cases`
+
+Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, or `deny`) and the command to evaluate.
+
+**Type:** `list[TestEntry]`\
+**Default:** `[]`
 
 ## Complete Example
 

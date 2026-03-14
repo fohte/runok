@@ -242,6 +242,7 @@ fn preset_merge_wrappers_appended() {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }]),
         ..Config::default()
     },
@@ -296,6 +297,7 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             },
             RuleEntry {
                 deny: Some("curl *".to_string()),
@@ -305,6 +307,7 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
+                tests: None,
             },
         ]),
         ..Config::default()

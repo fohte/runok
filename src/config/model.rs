@@ -19,6 +19,8 @@ pub struct Config {
     pub definitions: Option<Definitions>,
     /// Audit log settings.
     pub audit: Option<AuditConfig>,
+    /// Test section for rule verification.
+    pub tests: Option<TestSection>,
 }
 
 /// Default settings applied when no rule matches a command.
@@ -61,6 +63,8 @@ pub struct RuleEntry {
     pub fix_suggestion: Option<String>,
     /// Sandbox preset name to apply when this rule matches (not allowed for deny rules).
     pub sandbox: Option<String>,
+    /// Inline test cases for this rule.
+    pub tests: Option<Vec<InlineTestEntry>>,
 }
 
 impl RuleEntry {
@@ -74,6 +78,31 @@ impl RuleEntry {
             _ => None,
         }
     }
+}
+
+/// A test case entry used in both inline rule tests and top-level test cases.
+/// Exactly one of `allow`, `ask`, or `deny` must be set. The key determines
+/// the expected decision, the value is the command to evaluate.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[cfg_attr(any(feature = "config-schema", test), schemars(transform = inline_test_entry_one_of_transform))]
+pub struct InlineTestEntry {
+    /// Command expected to be allowed.
+    pub allow: Option<String>,
+    /// Command expected to trigger an ask prompt.
+    pub ask: Option<String>,
+    /// Command expected to be denied.
+    pub deny: Option<String>,
+}
+
+/// Top-level test section for cross-rule tests and test-only extends.
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct TestSection {
+    /// Additional config files to merge only during test execution.
+    pub extends: Option<Vec<String>>,
+    /// Test cases to evaluate.
+    pub cases: Option<Vec<InlineTestEntry>>,
 }
 
 /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
@@ -376,6 +405,7 @@ impl Config {
     ///   contradictory constraints.)
     /// - audit: override (local wins at merge level; loader enforces
     ///   global-only by stripping audit from project/local layers)
+    /// - tests: override (local wins; test definitions are not merged across layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
             extends: Self::merge_vecs(self.extends, other.extends),
@@ -383,6 +413,7 @@ impl Config {
             rules: Self::merge_vecs(self.rules, other.rules),
             definitions: Self::merge_definitions(self.definitions, other.definitions),
             audit: Self::merge_audit(self.audit, other.audit),
+            tests: other.tests.or(self.tests),
         }
     }
 
@@ -547,9 +578,9 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
         })
     };
 
-    let deny_variant = make_variant("deny", &[]);
-    let allow_variant = make_variant("allow", &["sandbox"]);
-    let ask_variant = make_variant("ask", &["sandbox"]);
+    let deny_variant = make_variant("deny", &["tests"]);
+    let allow_variant = make_variant("allow", &["sandbox", "tests"]);
+    let ask_variant = make_variant("ask", &["sandbox", "tests"]);
 
     // Replace the schema with oneOf
     let description = schema.get("description").cloned();
@@ -563,6 +594,52 @@ fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     schema.insert(
         "oneOf".to_owned(),
         serde_json::Value::Array(vec![deny_variant, allow_variant, ask_variant]),
+    );
+
+    if let Some(desc) = description {
+        schema.insert("description".to_owned(), desc);
+    }
+}
+
+/// Transform the generated `InlineTestEntry` schema into a `oneOf` with three variants:
+/// - `allow`: requires `allow`, forbids `ask`/`deny`
+/// - `ask`: requires `ask`, forbids `allow`/`deny`
+/// - `deny`: requires `deny`, forbids `allow`/`ask`
+#[cfg(any(feature = "config-schema", test))]
+fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) {
+    let make_variant = |action: &str| -> serde_json::Value {
+        let mut properties = serde_json::Map::new();
+        let required = vec![serde_json::Value::String(action.to_string())];
+
+        if let Some(prop) = schema
+            .get("properties")
+            .and_then(|p| p.get(action))
+            .cloned()
+        {
+            properties.insert(action.to_string(), prop);
+        }
+
+        serde_json::json!({
+            "type": "object",
+            "properties": serde_json::Value::Object(properties),
+            "required": serde_json::Value::Array(required),
+            "additionalProperties": false
+        })
+    };
+
+    let allow_variant = make_variant("allow");
+    let ask_variant = make_variant("ask");
+    let deny_variant = make_variant("deny");
+
+    let description = schema.get("description").cloned();
+
+    if let Some(obj) = schema.as_object_mut() {
+        obj.clear();
+    }
+
+    schema.insert(
+        "oneOf".to_owned(),
+        serde_json::Value::Array(vec![allow_variant, ask_variant, deny_variant]),
     );
 
     if let Some(desc) = description {
@@ -1116,6 +1193,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1130,6 +1208,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1144,6 +1223,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -1181,9 +1261,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
             audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1202,9 +1284,11 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             definitions: None,
             audit: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1414,6 +1498,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Valid rule (should not appear in errors)
                 RuleEntry {
@@ -1424,6 +1509,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    tests: None,
                 },
                 // Error 2: deny with sandbox
                 RuleEntry {
@@ -1434,6 +1520,7 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("restricted".to_string()),
+                    tests: None,
                 },
                 // Error 3: undefined sandbox
                 RuleEntry {
@@ -1444,9 +1531,11 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("nonexistent".to_string()),
+                    tests: None,
                 },
             ]),
             definitions: None,
+            tests: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
@@ -1478,6 +1567,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1496,6 +1586,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1579,6 +1670,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };
@@ -1591,6 +1683,7 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                tests: None,
             }]),
             ..Config::default()
         };

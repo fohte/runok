@@ -778,6 +778,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -790,6 +791,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -802,6 +804,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         }
     }
 
@@ -1146,6 +1149,7 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            tests: None,
         };
         let config = make_config(vec![invalid_rule, allow_rule("git status")]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
