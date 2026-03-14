@@ -19,6 +19,8 @@ Tokens wrapped in `<...>` are **placeholders** — special tokens that match dyn
 
 The `<cmd>` placeholder captures the **remaining tokens** as the wrapped command. The wrapped command is then evaluated against the other rules in the configuration. See [Wrapped Command Recursion](/rule-evaluation/wrapper-recursion/) for details.
 
+`<cmd>` only matches token sequences whose **first token is not a flag** (does not start with `-`). This prevents wrapper patterns from accidentally consuming flag arguments as commands. For example, `command <cmd>` does not match `command -v a` because `-v` is a flag, not a command name.
+
 ```yaml
 # sudo echo hello -> wrapped command is "echo hello"
 - allow: 'sudo <cmd>'
@@ -243,7 +245,7 @@ In the `find` wrapper example, `\\;` is a backslash-escaped semicolon in YAML. T
 
 ## Restrictions
 
-- `<cmd>` captures one or more tokens; it tries all possible split points to find a valid wrapped command
+- `<cmd>` captures one or more tokens whose first token is not a flag (does not start with `-`); it tries all possible split points to find a valid wrapped command
 - Optional groups, path references, and variable references are not supported inside wrapper patterns
 
 ## Related

@@ -825,7 +825,7 @@ fn match_engine<'a>(
                 let is_cmd = name == "cmd";
                 if rest.is_empty() {
                     if is_cmd {
-                        if cmd_tokens.is_empty() {
+                        if cmd_tokens.is_empty() || cmd_tokens[0].starts_with('-') {
                             return Ok(false);
                         }
                         let saved_len = captured.len();
@@ -840,6 +840,10 @@ fn match_engine<'a>(
                     }
                 } else if !cmd_tokens.is_empty() {
                     for take in 1..=cmd_tokens.len() {
+                        // <cmd> must not capture a sequence starting with a flag
+                        if is_cmd && cmd_tokens[0].starts_with('-') {
+                            break;
+                        }
                         let saved_len = captured.len();
                         if is_cmd {
                             captured.extend_from_slice(&cmd_tokens[..take]);
@@ -1805,8 +1809,9 @@ mod tests {
     #[case::wildcard_before_cmd(
         "xargs * <cmd>",
         "xargs -I{} echo hello",
-        // Wildcard tries skip=0,1,2: all produce candidates
-        vec![vec!["-I{}", "echo", "hello"], vec!["echo", "hello"], vec!["hello"]],
+        // Wildcard tries skip=0,1,2: skip=0 is rejected because <cmd> would
+        // start with a flag ("-I{}"), so only skip=1 and skip=2 produce candidates.
+        vec![vec!["echo", "hello"], vec!["hello"]],
     )]
     #[case::no_match(
         "sudo <cmd>",
@@ -1821,7 +1826,8 @@ mod tests {
     #[case::negation_before_cmd(
         "run !--dry-run <cmd>",
         "run --verbose echo hello",
-        vec![vec!["--verbose", "echo", "hello"]],
+        // <cmd> rejects capture starting with a flag ("--verbose"), so no match.
+        Vec::<Vec<&str>>::new(),
     )]
     #[case::positional_negation_before_cmd(
         "run !exec <cmd>",
@@ -1857,6 +1863,16 @@ mod tests {
         "run -v <cmd>",
         "run -v echo hello",
         vec![vec!["echo", "hello"]],
+    )]
+    #[case::cmd_rejects_flag_start(
+        "command <cmd>",
+        "command -v a",
+        Vec::<Vec<&str>>::new(),
+    )]
+    #[case::cmd_accepts_non_flag(
+        "command <cmd>",
+        "command ls",
+        vec![vec!["ls"]],
     )]
     fn extract_placeholder_cases(
         #[case] pattern_str: &str,
