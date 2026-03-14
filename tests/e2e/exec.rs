@@ -23,25 +23,10 @@ fn exec_env() -> TestEnv {
     "})
 }
 
-// Denied commands are never executed, so no --dry-run needed for deny cases.
-// Allow cases use --dry-run to avoid actual command execution and side effects.
-
 #[rstest]
 #[case::deny_post(
     &["exec", "--", "curl", "-X", "POST", "https://example.com"],
     3,
-)]
-#[case::allow_git_status_dry_run(
-    &["exec", "--dry-run", "--", "git", "status"],
-    0,
-)]
-#[case::allow_curl_without_method_dry_run(
-    &["exec", "--dry-run", "--", "curl", "https://example.com"],
-    0,
-)]
-#[case::allow_curl_get_dry_run(
-    &["exec", "--dry-run", "--", "curl", "-X", "GET", "https://example.com"],
-    0,
 )]
 fn exec_exit_code(exec_env: TestEnv, #[case] args: &[&str], #[case] expected_exit: i32) {
     let assert = exec_env.command().args(args).assert();
@@ -68,23 +53,6 @@ fn exec_ask_treated_as_deny() {
         .args(["exec", "--", "git", "push", "origin", "main"])
         .assert();
     assert.code(3);
-}
-
-#[rstest]
-fn exec_sandbox_allow_with_dry_run(exec_env: TestEnv) {
-    let assert = exec_env
-        .command()
-        .args([
-            "exec",
-            "--dry-run",
-            "--sandbox",
-            "restricted",
-            "--",
-            "echo",
-            "hello",
-        ])
-        .assert();
-    assert.code(0).stderr(predicates::str::contains("allowed"));
 }
 
 #[rstest]

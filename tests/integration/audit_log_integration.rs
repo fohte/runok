@@ -13,9 +13,7 @@ use runok::adapter::{self, RunOptions};
 use runok::audit::AuditEntry;
 use runok::config::parse_config;
 use runok::exec::ExecError;
-use runok::exec::command_executor::{
-    CommandExecutor, CommandInput, DryRunResult, ExecMode, SandboxPolicy,
-};
+use runok::exec::command_executor::{CommandExecutor, CommandInput, ExecMode, SandboxPolicy};
 
 /// Mock executor that records exec calls without actually running commands.
 /// This avoids the transparent-proxy exec() syscall that replaces the process.
@@ -40,15 +38,6 @@ impl CommandExecutor for MockExecutor {
 
     fn validate(&self, _command: &[String]) -> Result<(), ExecError> {
         Ok(())
-    }
-
-    fn dry_run(&self, _command: &CommandInput, _sandbox: Option<&SandboxPolicy>) -> DryRunResult {
-        DryRunResult {
-            program: String::new(),
-            exec_mode: ExecMode::SpawnAndWait,
-            is_valid: true,
-            error: None,
-        }
     }
 
     fn determine_exec_mode(
@@ -279,20 +268,6 @@ fn no_audit_section_uses_default_behavior() {
     // Should succeed without errors even without an audit section
     let exit_code = adapter::run_with_options(&endpoint, &config, &options);
     assert_eq!(exit_code, 0);
-}
-
-#[rstest]
-fn dry_run_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig) {
-    let endpoint = echo_hello_endpoint();
-    let options = RunOptions {
-        dry_run: true,
-        verbose: false,
-    };
-
-    let exit_code = adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
-    assert_eq!(exit_code, 0);
-
-    assert!(!audit_file_exists(allow_echo_audit_config.audit_dir.path()));
 }
 
 #[rstest]

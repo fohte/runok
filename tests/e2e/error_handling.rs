@@ -7,7 +7,7 @@ use super::helpers::TestEnv;
 
 #[rstest]
 #[case::check(&["check", "--", "git", "status"], 2)]
-#[case::exec(&["exec", "--dry-run", "--", "echo", "hello"], 1)]
+#[case::exec(&["exec", "--", "echo", "hello"], 1)]
 fn invalid_config_exits_with_error(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new("rules: [invalid yaml\n  broken:");
     let assert = env.command().args(args).assert();
@@ -20,7 +20,7 @@ fn invalid_config_exits_with_error(#[case] args: &[&str], #[case] expected_exit:
 
 #[rstest]
 #[case::check(&["check", "--", "rm", "-rf", "/"], 2)]
-#[case::exec(&["exec", "--dry-run", "--", "rm", "-rf", "/"], 1)]
+#[case::exec(&["exec", "--", "rm", "-rf", "/"], 1)]
 fn validation_error_deny_with_sandbox(#[case] args: &[&str], #[case] expected_exit: i32) {
     let env = TestEnv::new(indoc! {"
         rules:

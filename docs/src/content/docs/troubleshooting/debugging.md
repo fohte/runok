@@ -65,20 +65,6 @@ You can also pipe commands via stdin:
 echo "curl -X POST https://example.com" | runok check
 ```
 
-## `runok exec --dry-run`
-
-The `--dry-run` flag on [`runok exec`](/cli/exec/) provides similar functionality, prefixed with `runok: dry-run:`:
-
-```bash
-runok exec --dry-run -- curl -X POST https://example.com
-```
-
-```
-runok: dry-run: command would be allowed
-```
-
-`runok check` is generally more convenient for debugging, as it is designed specifically for this purpose. Use `exec --dry-run` when you want to verify behavior in the exact same invocation style as production usage.
-
 ## `--verbose` with `runok exec`
 
 The `--verbose` flag also works with `runok exec` for debugging in production-like scenarios:

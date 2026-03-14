@@ -355,7 +355,6 @@ fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
 
 #[rstest]
 #[case::check(&["check", "--", "echo", "hello"])]
-#[case::dry_run(&["exec", "--dry-run", "--", "echo", "hello"])]
 fn non_exec_does_not_create_audit_log(allow_echo_env: AuditTestEnv, #[case] args: &[&str]) {
     allow_echo_env.command().args(args).assert().code(0);
 
