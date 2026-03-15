@@ -45,7 +45,7 @@ Tools whose usage varies by project or team are intentionally excluded:
 - Language runtimes (`node`, `python`)
 - Package managers (`npm`, `cargo`)
 
-Define rules for those in your own `runok.yml`. See [Real-World Examples](/getting-started/real-world-examples/) for reference configurations.
+Define rules for those in your own `runok.yml`. See the [Quick Start](/getting-started/quickstart/) page for real-world configuration examples.
 
 ## Referencing presets
 
@@ -106,5 +106,5 @@ Review the [preset source files](https://github.com/fohte/runok-presets) to conf
 ## Related
 
 - [Extends (Presets)](/configuration/extends/) -- Full reference for the `extends` field, including resolution order and caching.
-- [Real-World Examples](/getting-started/real-world-examples/) -- See how runok is used in real projects.
+- [Quick Start](/getting-started/quickstart/) -- Get started and see real-world configuration examples.
 - [Configuration Schema](/configuration/schema/) -- Complete reference for `runok.yml`.

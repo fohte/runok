@@ -75,9 +75,15 @@ runok check -- git push origin main
 
 The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-format json` for machine-readable output.
 
+:::tip[Real-world configurations]
+See how runok is configured in practice:
+
+- [fohte/dotfiles `runok.yml`](https://github.com/fohte/dotfiles/blob/master/config/runok/runok.yml) -- A personal dotfiles configuration extending official presets with project-specific rules.
+- [fohte/runok-presets](https://github.com/fohte/runok-presets) -- The official preset collection for common read-only commands. See [Official Presets](/configuration/official-presets/) for details.
+  :::
+
 ## Next steps
 
 - [Official Presets (runok-presets)](/configuration/official-presets/) -- Start with ready-made rules for common read-only commands.
 - [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook.
 - [CLI Reference](/cli/overview/) -- Full reference for `runok init`, `runok check`, and `runok exec`.
-- [Real-World Examples](/getting-started/real-world-examples/) -- See how runok is used in real projects.
