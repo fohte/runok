@@ -78,7 +78,7 @@ The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-for
 :::tip[Real-world configurations]
 See how runok is configured in practice:
 
-- [fohte/dotfiles `runok.yml`](https://github.com/fohte/dotfiles/blob/master/config/runok/runok.yml) -- A personal dotfiles configuration extending official presets with project-specific rules.
+- [fohte/dotfiles `runok.yml`](https://github.com/fohte/dotfiles/blob/master/config/runok/runok.yml) -- The author's dotfiles configuration extending official presets with project-specific rules.
 - [fohte/runok-presets](https://github.com/fohte/runok-presets) -- The official preset collection for common read-only commands. See [Official Presets](/configuration/official-presets/) for details.
   :::
 
