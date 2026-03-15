@@ -66,10 +66,6 @@ export default defineConfig({
           autogenerate: { directory: 'architecture' },
         },
         {
-          label: 'Recipes',
-          autogenerate: { directory: 'recipes' },
-        },
-        {
           label: 'Troubleshooting',
           autogenerate: { directory: 'troubleshooting' },
         },

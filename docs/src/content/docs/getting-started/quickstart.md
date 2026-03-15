@@ -80,4 +80,4 @@ The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-for
 - [Official Presets (runok-presets)](/configuration/official-presets/) -- Start with ready-made rules for common read-only commands.
 - [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook.
 - [CLI Reference](/cli/overview/) -- Full reference for `runok init`, `runok check`, and `runok exec`.
-- [Recipes](/recipes/overview/) -- Common configuration patterns and examples.
+- [Real-World Examples](/getting-started/real-world-examples/) -- See how runok is used in real projects.
