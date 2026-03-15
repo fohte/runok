@@ -412,22 +412,6 @@ fn match_engine<'a>(
             }
         }
 
-        PatternToken::QuotedLiteral(s) => {
-            if cmd_tokens.is_empty() || s != cmd_tokens[0] {
-                return Ok(false);
-            }
-            match_engine(
-                rest,
-                &cmd_tokens[1..],
-                definitions,
-                steps,
-                captures,
-                extract,
-                after_double_dash,
-                var_captures,
-            )
-        }
-
         PatternToken::Alternation(alts) => {
             if cmd_tokens.is_empty() {
                 return Ok(false);
@@ -2164,13 +2148,17 @@ mod tests {
         );
     }
 
-    // === Quoted literal with `*` (no glob) ===
+    // === Quoted strings: `*` is glob, `\*` is literal ===
 
     #[rstest]
-    #[case::quoted_star_exact_match(r#"git commit -m "WIP*""#, "git commit -m WIP*", true)]
-    #[case::quoted_star_no_glob(r#"git commit -m "WIP*""#, "git commit -m WIPfoo", false)]
-    #[case::quoted_star_only(r#"cmd "*""#, "cmd *", true)]
-    #[case::quoted_star_only_no_glob(r#"cmd "*""#, "cmd hello", false)]
+    #[case::quoted_star_glob_matches(r#"git commit -m "WIP*""#, "git commit -m WIPfoo", true)]
+    #[case::quoted_star_glob_exact(r#"git commit -m "WIP*""#, "git commit -m WIP*", true)]
+    #[case::quoted_star_glob_no_match(r#"git commit -m "WIP*""#, "git commit -m DONE", false)]
+    #[case::quoted_star_only_glob(r#"cmd "*""#, "cmd hello", true)]
+    #[case::escaped_star_exact_match(r#"git commit -m "WIP\*""#, "git commit -m WIP*", true)]
+    #[case::escaped_star_no_glob(r#"git commit -m "WIP\*""#, "git commit -m WIPfoo", false)]
+    #[case::escaped_star_only(r#"cmd "\*""#, "cmd *", true)]
+    #[case::escaped_star_only_no_glob(r#"cmd "\*""#, "cmd hello", false)]
     fn quoted_literal_matching(
         #[case] pattern_str: &str,
         #[case] command_str: &str,

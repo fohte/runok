@@ -422,7 +422,7 @@ fn arb_rich_pattern() -> impl Strategy<Value = String> {
                 1 => arb_flag().prop_map(|f| format!("[{f}]")),
                 // Alternation
                 1 => (arb_positional(), arb_positional()).prop_map(|(a, b)| format!("{a}|{b}")),
-                // QuotedLiteral
+                // Quoted literal (grouping only)
                 1 => arb_positional().prop_map(|s| format!("\"{s}\"")),
                 // Shell special tokens for edge case coverage
                 1 => arb_shell_special_token(),
@@ -896,8 +896,9 @@ proptest! {
 }
 
 // ========================================
-// QuotedLiteral correctness
-// Quoted patterns suppress glob expansion
+// Quoted literal correctness
+// Quotes are grouping only; `*` inside quotes still acts as a glob.
+// Use `\*` for a literal asterisk.
 // ========================================
 
 proptest! {
@@ -921,25 +922,46 @@ proptest! {
     }
 
     #[test]
-    fn prop_quoted_literal_suppresses_glob(
+    fn prop_quoted_star_acts_as_glob(
         cmd_name in arb_cmd_name(),
         base in arb_safe_positional(),
         extra in arb_safe_positional(),
     ) {
-        // "base*" must NOT match "base<extra>" (glob suppressed)
+        // "base*" SHOULD match "base<extra>" (glob is active inside quotes)
         let quoted_val = format!("{base}*");
         let pattern = format!("{cmd_name} \"{quoted_val}\"");
         let yaml = build_yaml_config("allow", &pattern);
         let config = parse_config(&yaml).unwrap();
         let ctx = empty_context();
 
+        let matching_val = format!("{base}{extra}");
+        let command = build_command(&cmd_name, &[matching_val]);
+        let result = evaluate_command(&config, &command, &ctx).unwrap();
+        prop_assert_eq!(result.action, Action::Allow,
+            "quoted star should glob-expand: pattern={:?} command={:?}",
+            pattern, command);
+    }
+
+    #[test]
+    fn prop_escaped_star_suppresses_glob(
+        cmd_name in arb_cmd_name(),
+        base in arb_safe_positional(),
+        extra in arb_safe_positional(),
+    ) {
+        // "base\*" must NOT match "base<extra>" (escaped star is literal)
+        let escaped_val = format!(r#"{base}\*"#);
+        let pattern = format!("{cmd_name} \"{escaped_val}\"");
+        let yaml = build_yaml_config("allow", &pattern);
+        let config = parse_config(&yaml).unwrap();
+        let ctx = empty_context();
+
         let non_matching_val = format!("{base}{extra}");
-        prop_assume!(non_matching_val != quoted_val);
+        prop_assume!(non_matching_val != format!("{base}*"));
         let command = build_command(&cmd_name, &[non_matching_val]);
         let result = evaluate_command(&config, &command, &ctx).unwrap();
         prop_assert!(
             !matches!(result.action, Action::Allow),
-            "quoted literal should NOT glob-expand: pattern={:?} command={:?}",
+            "escaped star should NOT glob-expand: pattern={:?} command={:?}",
             pattern, command
         );
     }

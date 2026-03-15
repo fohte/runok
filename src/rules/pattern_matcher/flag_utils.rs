@@ -88,7 +88,7 @@ pub(crate) fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens
                     return false;
                 }
             }
-            PatternToken::Literal(s) | PatternToken::QuotedLiteral(s) if s.starts_with('-') => {
+            PatternToken::Literal(s) if s.starts_with('-') => {
                 if cmd_tokens.contains(&s.as_str()) {
                     return false;
                 }

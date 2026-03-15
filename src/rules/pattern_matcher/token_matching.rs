@@ -52,6 +52,9 @@ fn unescape_and_match(pattern: &str, token: &str) -> bool {
                 } else {
                     unescaped.push(next);
                 }
+            } else {
+                // Trailing backslash with no following character — keep it as literal `\`
+                unescaped.push('\\');
             }
         } else {
             if ch == '*' {
@@ -139,7 +142,6 @@ pub(crate) fn match_single_token(
 ) -> bool {
     match token {
         PatternToken::Literal(s) => literal_matches(s, cmd_token),
-        PatternToken::QuotedLiteral(s) => s == cmd_token,
         PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),

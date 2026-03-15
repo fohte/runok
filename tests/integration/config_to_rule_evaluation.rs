@@ -1,6 +1,6 @@
 use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
 
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
@@ -858,35 +858,136 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 }
 
 // ========================================
-// QuotedLiteral suppresses glob: "*" in YAML does not glob-expand
+// Quoted `*` acts as glob; `\*` is literal
 // ========================================
 
 #[rstest]
-#[case::exact_literal_star_matches(
+// `*` acts as glob
+#[case::quoted_star_glob_matches(
+    r#"git commit -m "WIP*""#,
+    "git commit -m 'WIP: fixup'",
+    assert_deny as ActionAssertion,
+)]
+#[case::quoted_star_glob_exact(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'WIP*'",
     assert_deny as ActionAssertion,
 )]
-#[case::glob_like_prefix_does_not_match(
-    "git commit -m 'WIP: fixup'",
-    assert_ask as ActionAssertion,
-)]
-#[case::unrelated_does_not_match(
+#[case::quoted_star_glob_no_match(
+    r#"git commit -m "WIP*""#,
     "git commit -m 'DONE: release'",
     assert_ask as ActionAssertion,
 )]
-fn quoted_literal_suppresses_glob(
+// `\*` is literal
+#[case::escaped_star_exact_match(
+    r#"git commit -m "WIP\*""#,
+    "git commit -m 'WIP*'",
+    assert_deny as ActionAssertion,
+)]
+#[case::escaped_star_no_glob(
+    r#"git commit -m "WIP\*""#,
+    "git commit -m 'WIP: fixup'",
+    assert_ask as ActionAssertion,
+)]
+fn quoted_and_escaped_star_matching(
+    #[case] pattern: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(&formatdoc! {r#"
+        rules:
+          - deny: '{pattern}'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Quoted glob with spaces (primary use case)
+// ========================================
+
+#[rstest]
+#[case::quoted_glob_with_space_matches(
+    "npx --package renovate -c 'renovate-config-validator foo.json'",
+    assert_allow as ActionAssertion,
+)]
+#[case::quoted_glob_with_space_no_match(
+    "npx --package renovate -c 'other-tool foo.json'",
+    assert_ask as ActionAssertion,
+)]
+fn quoted_glob_with_space(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
 ) {
     let config = parse_config(indoc! {r#"
         rules:
-          - deny: 'git commit -m "WIP*"'
+          - allow: "npx --package renovate -c 'renovate-config-validator *'"
     "#})
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
+}
+
+// ========================================
+// Quoted flag-like values consumed as flag arguments
+// ========================================
+
+// Pattern `grep -e "-v" *` should parse `-e` as a value-taking flag with
+// value `-v`, not as two independent boolean flags. When `-e` is properly
+// a FlagWithValue, the command parser knows to consume the next token as
+// its value, so `grep -e -v foo.txt` means `-e` takes value `-v`.
+// Without FlagWithValue, `-e` and `-v` are both boolean flags and `foo.txt`
+// becomes a positional arg, which changes match semantics.
+#[rstest]
+#[case::quoted_flag_value_different_order(
+    "grep -e '-v' *",
+    "grep foo.txt -e -v",
+    assert_allow as ActionAssertion,
+)]
+#[case::quoted_flag_value_wrong_value_rejects(
+    "grep -e '-v' *",
+    "grep foo.txt -e -x",
+    assert_ask as ActionAssertion,
+)]
+fn quoted_flag_like_value(
+    #[case] pattern: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(&formatdoc! {r#"
+        rules:
+          - allow: "{pattern}"
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Backslash before closing quote is not an escape
+// ========================================
+
+#[rstest]
+fn backslash_before_closing_quote(empty_context: EvalContext) {
+    // YAML `"cmd 'hello\\'"` → string `cmd 'hello\'`
+    // The lexer should treat `\` before closing `'` as literal, producing
+    // QuotedLiteral("hello\"). The command `cmd hello\\` tokenizes as
+    // `["cmd", "hello\"]` (shell resolves `\\` → `\`).
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: "cmd 'hello\\'"
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, r"cmd hello\\", &empty_context).unwrap();
+    assert_allow(&result.action);
 }
 
 // ========================================
@@ -1296,6 +1397,37 @@ fn fused_short_flag_value(
           - allow: 'git tag [-n *] *'
           - allow: 'git log [-n *]'
     "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Backslash followed by space in pattern
+// ========================================
+
+#[rstest]
+#[case::backslash_then_wildcard_matches(
+    r"cmd \\ foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::backslash_then_wildcard_no_match(
+    r"other \\ foo",
+    assert_ask as ActionAssertion,
+)]
+fn backslash_followed_by_space(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    // YAML `"cmd \\ *"` → string `cmd \ *`
+    // Lexer should produce [Literal("cmd"), Literal("\"), Wildcard]
+    // (three tokens, NOT a single Literal("\ *"))
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: "cmd \\ *"
+    "#})
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();
