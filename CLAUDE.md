@@ -73,7 +73,6 @@ When adding, changing, or removing user-facing features, CLI options, configurat
   - Pattern syntax changes: `pattern-syntax/`
   - Rule evaluation changes: `rule-evaluation/`
   - Sandbox changes: `sandbox/`
-  - New recipes or examples: `recipes/`
 
 Do not create new doc pages unless the change introduces an entirely new concept. Prefer updating existing pages first.
 

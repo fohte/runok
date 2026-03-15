@@ -17,8 +17,7 @@
 <p align="center">
   <a href="https://runok.fohte.net">📖 Documentation</a> &middot;
   <a href="https://runok.fohte.net/getting-started/quickstart/">🚀 Quick Start</a> &middot;
-  <a href="https://runok.fohte.net/configuration/schema/">🔧 Configuration</a> &middot;
-  <a href="https://runok.fohte.net/recipes/overview/">📋 Recipes</a>
+  <a href="https://runok.fohte.net/configuration/schema/">🔧 Configuration</a>
 </p>
 
 ---
