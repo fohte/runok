@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.2.0](https://github.com/fohte/runok/compare/v0.1.5...v0.2.0) (2026-03-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* treat `*` inside quotes as glob, support `\*` escape for literal asterisk ([#157](https://github.com/fohte/runok/issues/157))
+
+### Features
+
+* **audit:** improve `audit` subcommand output with table format and colors ([#200](https://github.com/fohte/runok/issues/200)) ([490e206](https://github.com/fohte/runok/commit/490e206ced957e86d3fd153c4ff59d761635ec2c))
+* **audit:** support audit logging for command evaluation results ([#103](https://github.com/fohte/runok/issues/103)) ([25c6749](https://github.com/fohte/runok/commit/25c6749ea560a4d18711e167f0d4c00fa623c916))
+* **cli:** add `--dir` filter option to `runok audit` ([#207](https://github.com/fohte/runok/issues/207)) ([71b768e](https://github.com/fohte/runok/commit/71b768eb02f21009b39aa33a8f4d65e168c20c80))
+* **cli:** add `runok test` subcommand for rule verification ([#204](https://github.com/fohte/runok/issues/204)) ([cfafb18](https://github.com/fohte/runok/commit/cfafb18bb5ca9433a7b8cac24fdbd431eb89e215))
+* **cli:** add `update-presets` command ([#197](https://github.com/fohte/runok/issues/197)) ([4c57355](https://github.com/fohte/runok/commit/4c5735573911666990a27f37ba887ec19158b3a5))
+* **rules:** add typed variable definitions (`definitions.vars`) with `<var:name>` placeholder ([#201](https://github.com/fohte/runok/issues/201)) ([ffee2ec](https://github.com/fohte/runok/commit/ffee2ec6d5f00b1c5d8a0ccc19e235d1a9f63a96))
+* **rules:** support `<var:name>` in command position and per-value type ([#208](https://github.com/fohte/runok/issues/208)) ([c5995ae](https://github.com/fohte/runok/commit/c5995ae7200a840b044137b80bece15443a3373e))
+* **rules:** support `redirects` and `pipe` variables in `when` clauses ([#203](https://github.com/fohte/runok/issues/203)) ([a513e1b](https://github.com/fohte/runok/commit/a513e1b3d5d6eee01d35c890da1dab4b52f95154))
+* **rules:** support fused short flag pattern matching (`-n3`) ([#205](https://github.com/fohte/runok/issues/205)) ([7a74122](https://github.com/fohte/runok/commit/7a7412289ade904add947f19ad934b9fe218e3cf))
+* treat `*` inside quotes as glob, support `\*` escape for literal asterisk ([#157](https://github.com/fohte/runok/issues/157)) ([23c7789](https://github.com/fohte/runok/commit/23c7789fa8abaa50c6190f241f00cc5fac15a9e8))
+
+
+### Bug Fixes
+
+* **cli:** reject unknown flags before `--` in `exec`/`check` subcommands ([#202](https://github.com/fohte/runok/issues/202)) ([7344abd](https://github.com/fohte/runok/commit/7344abd133defc254e9e6aa78c890a869e62b0c3))
+* **cli:** remove `exec --dry-run` option ([#216](https://github.com/fohte/runok/issues/216)) ([155c0d3](https://github.com/fohte/runok/commit/155c0d30ad5bf13b4d727b9f86dd7f536ff38dc2))
+* **pattern-matcher:** skip flag-starting token sequences in `<cmd>` placeholder matching ([#206](https://github.com/fohte/runok/issues/206)) ([f706488](https://github.com/fohte/runok/commit/f7064883def3bf9c0bc875e9e1ae0a13289171f2))
+
+
+### Dependencies
+
+* update rust crate chrono to v0.4.44 ([#211](https://github.com/fohte/runok/issues/211)) ([68bdb28](https://github.com/fohte/runok/commit/68bdb2830f49c433e9ef3cbe8c8f748d20ff3108))
+* update rust crate semver to v1.0.27 ([#212](https://github.com/fohte/runok/issues/212)) ([81a5251](https://github.com/fohte/runok/commit/81a525147e3145b222199429e0ef4c8e13c52fec))
+
 ## [0.1.5](https://github.com/fohte/runok/compare/v0.1.4...v0.1.5) (2026-03-12)
 
 
