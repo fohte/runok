@@ -11,10 +11,6 @@ const EXEC_FLAGS: &[FlagDef] = &[
         takes_value: true,
     },
     FlagDef {
-        name: "--dry-run",
-        takes_value: false,
-    },
-    FlagDef {
         name: "--verbose",
         takes_value: false,
     },
@@ -122,8 +118,7 @@ mod tests {
     #[case::exec_known_flag_before_double_dash("runok exec --verbose -- ls -la")]
     #[case::exec_sandbox_with_value("runok exec --sandbox strict -- ls")]
     #[case::exec_sandbox_eq_form("runok exec --sandbox=strict -- ls")]
-    #[case::exec_dry_run("runok exec --dry-run -- git status")]
-    #[case::exec_all_flags("runok exec --sandbox strict --dry-run --verbose -- ls")]
+    #[case::exec_all_flags("runok exec --sandbox strict --verbose -- ls")]
     #[case::exec_command_without_double_dash("runok exec ls -la")]
     #[case::exec_command_with_flag_args("runok exec git log --oneline")]
     #[case::check_with_double_dash("runok check -- ls -la")]

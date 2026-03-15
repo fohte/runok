@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
@@ -275,51 +274,6 @@ impl SandboxPolicy {
     }
 }
 
-/// An error that can occur during dry-run validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DryRunError {
-    /// The command was not found.
-    NotFound(String),
-    /// Permission was denied to execute the command.
-    PermissionDenied(String),
-    /// An I/O error occurred.
-    Io(String),
-}
-
-impl From<ExecError> for DryRunError {
-    fn from(err: ExecError) -> Self {
-        match err {
-            ExecError::NotFound(s) => DryRunError::NotFound(s),
-            ExecError::PermissionDenied(s) => DryRunError::PermissionDenied(s),
-            ExecError::Io(e) => DryRunError::Io(e.to_string()),
-        }
-    }
-}
-
-impl std::fmt::Display for DryRunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DryRunError::NotFound(s) => write!(f, "command not found: {s}"),
-            DryRunError::PermissionDenied(s) => write!(f, "permission denied: {s}"),
-            DryRunError::Io(s) => write!(f, "io error: {s}"),
-        }
-    }
-}
-
-/// The result of a dry-run validation, containing information about what
-/// would happen if the command were executed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DryRunResult {
-    /// The program name that was validated.
-    pub program: String,
-    /// The execution mode that would be used.
-    pub exec_mode: ExecMode,
-    /// Whether the command was found and is executable.
-    pub is_valid: bool,
-    /// If validation failed, the reason.
-    pub error: Option<DryRunError>,
-}
-
 /// Trait for executing commands and returning exit codes.
 pub trait CommandExecutor {
     /// Execute a command and return the exit code.
@@ -335,11 +289,8 @@ pub trait CommandExecutor {
         sandbox: Option<&SandboxPolicy>,
     ) -> Result<i32, ExecError>;
 
-    /// Check that the command exists and is executable (for dry-run validation).
+    /// Check that the command exists and is executable.
     fn validate(&self, command: &[String]) -> Result<(), ExecError>;
-
-    /// Validate a command without executing it, returning structured results.
-    fn dry_run(&self, command: &CommandInput, sandbox: Option<&SandboxPolicy>) -> DryRunResult;
 
     /// Determine the execution mode based on sandbox presence and command form.
     fn determine_exec_mode(&self, sandbox: Option<&SandboxPolicy>, is_compound: bool) -> ExecMode;
@@ -430,31 +381,6 @@ impl<S: SandboxExecutor> CommandExecutor for ProcessCommandExecutor<S> {
             Ok(())
         } else {
             Err(ExecError::NotFound(program.clone()))
-        }
-    }
-
-    fn dry_run(&self, command: &CommandInput, sandbox: Option<&SandboxPolicy>) -> DryRunResult {
-        let program = command.program().to_string();
-        let exec_mode = self.determine_exec_mode(sandbox, command.is_compound());
-
-        let validation_args: Cow<[String]> = match command {
-            CommandInput::Argv(args) => Cow::Borrowed(args),
-            CommandInput::Shell(_) => Cow::Owned(vec!["sh".into()]),
-        };
-
-        match self.validate(&validation_args) {
-            Ok(()) => DryRunResult {
-                program,
-                exec_mode,
-                is_valid: true,
-                error: None,
-            },
-            Err(e) => DryRunResult {
-                program,
-                exec_mode,
-                is_valid: false,
-                error: Some(e.into()),
-            },
         }
     }
 
@@ -756,72 +682,6 @@ mod tests {
             .status()
             .expect("sh should complete");
         assert_eq!(exit_code_from_status(status), 137); // 128 + SIGKILL(9)
-    }
-
-    // === Dry-run ===
-
-    #[rstest]
-    #[case::argv_existing(
-        CommandInput::Argv(vec!["sh".into()]),
-        false,
-        true,
-        "sh",
-        ExecMode::TransparentProxy
-    )]
-    #[case::argv_nonexistent(
-        CommandInput::Argv(vec!["__nonexistent_cmd_99__".into()]),
-        false,
-        false,
-        "__nonexistent_cmd_99__",
-        ExecMode::TransparentProxy
-    )]
-    #[case::shell_compound(
-        CommandInput::Shell("echo hello".into()),
-        false,
-        true,
-        "sh",
-        ExecMode::ShellExec
-    )]
-    #[case::argv_empty(
-        CommandInput::Argv(vec![]),
-        false,
-        false,
-        "",
-        ExecMode::TransparentProxy
-    )]
-    #[case::argv_with_sandbox(
-        CommandInput::Argv(vec!["sh".into()]),
-        true,
-        true,
-        "sh",
-        ExecMode::SpawnAndWait
-    )]
-    fn dry_run(
-        executor: ProcessCommandExecutor<StubSandboxExecutor>,
-        #[case] command: CommandInput,
-        #[case] has_sandbox: bool,
-        #[case] expected_valid: bool,
-        #[case] expected_program: &str,
-        #[case] expected_mode: ExecMode,
-    ) {
-        let policy = stub_sandbox_policy();
-        let sandbox = if has_sandbox { Some(&policy) } else { None };
-        let result = executor.dry_run(&command, sandbox);
-
-        assert_eq!(result.is_valid, expected_valid);
-        assert_eq!(result.program, expected_program);
-        if cfg!(unix) {
-            assert_eq!(result.exec_mode, expected_mode);
-        }
-        if expected_valid {
-            assert!(result.error.is_none());
-        } else {
-            let error = result.error.expect("error should be present");
-            assert!(
-                matches!(error, DryRunError::NotFound(ref s) if s == expected_program),
-                "expected NotFound({expected_program:?}), got {error:?}"
-            );
-        }
     }
 
     // === Custom SandboxExecutor for testing ===
@@ -1307,34 +1167,6 @@ mod tests {
         assert_eq!(policy.writable_roots, vec![PathBuf::from("/tmp")]);
         assert_eq!(policy.read_only_subpaths, vec![PathBuf::from(".git")]);
         assert!(policy.network_allowed);
-    }
-
-    // === DryRunError conversion and display ===
-
-    #[rstest]
-    #[case::not_found(
-        ExecError::NotFound("foo".into()),
-        DryRunError::NotFound("foo".into()),
-        "command not found: foo"
-    )]
-    #[case::permission_denied(
-        ExecError::PermissionDenied("bar".into()),
-        DryRunError::PermissionDenied("bar".into()),
-        "permission denied: bar"
-    )]
-    #[case::io_error(
-        ExecError::Io(std::io::Error::other("disk failure")),
-        DryRunError::Io("disk failure".into()),
-        "io error: disk failure"
-    )]
-    fn dry_run_error_from_exec_error(
-        #[case] exec_err: ExecError,
-        #[case] expected: DryRunError,
-        #[case] display: &str,
-    ) {
-        let converted: DryRunError = exec_err.into();
-        assert_eq!(converted, expected);
-        assert_eq!(converted.to_string(), display);
     }
 
     // === LinuxSandboxExecutor ===

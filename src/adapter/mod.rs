@@ -48,8 +48,6 @@ pub enum SandboxInfo {
 /// Options that modify the behavior of `run()`.
 #[derive(Debug, Clone, Default)]
 pub struct RunOptions {
-    /// When true, skip command execution and only report what would happen.
-    pub dry_run: bool,
     /// When true, output detailed rule matching information to stderr.
     pub verbose: bool,
 }
@@ -70,12 +68,6 @@ pub trait Endpoint {
 
     /// Handle an error with protocol-specific error reporting. Returns the exit code.
     fn handle_error(&self, error: anyhow::Error) -> i32;
-
-    /// Handle the dry-run case: report what would happen without executing.
-    /// Default implementation delegates to `handle_action`.
-    fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-        self.handle_action(result)
-    }
 
     /// Return audit metadata for this endpoint. Used to populate the
     /// `metadata` field of `AuditEntry`.
@@ -206,7 +198,7 @@ pub fn run(endpoint: &dyn Endpoint, config: &Config) -> i32 {
     run_with_options(endpoint, config, &RunOptions::default())
 }
 
-/// Run the common evaluation flow with options controlling dry-run and verbose behavior.
+/// Run the common evaluation flow with options controlling verbose behavior.
 pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunOptions) -> i32 {
     let defaults = config.defaults.clone().unwrap_or_default();
 
@@ -345,18 +337,9 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     // Apply defaults.sandbox fallback when the matched rule has no sandbox
     let action_result = apply_sandbox_fallback(action_result, &defaults);
 
-    // Record audit log entry (exec/hook only, not dry-run or check)
-    if endpoint.is_auditable() && !options.dry_run {
+    // Record audit log entry (exec/hook only, not check)
+    if endpoint.is_auditable() {
         write_audit_log(endpoint, config, &command, &action_result, &defaults);
-    }
-
-    if options.dry_run {
-        if options.verbose {
-            eprintln!("[verbose] Dry-run mode: skipping execution");
-        }
-        return endpoint
-            .handle_dry_run(action_result)
-            .unwrap_or_else(|e| endpoint.handle_error(e));
     }
 
     endpoint
@@ -377,13 +360,11 @@ mod tests {
         action_exit_code: i32,
         no_match_exit_code: i32,
         error_exit_code: i32,
-        dry_run_exit_code: i32,
         action_should_fail: bool,
         no_match_should_fail: bool,
         called_handle_action: RefCell<bool>,
         called_handle_no_match: RefCell<bool>,
         called_handle_error: RefCell<bool>,
-        called_handle_dry_run: RefCell<bool>,
         last_action: RefCell<Option<Action>>,
         last_sandbox: RefCell<Option<SandboxInfo>>,
         last_defaults_action: RefCell<Option<Option<ActionKind>>>,
@@ -396,13 +377,11 @@ mod tests {
                 action_exit_code: 0,
                 no_match_exit_code: 0,
                 error_exit_code: 2,
-                dry_run_exit_code: 0,
                 action_should_fail: false,
                 no_match_should_fail: false,
                 called_handle_action: RefCell::new(false),
                 called_handle_no_match: RefCell::new(false),
                 called_handle_error: RefCell::new(false),
-                called_handle_dry_run: RefCell::new(false),
                 last_action: RefCell::new(None),
                 last_sandbox: RefCell::new(None),
                 last_defaults_action: RefCell::new(None),
@@ -465,13 +444,6 @@ mod tests {
         fn handle_error(&self, _error: anyhow::Error) -> i32 {
             *self.called_handle_error.borrow_mut() = true;
             self.error_exit_code
-        }
-
-        fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-            *self.called_handle_dry_run.borrow_mut() = true;
-            *self.last_action.borrow_mut() = Some(result.action);
-            *self.last_sandbox.borrow_mut() = Some(result.sandbox);
-            Ok(self.dry_run_exit_code)
         }
     }
 
@@ -816,101 +788,6 @@ mod tests {
         }
     }
 
-    // --- dry-run: calls handle_dry_run instead of handle_action ---
-
-    #[rstest]
-    fn dry_run_calls_handle_dry_run_instead_of_handle_action() {
-        let endpoint = MockEndpoint::new(Ok(Some("git status".to_string())));
-        let config = make_config(vec![allow_rule("git status")]);
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        let exit_code = run_with_options(&endpoint, &config, &options);
-
-        assert!(*endpoint.called_handle_dry_run.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
-        assert_eq!(exit_code, 0);
-    }
-
-    #[rstest]
-    fn dry_run_with_deny_calls_handle_dry_run() {
-        let endpoint = MockEndpoint::new(Ok(Some("rm -rf /".to_string())));
-        let config = make_config(vec![deny_rule("rm -rf /")]);
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        let exit_code = run_with_options(&endpoint, &config, &options);
-
-        assert!(*endpoint.called_handle_dry_run.borrow());
-        assert!(!*endpoint.called_handle_action.borrow());
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Deny(_))
-        ));
-        assert_eq!(exit_code, 0);
-    }
-
-    #[rstest]
-    fn dry_run_with_no_match_calls_handle_dry_run() {
-        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
-        let config = make_config(vec![allow_rule("git status")]);
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        let exit_code = run_with_options(&endpoint, &config, &options);
-
-        // No match + dry-run -> handle_dry_run, not handle_no_match
-        assert!(*endpoint.called_handle_dry_run.borrow());
-        assert!(!*endpoint.called_handle_no_match.borrow());
-        assert_eq!(exit_code, 0);
-
-        // With no configured defaults, defaults fall back to Ask
-        let last = endpoint.last_action.borrow();
-        assert!(
-            matches!(last.as_ref(), Some(Action::Ask(None))),
-            "expected Action::Ask(None), got {last:?}"
-        );
-    }
-
-    #[rstest]
-    #[case::deny(ActionKind::Deny, "Deny")]
-    #[case::allow(ActionKind::Allow, "Allow")]
-    #[case::ask(ActionKind::Ask, "Ask")]
-    fn dry_run_with_no_match_resolves_defaults_action(
-        #[case] default_action: ActionKind,
-        #[case] expected_variant: &str,
-    ) {
-        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
-        let config = Config {
-            rules: Some(vec![allow_rule("git status")]),
-            defaults: Some(Defaults {
-                action: Some(default_action),
-                sandbox: None,
-            }),
-            ..Default::default()
-        };
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        let exit_code = run_with_options(&endpoint, &config, &options);
-
-        assert!(*endpoint.called_handle_dry_run.borrow());
-        assert!(!*endpoint.called_handle_no_match.borrow());
-        assert_eq!(exit_code, 0);
-
-        let last = endpoint.last_action.borrow();
-        let action = last.as_ref().expect("action should be recorded");
-        let variant = format!("{action:?}");
-        assert!(
-            variant.starts_with(expected_variant),
-            "expected action starting with '{expected_variant}', got '{variant}'"
-        );
-    }
-
     // --- run_with_options defaults to same behavior as run ---
 
     #[rstest]
@@ -921,7 +798,6 @@ mod tests {
         let exit_code = run_with_options(&endpoint, &config, &options);
 
         assert!(*endpoint.called_handle_action.borrow());
-        assert!(!*endpoint.called_handle_dry_run.borrow());
         assert_eq!(exit_code, 0);
     }
 
@@ -976,31 +852,6 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn no_match_with_defaults_sandbox_falls_back_in_dry_run() {
-        let endpoint = MockEndpoint::new(Ok(Some("unknown-command".to_string())));
-        let config = make_config_with_defaults(
-            vec![allow_rule("git status")],
-            Some(ActionKind::Allow),
-            Some("default-sandbox".to_string()),
-        );
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        run_with_options(&endpoint, &config, &options);
-
-        assert!(*endpoint.called_handle_dry_run.borrow());
-        match &*endpoint.last_sandbox.borrow() {
-            Some(SandboxInfo::Preset(Some(preset))) => {
-                assert_eq!(preset, "default-sandbox");
-            }
-            other => {
-                panic!("expected SandboxInfo::Preset(Some(\"default-sandbox\")), got {other:?}")
-            }
-        }
-    }
-
     // --- single extracted sub-command uses simplified form ---
 
     #[rstest]
@@ -1048,10 +899,7 @@ mod tests {
     fn single_extracted_subcommand_verbose_logs_extraction() {
         let endpoint = MockEndpoint::new(Ok(Some("for f in *.yaml; do echo $f; done".to_string())));
         let config = make_config(vec![allow_rule("echo *")]);
-        let options = RunOptions {
-            dry_run: false,
-            verbose: true,
-        };
+        let options = RunOptions { verbose: true };
         let exit_code = run_with_options(&endpoint, &config, &options);
 
         assert!(*endpoint.called_handle_action.borrow());
@@ -1091,10 +939,6 @@ mod tests {
 
         fn handle_error(&self, error: anyhow::Error) -> i32 {
             self.inner.handle_error(error)
-        }
-
-        fn handle_dry_run(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-            self.inner.handle_dry_run(result)
         }
 
         fn audit_metadata(&self) -> crate::audit::AuditMetadata {
@@ -1169,23 +1013,6 @@ mod tests {
             ..Default::default()
         };
         run(&endpoint, &config);
-
-        assert_no_audit_log(&audit_dir);
-    }
-
-    #[rstest]
-    fn audit_log_not_written_in_dry_run_mode(audit_dir: TempDir) {
-        let endpoint = AuditableMockEndpoint::new(Ok(Some("git status".to_string())));
-        let config = Config {
-            rules: Some(vec![allow_rule("git status")]),
-            audit: Some(make_audit_config(&audit_dir)),
-            ..Default::default()
-        };
-        let options = RunOptions {
-            dry_run: true,
-            verbose: false,
-        };
-        run_with_options(&endpoint, &config, &options);
 
         assert_no_audit_log(&audit_dir);
     }

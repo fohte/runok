@@ -23,10 +23,6 @@ A single argument after `--` is interpreted as a shell command (passed to the sh
 
 Apply a named [sandbox preset](/sandbox/overview/) from your runok configuration. Overrides any sandbox defined in the matching rule.
 
-### `--dry-run`
-
-Show what would happen without executing the command. Prints diagnostic information to stderr and always exits with code `0`.
-
 ### `--verbose`
 
 Output detailed rule matching information to stderr.
@@ -43,12 +39,6 @@ Execute with a sandbox preset:
 
 ```sh
 runok exec --sandbox strict -- npm install
-```
-
-Preview what would happen without executing:
-
-```sh
-runok exec --dry-run -- git push --force
 ```
 
 Run a shell expression (single argument, passed to shell):

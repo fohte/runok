@@ -95,10 +95,6 @@ pub struct ExecArgs {
     #[arg(long)]
     pub sandbox: Option<String>,
 
-    /// Show what would happen without executing the command
-    #[arg(long)]
-    pub dry_run: bool,
-
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
@@ -174,23 +170,15 @@ mod tests {
     #[rstest]
     #[case::exec_simple(
         &["runok", "exec", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, dry_run: false, verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, verbose: false }),
     )]
     #[case::exec_with_sandbox(
         &["runok", "exec", "--sandbox", "strict", "--", "ls"],
-        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: Some("strict".into()), dry_run: false, verbose: false }),
-    )]
-    #[case::exec_with_dry_run(
-        &["runok", "exec", "--dry-run", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, dry_run: true, verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: Some("strict".into()), verbose: false }),
     )]
     #[case::exec_with_verbose(
         &["runok", "exec", "--verbose", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, dry_run: false, verbose: true }),
-    )]
-    #[case::exec_with_dry_run_and_verbose(
-        &["runok", "exec", "--dry-run", "--verbose", "--", "ls"],
-        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: None, dry_run: true, verbose: true }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, verbose: true }),
     )]
     #[case::check_with_command(
         &["runok", "check", "--", "git", "status"],
