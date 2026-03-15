@@ -73,6 +73,10 @@ export default defineConfig({
           label: 'Troubleshooting',
           autogenerate: { directory: 'troubleshooting' },
         },
+        {
+          label: 'Releases',
+          autogenerate: { directory: 'releases' },
+        },
       ],
     }),
   ],
