@@ -157,7 +157,7 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
     use super::PatternParseError;
 
     let command = match &lex_tokens[0] {
-        LexToken::Literal(s) => CommandPattern::Literal(s.clone()),
+        LexToken::Literal(s) | LexToken::QuotedLiteral(s) => CommandPattern::Literal(s.clone()),
         LexToken::Alternation(alts) => CommandPattern::Alternation(alts.clone()),
         LexToken::Wildcard => CommandPattern::Wildcard,
         LexToken::Placeholder(name) if name.starts_with("var:") => {
@@ -215,7 +215,7 @@ fn build_pattern_tokens(
                 }
             }
 
-            LexToken::Literal(s) => {
+            LexToken::Literal(s) | LexToken::QuotedLiteral(s) => {
                 result.push(PatternToken::Literal(s.clone()));
             }
 
@@ -298,7 +298,7 @@ fn build_pattern_tokens(
 fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::PatternParseError> {
     match token {
         LexToken::Wildcard => Ok(PatternToken::Wildcard),
-        LexToken::Literal(s) => Ok(PatternToken::Literal(s.clone())),
+        LexToken::Literal(s) | LexToken::QuotedLiteral(s) => Ok(PatternToken::Literal(s.clone())),
         LexToken::Negation(s) => Ok(PatternToken::Negation(Box::new(PatternToken::Literal(
             s.clone(),
         )))),

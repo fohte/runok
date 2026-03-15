@@ -934,6 +934,59 @@ fn quoted_glob_with_space(
 }
 
 // ========================================
+// Quoted flag-like values consumed as flag arguments
+// ========================================
+
+// Pattern `grep -e "-v" *` should parse `-e` as a value-taking flag with
+// value `-v`, not as two independent boolean flags. When `-e` is properly
+// a FlagWithValue, the command parser knows to consume the next token as
+// its value, so `grep -e -v foo.txt` means `-e` takes value `-v`.
+// Without FlagWithValue, `-e` and `-v` are both boolean flags and `foo.txt`
+// becomes a positional arg, which changes match semantics.
+#[rstest]
+#[case::quoted_flag_value_different_order(
+    "grep -e '-v' *",
+    "grep foo.txt -e -v",
+    assert_allow as ActionAssertion,
+)]
+#[case::quoted_flag_value_wrong_value_rejects(
+    "grep -e '-v' *",
+    "grep foo.txt -e -x",
+    assert_ask as ActionAssertion,
+)]
+fn quoted_flag_like_value(
+    #[case] pattern: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(&formatdoc! {r#"
+        rules:
+          - allow: "{pattern}"
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Backslash before closing quote is not an escape
+// ========================================
+
+#[rstest]
+fn backslash_before_closing_quote(empty_context: EvalContext) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: "cmd 'hello\\'"
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, r"cmd hello\", &empty_context).unwrap();
+    assert_allow(&result.action);
+}
+
+// ========================================
 // Double-dash (--) positional matching
 // ========================================
 

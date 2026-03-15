@@ -7,6 +7,12 @@ use super::PatternParseError;
 pub enum LexToken {
     /// A plain literal string (e.g. "git", "status", "-f")
     Literal(String),
+    /// A quoted literal string (e.g. `"hello world"`, `'WIP*'`).
+    /// Quotes are used for grouping only — `*` inside quotes is still a glob.
+    /// The parser treats this identically to `Literal` for matching purposes,
+    /// but the distinction matters for flag-value association: a quoted token
+    /// that looks like a flag (e.g. `"-v"`) is still consumed as a flag value.
+    QuotedLiteral(String),
     /// A pipe-separated alternation (e.g. "-X|--request" -> ["-X", "--request"])
     Alternation(Vec<String>),
     /// The wildcard token `*`
@@ -57,7 +63,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                     let token = consume_alternation_continuation(&mut chars, first_words)?;
                     tokens.push(token);
                 } else {
-                    tokens.push(LexToken::Literal(value));
+                    tokens.push(LexToken::QuotedLiteral(value));
                 }
             }
 
@@ -231,6 +237,8 @@ fn consume_word(
 /// Consume characters until `end_char` is found. Returns `None` if input ends first.
 /// Backslash escapes are preserved in the output (e.g., `\*` stays as `\*`)
 /// so the matcher can distinguish escaped wildcards from glob wildcards.
+/// A backslash immediately before the closing delimiter is NOT treated as an
+/// escape — the delimiter still closes the string and the `\` is kept as literal.
 fn consume_until(
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     end_char: char,
@@ -238,9 +246,17 @@ fn consume_until(
     let mut s = String::new();
     while let Some((_, c)) = chars.next() {
         if c == '\\' {
-            s.push('\\');
-            if let Some((_, next)) = chars.next() {
+            if let Some(&(_, next)) = chars.peek() {
+                if next == end_char {
+                    // Don't escape the closing delimiter — treat `\` as literal
+                    s.push('\\');
+                    continue;
+                }
+                s.push('\\');
                 s.push(next);
+                chars.next();
+            } else {
+                s.push('\\');
             }
             continue;
         }
@@ -518,17 +534,17 @@ mod tests {
         LexToken::Literal("git".into()),
         LexToken::Literal("commit".into()),
         LexToken::Literal("-m".into()),
-        LexToken::Literal("WIP*".into()),
+        LexToken::QuotedLiteral("WIP*".into()),
     ])]
     #[case::single_quoted_with_space("echo 'hello world'", vec![
         LexToken::Literal("echo".into()),
-        LexToken::Literal("hello world".into()),
+        LexToken::QuotedLiteral("hello world".into()),
     ])]
     #[case::escaped_star_in_quotes(r#"git commit -m "WIP\*""#, vec![
         LexToken::Literal("git".into()),
         LexToken::Literal("commit".into()),
         LexToken::Literal("-m".into()),
-        LexToken::Literal(r"WIP\*".into()),
+        LexToken::QuotedLiteral(r"WIP\*".into()),
     ])]
     #[case::escaped_star_unquoted(r"cmd WIP\*", vec![
         LexToken::Literal("cmd".into()),
