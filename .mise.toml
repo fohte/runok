@@ -1,15 +1,15 @@
 [tools]
-lefthook = "2.1.0"
-"github:ast-grep/ast-grep" = "0.40.5"
+lefthook = "2.1.3"
+"github:ast-grep/ast-grep" = "0.41.0"
 
 # sandbox runtime for tests
 "npm:@anthropic-ai/sandbox-runtime" = "0.0.39"
 
 # lefthook hooks
-actionlint = "1.7.10"
-bun = "1.3.8"
+actionlint = "1.7.11"
+bun = "1.3.10"
 "github:fohte/basefmt" = "0.1.0"
-"npm:@commitlint/cli" = "20.4.1"
+"npm:@commitlint/cli" = "20.4.3"
 "npm:prettier" = "3.8.1"
 shellcheck = "0.11.0"
 shfmt = "3.12.0"

@@ -23,7 +23,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.head_ref }}
           token: ${{ steps.app-token.outputs.token }}
@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Commit and push changes
-        uses: suzuki-shunsuke/commit-action@v0.1.0
+        uses: suzuki-shunsuke/commit-action@v0.1.1
         with:
           commit_message: 'chore: restore executable bit on scripts/bootstrap'
           workflow: deny
