@@ -139,7 +139,7 @@ sudo pacman -S bubblewrap
 warning: glob deny pattern "/some/glob/*" is expanded before sandbox execution; files created later will not be protected. Use literal paths for complete coverage.
 ```
 
-On Linux, glob patterns in `read_only_subpaths` are expanded at sandbox startup time. Files created after the sandbox starts will not be covered by the read-only restriction.
+On Linux, glob patterns in `fs.deny` are expanded at sandbox startup time. Files created after the sandbox starts will not be covered by the deny restriction.
 
 **Solution:** Use literal paths instead of glob patterns for reliable protection:
 
@@ -147,13 +147,14 @@ On Linux, glob patterns in `read_only_subpaths` are expanded at sandbox startup 
 definitions:
   sandbox:
     my-preset:
-      read_only_subpaths:
-        # Glob pattern - files created later are NOT protected
-        # - '/project/.env*'
+      fs:
+        deny:
+          # Glob pattern - files created later are NOT protected
+          # - '/project/.env*'
 
-        # Literal paths - always protected
-        - '/project/.env'
-        - '/project/.env.local'
+          # Literal paths - always protected
+          - '/project/.env'
+          - '/project/.env.local'
 ```
 
 ### Glob pattern match limit exceeded (Linux)
@@ -172,7 +173,7 @@ A glob pattern in the sandbox definition matched too many paths. Only the first 
 sandbox setup failed: cannot canonicalize path '/some/path': No such file or directory
 ```
 
-A `writable_roots` path in the sandbox definition does not exist on disk.
+An `fs.writable` path in the sandbox definition does not exist on disk.
 
 **Solution:** Create the missing directory, or fix the path in the sandbox definition:
 
@@ -180,8 +181,9 @@ A `writable_roots` path in the sandbox definition does not exist on disk.
 definitions:
   sandbox:
     my-preset:
-      writable_roots:
-        - '/path/that/exists'
+      fs:
+        writable:
+          - '/path/that/exists'
 ```
 
 ### Conflicting sandbox policies
@@ -190,16 +192,17 @@ definitions:
 conflicting sandbox policies: no common writable roots
 ```
 
-This occurs with compound commands where sub-commands have different sandbox presets, and the intersection of their `writable_roots` is empty.
+This occurs with compound commands where sub-commands have different sandbox presets, and the intersection of their `fs.writable` paths is empty.
 
-**Solution:** Either use the same sandbox preset for both commands, or expand the writable roots to include a common directory:
+**Solution:** Either use the same sandbox preset for both commands, or expand the writable paths to include a common directory:
 
 ```yaml
 definitions:
   sandbox:
     shared-preset:
-      writable_roots:
-        - '/common/path'
+      fs:
+        writable:
+          - '/common/path'
 ```
 
 For compound commands with irreconcilable sandbox policies, runok escalates the action to `ask` with the message:
@@ -222,8 +225,9 @@ A rule references a sandbox preset name that does not exist in the `definitions.
 definitions:
   sandbox:
     my-preset:
-      writable_roots:
-        - '.'
+      fs:
+        writable:
+          - '.'
 ```
 
 ## Preset loading errors

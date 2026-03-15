@@ -194,7 +194,7 @@ Inline test cases for this rule. Each entry specifies the expected decision and 
 - allow: 'git status'
   tests:
     - allow: 'git status'
-    - allow: 'git status --short'
+    - ask: 'git status --short'
 ```
 
 ### `definitions`

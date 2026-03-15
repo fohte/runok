@@ -41,8 +41,8 @@ runok check --verbose -- rm -rf /
 ```
 [verbose] Evaluating command: "rm -rf /"
 [verbose] No rules matched
-[verbose] No matching rule, using default behavior
-no match
+[verbose] Evaluation result: Ask
+ask
 ```
 
 For [compound commands](/rule-evaluation/compound-commands/) (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually:
