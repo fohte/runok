@@ -976,13 +976,17 @@ fn quoted_flag_like_value(
 
 #[rstest]
 fn backslash_before_closing_quote(empty_context: EvalContext) {
+    // YAML `"cmd 'hello\\'"` → string `cmd 'hello\'`
+    // The lexer should treat `\` before closing `'` as literal, producing
+    // QuotedLiteral("hello\"). The command `cmd hello\\` tokenizes as
+    // `["cmd", "hello\"]` (shell resolves `\\` → `\`).
     let config = parse_config(indoc! {r#"
         rules:
           - allow: "cmd 'hello\\'"
     "#})
     .unwrap();
 
-    let result = evaluate_command(&config, r"cmd hello\", &empty_context).unwrap();
+    let result = evaluate_command(&config, r"cmd hello\\", &empty_context).unwrap();
     assert_allow(&result.action);
 }
 
@@ -1393,6 +1397,37 @@ fn fused_short_flag_value(
           - allow: 'git tag [-n *] *'
           - allow: 'git log [-n *]'
     "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// Backslash followed by space in pattern
+// ========================================
+
+#[rstest]
+#[case::backslash_then_wildcard_matches(
+    r"cmd \\ foo",
+    assert_allow as ActionAssertion,
+)]
+#[case::backslash_then_wildcard_no_match(
+    r"other \\ foo",
+    assert_ask as ActionAssertion,
+)]
+fn backslash_followed_by_space(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    // YAML `"cmd \\ *"` → string `cmd \ *`
+    // Lexer should produce [Literal("cmd"), Literal("\"), Wildcard]
+    // (three tokens, NOT a single Literal("\ *"))
+    let config = parse_config(indoc! {r#"
+        rules:
+          - allow: "cmd \\ *"
+    "#})
     .unwrap();
 
     let result = evaluate_command(&config, command, &empty_context).unwrap();

@@ -52,6 +52,9 @@ fn unescape_and_match(pattern: &str, token: &str) -> bool {
                 } else {
                     unescaped.push(next);
                 }
+            } else {
+                // Trailing backslash with no following character — keep it as literal `\`
+                unescaped.push('\\');
             }
         } else {
             if ch == '*' {

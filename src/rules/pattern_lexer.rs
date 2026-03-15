@@ -211,7 +211,21 @@ fn consume_word(
     let mut word = match prefix {
         Some(c) => {
             chars.next(); // consume the prefixed char
-            String::from(c)
+            let mut w = String::from(c);
+            // When the prefix is a backslash, peek the next character to form
+            // an escape pair (e.g., `\*` → two chars `\*` in the word).
+            // Without this, the `while` loop below would see a word-boundary
+            // character (space, etc.) and break immediately, leaving only `\`
+            // in the word — which `unescape_and_match` would resolve to "".
+            if c == '\\'
+                && let Some(&(_, next)) = chars.peek()
+                && !is_word_boundary(next)
+                && extra_stop != Some(next)
+            {
+                w.push(next);
+                chars.next();
+            }
+            w
         }
         None => String::new(),
     };
@@ -219,7 +233,12 @@ fn consume_word(
         if c == '\\' {
             chars.next(); // consume backslash
             word.push('\\');
-            if let Some(&(_, next)) = chars.peek() {
+            // Stop before word-boundary characters so they are not
+            // swallowed into this token (e.g., `\\ *` → two tokens).
+            if let Some(&(_, next)) = chars.peek()
+                && !is_word_boundary(next)
+                && extra_stop != Some(next)
+            {
                 word.push(next);
                 chars.next();
             }
