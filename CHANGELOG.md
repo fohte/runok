@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/fohte/runok/compare/v0.2.0...v0.2.1) (2026-03-15)
+
+
+### Dependencies
+
+* update rust crate libc to v0.2.183 ([#220](https://github.com/fohte/runok/issues/220)) ([22e7f27](https://github.com/fohte/runok/commit/22e7f2766d72c600048a798aa48ee86c715c5fac))
+
 ## [0.2.0](https://github.com/fohte/runok/compare/v0.1.5...v0.2.0) (2026-03-15)
 
 
