@@ -79,21 +79,21 @@ Define allowed commands in `runok.yml`:
 
 ```yaml
 rules:
-  - allow: "git push|pull|fetch **"
-  - allow: "npm install|test|run **"
+  - allow: "git push|pull|fetch *"
+  - allow: "npm install|test|run *"
   - deny: "rm -rf /"
 ```
 
 Then use runok to check or execute commands:
 
 ```sh
-$ runok check "git push origin main"
+$ runok check -- git push origin main
 # ✅ allowed
 
-$ runok check "rm -rf /"
+$ runok check -- rm -rf /
 # ❌ denied
 
-$ runok exec "npm test"
+$ runok exec -- npm test
 # runs in a sandboxed environment
 ```
 

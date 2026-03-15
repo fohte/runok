@@ -84,7 +84,7 @@ The executor layer ([`src/exec/`](https://github.com/fohte/runok/blob/main/src/e
 When a sandbox policy is active, a platform-specific sandbox wraps the execution:
 
 - **macOS**: Generates an SBPL (Seatbelt Profile Language) profile and runs the command through `sandbox-exec`.
-- **Linux**: Uses Landlock LSM for filesystem access control.
+- **Linux**: Uses bubblewrap for mount namespace isolation, Landlock LSM for filesystem access control, and seccomp-bpf for network syscall filtering.
 
 ## Module Overview
 

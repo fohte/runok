@@ -36,7 +36,7 @@ rules:
   - allow: 'git status'
     tests:
       - allow: 'git status'
-      - allow: 'git status --short'
+      - deny: 'git status --short'
 
   - deny: 'git push -f|--force *'
     tests:
