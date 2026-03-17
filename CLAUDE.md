@@ -76,7 +76,7 @@ When adding, changing, or removing user-facing features, CLI options, configurat
 
 Do not create new doc pages unless the change introduces an entirely new concept. Prefer updating existing pages first.
 
-### Add release notes for every PR
+### Add release notes for user-facing changes
 
 When a PR introduces user-facing changes (new features, bug fixes, breaking changes, behavioral changes, new CLI options, etc.), add an entry to `docs/src/content/docs/releases/next.md`. This file tracks unreleased changes.
 
