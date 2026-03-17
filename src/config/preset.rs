@@ -160,6 +160,17 @@ pub fn load_preset_with<G: GitClient>(
             // Resolve paths in the remote preset relative to the cache directory
             let cache_dir = cache.cache_dir(reference);
             super::path_resolver::resolve_config_paths(&mut config, &cache_dir)?;
+
+            // Strip test definitions from remote presets.  Tests are authored
+            // for the preset itself and should not be evaluated by downstream
+            // consumers — local overrides would cause them to fail.
+            if let Some(rules) = &mut config.rules {
+                for rule in rules.iter_mut() {
+                    rule.tests = None;
+                }
+            }
+            config.tests = None;
+
             Ok(config)
         }
     }
@@ -349,9 +360,12 @@ fn determine_preset_base_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::cache::CacheMetadata;
+    use crate::config::git_client::mock::MockGitClient;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
     #[fixture]
@@ -1011,6 +1025,92 @@ mod tests {
         assert_eq!(
             determine_preset_base_dir(ref_str, tmp.path(), &cache),
             expected,
+        );
+    }
+
+    // === Remote preset inline tests are stripped ===
+
+    fn current_timestamp() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[rstest]
+    fn remote_preset_inline_tests_stripped(tmp: TempDir) {
+        let reference_str = "github:org/preset@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Write a preset with inline tests into the cache
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(
+            cache_dir.join("runok.yml"),
+            indoc! {"
+                rules:
+                  - ask: 'gh api *'
+                    tests:
+                      - ask: 'gh api /repos'
+                  - allow: 'git status'
+                    tests:
+                      - allow: 'git status --short'
+                tests:
+                  cases:
+                    - ask: 'gh api /users'
+            "},
+        )
+        .unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let config = load_preset_with(reference_str, tmp.path(), &mock, &cache).unwrap();
+
+        let rules = config.rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        // Rules should be preserved
+        assert_eq!(rules[0].ask.as_deref(), Some("gh api *"));
+        assert_eq!(rules[1].allow.as_deref(), Some("git status"));
+        // Inline tests should be stripped
+        assert!(
+            rules.iter().all(|r| r.tests.is_none()),
+            "all inline tests should be stripped from remote preset"
+        );
+        // Top-level tests should be stripped
+        assert!(
+            config.tests.is_none(),
+            "top-level tests should be stripped from remote preset"
+        );
+    }
+
+    #[rstest]
+    fn local_preset_inline_tests_preserved(tmp: TempDir) {
+        let base_dir = tmp.path();
+        fs::write(
+            base_dir.join("local.yml"),
+            indoc! {"
+                rules:
+                  - ask: 'gh api *'
+                    tests:
+                      - ask: 'gh api /repos'
+            "},
+        )
+        .unwrap();
+
+        let config = load_local_preset("./local.yml", base_dir).unwrap();
+        let rules = config.rules.unwrap();
+        assert!(
+            rules[0].tests.is_some(),
+            "inline tests should be preserved in local preset"
         );
     }
 }
