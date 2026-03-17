@@ -76,6 +76,21 @@ When adding, changing, or removing user-facing features, CLI options, configurat
 
 Do not create new doc pages unless the change introduces an entirely new concept. Prefer updating existing pages first.
 
+### Add release notes for user-facing changes
+
+When a PR introduces user-facing changes (new features, bug fixes, breaking changes, behavioral changes, new CLI options, etc.), add an entry to `docs/src/content/docs/releases/next.md`. This file tracks unreleased changes.
+
+**When to add:** Any PR that changes user-visible behavior. Skip for purely internal changes (CI config, dev tooling, refactors with no behavior change, dependency bumps with no user impact).
+
+**Format:** Follow the style of existing release notes (e.g., `docs/src/content/docs/releases/v0-2-0.md`):
+
+- Use `## Highlights` for major/breaking changes, `## New Features` for additions, `## Bug Fixes` for fixes.
+- Each entry is a `###` heading with a short description and a PR link: `### Feature name ([#123](https://github.com/fohte/runok/pull/123))`.
+- Include a brief explanation and a code example when helpful.
+- Link to relevant doc pages with `See [Page Name](/path/) for details.` when applicable.
+
+**If `next.md` already has entries**, append to the appropriate section. If it still has the placeholder text `No unreleased changes yet.`, replace it with the new entry.
+
 ## Code rules
 
 ### Use the `shlex` crate for shell quoting and splitting
