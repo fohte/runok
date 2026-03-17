@@ -77,6 +77,7 @@ tests:
 `runok test` runs in an isolated environment:
 
 - **Global configuration is excluded.** The global `~/.config/runok/runok.yml` is not loaded. Only the target configuration file and its `extends` are used.
+- **Remote preset inline tests are excluded.** Inline tests from remote presets (e.g., `github:org/repo`) are stripped on load and not evaluated. Remote preset tests are meant to be validated by the preset itself.
 - **All test cases run.** The runner does not stop on the first failure — it executes every test case and reports all results.
 
 ## Output
