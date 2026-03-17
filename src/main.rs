@@ -98,13 +98,13 @@ fn main() -> ExitCode {
 
 fn run_test(args: &cli::TestArgs) -> ExitCode {
     use runok::test::{
-        TestError, load_test_config, parse_test_cases, report, report_summary, run_tests,
+        TestError, load_test_config, parse_test_cases_scoped, report, report_summary, run_tests,
     };
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config_path = args.config.clone().unwrap_or_else(|| cwd.clone());
 
-    let (config, resolved_path) = match load_test_config(&config_path) {
+    let loaded = match load_test_config(&config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: {e}");
@@ -112,13 +112,18 @@ fn run_test(args: &cli::TestArgs) -> ExitCode {
         }
     };
 
-    let test_cases = parse_test_cases(&config, &resolved_path);
+    let test_cases = parse_test_cases_scoped(
+        &loaded.config,
+        &loaded.path,
+        loaded.preset_config.as_ref(),
+        loaded.preset_rule_count,
+    );
     if test_cases.is_empty() {
         eprintln!("runok: {}", TestError::NoTestCases);
         return ExitCode::from(2);
     }
 
-    let results = run_tests(&config, &test_cases);
+    let results = run_tests(&loaded.config, &test_cases);
     let mut stdout = std::io::stdout();
     report(&results, &mut stdout);
     report_summary(&results, &mut stdout);

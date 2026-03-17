@@ -84,11 +84,15 @@ pub enum TestCaseSource {
 }
 
 /// A single test case.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TestCase {
     pub command: String,
     pub expected: ExpectedDecision,
     pub source: TestCaseSource,
+    /// When set, evaluate this test case against this scoped config instead
+    /// of the full merged config.  Used for inline tests from presets so that
+    /// downstream overrides do not affect the preset's own tests.
+    pub scope_config: Option<Config>,
 }
 
 /// Result of a single test case execution.
@@ -163,7 +167,25 @@ fn parse_inline_entry(entry: &InlineTestEntry) -> Option<(ExpectedDecision, Stri
 }
 
 /// Parse all test cases from a config, using `file` as the source path.
+///
+/// When `preset_config` is provided, inline tests whose `rule_index` is
+/// less than `preset_rule_count` are given `scope_config = Some(preset_config)`
+/// so they are evaluated only against the preset's rules.
 pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
+    parse_test_cases_scoped(config, file, None, 0)
+}
+
+/// Parse test cases with optional preset scoping.
+///
+/// Inline tests for rules at index `0..preset_rule_count` receive
+/// `scope_config` set to `preset_config` so they are evaluated against
+/// the preset layer only.
+pub fn parse_test_cases_scoped(
+    config: &Config,
+    file: &Path,
+    preset_config: Option<&Config>,
+    preset_rule_count: usize,
+) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
     // Inline tests from rules
@@ -172,6 +194,11 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
             if let Some(tests) = &rule.tests {
                 for entry in tests {
                     if let Some((expected, command)) = parse_inline_entry(entry) {
+                        let scope_config = if rule_index < preset_rule_count {
+                            preset_config.cloned()
+                        } else {
+                            None
+                        };
                         cases.push(TestCase {
                             command,
                             expected,
@@ -179,6 +206,7 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
                                 file: file.to_path_buf(),
                                 rule_index,
                             },
+                            scope_config,
                         });
                     }
                 }
@@ -198,6 +226,7 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
                     source: TestCaseSource::TopLevel {
                         file: file.to_path_buf(),
                     },
+                    scope_config: None,
                 });
             }
         }
@@ -211,12 +240,18 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
 // ---------------------------------------------------------------------------
 
 /// Run all test cases against the given config and return aggregated results.
+///
+/// Each test case is evaluated against its own `scope_config` when present,
+/// otherwise against the full merged `config`.  This ensures that inline
+/// tests from presets are evaluated only against the preset's rules, not
+/// against downstream overrides.
 pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
     let context = EvalContext::from_env();
     let results = test_cases
         .iter()
-        .map(
-            |tc| match evaluate_compound(config, &tc.command, &context) {
+        .map(|tc| {
+            let eval_config = tc.scope_config.as_ref().unwrap_or(config);
+            match evaluate_compound(eval_config, &tc.command, &context) {
                 Ok(result) => {
                     let actual = action_to_kind(&result.action);
                     let expected_kind: ActionKind = tc.expected.into();
@@ -233,8 +268,8 @@ pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
                     passed: false,
                     error: Some(e.to_string()),
                 },
-            },
-        )
+            }
+        })
         .collect();
     TestResults { results }
 }
@@ -306,7 +341,19 @@ const CONFIG_FILENAMES: &[&str] = &["runok.yml", "runok.yaml"];
 /// Unlike the normal loader this intentionally skips the global config
 /// (`~/.config/runok/runok.yml`) so that test results are fully determined
 /// by the project config alone.
-pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
+/// Result of loading a test config, containing the merged config and
+/// optional preset-only config for scoped inline test evaluation.
+pub struct LoadedTestConfig {
+    pub config: Config,
+    pub path: PathBuf,
+    /// The config containing only preset (extends) rules, used to scope
+    /// inline tests from presets so they are not affected by local overrides.
+    pub preset_config: Option<Config>,
+    /// Number of rules that come from presets (extends).
+    pub preset_rule_count: usize,
+}
+
+pub fn load_test_config(file: &Path) -> Result<LoadedTestConfig, TestError> {
     let path = if file.is_file() {
         file.to_path_buf()
     } else if file.is_dir() {
@@ -329,19 +376,44 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
     let base_dir = path.parent().unwrap_or(Path::new("."));
     resolve_config_paths(&mut config, base_dir).map_err(ConfigError::from)?;
 
-    // Resolve normal extends
+    // Resolve normal extends, keeping a snapshot of the preset-only config
+    let mut preset_config = None;
+    let mut preset_rule_count = 0;
+
     if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
         let source_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("runok.yml");
         let cache = PresetCache::from_env().map_err(ConfigError::from)?;
+
+        // Resolve extends with only the extends references (no local rules)
+        // to get the preset-only config for scoped test evaluation.
+        let extends_only = Config {
+            extends: config.extends.clone(),
+            defaults: None,
+            rules: None,
+            definitions: config.definitions.clone(),
+            audit: None,
+            tests: None,
+        };
+        let resolved_preset = resolve_extends(extends_only, base_dir, source_name, &cache)
+            .map_err(|e| TestError::ExtendsResolution {
+                path: source_name.to_string(),
+                source: Box::new(e),
+            })?;
+        preset_rule_count = resolved_preset.rules.as_ref().map_or(0, |r| r.len());
+
         config = resolve_extends(config, base_dir, source_name, &cache).map_err(|e| {
             TestError::ExtendsResolution {
                 path: source_name.to_string(),
                 source: Box::new(e),
             }
         })?;
+
+        if preset_rule_count > 0 {
+            preset_config = Some(resolved_preset);
+        }
     }
 
     // Resolve tests.extends: merge additional config files into the config
@@ -386,7 +458,12 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
     }
 
     config.validate()?;
-    Ok((config, path))
+    Ok(LoadedTestConfig {
+        config,
+        path,
+        preset_config,
+        preset_rule_count,
+    })
 }
 
 #[cfg(test)]
@@ -467,6 +544,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                scope_config: None,
             },
             actual: if passed {
                 ActionKind::Allow
@@ -629,6 +707,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            scope_config: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -649,6 +728,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            scope_config: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -672,6 +752,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                scope_config: None,
             },
             TestCase {
                 command: "git status".to_string(),
@@ -679,6 +760,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                scope_config: None,
             },
         ];
 
@@ -699,6 +781,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            scope_config: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -724,6 +807,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            scope_config: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -766,6 +850,7 @@ mod tests {
                     source: TestCaseSource::TopLevel {
                         file: PathBuf::from("test.yml"),
                     },
+                    scope_config: None,
                 },
                 actual,
                 passed,
@@ -805,7 +890,8 @@ mod tests {
             "},
         );
 
-        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
+        let loaded = load_test_config(&env.config_path()).expect("load failed");
+        let config = loaded.config;
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].allow.as_deref(), Some("git status"));
@@ -821,7 +907,8 @@ mod tests {
             "},
         );
 
-        let (config, _) = load_test_config(&env.dir).expect("load failed");
+        let loaded = load_test_config(&env.dir).expect("load failed");
+        let config = loaded.config;
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules[0].allow.as_deref(), Some("echo hello"));
     }
@@ -836,7 +923,8 @@ mod tests {
             "},
         );
 
-        let (config, _) = load_test_config(&env.dir).expect("load failed");
+        let loaded = load_test_config(&env.dir).expect("load failed");
+        let config = loaded.config;
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules[0].deny.as_deref(), Some("rm *"));
     }
@@ -872,7 +960,8 @@ mod tests {
             "},
         );
 
-        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
+        let loaded = load_test_config(&env.config_path()).expect("load failed");
+        let config = loaded.config;
         let rules = config.rules.expect("rules missing");
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].allow.as_deref(), Some("echo base"));
@@ -901,7 +990,8 @@ mod tests {
             "},
         );
 
-        let (config, _) = load_test_config(&env.config_path()).expect("load failed");
+        let loaded = load_test_config(&env.config_path()).expect("load failed");
+        let config = loaded.config;
         let rules = config.rules.expect("rules missing");
         // Main rule + rules from tests.extends
         assert_eq!(rules.len(), 2);
@@ -924,6 +1014,151 @@ mod tests {
 
         let result = load_test_config(&env.config_path());
         assert!(matches!(result, Err(TestError::ConfigNotFound { .. })));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_test_cases_scoped
+    // -----------------------------------------------------------------------
+
+    #[rstest]
+    fn parse_test_cases_scoped_assigns_scope_config(env: TestEnv) {
+        let yaml = indoc! {"
+            rules:
+              - ask: 'gh api *'
+                tests:
+                  - ask: 'gh api /repos'
+              - deny: 'rm *'
+                tests:
+                  - deny: 'rm foo'
+        "};
+        let config = parse_config(yaml).expect("parse failed");
+        let preset_config = parse_config(indoc! {"
+            rules:
+              - ask: 'gh api *'
+                tests:
+                  - ask: 'gh api /repos'
+        "})
+        .expect("parse failed");
+
+        let cases = parse_test_cases_scoped(&config, &env.config_path(), Some(&preset_config), 1);
+        assert_eq!(cases.len(), 2);
+
+        // First rule (index 0) is a preset rule -> should have scope_config
+        assert!(
+            cases[0].scope_config.is_some(),
+            "preset inline test should have scope_config"
+        );
+        // Second rule (index 1) is a local rule -> should not have scope_config
+        assert!(
+            cases[1].scope_config.is_none(),
+            "local inline test should not have scope_config"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // run_tests with scope_config
+    // -----------------------------------------------------------------------
+
+    #[rstest]
+    fn run_tests_scope_config_isolates_preset_tests() {
+        // Simulate a preset rule that asks for 'gh api *'
+        // and a local rule that denies 'gh api * --paginate *'.
+        // The preset's inline test should pass (evaluated against preset config only).
+        let merged_yaml = indoc! {"
+            rules:
+              - ask: 'gh api *'
+              - deny: 'gh api * --paginate *'
+        "};
+        let merged_config = parse_config(merged_yaml).expect("parse failed");
+        let preset_yaml = indoc! {"
+            rules:
+              - ask: 'gh api *'
+        "};
+        let preset_config = parse_config(preset_yaml).expect("parse failed");
+
+        let test_cases = vec![
+            // Preset inline test: should be evaluated against preset_config
+            TestCase {
+                command: "gh api --paginate /repos/cli/cli/issues".to_string(),
+                expected: ExpectedDecision::Ask,
+                source: TestCaseSource::Inline {
+                    file: PathBuf::from("preset.yml"),
+                    rule_index: 0,
+                },
+                scope_config: Some(preset_config),
+            },
+            // Local inline test: should be evaluated against merged_config
+            TestCase {
+                command: "gh api --paginate /repos/cli/cli/issues".to_string(),
+                expected: ExpectedDecision::Deny,
+                source: TestCaseSource::Inline {
+                    file: PathBuf::from("runok.yml"),
+                    rule_index: 1,
+                },
+                scope_config: None,
+            },
+        ];
+
+        let results = run_tests(&merged_config, &test_cases);
+        assert!(
+            results.is_success(),
+            "both tests should pass: preset test evaluated against preset config, \
+             local test against merged config"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // load_test_config with extends (scoped)
+    // -----------------------------------------------------------------------
+
+    #[rstest]
+    fn load_test_config_with_extends_provides_preset_config(env: TestEnv) {
+        env.write_file(
+            "preset.yml",
+            indoc! {"
+                rules:
+                  - ask: 'gh api *'
+            "},
+        );
+        env.write_file(
+            "runok.yml",
+            indoc! {"
+                extends:
+                  - ./preset.yml
+                rules:
+                  - deny: 'gh api * --paginate *'
+            "},
+        );
+
+        let loaded = load_test_config(&env.config_path()).expect("load failed");
+        assert!(
+            loaded.preset_config.is_some(),
+            "preset_config should be present when extends is used"
+        );
+        assert_eq!(loaded.preset_rule_count, 1);
+
+        // The preset_config should only contain the preset's rules
+        let preset_rules = loaded.preset_config.unwrap().rules.unwrap();
+        assert_eq!(preset_rules.len(), 1);
+        assert_eq!(preset_rules[0].ask.as_deref(), Some("gh api *"));
+    }
+
+    #[rstest]
+    fn load_test_config_no_extends_has_no_preset_config(env: TestEnv) {
+        env.write_file(
+            "runok.yml",
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+            "},
+        );
+
+        let loaded = load_test_config(&env.config_path()).expect("load failed");
+        assert!(
+            loaded.preset_config.is_none(),
+            "preset_config should be None when no extends"
+        );
+        assert_eq!(loaded.preset_rule_count, 0);
     }
 
     // -----------------------------------------------------------------------
