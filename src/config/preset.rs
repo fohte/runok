@@ -161,14 +161,15 @@ pub fn load_preset_with<G: GitClient>(
             let cache_dir = cache.cache_dir(reference);
             super::path_resolver::resolve_config_paths(&mut config, &cache_dir)?;
 
-            // Strip inline tests from remote preset rules.  Inline tests are
-            // authored for the preset itself and should not be evaluated by
-            // downstream consumers — local overrides would cause them to fail.
+            // Strip test definitions from remote presets.  Tests are authored
+            // for the preset itself and should not be evaluated by downstream
+            // consumers — local overrides would cause them to fail.
             if let Some(rules) = &mut config.rules {
                 for rule in rules.iter_mut() {
                     rule.tests = None;
                 }
             }
+            config.tests = None;
 
             Ok(config)
         }
@@ -1057,6 +1058,9 @@ mod tests {
                   - allow: 'git status'
                     tests:
                       - allow: 'git status --short'
+                tests:
+                  cases:
+                    - ask: 'gh api /users'
             "},
         )
         .unwrap();
@@ -1078,12 +1082,13 @@ mod tests {
         assert_eq!(rules[1].allow.as_deref(), Some("git status"));
         // Inline tests should be stripped
         assert!(
-            rules[0].tests.is_none(),
-            "inline tests should be stripped from remote preset"
+            rules.iter().all(|r| r.tests.is_none()),
+            "all inline tests should be stripped from remote preset"
         );
+        // Top-level tests should be stripped
         assert!(
-            rules[1].tests.is_none(),
-            "inline tests should be stripped from remote preset"
+            config.tests.is_none(),
+            "top-level tests should be stripped from remote preset"
         );
     }
 
