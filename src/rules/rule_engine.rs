@@ -267,8 +267,8 @@ fn has_writable_contradiction(
         sandbox_map
             .get(name.as_str())
             .and_then(|p| p.fs.as_ref())
-            .and_then(|fs| fs.writable.as_ref())
-            .is_some_and(|w| !w.is_empty())
+            .and_then(|fs| fs.write_allow())
+            .is_some_and(|w: &Vec<String>| !w.is_empty())
     })
 }
 
@@ -1581,7 +1581,7 @@ mod tests {
     // Compound: sandbox policy aggregation
     // ========================================
 
-    use crate::config::{FsPolicy, NetworkPolicy, SandboxPreset};
+    use crate::config::{FsAccessPolicy, FsPolicy, NetworkPolicy, SandboxPreset};
 
     fn make_sandbox_config(
         rules: Vec<RuleEntry>,
@@ -1615,12 +1615,15 @@ mod tests {
                     "preset_a".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec![
-                                "/tmp".to_string(),
-                                "/home".to_string(),
-                                "/var".to_string(),
-                            ]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec![
+                                    "/tmp".to_string(),
+                                    "/home".to_string(),
+                                    "/var".to_string(),
+                                ]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -1629,8 +1632,11 @@ mod tests {
                     "preset_b".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string(), "/var".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string(), "/var".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -1656,8 +1662,11 @@ mod tests {
                     "preset_a".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: Some(vec!["/etc/passwd".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: Some(vec!["/etc/passwd".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -1666,8 +1675,11 @@ mod tests {
                     "preset_b".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: Some(vec!["/etc/shadow".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: Some(vec!["/etc/shadow".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -1692,8 +1704,11 @@ mod tests {
                     "preset_a".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: Some(NetworkPolicy { allow: Some(true) }),
                     },
@@ -1702,8 +1717,11 @@ mod tests {
                     "preset_b".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: Some(NetworkPolicy { allow: Some(true) }),
                     },
@@ -1733,8 +1751,11 @@ mod tests {
                     "net_ok".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: Some(NetworkPolicy { allow: Some(true) }),
                     },
@@ -1743,8 +1764,11 @@ mod tests {
                     "no_net".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: Some(NetworkPolicy { allow: Some(false) }),
                     },
@@ -1779,8 +1803,11 @@ mod tests {
                     "only_tmp".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -1789,8 +1816,11 @@ mod tests {
                     "only_home".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/home".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/home".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -1814,8 +1844,11 @@ mod tests {
                 "only_tmp".to_string(),
                 SandboxPreset {
                     fs: Some(FsPolicy {
-                        writable: Some(vec!["/tmp".to_string()]),
-                        deny: None,
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
                     }),
                     network: None,
                 },
@@ -1838,8 +1871,11 @@ mod tests {
                 "preset_a".to_string(),
                 SandboxPreset {
                     fs: Some(FsPolicy {
-                        writable: Some(vec!["/tmp".to_string()]),
-                        deny: Some(vec!["/etc".to_string()]),
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/tmp".to_string()]),
+                            deny: Some(vec!["/etc".to_string()]),
+                        }),
                     }),
                     network: None,
                 },
@@ -1893,8 +1929,11 @@ mod tests {
                 "restricted".to_string(),
                 SandboxPreset {
                     fs: Some(FsPolicy {
-                        writable: Some(vec!["/tmp".to_string()]),
-                        deny: Some(vec!["/etc".to_string()]),
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/tmp".to_string()]),
+                            deny: Some(vec!["/etc".to_string()]),
+                        }),
                     }),
                     network: None,
                 },
@@ -1917,8 +1956,11 @@ mod tests {
                 "restricted".to_string(),
                 SandboxPreset {
                     fs: Some(FsPolicy {
-                        writable: Some(vec!["/tmp".to_string()]),
-                        deny: None,
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/tmp".to_string()]),
+                            deny: None,
+                        }),
                     }),
                     network: Some(NetworkPolicy { allow: Some(true) }),
                 },
@@ -1945,12 +1987,15 @@ mod tests {
                     "p1".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec![
-                                "/a".to_string(),
-                                "/b".to_string(),
-                                "/c".to_string(),
-                            ]),
-                            deny: Some(vec!["/x".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec![
+                                    "/a".to_string(),
+                                    "/b".to_string(),
+                                    "/c".to_string(),
+                                ]),
+                                deny: Some(vec!["/x".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -1959,8 +2004,11 @@ mod tests {
                     "p2".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/b".to_string(), "/c".to_string()]),
-                            deny: Some(vec!["/y".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/b".to_string(), "/c".to_string()]),
+                                deny: Some(vec!["/y".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -1969,8 +2017,11 @@ mod tests {
                     "p3".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/c".to_string(), "/d".to_string()]),
-                            deny: Some(vec!["/z".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/c".to_string(), "/d".to_string()]),
+                                deny: Some(vec!["/z".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -2010,8 +2061,11 @@ mod tests {
                     "only_tmp".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -2020,8 +2074,11 @@ mod tests {
                     "only_home".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["/home".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/home".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },

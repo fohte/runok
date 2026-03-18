@@ -193,12 +193,12 @@
         }
       }
     },
-    "FsPolicy": {
-      "description": "Filesystem access policy within a sandbox preset.",
+    "FsAccessPolicy": {
+      "description": "Access policy for a single operation (read or write).",
       "type": "object",
       "properties": {
-        "deny": {
-          "description": "Paths the sandboxed process is denied access to. Supports `<path:name>` references.",
+        "allow": {
+          "description": "Paths that are allowed for this operation.",
           "type": [
             "array",
             "null"
@@ -207,8 +207,8 @@
             "type": "string"
           }
         },
-        "writable": {
-          "description": "Directories the sandboxed process is allowed to write to.",
+        "deny": {
+          "description": "Paths that are denied for this operation. Supports `<path:name>` references.",
           "type": [
             "array",
             "null"
@@ -216,6 +216,34 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "FsPolicy": {
+      "description": "Filesystem access policy within a sandbox preset.\n\nSupports two formats:\n\n**Legacy format** (backward compatible):\n```yaml\nfs:\n  writable: [.]\n  deny: ['<path:sensitive>']\n```\n\n**New format** with explicit read/write control:\n```yaml\nfs:\n  read:\n    allow: [/]\n    deny: [~/.ssh, ~/.gnupg]\n  write:\n    allow: [., /tmp]\n    deny: [.env, .envrc]\n```\n\nIn the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.\nRead access defaults to allow-all with no denies.",
+      "type": "object",
+      "properties": {
+        "read": {
+          "description": "Read access policy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsAccessPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "write": {
+          "description": "Write access policy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FsAccessPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

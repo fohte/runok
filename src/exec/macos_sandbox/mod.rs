@@ -107,6 +107,44 @@ impl MacOsSandboxExecutor {
             }
         }
 
+        // Deny reads to read_deny_paths (blocks both read and write access).
+        for deny_path in &policy.read_deny_paths {
+            let path_str = deny_path.to_string_lossy();
+            match classify_deny_path(&path_str) {
+                DenyPathKind::AbsoluteLiteral => {
+                    let escaped = sbpl_escape_string(&path_str);
+                    sbpl.push_str(&format!("(deny file-read* (subpath {escaped}))\n"));
+                    sbpl.push_str(&format!("(deny file-write* (subpath {escaped}))\n"));
+                }
+                DenyPathKind::RelativeLiteral => {
+                    // Resolve against each writable_root
+                    for root in &policy.writable_roots {
+                        let full_path = root.join(&*path_str);
+                        let full_str = full_path.to_string_lossy();
+                        let escaped = sbpl_escape_string(&full_str);
+                        sbpl.push_str(&format!("(deny file-read* (subpath {escaped}))\n"));
+                        sbpl.push_str(&format!("(deny file-write* (subpath {escaped}))\n"));
+                    }
+                }
+                DenyPathKind::GlobPattern => {
+                    if path_str.starts_with('/') {
+                        let regex = glob_to_sbpl_regex(&path_str);
+                        let escaped = sbpl_escape_string(&regex);
+                        sbpl.push_str(&format!("(deny file-read* (regex {escaped}))\n"));
+                        sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
+                    } else {
+                        for root in &policy.writable_roots {
+                            let full_pattern = format!("{}/{}", root.to_string_lossy(), path_str);
+                            let regex = glob_to_sbpl_regex(&full_pattern);
+                            let escaped = sbpl_escape_string(&regex);
+                            sbpl.push_str(&format!("(deny file-read* (regex {escaped}))\n"));
+                            sbpl.push_str(&format!("(deny file-write* (regex {escaped}))\n"));
+                        }
+                    }
+                }
+            }
+        }
+
         // Allow writes to /dev/null and temporary directories needed for process execution
         sbpl.push_str("(allow file-write* (literal \"/dev/null\"))\n");
         sbpl.push_str("(allow file-write* (literal \"/dev/dtracehelper\"))\n");
@@ -169,6 +207,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: roots.iter().map(PathBuf::from).collect(),
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         }
     }
@@ -177,6 +216,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: writable.iter().map(PathBuf::from).collect(),
             read_only_subpaths: deny.iter().map(PathBuf::from).collect(),
+            read_deny_paths: vec![],
             network_allowed: network,
         }
     }
@@ -188,6 +228,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         },
         indoc! {r#"
@@ -231,6 +272,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: false,
         },
         indoc! {r#"
@@ -360,6 +402,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let command = vec![
@@ -413,6 +456,7 @@ mod tests {
             SandboxPolicy {
                 writable_roots: vec![],
                 read_only_subpaths: vec![],
+                read_deny_paths: vec![],
                 network_allowed: true,
             }
         }
@@ -490,6 +534,7 @@ mod tests {
             let policy = SandboxPolicy {
                 writable_roots: vec![canonical_dir.clone()],
                 read_only_subpaths: vec![],
+                read_deny_paths: vec![],
                 network_allowed: true,
             };
 
@@ -524,6 +569,7 @@ mod tests {
             let policy = SandboxPolicy {
                 writable_roots: vec![canonical_dir.clone()],
                 read_only_subpaths: vec![PathBuf::from(".git")],
+                read_deny_paths: vec![],
                 network_allowed: true,
             };
 
@@ -563,6 +609,7 @@ mod tests {
             let policy = SandboxPolicy {
                 writable_roots: vec![canonical_dir.clone()],
                 read_only_subpaths: vec![PathBuf::from(".git")],
+                read_deny_paths: vec![],
                 network_allowed: true,
             };
 
@@ -588,6 +635,7 @@ mod tests {
             let policy = SandboxPolicy {
                 writable_roots: vec![],
                 read_only_subpaths: vec![],
+                read_deny_paths: vec![],
                 network_allowed: false,
             };
 
@@ -622,6 +670,7 @@ mod tests {
             let policy = SandboxPolicy {
                 writable_roots: vec![],
                 read_only_subpaths: vec![],
+                read_deny_paths: vec![],
                 network_allowed: true,
             };
 

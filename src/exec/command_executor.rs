@@ -53,6 +53,10 @@ pub struct SandboxPolicy {
     pub writable_roots: Vec<PathBuf>,
     /// Read-only subpaths that are always protected (e.g., .git, .runok).
     pub read_only_subpaths: Vec<PathBuf>,
+    /// Paths denied for reading (and writing). These paths are completely
+    /// inaccessible to the sandboxed process.
+    #[serde(default)]
+    pub read_deny_paths: Vec<PathBuf>,
     /// Whether network access is allowed.
     pub network_allowed: bool,
 }
@@ -69,6 +73,16 @@ impl SandboxPolicy {
         read_only_subpaths: Vec<String>,
         network_allowed: bool,
     ) -> Result<Self, SandboxError> {
+        Self::build_full(writable_roots, read_only_subpaths, vec![], network_allowed)
+    }
+
+    /// Build a `SandboxPolicy` with all fields including read-deny paths.
+    pub fn build_full(
+        writable_roots: Vec<String>,
+        read_only_subpaths: Vec<String>,
+        read_deny_paths: Vec<String>,
+        network_allowed: bool,
+    ) -> Result<Self, SandboxError> {
         let mut resolved_writable: Vec<PathBuf> = Vec::new();
         for path in &writable_roots {
             let expanded = crate::config::expand_tilde(path);
@@ -81,18 +95,24 @@ impl SandboxPolicy {
         // Deny paths may contain glob patterns (e.g., `.env*`, `~/.ssh/**`, `/etc/**`)
         // from expanded `<path:name>` references, so they cannot be canonicalized.
         // Only expand `~` to $HOME.
-        let mut readonly_set: HashSet<PathBuf> = HashSet::new();
-        for path in &read_only_subpaths {
-            let expanded = crate::config::expand_tilde(path);
-            readonly_set.insert(PathBuf::from(expanded));
-        }
+        let resolve_deny_paths = |paths: &[String]| -> Vec<PathBuf> {
+            let mut set: HashSet<PathBuf> = HashSet::new();
+            for path in paths {
+                let expanded = crate::config::expand_tilde(path);
+                set.insert(PathBuf::from(expanded));
+            }
+            let mut sorted: Vec<PathBuf> = set.into_iter().collect();
+            sorted.sort();
+            sorted
+        };
 
-        let mut resolved_readonly: Vec<PathBuf> = readonly_set.into_iter().collect();
-        resolved_readonly.sort();
+        let resolved_readonly = resolve_deny_paths(&read_only_subpaths);
+        let resolved_read_deny = resolve_deny_paths(&read_deny_paths);
 
         Ok(SandboxPolicy {
             writable_roots: resolved_writable,
             read_only_subpaths: resolved_readonly,
+            read_deny_paths: resolved_read_deny,
             network_allowed,
         })
     }
@@ -140,6 +160,12 @@ impl SandboxPolicy {
             readonly_set.extend(policy.read_only_subpaths.iter().cloned());
         }
 
+        // read_deny_paths: union
+        let mut read_deny_set: HashSet<PathBuf> = HashSet::new();
+        for policy in policies {
+            read_deny_set.extend(policy.read_deny_paths.iter().cloned());
+        }
+
         // network_allowed: all must be true
         let network_allowed = policies.iter().all(|p| p.network_allowed);
 
@@ -149,9 +175,13 @@ impl SandboxPolicy {
         let mut read_only_subpaths: Vec<PathBuf> = readonly_set.into_iter().collect();
         read_only_subpaths.sort();
 
+        let mut read_deny_paths: Vec<PathBuf> = read_deny_set.into_iter().collect();
+        read_deny_paths.sort();
+
         Ok(SandboxPolicy {
             writable_roots,
             read_only_subpaths,
+            read_deny_paths,
             network_allowed,
         })
     }
@@ -266,9 +296,10 @@ impl SandboxPolicy {
     /// Converts string paths to `PathBuf`, expands `~`, canonicalizes paths,
     /// and adds protected paths.
     pub fn from_merged(policy: &crate::config::MergedSandboxPolicy) -> Result<Self, SandboxError> {
-        Self::build(
+        Self::build_full(
             policy.writable.clone(),
             policy.deny.clone(),
+            policy.read_deny.clone(),
             policy.network_allowed,
         )
     }
@@ -496,6 +527,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![PathBuf::from(".git")],
+            read_deny_paths: vec![],
             network_allowed: true,
         }
     }
@@ -920,6 +952,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home")],
             read_only_subpaths: vec![PathBuf::from(".git")],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let merged = SandboxPolicy::merge(std::slice::from_ref(&policy)).unwrap();
@@ -969,6 +1002,7 @@ mod tests {
             .map(|roots| SandboxPolicy {
                 writable_roots: roots.iter().map(PathBuf::from).collect(),
                 read_only_subpaths: vec![],
+                read_deny_paths: vec![],
                 network_allowed: true,
             })
             .collect();
@@ -1017,6 +1051,7 @@ mod tests {
             .map(|paths| SandboxPolicy {
                 writable_roots: vec![PathBuf::from("/tmp")],
                 read_only_subpaths: paths.iter().map(PathBuf::from).collect(),
+                read_deny_paths: vec![],
                 network_allowed: true,
             })
             .collect();
@@ -1035,11 +1070,13 @@ mod tests {
         let a = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: net_a,
         };
         let b = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: net_b,
         };
         let merged = SandboxPolicy::merge(&[a, b]).unwrap();
@@ -1055,6 +1092,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string()],
             deny: vec![".env*".to_string(), "/etc/shadow".to_string()],
+            read_deny: vec![],
             network_allowed: false,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
@@ -1076,6 +1114,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec![],
             deny: vec!["~/.ssh/**".to_string()],
+            read_deny: vec![],
             network_allowed: true,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
@@ -1095,6 +1134,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec![],
             deny: vec![],
+            read_deny: vec![],
             network_allowed: true,
         };
         let policy = SandboxPolicy::from_merged(&merged).unwrap();
@@ -1111,6 +1151,7 @@ mod tests {
         let merged = MergedSandboxPolicy {
             writable: vec!["/nonexistent_12345".to_string()],
             deny: vec![],
+            read_deny: vec![],
             network_allowed: true,
         };
         let result = SandboxPolicy::from_merged(&merged);
@@ -1146,6 +1187,7 @@ mod tests {
                 PathBuf::from("/home/user/project/.git"),
                 PathBuf::from(".env*"),
             ],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
 

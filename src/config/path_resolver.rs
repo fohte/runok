@@ -107,11 +107,21 @@ pub fn resolve_config_paths(
     if let Some(sandbox) = defs.sandbox.as_mut() {
         for preset in sandbox.values_mut() {
             if let Some(fs) = preset.fs.as_mut() {
-                if let Some(writable) = fs.writable.as_mut() {
-                    resolve_vec(writable)?;
+                if let Some(write) = fs.write.as_mut() {
+                    if let Some(allow) = write.allow.as_mut() {
+                        resolve_vec(allow)?;
+                    }
+                    if let Some(deny) = write.deny.as_mut() {
+                        resolve_vec(deny)?;
+                    }
                 }
-                if let Some(deny) = fs.deny.as_mut() {
-                    resolve_vec(deny)?;
+                if let Some(read) = fs.read.as_mut() {
+                    if let Some(allow) = read.allow.as_mut() {
+                        resolve_vec(allow)?;
+                    }
+                    if let Some(deny) = read.deny.as_mut() {
+                        resolve_vec(deny)?;
+                    }
                 }
             }
         }
@@ -210,7 +220,7 @@ mod tests {
 
     #[test]
     fn resolve_config_paths_resolves_definitions() {
-        use crate::config::{Config, Definitions, FsPolicy, SandboxPreset};
+        use crate::config::{Config, Definitions, FsAccessPolicy, FsPolicy, SandboxPreset};
         use std::collections::HashMap;
 
         let mut config = Config {
@@ -223,8 +233,11 @@ mod tests {
                     "restricted".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["./tmp".to_string()]),
-                            deny: Some(vec![".env*".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["./tmp".to_string()]),
+                                deny: Some(vec![".env*".to_string()]),
+                            }),
                         }),
                         network: None,
                     },
@@ -257,13 +270,13 @@ mod tests {
         let sandbox = defs.sandbox.unwrap();
         let restricted = &sandbox["restricted"];
         let fs = restricted.fs.as_ref().unwrap();
-        let writable = fs.writable.as_ref().unwrap();
+        let writable = fs.write_allow().unwrap();
         assert!(
             writable[0].starts_with("/project/"),
             "writable ./tmp should be resolved: {}",
             writable[0]
         );
-        let deny = fs.deny.as_ref().unwrap();
+        let deny = fs.write_deny().unwrap();
         assert!(
             deny[0].starts_with("/project/"),
             "deny .env* should be resolved: {}",
@@ -273,7 +286,7 @@ mod tests {
 
     #[test]
     fn resolve_config_paths_preserves_path_refs() {
-        use crate::config::{Config, Definitions, FsPolicy, SandboxPreset};
+        use crate::config::{Config, Definitions, FsAccessPolicy, FsPolicy, SandboxPreset};
         use std::collections::HashMap;
 
         let mut config = Config {
@@ -286,8 +299,14 @@ mod tests {
                     "restricted".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: None,
-                            deny: Some(vec!["<path:sensitive>".to_string(), ".secret".to_string()]),
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: None,
+                                deny: Some(vec![
+                                    "<path:sensitive>".to_string(),
+                                    ".secret".to_string(),
+                                ]),
+                            }),
                         }),
                         network: None,
                     },
@@ -303,7 +322,7 @@ mod tests {
         let defs = config.definitions.unwrap();
         let sandbox = defs.sandbox.unwrap();
         let restricted = &sandbox["restricted"];
-        let deny = restricted.fs.as_ref().unwrap().deny.as_ref().unwrap();
+        let deny = restricted.fs.as_ref().unwrap().write_deny().unwrap();
 
         // <path:name> references must be preserved as-is
         assert_eq!(deny[0], "<path:sensitive>");
