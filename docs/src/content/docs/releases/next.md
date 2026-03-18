@@ -6,15 +6,44 @@ sidebar:
 
 This page tracks changes that will be included in the next release. It is updated as pull requests are merged.
 
+## Highlights
+
+### Breaking: sandbox `fs` config format changed to `read`/`write` sub-sections
+
+The sandbox `fs` section now uses explicit `read` and `write` sub-sections instead of the flat `writable`/`deny` fields. This enables a new capability: **denying read access** to specific paths.
+
+**What should I do?**
+
+Update your `definitions.sandbox` entries to use the new format:
+
+```yaml title="runok.yml"
+# Before (v0.2.x)
+definitions:
+  sandbox:
+    restricted:
+      fs:
+        writable: ['.']
+        deny: ['.git']
+
+# After: use read/write sub-sections
+definitions:
+  sandbox:
+    restricted:
+      fs:
+        write:
+          allow: ['.']
+          deny: ['.git']
+```
+
+The previous `writable`/`deny` format is still accepted for backward compatibility, but the new format is recommended.
+
 ## New Features
 
 ### Read access control in sandbox presets
 
 Sandbox presets now support denying **read access** to specific paths via `fs.read.deny`. Previously, sandboxing could only restrict write access and network access. With this change, sensitive files like `~/.ssh` and `~/.gnupg` can be made completely inaccessible to sandboxed commands.
 
-The `fs` section now uses explicit `read`/`write` sub-sections:
-
-```yaml
+```yaml title="runok.yml"
 definitions:
   sandbox:
     restricted:
@@ -25,8 +54,6 @@ definitions:
           allow: [., /tmp]
           deny: [.env, .envrc]
 ```
-
-The previous `writable`/`deny` format is still supported for backward compatibility.
 
 See [Sandbox Overview](/sandbox/overview/) for details.
 
