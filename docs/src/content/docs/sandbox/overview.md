@@ -18,11 +18,16 @@ definitions:
   sandbox:
     restricted:
       fs:
-        writable:
-          - '.'
-        deny:
-          - '.git'
-          - '.runok'
+        read:
+          deny:
+            - '~/.ssh'
+            - '~/.gnupg'
+        write:
+          allow:
+            - '.'
+          deny:
+            - '.git'
+            - '.runok'
       network:
         allow: false
 ```
@@ -31,15 +36,35 @@ Each preset contains two sections:
 
 ### `fs` — File system policy
 
-| Field      | Type       | Description                                                                                                                                                            |
-| ---------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `writable` | `string[]` | Directories the sandboxed process can write to. Paths support `~` expansion.                                                                                           |
-| `deny`     | `string[]` | Paths the sandboxed process cannot write to, even within writable directories. Supports glob patterns (`*`, `**`, `?`, `[...]`, `{a,b}`) and `<path:name>` references. |
+The `fs` section controls both read and write access through `read` and `write` sub-sections:
 
-The `deny` list always takes priority over `writable`. For example, if `writable` includes `"."` (the current directory) and `deny` includes `".git"`, the process can write anywhere in the project except the `.git` directory.
+#### `fs.write` — Write access control
 
-:::note
-Read access is never restricted. The sandbox only controls **write** access and **network** access.
+| Field   | Type       | Description                                                                                                                                                            |
+| ------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow` | `string[]` | Directories the sandboxed process can write to. Paths support `~` expansion.                                                                                           |
+| `deny`  | `string[]` | Paths the sandboxed process cannot write to, even within writable directories. Supports glob patterns (`*`, `**`, `?`, `[...]`, `{a,b}`) and `<path:name>` references. |
+
+The `deny` list always takes priority over `allow`. For example, if `allow` includes `"."` (the current directory) and `deny` includes `".git"`, the process can write anywhere in the project except the `.git` directory.
+
+#### `fs.read` — Read access control
+
+| Field  | Type       | Description                                                                                   |
+| ------ | ---------- | --------------------------------------------------------------------------------------------- |
+| `deny` | `string[]` | Paths the sandboxed process cannot read. Supports glob patterns and `<path:name>` references. |
+
+When `fs.read.deny` is specified, the listed paths are completely inaccessible (both read and write are blocked).
+
+:::tip[Legacy format]
+The previous `writable`/`deny` format is still supported for backward compatibility:
+
+```yaml
+fs:
+  writable: ['.']
+  deny: ['.git']
+```
+
+This is equivalent to `fs.write.allow: ['.']` and `fs.write.deny: ['.git']`.
 :::
 
 ### `network` — Network policy
@@ -52,22 +77,29 @@ When `network.allow` is `false`, TCP/UDP sockets are blocked. Unix domain socket
 
 ## Using `<path:name>` references
 
-You can define reusable path lists under `definitions.paths` and reference them in sandbox `deny` lists:
+You can define reusable path lists under `definitions.paths` and reference them in sandbox deny lists:
 
 ```yaml
 definitions:
   paths:
     sensitive:
       - '.env*'
+      - 'credentials.*'
+    secrets:
       - '~/.ssh/**'
+      - '~/.gnupg/**'
   sandbox:
     restricted:
       fs:
-        deny:
-          - '<path:sensitive>'
+        read:
+          deny:
+            - '<path:secrets>'
+        write:
+          deny:
+            - '<path:sensitive>'
 ```
 
-The `<path:sensitive>` reference expands to all paths listed under `definitions.paths.sensitive`. See [Path References](/pattern-syntax/placeholders/#path-references-pathname) and [`definitions.paths`](/configuration/schema/#definitionspaths) for details.
+The `<path:secrets>` reference expands to all paths listed under `definitions.paths.secrets`. References can be used in both `read.deny` and `write.deny`. See [Path References](/pattern-syntax/placeholders/#path-references-pathname) and [`definitions.paths`](/configuration/schema/#definitionspaths) for details.
 
 ## Applying sandbox to rules
 
@@ -105,8 +137,9 @@ When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-comma
 
 | Field           | Merge strategy | Effect                                                       |
 | --------------- | -------------- | ------------------------------------------------------------ |
-| `writable`      | Intersection   | Only directories allowed by **all** policies remain writable |
-| `deny`          | Union          | Denied paths from **any** policy are protected               |
+| `write.allow`   | Intersection   | Only directories allowed by **all** policies remain writable |
+| `write.deny`    | Union          | Write-denied paths from **any** policy are protected         |
+| `read.deny`     | Union          | Read-denied paths from **any** policy are protected          |
 | `network.allow` | AND            | Network is blocked if **any** policy denies it               |
 
 This ensures that a less-restricted command in a pipeline cannot weaken the restrictions of a more-restricted command.
@@ -120,26 +153,33 @@ definitions:
   paths:
     sensitive:
       - '.env*'
-      - '~/.ssh/**'
       - 'credentials.*'
+    secrets:
+      - '~/.ssh/**'
+      - '~/.gnupg/**'
   sandbox:
     workspace-write:
       fs:
-        writable:
-          - '.'
-        deny:
-          - '.git'
-          - '.runok'
-          - '<path:sensitive>'
+        read:
+          deny:
+            - '<path:secrets>'
+        write:
+          allow:
+            - '.'
+          deny:
+            - '.git'
+            - '.runok'
+            - '<path:sensitive>'
       network:
         allow: true
     no-network:
       fs:
-        writable:
-          - '.'
-        deny:
-          - '.git'
-          - '.runok'
+        write:
+          allow:
+            - '.'
+          deny:
+            - '.git'
+            - '.runok'
       network:
         allow: false
 
