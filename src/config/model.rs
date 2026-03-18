@@ -457,6 +457,7 @@ impl JsonSchema for FsPolicy {
                 {
                     "type": "object",
                     "description": "New format with read/write sub-sections",
+                    "additionalProperties": false,
                     "properties": {
                         "read": generator.subschema_for::<FsAccessPolicy>(),
                         "write": generator.subschema_for::<FsAccessPolicy>()
@@ -465,6 +466,7 @@ impl JsonSchema for FsPolicy {
                 {
                     "type": "object",
                     "description": "Legacy format (deprecated)",
+                    "additionalProperties": false,
                     "properties": {
                         "writable": {
                             "type": ["array", "null"],

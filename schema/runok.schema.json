@@ -231,7 +231,8 @@
             "write": {
               "$ref": "#/$defs/FsAccessPolicy"
             }
-          }
+          },
+          "additionalProperties": false
         },
         {
           "description": "Legacy format (deprecated)",
@@ -255,7 +256,8 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "additionalProperties": false
         }
       ]
     },
