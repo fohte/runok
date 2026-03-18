@@ -6,9 +6,9 @@ sidebar:
 
 This page tracks changes that will be included in the next release. It is updated as pull requests are merged.
 
-## Breaking Changes
+## Highlights
 
-### Remove `definitions.commands` field
+### Breaking: Remove `definitions.commands` field ([#235](https://github.com/fohte/runok/pull/235))
 
 The `definitions.commands` configuration field has been removed. This field was parsed and merged but never referenced by the rule engine or command parser, so it had no effect at runtime. If your configuration includes `definitions.commands`, simply remove it — no other changes are needed.
 
