@@ -220,7 +220,7 @@
       }
     },
     "FsPolicy": {
-      "description": "Filesystem access policy within a sandbox preset.\n\nSupports two formats:\n\n**Legacy format** (backward compatible):\n```yaml\nfs:\n  writable: [.]\n  deny: ['<path:sensitive>']\n```\n\n**New format** with explicit read/write control:\n```yaml\nfs:\n  read:\n    allow: [/]\n    deny: [~/.ssh, ~/.gnupg]\n  write:\n    allow: [., /tmp]\n    deny: [.env, .envrc]\n```\n\nIn the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.\nRead access defaults to allow-all with no denies.",
+      "description": "Filesystem access policy within a sandbox preset.\n\nSupports two formats:\n\n**Legacy format** (backward compatible):\n```yaml\nfs:\n  writable: [.]\n  deny: ['<path:sensitive>']\n```\n\n**New format** with explicit read/write control:\n```yaml\nfs:\n  read:\n    allow: [/]\n    deny: [~/.ssh, ~/.gnupg]\n  write:\n    allow: [., /tmp]\n    deny: [.env, .envrc]\n```\n\nIn the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.\nRead access defaults to allow-all with no denies.\nThe legacy format emits a deprecation warning at parse time.",
       "type": "object",
       "properties": {
         "read": {

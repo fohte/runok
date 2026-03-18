@@ -371,6 +371,7 @@ impl SandboxPreset {
 ///
 /// In the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.
 /// Read access defaults to allow-all with no denies.
+/// The legacy format emits a deprecation warning at parse time.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct FsPolicy {
@@ -417,7 +418,6 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
     where
         D: Deserializer<'de>,
     {
-        // Try to deserialize as a generic map to detect the format
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct NewFormat {
@@ -444,17 +444,24 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
                 read: new.read,
                 write: new.write,
             }),
-            FsPolicyFormat::Legacy(legacy) => Ok(FsPolicy {
-                read: None,
-                write: if legacy.writable.is_some() || legacy.deny.is_some() {
-                    Some(FsAccessPolicy {
-                        allow: legacy.writable,
-                        deny: legacy.deny,
-                    })
-                } else {
-                    None
-                },
-            }),
+            FsPolicyFormat::Legacy(legacy) => {
+                eprintln!(
+                    "warning: sandbox fs config uses deprecated format (writable/deny). \
+                     Migrate to the new format: fs: {{ write: {{ allow: [...], deny: [...] }} }}. \
+                     See https://runok.dev/sandbox/overview/ for details."
+                );
+                Ok(FsPolicy {
+                    read: None,
+                    write: if legacy.writable.is_some() || legacy.deny.is_some() {
+                        Some(FsAccessPolicy {
+                            allow: legacy.writable,
+                            deny: legacy.deny,
+                        })
+                    } else {
+                        None
+                    },
+                })
+            }
         }
     }
 }

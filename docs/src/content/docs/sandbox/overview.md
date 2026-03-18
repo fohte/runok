@@ -55,16 +55,22 @@ The `deny` list always takes priority over `allow`. For example, if `allow` incl
 
 When `fs.read.deny` is specified, the listed paths are completely inaccessible (both read and write are blocked).
 
-:::tip[Legacy format]
-The previous `writable`/`deny` format is still supported for backward compatibility:
+:::caution[Deprecated legacy format]
+The previous `writable`/`deny` format is still accepted but deprecated. It emits a warning at parse time and will be removed in a future release. Migrate to the new `read`/`write` format.
 
 ```yaml
+# Deprecated
 fs:
   writable: ['.']
   deny: ['.git']
+
+# Equivalent new format
+fs:
+  write:
+    allow: ['.']
+    deny: ['.git']
 ```
 
-This is equivalent to `fs.write.allow: ['.']` and `fs.write.deny: ['.git']`.
 :::
 
 ### `network` — Network policy

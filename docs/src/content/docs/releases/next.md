@@ -8,34 +8,22 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
-### Breaking: sandbox `fs` config format changed to `read`/`write` sub-sections
+### Deprecated: sandbox `fs.writable`/`fs.deny` replaced by `fs.read`/`fs.write` sub-sections
 
-The sandbox `fs` section now uses explicit `read` and `write` sub-sections instead of the flat `writable`/`deny` fields. This enables a new capability: **denying read access** to specific paths.
-
-**What should I do?**
-
-Update your `definitions.sandbox` entries to use the new format:
+The sandbox `fs` section now uses explicit `read` and `write` sub-sections instead of the flat `writable`/`deny` fields. The old format still works but emits a deprecation warning and will be removed in a future release.
 
 ```yaml title="runok.yml"
-# Before (v0.2.x)
-definitions:
-  sandbox:
-    restricted:
-      fs:
-        writable: ['.']
-        deny: ['.git']
+# Deprecated (emits warning)
+fs:
+  writable: ['.']
+  deny: ['.git']
 
-# After: use read/write sub-sections
-definitions:
-  sandbox:
-    restricted:
-      fs:
-        write:
-          allow: ['.']
-          deny: ['.git']
+# New format
+fs:
+  write:
+    allow: ['.']
+    deny: ['.git']
 ```
-
-The previous `writable`/`deny` format is still accepted for backward compatibility, but the new format is recommended.
 
 ## New Features
 
