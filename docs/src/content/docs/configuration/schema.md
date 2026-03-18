@@ -261,24 +261,35 @@ definitions:
 
 ###### `fs`
 
-Filesystem access policy.
+Filesystem access policy with `read` and `write` sub-sections.
 
 **Type:** `object`\
 **Default:** None
 
-###### `fs.writable`
+###### `fs.read.deny`
+
+Paths the sandboxed process cannot read. These paths become completely inaccessible (both read and write are blocked). Supports glob patterns and `<path:name>` references.
+
+**Type:** `list[str]`\
+**Default:** `[]`
+
+###### `fs.write.allow`
 
 Directories the sandboxed process is allowed to write to.
 
 **Type:** `list[str]`\
 **Default:** `[]`
 
-###### `fs.deny`
+###### `fs.write.deny`
 
-Paths the sandboxed process is denied access to. Supports `<path:name>` references to entries in `definitions.paths`.
+Paths the sandboxed process cannot write to, even within writable directories. Supports glob patterns (`*`, `**`, `?`, `[...]`, `{a,b}`) and `<path:name>` references.
 
 **Type:** `list[str]`\
 **Default:** `[]`
+
+:::note[Legacy format]
+The previous flat format (`fs.writable` / `fs.deny`) is still accepted but deprecated. See [Sandbox Overview](/sandbox/overview/) for migration guidance.
+:::
 
 ###### `network`
 

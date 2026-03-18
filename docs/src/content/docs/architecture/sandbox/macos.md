@@ -32,6 +32,10 @@ runok generates an SBPL profile with the following structure:
 ;; Re-deny writes to protected subpaths (deny wins over allow)
 (deny file-write* (subpath "/path/to/writable/.git"))
 
+;; Block read+write to read-denied paths (e.g., ~/.ssh)
+(deny file-read* (subpath "/Users/me/.ssh"))
+(deny file-write* (subpath "/Users/me/.ssh"))
+
 ;; Always allow /dev/null writes (many tools depend on it)
 (allow file-write* (literal "/dev/null"))
 
@@ -42,7 +46,7 @@ runok generates an SBPL profile with the following structure:
 
 Key design decisions:
 
-- **`(allow default)`** is used as the base, then `(deny file-write*)` blocks all writes. This means read access is always permitted — the sandbox only restricts writes and network.
+- **`(allow default)`** is used as the base, then `(deny file-write*)` blocks all writes. Read access is permitted by default, but can be selectively denied via `fs.read.deny` using `(deny file-read*)` rules. Seatbelt technically supports `deny file-read*` — runok uses it when `fs.read.deny` paths are configured.
 - **Deny rules take priority** over allow rules in Seatbelt, so `deny` entries in the sandbox config are enforced even within writable directories.
 - **Unix domain sockets** are always allowed because many development tools require local inter-process communication.
 
