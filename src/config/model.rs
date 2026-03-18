@@ -349,31 +349,9 @@ impl SandboxPreset {
 
 /// Filesystem access policy within a sandbox preset.
 ///
-/// Supports two formats:
-///
-/// **Legacy format** (backward compatible):
-/// ```yaml
-/// fs:
-///   writable: [.]
-///   deny: ['<path:sensitive>']
-/// ```
-///
-/// **New format** with explicit read/write control:
-/// ```yaml
-/// fs:
-///   read:
-///     allow: [/]
-///     deny: [~/.ssh, ~/.gnupg]
-///   write:
-///     allow: [., /tmp]
-///     deny: [.env, .envrc]
-/// ```
-///
-/// In the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.
-/// Read access defaults to allow-all with no denies.
-/// The legacy format emits a deprecation warning at parse time.
+/// Supports a new `read`/`write` format and a deprecated legacy `writable`/`deny` format
+/// (the latter emits a warning at parse time).
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct FsPolicy {
     /// Read access policy.
     pub read: Option<FsAccessPolicy>,
@@ -446,9 +424,8 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
             }),
             FsPolicyFormat::Legacy(legacy) => {
                 eprintln!(
-                    "warning: sandbox fs config uses deprecated format (writable/deny). \
-                     Migrate to the new format: fs: {{ write: {{ allow: [...], deny: [...] }} }}. \
-                     See https://runok.dev/sandbox/overview/ for details."
+                    "warning: sandbox fs 'writable'/'deny' fields are deprecated, \
+                     use 'write: {{ allow: [...], deny: [...] }}' instead"
                 );
                 Ok(FsPolicy {
                     read: None,
@@ -463,6 +440,44 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
                 })
             }
         }
+    }
+}
+
+#[cfg(any(feature = "config-schema", test))]
+impl JsonSchema for FsPolicy {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "FsPolicy".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use schemars::json_schema;
+
+        json_schema!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "New format with read/write sub-sections",
+                    "properties": {
+                        "read": generator.subschema_for::<FsAccessPolicy>(),
+                        "write": generator.subschema_for::<FsAccessPolicy>()
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "Legacy format (deprecated)",
+                    "properties": {
+                        "writable": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" }
+                        },
+                        "deny": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" }
+                        }
+                    }
+                }
+            ]
+        })
     }
 }
 

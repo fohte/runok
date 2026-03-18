@@ -84,11 +84,28 @@ pub fn build_bwrap_args(
                     expand_and_hide(&full.to_string_lossy(), &mut args);
                 }
             }
+        } else if deny_path.is_relative() {
+            // Resolve relative paths against each writable_root
+            for root in &policy.writable_roots {
+                let full_path = root.join(&path_str);
+                if full_path.is_dir() {
+                    args.extend([
+                        "--tmpfs".to_string(),
+                        full_path.to_string_lossy().to_string(),
+                    ]);
+                } else if full_path.exists() {
+                    args.extend([
+                        "--ro-bind".to_string(),
+                        "/dev/null".to_string(),
+                        full_path.to_string_lossy().to_string(),
+                    ]);
+                }
+            }
         } else if deny_path.is_dir() {
-            // For directories, use tmpfs to hide contents
+            // Absolute path: for directories, use tmpfs to hide contents
             args.extend(["--tmpfs".to_string(), path_str]);
         } else if deny_path.exists() {
-            // For files, bind-mount /dev/null over them
+            // Absolute path: for files, bind-mount /dev/null over them
             args.extend(["--ro-bind".to_string(), "/dev/null".to_string(), path_str]);
         }
     }

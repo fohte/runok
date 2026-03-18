@@ -53,7 +53,7 @@ The `deny` list always takes priority over `allow`. For example, if `allow` incl
 | ------ | ---------- | --------------------------------------------------------------------------------------------- |
 | `deny` | `string[]` | Paths the sandboxed process cannot read. Supports glob patterns and `<path:name>` references. |
 
-When `fs.read.deny` is specified, the listed paths are completely inaccessible (both read and write are blocked).
+`fs.read.deny` blocks read access to the listed paths. Since write access requires read access, these paths become completely inaccessible to the sandboxed process.
 
 :::caution[Deprecated legacy format]
 The previous `writable`/`deny` format is still accepted but deprecated. It emits a warning at parse time and will be removed in a future release. Migrate to the new `read`/`write` format.

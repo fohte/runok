@@ -4,11 +4,11 @@ use serde_json::Value;
 
 use super::helpers::TestEnv;
 
-// === New fs format: read/write with allow/deny ===
+// === Sandbox preset in JSON output: parameterized ===
 
 #[rstest]
-fn check_new_fs_format_parses_correctly() {
-    let env = TestEnv::new(indoc! {"
+#[case::new_format_full(
+    indoc! {"
         rules:
           - allow: 'cat *'
             sandbox: restricted
@@ -23,32 +23,12 @@ fn check_new_fs_format_parses_correctly() {
                   deny: [.env, .envrc]
               network:
                 allow: true
-    "});
-    let assert = env
-        .command()
-        .args([
-            "check",
-            "--output-format",
-            "json",
-            "--",
-            "cat",
-            "/etc/passwd",
-        ])
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert!(
-        json["sandbox"].is_object(),
-        "sandbox info should be present"
-    );
-    assert_eq!(json["sandbox"]["preset"], "restricted");
-}
-
-#[rstest]
-fn check_new_fs_format_write_only() {
-    let env = TestEnv::new(indoc! {"
+    "},
+    &["cat", "/etc/passwd"],
+    "restricted",
+)]
+#[case::new_format_write_only(
+    indoc! {"
         rules:
           - allow: 'echo *'
             sandbox: write_only
@@ -59,21 +39,12 @@ fn check_new_fs_format_write_only() {
                 write:
                   allow: [.]
                   deny: [.git]
-    "});
-    let assert = env
-        .command()
-        .args(["check", "--output-format", "json", "--", "echo", "hello"])
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert_eq!(json["sandbox"]["preset"], "write_only");
-}
-
-#[rstest]
-fn check_new_fs_format_read_deny_only() {
-    let env = TestEnv::new(indoc! {"
+    "},
+    &["echo", "hello"],
+    "write_only",
+)]
+#[case::new_format_read_deny_only(
+    indoc! {"
         rules:
           - allow: 'cat *'
             sandbox: read_deny
@@ -83,23 +54,12 @@ fn check_new_fs_format_read_deny_only() {
               fs:
                 read:
                   deny: [~/.ssh]
-    "});
-    let assert = env
-        .command()
-        .args(["check", "--output-format", "json", "--", "cat", "file.txt"])
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert_eq!(json["sandbox"]["preset"], "read_deny");
-}
-
-// === Backward compatibility: legacy fs format ===
-
-#[rstest]
-fn check_legacy_fs_format_still_works() {
-    let env = TestEnv::new(indoc! {"
+    "},
+    &["cat", "file.txt"],
+    "read_deny",
+)]
+#[case::legacy_format(
+    indoc! {"
         rules:
           - allow: 'echo *'
             sandbox: legacy
@@ -111,71 +71,37 @@ fn check_legacy_fs_format_still_works() {
                 deny: [.git]
               network:
                 allow: false
-    "});
+    "},
+    &["echo", "hello"],
+    "legacy",
+)]
+fn check_sandbox_preset_in_json_output(
+    #[case] config: &str,
+    #[case] command: &[&str],
+    #[case] expected_preset: &str,
+) {
+    let env = TestEnv::new(config);
     let assert = env
         .command()
-        .args(["check", "--output-format", "json", "--", "echo", "hello"])
+        .args(["check", "--output-format", "json", "--"])
+        .args(command)
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
     let json: Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
     assert_eq!(json["decision"], "allow");
-    assert_eq!(json["sandbox"]["preset"], "legacy");
+    assert!(
+        json["sandbox"].is_object(),
+        "sandbox info should be present"
+    );
+    assert_eq!(json["sandbox"]["preset"], expected_preset);
 }
 
-// === Validation: new format passes runok test ===
+// === Path reference expansion in new format: parameterized ===
 
 #[rstest]
-fn test_command_with_new_fs_format() {
-    let env = TestEnv::new(indoc! {"
-        rules:
-          - allow: 'cat *'
-            sandbox: restricted
-            tests:
-              - allow: 'cat /etc/passwd'
-        definitions:
-          sandbox:
-            restricted:
-              fs:
-                read:
-                  deny: [~/.ssh]
-                write:
-                  allow: [., /tmp]
-    "});
-    env.command()
-        .args(["test"])
-        .assert()
-        .code(0)
-        .stdout(predicates::str::contains("1 passed"));
-}
-
-#[rstest]
-fn test_command_with_legacy_fs_format() {
-    let env = TestEnv::new(indoc! {"
-        rules:
-          - allow: 'echo *'
-            sandbox: legacy
-            tests:
-              - allow: 'echo hello'
-        definitions:
-          sandbox:
-            legacy:
-              fs:
-                writable: [.]
-                deny: [.git]
-    "});
-    env.command()
-        .args(["test"])
-        .assert()
-        .code(0)
-        .stdout(predicates::str::contains("1 passed"));
-}
-
-// === Path reference expansion in new format ===
-
-#[rstest]
-fn check_path_ref_in_new_format_write_deny() {
-    let env = TestEnv::new(indoc! {"
+#[case::write_deny(
+    indoc! {"
         rules:
           - allow: 'echo *'
             sandbox: with_refs
@@ -190,21 +116,11 @@ fn check_path_ref_in_new_format_write_deny() {
                 write:
                   allow: [.]
                   deny: ['<path:sensitive>']
-    "});
-    let assert = env
-        .command()
-        .args(["check", "--output-format", "json", "--", "echo", "hello"])
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert_eq!(json["sandbox"]["preset"], "with_refs");
-}
-
-#[rstest]
-fn check_path_ref_in_new_format_read_deny() {
-    let env = TestEnv::new(indoc! {"
+    "},
+    &["echo", "hello"],
+)]
+#[case::read_deny(
+    indoc! {"
         rules:
           - allow: 'cat *'
             sandbox: with_refs
@@ -218,16 +134,65 @@ fn check_path_ref_in_new_format_read_deny() {
               fs:
                 read:
                   deny: ['<path:secrets>']
-    "});
+    "},
+    &["cat", "file.txt"],
+)]
+fn check_path_ref_in_new_format(#[case] config: &str, #[case] command: &[&str]) {
+    let env = TestEnv::new(config);
     let assert = env
         .command()
-        .args(["check", "--output-format", "json", "--", "cat", "file.txt"])
+        .args(["check", "--output-format", "json", "--"])
+        .args(command)
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
     let json: Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
     assert_eq!(json["decision"], "allow");
     assert_eq!(json["sandbox"]["preset"], "with_refs");
+}
+
+// === Validation: runok test with different formats: parameterized ===
+
+#[rstest]
+#[case::new_format(
+    indoc! {"
+        rules:
+          - allow: 'cat *'
+            sandbox: restricted
+            tests:
+              - allow: 'cat /etc/passwd'
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                read:
+                  deny: [~/.ssh]
+                write:
+                  allow: [., /tmp]
+    "},
+)]
+#[case::legacy_format(
+    indoc! {"
+        rules:
+          - allow: 'echo *'
+            sandbox: legacy
+            tests:
+              - allow: 'echo hello'
+        definitions:
+          sandbox:
+            legacy:
+              fs:
+                writable: [.]
+                deny: [.git]
+    "},
+)]
+fn test_command_with_fs_format(#[case] config: &str) {
+    let env = TestEnv::new(config);
+    env.command()
+        .args(["test"])
+        .assert()
+        .code(0)
+        .stdout(predicates::str::contains("1 passed"));
 }
 
 // === Validation error: undefined path ref in new format ===

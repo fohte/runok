@@ -220,32 +220,44 @@
       }
     },
     "FsPolicy": {
-      "description": "Filesystem access policy within a sandbox preset.\n\nSupports two formats:\n\n**Legacy format** (backward compatible):\n```yaml\nfs:\n  writable: [.]\n  deny: ['<path:sensitive>']\n```\n\n**New format** with explicit read/write control:\n```yaml\nfs:\n  read:\n    allow: [/]\n    deny: [~/.ssh, ~/.gnupg]\n  write:\n    allow: [., /tmp]\n    deny: [.env, .envrc]\n```\n\nIn the legacy format, `writable` maps to `write.allow` and `deny` maps to `write.deny`.\nRead access defaults to allow-all with no denies.\nThe legacy format emits a deprecation warning at parse time.",
-      "type": "object",
-      "properties": {
-        "read": {
-          "description": "Read access policy.",
-          "anyOf": [
-            {
+      "oneOf": [
+        {
+          "description": "New format with read/write sub-sections",
+          "type": "object",
+          "properties": {
+            "read": {
               "$ref": "#/$defs/FsAccessPolicy"
             },
-            {
-              "type": "null"
+            "write": {
+              "$ref": "#/$defs/FsAccessPolicy"
             }
-          ]
+          }
         },
-        "write": {
-          "description": "Write access policy.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FsAccessPolicy"
+        {
+          "description": "Legacy format (deprecated)",
+          "type": "object",
+          "properties": {
+            "deny": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             },
-            {
-              "type": "null"
+            "writable": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             }
-          ]
+          }
         }
-      }
+      ]
     },
     "InlineTestEntry": {
       "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
