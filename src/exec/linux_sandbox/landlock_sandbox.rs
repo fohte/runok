@@ -124,6 +124,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user/project")],
             read_only_subpaths: vec![PathBuf::from("/home/user/project/.git")],
+            read_deny_paths: vec![],
             network_allowed: true,
         },
         vec![
@@ -137,6 +138,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: false,
         },
         vec![
@@ -153,6 +155,7 @@ mod tests {
             read_only_subpaths: vec![
                 PathBuf::from("/workspace/.git"),
             ],
+            read_deny_paths: vec![],
             network_allowed: false,
         },
         vec![

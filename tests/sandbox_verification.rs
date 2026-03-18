@@ -83,6 +83,7 @@ fn sandbox_denies_write_outside_writable_roots() {
     let policy = SandboxPolicy {
         writable_roots: vec![allowed_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -109,6 +110,7 @@ fn sandbox_allows_write_to_writable_root() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -140,6 +142,7 @@ fn sandbox_denies_write_to_read_only_subpath() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![git_dir],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -176,6 +179,7 @@ fn sandbox_allows_write_outside_read_only_subpath() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![git_dir],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -203,6 +207,7 @@ fn sandbox_denies_network_when_not_allowed() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: false,
     };
 
@@ -243,6 +248,7 @@ fn sandbox_allows_read_when_writes_denied() {
     let policy = SandboxPolicy {
         writable_roots: vec![],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -269,6 +275,7 @@ fn sandbox_runs_command_successfully() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -285,6 +292,7 @@ fn sandbox_preserves_nonzero_exit_code() {
     let policy = SandboxPolicy {
         writable_roots: vec![],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 

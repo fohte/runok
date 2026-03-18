@@ -217,6 +217,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![PathBuf::from("/home/user/project")],
             read_only_subpaths: vec![PathBuf::from("/home/user/project/.git")],
+            read_deny_paths: vec![],
             network_allowed: false,
         }
     }
@@ -275,6 +276,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed,
         };
         let args = build_bwrap_args(
@@ -348,6 +350,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/home/user")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -368,6 +371,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -388,6 +392,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -408,6 +413,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp/myproject")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -492,6 +498,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -527,6 +534,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(".env*")],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -559,6 +567,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -593,6 +602,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
