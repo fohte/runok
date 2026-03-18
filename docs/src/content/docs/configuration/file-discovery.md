@@ -84,7 +84,6 @@ Different fields use different merge strategies:
 | `definitions.paths`    | Per-key append   | Values for each key are concatenated (deduplicated). |
 | `definitions.sandbox`  | Per-key override | Higher-priority layer replaces the entire preset.    |
 | `definitions.wrappers` | Append           | Lists are concatenated.                              |
-| `definitions.commands` | Append           | Lists are concatenated.                              |
 
 ### Example
 

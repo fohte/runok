@@ -16,7 +16,7 @@ pub struct Config {
     pub defaults: Option<Defaults>,
     /// Ordered list of permission rules evaluated against each command.
     pub rules: Option<Vec<RuleEntry>>,
-    /// Reusable definitions for paths, sandbox presets, wrappers, and commands.
+    /// Reusable definitions for paths, sandbox presets, wrappers, and variables.
     pub definitions: Option<Definitions>,
     /// Audit log settings.
     pub audit: Option<AuditConfig>,
@@ -106,7 +106,7 @@ pub struct TestSection {
     pub cases: Option<Vec<InlineTestEntry>>,
 }
 
-/// Reusable definitions for paths, sandbox presets, wrappers, and commands.
+/// Reusable definitions for paths, sandbox presets, wrappers, and variables.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Definitions {
@@ -116,8 +116,6 @@ pub struct Definitions {
     pub sandbox: Option<HashMap<String, SandboxPreset>>,
     /// Wrapper command patterns for recursive evaluation (e.g., `sudo <cmd>`).
     pub wrappers: Option<Vec<String>>,
-    /// Additional command patterns to recognize.
-    pub commands: Option<Vec<String>>,
     /// Typed variable definitions referenced by `<var:name>` in rule patterns.
     pub vars: Option<HashMap<String, VarDefinition>>,
 }
@@ -504,7 +502,7 @@ impl Config {
 
     /// Merge two configs. `self` is the base (e.g. global), `other` is the override (e.g. local).
     ///
-    /// - extends / rules / definitions.wrappers / definitions.commands: append
+    /// - extends / rules / definitions.wrappers: append
     /// - defaults.action / defaults.sandbox: override (local wins)
     /// - definitions.paths: per-key append (values concatenated, duplicates removed)
     /// - definitions.sandbox: per-key override
@@ -549,7 +547,7 @@ impl Config {
                 paths: Self::merge_paths(b.paths, o.paths),
                 sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
                 wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
-                commands: Self::merge_vecs(b.commands, o.commands),
+
                 vars: Self::merge_vars(b.vars, o.vars),
             }),
         }
@@ -1154,18 +1152,9 @@ mod tests {
         "},
         vec!["sudo <cmd>", "bash -c <cmd>", "xargs <cmd>"],
     )]
-    #[case::commands(
-        indoc! {"
-            definitions:
-              commands:
-                - 'git commit'
-                - 'git push'
-        "},
-        vec!["git commit", "git push"],
-    )]
     fn parse_definitions_string_lists(#[case] yaml: &str, #[case] expected: Vec<&str>) {
         let defs = parse_config(yaml).unwrap().definitions.unwrap();
-        let actual = defs.wrappers.or(defs.commands).unwrap();
+        let actual = defs.wrappers.unwrap();
         let actual_refs: Vec<&str> = actual.iter().map(|s| s.as_str()).collect();
         assert_eq!(actual_refs, expected);
     }
@@ -1936,27 +1925,6 @@ mod tests {
         let result = base.merge(over);
         let wrappers = result.definitions.unwrap().wrappers.unwrap();
         assert_eq!(wrappers, vec!["sudo <cmd>", "bash -c <cmd>"]);
-    }
-
-    #[test]
-    fn merge_definitions_commands_appended() {
-        let base = Config {
-            definitions: Some(Definitions {
-                commands: Some(vec!["git commit".to_string()]),
-                ..Definitions::default()
-            }),
-            ..Config::default()
-        };
-        let over = Config {
-            definitions: Some(Definitions {
-                commands: Some(vec!["git push".to_string()]),
-                ..Definitions::default()
-            }),
-            ..Config::default()
-        };
-        let result = base.merge(over);
-        let commands = result.definitions.unwrap().commands.unwrap();
-        assert_eq!(commands, vec!["git commit", "git push"]);
     }
 
     #[test]
