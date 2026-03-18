@@ -27,7 +27,7 @@
       ]
     },
     "definitions": {
-      "description": "Reusable definitions for paths, sandbox presets, wrappers, and commands.",
+      "description": "Reusable definitions for paths, sandbox presets, wrappers, and variables.",
       "anyOf": [
         {
           "$ref": "#/$defs/Definitions"
@@ -135,19 +135,9 @@
       }
     },
     "Definitions": {
-      "description": "Reusable definitions for paths, sandbox presets, wrappers, and commands.",
+      "description": "Reusable definitions for paths, sandbox presets, wrappers, and variables.",
       "type": "object",
       "properties": {
-        "commands": {
-          "description": "Additional command patterns to recognize.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
         "paths": {
           "description": "Named path lists referenced by `<path:name>` in sandbox deny rules.",
           "type": [

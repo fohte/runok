@@ -199,7 +199,7 @@ Inline test cases for this rule. Each entry specifies the expected decision and 
 
 ### `definitions`
 
-Reusable definitions for paths, variables, sandbox presets, wrappers, and commands.
+Reusable definitions for paths, variables, sandbox presets, and wrappers.
 
 **Type:** `object`\
 **Default:** `{}`\
@@ -310,19 +310,6 @@ definitions:
   wrappers:
     - 'sudo <cmd>'
     - 'env * <cmd>'
-```
-
-#### `definitions.commands`
-
-Additional command patterns to recognize during parsing.
-
-**Type:** `list[str]`\
-**Default:** `[]`
-
-```yaml title="runok.yml"
-definitions:
-  commands:
-    - mycustomtool
 ```
 
 #### `definitions.vars`
@@ -499,8 +486,6 @@ definitions:
         allow: false
   wrappers:
     - 'sudo <cmd>'
-  commands:
-    - mycustomtool
 
 audit:
   enabled: true

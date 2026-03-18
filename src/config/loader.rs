@@ -439,8 +439,6 @@ mod tests {
                       - "/var/log/**"
                   wrappers:
                     - "sudo <cmd>"
-                  commands:
-                    - "git commit"
             "#},
         );
         env.write_local(
@@ -452,8 +450,6 @@ mod tests {
                       - "~/.ssh/**"
                   wrappers:
                     - "bash -c <cmd>"
-                  commands:
-                    - "git push"
             "#},
         );
 
@@ -476,7 +472,6 @@ mod tests {
         assert_eq!(paths["logs"], vec!["/var/log/**"]);
 
         assert_eq!(defs.wrappers.unwrap(), vec!["sudo <cmd>", "bash -c <cmd>"]);
-        assert_eq!(defs.commands.unwrap(), vec!["git commit", "git push"]);
     }
 
     #[rstest]
