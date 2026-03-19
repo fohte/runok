@@ -29,18 +29,10 @@ fn runok_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_runok"))
 }
 
-/// Check if bubblewrap is available on the system.
-fn bwrap_available() -> bool {
-    Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// Run a command inside the sandbox with the given policy.
 ///
 /// Returns the exit code of the runok binary.
+/// Panics if bubblewrap is not installed.
 fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
     let policy_json = serde_json::to_string(policy).expect("failed to serialize policy");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
@@ -67,10 +59,6 @@ fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
 
 #[rstest]
 fn sandbox_denies_write_outside_writable_roots() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -100,10 +88,6 @@ fn sandbox_denies_write_outside_writable_roots() {
 
 #[rstest]
 fn sandbox_allows_write_to_writable_root() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
     let test_file = canonical_dir.join("allowed_write_file");
@@ -127,10 +111,6 @@ fn sandbox_allows_write_to_writable_root() {
 
 #[rstest]
 fn sandbox_denies_write_to_read_only_subpath() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -162,10 +142,6 @@ fn sandbox_denies_write_to_read_only_subpath() {
 
 #[rstest]
 fn sandbox_allows_write_outside_read_only_subpath() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -198,10 +174,6 @@ fn sandbox_allows_write_outside_read_only_subpath() {
 
 #[rstest]
 fn sandbox_denies_network_when_not_allowed() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -239,10 +211,6 @@ fn sandbox_denies_network_when_not_allowed() {
 
 #[rstest]
 fn sandbox_allows_read_when_writes_denied() {
-    if !bwrap_available() {
-        return;
-    }
-
     // Read /etc/hostname which is bind-mounted read-only by bwrap (--ro-bind / /).
     // Using a host-filesystem file avoids the --tmpfs /tmp issue where tmpdir
     // contents are hidden inside the sandbox.
@@ -266,10 +234,6 @@ fn sandbox_allows_read_when_writes_denied() {
 
 #[rstest]
 fn sandbox_read_deny_blocks_file_read() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -305,10 +269,6 @@ fn sandbox_read_deny_blocks_file_read() {
 
 #[rstest]
 fn sandbox_read_deny_blocks_directory_listing() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -332,10 +292,6 @@ fn sandbox_read_deny_blocks_directory_listing() {
 
 #[rstest]
 fn sandbox_read_deny_does_not_affect_other_paths() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -369,10 +325,6 @@ fn sandbox_read_deny_does_not_affect_other_paths() {
 
 #[rstest]
 fn sandbox_runs_command_successfully() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -389,10 +341,6 @@ fn sandbox_runs_command_successfully() {
 
 #[rstest]
 fn sandbox_preserves_nonzero_exit_code() {
-    if !bwrap_available() {
-        return;
-    }
-
     let policy = SandboxPolicy {
         writable_roots: vec![],
         read_only_subpaths: vec![],
