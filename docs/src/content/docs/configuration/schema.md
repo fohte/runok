@@ -481,18 +481,26 @@ definitions:
   sandbox:
     standard:
       fs:
-        writable:
-          - .
-        deny:
-          - <path:secrets>
+        read:
+          deny:
+            - <path:secrets>
+        write:
+          allow:
+            - .
+          deny:
+            - <path:secrets>
       network:
         allow: true
     strict:
       fs:
-        writable:
-          - ./src
-        deny:
-          - <path:secrets>
+        read:
+          deny:
+            - <path:secrets>
+        write:
+          allow:
+            - ./src
+          deny:
+            - <path:secrets>
       network:
         allow: false
   wrappers:
