@@ -232,95 +232,49 @@ fn sandbox_allows_read_when_writes_denied() {
 
 // === Read deny ===
 
+/// Verifies that read-denied paths are inaccessible while other paths remain
+/// readable. Each case creates a denied directory with a file inside it and
+/// an allowed file outside it.
 #[rstest]
-fn sandbox_read_deny_blocks_file_read() {
+#[case::file_in_denied_dir("secrets", "key.pem")]
+#[case::ssh_dir(".ssh", "id_rsa")]
+fn sandbox_read_deny_blocks_file_access(
+    #[case] denied_dir_name: &str,
+    #[case] denied_file_name: &str,
+) {
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
-    let secret_dir = canonical_dir.join("secrets");
-    std::fs::create_dir(&secret_dir).unwrap();
-    let secret_file = secret_dir.join("key.pem");
-    std::fs::write(&secret_file, "secret-content").unwrap();
+    let denied_dir = canonical_dir.join(denied_dir_name);
+    std::fs::create_dir(&denied_dir).unwrap();
+    let denied_file = denied_dir.join(denied_file_name);
+    std::fs::write(&denied_file, "secret").unwrap();
 
-    let normal_file = canonical_dir.join("normal.txt");
-    std::fs::write(&normal_file, "normal-content").unwrap();
+    let allowed_file = canonical_dir.join("allowed.txt");
+    std::fs::write(&allowed_file, "public").unwrap();
 
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
-        read_deny_paths: vec![secret_dir],
+        read_deny_paths: vec![denied_dir],
         network_allowed: true,
     };
 
-    // Normal file is readable
+    // File inside denied dir is NOT readable
     let exit_code = run_sandboxed(
         &policy,
-        &["sh", "-c", &format!("cat {}", normal_file.display())],
+        &["sh", "-c", &format!("cat {}", denied_file.display())],
     );
-    assert_eq!(exit_code, 0, "reading normal file should succeed");
+    assert_ne!(exit_code, 0, "reading file in denied dir should fail");
 
-    // Secret file is NOT readable
+    // File outside denied dir is readable
     let exit_code = run_sandboxed(
         &policy,
-        &["sh", "-c", &format!("cat {}", secret_file.display())],
-    );
-    assert_ne!(exit_code, 0, "reading read-denied file should fail");
-}
-
-#[rstest]
-fn sandbox_read_deny_blocks_directory_listing() {
-    let tmpdir = tempfile::tempdir().unwrap();
-    let canonical_dir = tmpdir.path().canonicalize().unwrap();
-
-    let protected_dir = canonical_dir.join(".ssh");
-    std::fs::create_dir(&protected_dir).unwrap();
-    std::fs::write(protected_dir.join("id_rsa"), "private-key").unwrap();
-
-    let policy = SandboxPolicy {
-        writable_roots: vec![canonical_dir],
-        read_only_subpaths: vec![],
-        read_deny_paths: vec![protected_dir.clone()],
-        network_allowed: true,
-    };
-
-    // On Linux, bwrap uses tmpfs to hide read-denied directories, so `ls`
-    // sees an empty directory (exit 0). Verify by reading a file inside it.
-    let id_rsa = protected_dir.join("id_rsa");
-    let exit_code = run_sandboxed(&policy, &["sh", "-c", &format!("cat {}", id_rsa.display())]);
-    assert_ne!(
-        exit_code, 0,
-        "reading file inside read-denied directory should fail"
-    );
-}
-
-#[rstest]
-fn sandbox_read_deny_does_not_affect_other_paths() {
-    let tmpdir = tempfile::tempdir().unwrap();
-    let canonical_dir = tmpdir.path().canonicalize().unwrap();
-
-    let secret_dir = canonical_dir.join("secrets");
-    std::fs::create_dir(&secret_dir).unwrap();
-
-    let src_dir = canonical_dir.join("src");
-    std::fs::create_dir(&src_dir).unwrap();
-    let readable_file = src_dir.join("main.rs");
-    std::fs::write(&readable_file, "fn main() {}").unwrap();
-
-    let policy = SandboxPolicy {
-        writable_roots: vec![canonical_dir],
-        read_only_subpaths: vec![],
-        read_deny_paths: vec![secret_dir],
-        network_allowed: true,
-    };
-
-    // Files outside read-deny paths are still readable
-    let exit_code = run_sandboxed(
-        &policy,
-        &["sh", "-c", &format!("cat {}", readable_file.display())],
+        &["sh", "-c", &format!("cat {}", allowed_file.display())],
     );
     assert_eq!(
         exit_code, 0,
-        "reading files outside read-deny paths should succeed"
+        "reading file outside denied dir should succeed"
     );
 }
 

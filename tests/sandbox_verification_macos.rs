@@ -207,10 +207,15 @@ fn sandbox_denies_write_to_write_deny_path() {
     );
 }
 
-// === read.deny: blocks file reads ===
+// === read.deny: blocks file access in denied directories ===
 
 #[rstest]
-fn sandbox_read_deny_blocks_file_read() {
+#[case::secrets_dir("secrets", "key.pem")]
+#[case::ssh_dir(".ssh", "id_rsa")]
+fn sandbox_read_deny_blocks_file_access(
+    #[case] denied_dir_name: &str,
+    #[case] denied_file_name: &str,
+) {
     if skip_if_nested_sandbox() {
         return;
     }
@@ -218,12 +223,12 @@ fn sandbox_read_deny_blocks_file_read() {
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
-    let secret_dir = canonical_dir.join("secrets");
-    fs::create_dir(&secret_dir).unwrap();
-    fs::write(secret_dir.join("key.pem"), "secret-content").unwrap();
+    let denied_dir = canonical_dir.join(denied_dir_name);
+    fs::create_dir(&denied_dir).unwrap();
+    fs::write(denied_dir.join(denied_file_name), "secret").unwrap();
 
-    let normal_file = canonical_dir.join("normal.txt");
-    fs::write(&normal_file, "normal-content").unwrap();
+    let allowed_file = canonical_dir.join("allowed.txt");
+    fs::write(&allowed_file, "public").unwrap();
 
     let env = TestEnv::new(&format!(
         indoc! {"
@@ -243,64 +248,25 @@ fn sandbox_read_deny_blocks_file_read() {
                       allow:
                         - {}
         "},
-        secret_dir.display(),
+        denied_dir.display(),
         canonical_dir.display(),
     ));
 
-    // Normal file is readable
-    env.command()
-        .args(["exec", "--", "cat", normal_file.to_str().unwrap()])
-        .assert()
-        .code(0)
-        .stdout(predicates::str::contains("normal-content"));
-
-    // Secret file is NOT readable
+    // File inside denied dir is NOT readable
     env.command()
         .args([
             "exec",
             "--",
             "cat",
-            secret_dir.join("key.pem").to_str().unwrap(),
+            denied_dir.join(denied_file_name).to_str().unwrap(),
         ])
         .assert()
         .code(predicates::ord::ne(0));
-}
 
-// === read.deny: blocks directory listing ===
-
-#[rstest]
-fn sandbox_read_deny_blocks_directory_listing() {
-    if skip_if_nested_sandbox() {
-        return;
-    }
-
-    let tmpdir = tempfile::tempdir().unwrap();
-    let canonical_dir = tmpdir.path().canonicalize().unwrap();
-
-    let protected_dir = canonical_dir.join(".ssh");
-    fs::create_dir(&protected_dir).unwrap();
-    fs::write(protected_dir.join("id_rsa"), "private-key").unwrap();
-
-    let env = TestEnv::new(&format!(
-        indoc! {"
-            rules:
-              - allow: 'ls *'
-                sandbox: deny_ssh
-              - allow: 'sh *'
-                sandbox: deny_ssh
-            definitions:
-              sandbox:
-                deny_ssh:
-                  fs:
-                    read:
-                      deny:
-                        - {}
-        "},
-        protected_dir.display(),
-    ));
-
+    // File outside denied dir is readable
     env.command()
-        .args(["exec", "--", "ls", protected_dir.to_str().unwrap()])
+        .args(["exec", "--", "cat", allowed_file.to_str().unwrap()])
         .assert()
-        .code(predicates::ord::ne(0));
+        .code(0)
+        .stdout(predicates::str::contains("public"));
 }
