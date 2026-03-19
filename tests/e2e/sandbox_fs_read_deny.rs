@@ -6,7 +6,7 @@ use super::helpers::TestEnv;
 // === Legacy format emits deprecation warning ===
 
 #[rstest]
-fn exec_legacy_format_emits_deprecation_warning() {
+fn legacy_format_emits_deprecation_warning() {
     let env = TestEnv::new(indoc! {"
         rules:
           - allow: 'echo *'
@@ -18,16 +18,16 @@ fn exec_legacy_format_emits_deprecation_warning() {
                 writable: [.]
                 deny: [.git]
     "});
+    // Use check to avoid sandbox execution (bwrap not available on all CI)
     env.command()
-        .args(["exec", "--", "echo", "hello"])
+        .args(["check", "--", "echo", "hello"])
         .assert()
         .code(0)
-        .stderr(predicates::str::contains("deprecated"))
-        .stdout(predicates::str::contains("hello"));
+        .stderr(predicates::str::contains("deprecated"));
 }
 
 #[rstest]
-fn exec_new_format_does_not_emit_deprecation_warning() {
+fn new_format_does_not_emit_deprecation_warning() {
     let env = TestEnv::new(indoc! {"
         rules:
           - allow: 'echo *'
@@ -41,11 +41,10 @@ fn exec_new_format_does_not_emit_deprecation_warning() {
                   deny: [.git]
     "});
     env.command()
-        .args(["exec", "--", "echo", "hello"])
+        .args(["check", "--", "echo", "hello"])
         .assert()
         .code(0)
-        .stderr(predicates::str::is_empty())
-        .stdout(predicates::str::contains("hello"));
+        .stderr(predicates::str::is_empty());
 }
 
 // === Config validation: undefined path ref in read.deny ===
