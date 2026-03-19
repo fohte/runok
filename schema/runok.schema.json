@@ -210,7 +210,7 @@
       }
     },
     "FsPolicy": {
-      "oneOf": [
+      "anyOf": [
         {
           "description": "New format with read/write sub-sections",
           "type": "object",

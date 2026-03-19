@@ -451,7 +451,7 @@ impl JsonSchema for FsPolicy {
         use schemars::json_schema;
 
         json_schema!({
-            "oneOf": [
+            "anyOf": [
                 {
                     "type": "object",
                     "description": "New format with read/write sub-sections",
