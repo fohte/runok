@@ -44,14 +44,12 @@ done
   echo "Released on ${release_date}. [Full changelog](https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${TAG_NAME})"
   echo ""
 
-  # Append the body of next.md (skip frontmatter and the description line)
+  # Append the body of next.md (skip frontmatter, start from first ## heading)
   awk '
-    BEGIN { fm=0; skip_header=1 }
-    fm<2 && /^---$/ { fm++; next }
-    fm<2 { next }
-    skip_header && /^$/ { next }
-    skip_header && /^This page tracks changes/ { next }
-    { skip_header=0; print }
+    /^---$/ { c++; next }
+    c == 1 { next }
+    c > 1 && /^## / { p=1 }
+    p { print }
   ' "$releases_dir/next.md"
 } > "$releases_dir/v${version_slug}.md"
 
