@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
-### Deprecated: sandbox `fs.writable`/`fs.deny` replaced by `fs.read`/`fs.write` sub-sections
+### Deprecated: sandbox `fs.writable`/`fs.deny` replaced by `fs.read`/`fs.write` sub-sections ([#236](https://github.com/fohte/runok/pull/236))
 
 The sandbox `fs` section now uses explicit `read` and `write` sub-sections instead of the flat `writable`/`deny` fields. The old format still works but emits a deprecation warning and will be removed in a future release.
 
@@ -27,7 +27,7 @@ fs:
 
 ## New Features
 
-### Read access control in sandbox presets
+### Read access control in sandbox presets ([#236](https://github.com/fohte/runok/pull/236))
 
 Sandbox presets now support denying **read access** to specific paths via `fs.read.deny`. Previously, sandboxing could only restrict write access and network access. With this change, sensitive files like `~/.ssh` and `~/.gnupg` can be made completely inaccessible to sandboxed commands.
 
