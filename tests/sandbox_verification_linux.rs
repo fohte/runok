@@ -1,8 +1,9 @@
 //! Integration tests that verify the Linux sandbox actually enforces restrictions.
 //!
 //! These tests build and run the `runok` binary with the `__sandbox-exec`
-//! subcommand, verifying that filesystem writes, read-only subpaths, and network
-//! access are properly restricted by the bubblewrap + landlock + seccomp stack.
+//! subcommand, verifying that filesystem writes, read-only subpaths, read-deny
+//! paths, and network access are properly restricted by the bubblewrap +
+//! landlock + seccomp stack.
 //!
 //! Requirements:
 //! - Linux (tests are `#[cfg(target_os = "linux")]`)
