@@ -29,6 +29,10 @@ View and filter audit log entries. Every `exec` and hook evaluation is logged au
 
 Run test cases defined in your configuration to verify that rules produce the expected decisions. Supports inline per-rule tests and a top-level `tests` section for cross-rule validation.
 
+### [`runok migrate`](/cli/migrate/)
+
+Migrate config files to the latest format. Automatically rewrites deprecated syntax while preserving comments and formatting.
+
 ### [`runok update-presets`](/cli/update-presets/)
 
 Force-update all remote presets referenced via `extends`, bypassing the TTL-based cache. Shows a diff for each preset that changed.

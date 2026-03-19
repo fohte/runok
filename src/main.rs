@@ -86,6 +86,11 @@ fn main() -> ExitCode {
         return run_test(args);
     }
 
+    // Migrate config files to the latest format
+    if let Commands::Migrate(ref args) = cli.command {
+        return run_migrate(args);
+    }
+
     // UpdatePresets reads config files directly (not via DefaultConfigLoader)
     if matches!(cli.command, Commands::UpdatePresets) {
         return run_update_presets();
@@ -141,6 +146,16 @@ fn run_update_presets() -> ExitCode {
     }
 }
 
+fn run_migrate(args: &cli::MigrateArgs) -> ExitCode {
+    match runok::migrate::run(args.config.as_deref()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("runok: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_init(args: &cli::InitArgs) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let scope = args.scope.as_ref().map(|s| match s {
@@ -171,6 +186,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
+        Commands::Migrate(_) => unreachable!("handled in main()"),
         Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),
@@ -232,6 +248,7 @@ fn run_command(command: Commands, cwd: &std::path::Path, stdin: impl std::io::Re
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
+        Commands::Migrate(_) => unreachable!("handled in main()"),
         Commands::UpdatePresets => unreachable!("handled in main()"),
         #[cfg(feature = "config-schema")]
         Commands::ConfigSchema => unreachable!("handled in main()"),

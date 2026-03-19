@@ -83,6 +83,34 @@ impl DefaultConfigLoader {
             .find(|path| path.exists())
     }
 
+    /// Return all config file paths that would be loaded for the given `cwd`.
+    ///
+    /// The returned list includes global and project config files (both main and
+    /// local override variants), in merge-priority order.
+    pub fn find_config_paths(&self, cwd: &Path) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        if let Some(dir) = &self.global_dir {
+            if let Some(p) = Self::find_config(dir, CONFIG_FILENAMES) {
+                paths.push(p);
+            }
+            if let Some(p) = Self::find_config(dir, LOCAL_OVERRIDE_FILENAMES) {
+                paths.push(p);
+            }
+        }
+
+        if let Some(dir) = self.find_project_dir(cwd) {
+            if let Some(p) = Self::find_config(&dir, CONFIG_FILENAMES) {
+                paths.push(p);
+            }
+            if let Some(p) = Self::find_config(&dir, LOCAL_OVERRIDE_FILENAMES) {
+                paths.push(p);
+            }
+        }
+
+        paths
+    }
+
     /// Read, parse, resolve paths, and resolve extends in a config file using its own base_dir.
     /// Resolving paths and extends before merging prevents global config paths from being
     /// incorrectly re-resolved with the local base_dir.
