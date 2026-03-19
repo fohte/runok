@@ -568,6 +568,25 @@ impl Config {
 
         self.expand_sandbox_path_refs(&mut errors);
 
+        // Reject fs.read.allow — it is accepted by the schema for structural
+        // consistency but has no effect at runtime (read access is allowed by
+        // default; only read.deny is enforced).
+        if let Some(defs) = &self.definitions
+            && let Some(sandbox) = &defs.sandbox
+        {
+            for (name, preset) in sandbox {
+                if let Some(fs) = &preset.fs
+                    && let Some(read) = &fs.read
+                    && read.allow.is_some()
+                {
+                    errors.push(format!(
+                        "sandbox preset '{name}': fs.read.allow is not supported. \
+                         Read access is allowed by default; use fs.read.deny to restrict it"
+                    ));
+                }
+            }
+        }
+
         // Reject <path:name> references inside definitions.paths values.
         // The <path:name> syntax is only valid in pattern contexts (rule
         // patterns, fs.deny), not inside path definitions themselves.
