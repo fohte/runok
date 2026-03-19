@@ -138,6 +138,7 @@ fn action_aggregation_priority(
     MergedSandboxPolicy {
         writable: vec!["./tmp".to_string()],
         deny: vec![],
+        read_deny: vec![],
         network_allowed: true,
     },
 )]
@@ -161,6 +162,7 @@ fn action_aggregation_priority(
     MergedSandboxPolicy {
         writable: vec![],
         deny: vec!["/etc/passwd".to_string(), "/etc/shadow".to_string()],
+        read_deny: vec![],
         network_allowed: true,
     },
 )]
@@ -184,6 +186,7 @@ fn action_aggregation_priority(
     MergedSandboxPolicy {
         writable: vec![],
         deny: vec![],
+        read_deny: vec![],
         network_allowed: false,
     },
 )]

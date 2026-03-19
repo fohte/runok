@@ -1,8 +1,9 @@
 //! Integration tests that verify the Linux sandbox actually enforces restrictions.
 //!
 //! These tests build and run the `runok` binary with the `__sandbox-exec`
-//! subcommand, verifying that filesystem writes, read-only subpaths, and network
-//! access are properly restricted by the bubblewrap + landlock + seccomp stack.
+//! subcommand, verifying that filesystem writes, read-only subpaths, read-deny
+//! paths, and network access are properly restricted by the bubblewrap +
+//! landlock + seccomp stack.
 //!
 //! Requirements:
 //! - Linux (tests are `#[cfg(target_os = "linux")]`)
@@ -28,18 +29,10 @@ fn runok_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_runok"))
 }
 
-/// Check if bubblewrap is available on the system.
-fn bwrap_available() -> bool {
-    Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// Run a command inside the sandbox with the given policy.
 ///
 /// Returns the exit code of the runok binary.
+/// Panics if bubblewrap is not installed.
 fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
     let policy_json = serde_json::to_string(policy).expect("failed to serialize policy");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
@@ -66,10 +59,6 @@ fn run_sandboxed(policy: &SandboxPolicy, command: &[&str]) -> i32 {
 
 #[rstest]
 fn sandbox_denies_write_outside_writable_roots() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -83,6 +72,7 @@ fn sandbox_denies_write_outside_writable_roots() {
     let policy = SandboxPolicy {
         writable_roots: vec![allowed_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -98,10 +88,6 @@ fn sandbox_denies_write_outside_writable_roots() {
 
 #[rstest]
 fn sandbox_allows_write_to_writable_root() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
     let test_file = canonical_dir.join("allowed_write_file");
@@ -109,6 +95,7 @@ fn sandbox_allows_write_to_writable_root() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -124,10 +111,6 @@ fn sandbox_allows_write_to_writable_root() {
 
 #[rstest]
 fn sandbox_denies_write_to_read_only_subpath() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -140,6 +123,7 @@ fn sandbox_denies_write_to_read_only_subpath() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![git_dir],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -158,10 +142,6 @@ fn sandbox_denies_write_to_read_only_subpath() {
 
 #[rstest]
 fn sandbox_allows_write_outside_read_only_subpath() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
@@ -176,6 +156,7 @@ fn sandbox_allows_write_outside_read_only_subpath() {
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![git_dir],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -193,16 +174,13 @@ fn sandbox_allows_write_outside_read_only_subpath() {
 
 #[rstest]
 fn sandbox_denies_network_when_not_allowed() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: false,
     };
 
@@ -233,16 +211,13 @@ fn sandbox_denies_network_when_not_allowed() {
 
 #[rstest]
 fn sandbox_allows_read_when_writes_denied() {
-    if !bwrap_available() {
-        return;
-    }
-
     // Read /etc/hostname which is bind-mounted read-only by bwrap (--ro-bind / /).
     // Using a host-filesystem file avoids the --tmpfs /tmp issue where tmpdir
     // contents are hidden inside the sandbox.
     let policy = SandboxPolicy {
         writable_roots: vec![],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -255,20 +230,65 @@ fn sandbox_allows_read_when_writes_denied() {
     );
 }
 
+// === Read deny ===
+
+/// Verifies that read-denied paths are inaccessible while other paths remain
+/// readable. Each case creates a denied directory with a file inside it and
+/// an allowed file outside it.
+#[rstest]
+#[case::file_in_denied_dir("secrets", "key.pem")]
+#[case::ssh_dir(".ssh", "id_rsa")]
+fn sandbox_read_deny_blocks_file_access(
+    #[case] denied_dir_name: &str,
+    #[case] denied_file_name: &str,
+) {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+    let denied_dir = canonical_dir.join(denied_dir_name);
+    std::fs::create_dir(&denied_dir).unwrap();
+    let denied_file = denied_dir.join(denied_file_name);
+    std::fs::write(&denied_file, "secret").unwrap();
+
+    let allowed_file = canonical_dir.join("allowed.txt");
+    std::fs::write(&allowed_file, "public").unwrap();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        read_deny_paths: vec![denied_dir],
+        network_allowed: true,
+    };
+
+    // File inside denied dir is NOT readable
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("cat {}", denied_file.display())],
+    );
+    assert_ne!(exit_code, 0, "reading file in denied dir should fail");
+
+    // File outside denied dir is readable
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("cat {}", allowed_file.display())],
+    );
+    assert_eq!(
+        exit_code, 0,
+        "reading file outside denied dir should succeed"
+    );
+}
+
 // === Basic execution ===
 
 #[rstest]
 fn sandbox_runs_command_successfully() {
-    if !bwrap_available() {
-        return;
-    }
-
     let tmpdir = tempfile::tempdir().unwrap();
     let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
     let policy = SandboxPolicy {
         writable_roots: vec![canonical_dir],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 
@@ -278,13 +298,10 @@ fn sandbox_runs_command_successfully() {
 
 #[rstest]
 fn sandbox_preserves_nonzero_exit_code() {
-    if !bwrap_available() {
-        return;
-    }
-
     let policy = SandboxPolicy {
         writable_roots: vec![],
         read_only_subpaths: vec![],
+        read_deny_paths: vec![],
         network_allowed: true,
     };
 

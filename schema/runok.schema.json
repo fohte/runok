@@ -183,12 +183,12 @@
         }
       }
     },
-    "FsPolicy": {
-      "description": "Filesystem access policy within a sandbox preset.",
+    "FsAccessPolicy": {
+      "description": "Access policy for a single operation (read or write).",
       "type": "object",
       "properties": {
-        "deny": {
-          "description": "Paths the sandboxed process is denied access to. Supports `<path:name>` references.",
+        "allow": {
+          "description": "Paths that are allowed for this operation.",
           "type": [
             "array",
             "null"
@@ -197,8 +197,8 @@
             "type": "string"
           }
         },
-        "writable": {
-          "description": "Directories the sandboxed process is allowed to write to.",
+        "deny": {
+          "description": "Paths that are denied for this operation. Supports `<path:name>` references.",
           "type": [
             "array",
             "null"
@@ -208,6 +208,48 @@
           }
         }
       }
+    },
+    "FsPolicy": {
+      "anyOf": [
+        {
+          "description": "New format with read/write sub-sections",
+          "type": "object",
+          "properties": {
+            "read": {
+              "$ref": "#/$defs/FsAccessPolicy"
+            },
+            "write": {
+              "$ref": "#/$defs/FsAccessPolicy"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Legacy format (deprecated)",
+          "type": "object",
+          "properties": {
+            "deny": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "writable": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "InlineTestEntry": {
       "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",

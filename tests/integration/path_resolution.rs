@@ -99,12 +99,12 @@ fn sandbox_paths_resolved_relative_to_config_file(
     let fs_policy = restricted.fs.as_ref().ok_or("fs policy missing")?;
 
     // Relative writable path is resolved
-    let writable = fs_policy.writable.as_ref().ok_or("writable missing")?;
+    let writable = fs_policy.write_allow().ok_or("writable missing")?;
     let expected_tmp = format!("{}/tmp", env.project_dir.display());
     assert_eq!(writable[0], expected_tmp, "cwd={}", cwd.display());
 
     // Relative deny path is resolved
-    let deny = fs_policy.deny.as_ref().ok_or("deny missing")?;
+    let deny = fs_policy.write_deny().ok_or("deny missing")?;
     let expected_deny_env = format!("{}/.env*", env.project_dir.display());
     assert_eq!(deny[0], expected_deny_env, "cwd={}", cwd.display());
     // Absolute paths remain unchanged

@@ -366,6 +366,7 @@ mod tests {
         let policy = MergedSandboxPolicy {
             writable: vec!["/tmp".to_string(), "/home".to_string()],
             deny: vec!["/etc".to_string()],
+            read_deny: vec![],
             network_allowed: true,
         };
         let info = SandboxInfo::MergedPolicy(Some(policy));
@@ -385,6 +386,7 @@ mod tests {
         let policy = MergedSandboxPolicy {
             writable: vec!["/workspace".to_string()],
             deny: vec![],
+            read_deny: vec![],
             network_allowed: false,
         };
         let info = SandboxInfo::MergedPolicy(Some(policy));

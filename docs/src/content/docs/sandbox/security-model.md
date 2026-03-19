@@ -9,10 +9,11 @@ This page explains what runok's sandbox is designed to protect against, the trus
 
 ## What the sandbox protects
 
-The sandbox restricts two capabilities of executed commands:
+The sandbox restricts three capabilities of executed commands:
 
 1. **File system writes** — Prevents commands from modifying files outside of explicitly allowed directories
-2. **Network access** — Prevents commands from making TCP/UDP connections when configured
+2. **File system reads** — Optionally prevents commands from reading specific sensitive paths (e.g., `~/.ssh`, `~/.gnupg`)
+3. **Network access** — Prevents commands from making TCP/UDP connections when configured
 
 ### File system protection
 
@@ -41,13 +42,11 @@ The sandbox treats every executed command as potentially untrusted. Even command
 
 The sandbox provides a **second layer of defense** beyond the [rule-based allow/deny system](/rule-evaluation/overview/). A command is first checked against rules (is it allowed to run?), then executed inside a sandbox (what can it do?).
 
-### Read access is always permitted
+### Read access is permitted by default
 
-The sandbox does **not** restrict read access. This is a deliberate design decision:
+The sandbox permits read access by default. Most development commands need to read source files, configuration, and dependencies, so blanket read restriction would break most workflows.
 
-- Most development commands need to read source files, configuration, and dependencies
-- Restricting reads would break most practical workflows
-- The primary risk from AI agent-executed commands is **modification** (writes) and **exfiltration** (network), not reading
+However, specific paths can be denied for reading via `fs.read.deny`. This is useful for protecting highly sensitive files like private keys (`~/.ssh`) or credential stores (`~/.gnupg`) that sandboxed commands should never access. Paths listed in `fs.read.deny` become completely inaccessible (both read and write are blocked).
 
 ### Unix domain sockets are always permitted
 
@@ -59,10 +58,11 @@ Within the sandbox itself, deny paths always override writable directories. If y
 
 ```yaml
 fs:
-  writable:
-    - '.'
-  deny:
-    - '.git'
+  write:
+    allow:
+      - '.'
+    deny:
+      - '.git'
 ```
 
 Then `.git` is protected even though `.` (its parent) is writable. This matches how both [macOS Seatbelt](/architecture/sandbox/macos/) and [Linux bubblewrap](/architecture/sandbox/linux/) work:
@@ -91,7 +91,7 @@ On macOS, this is provided by the Seatbelt kernel extension. On Linux, it is pro
 
 ## Limitations
 
-- **Read access is not restricted** — the sandbox cannot prevent data from being read
+- **Read restriction is opt-in and path-based** — by default all files are readable; only paths explicitly listed in `fs.read.deny` are blocked
 - **Network granularity is binary** — network access is either fully allowed or fully blocked; per-host or per-port filtering is not supported
 - **macOS Seatbelt is deprecated** — Apple has deprecated `sandbox-exec` but provides no replacement. It continues to work and is used by Apple's own tools
 - **Linux glob deny patterns are expanded at startup** — on Linux, glob patterns in `deny` are expanded against the filesystem before the sandbox starts. Files created after startup that match a glob pattern will not be protected

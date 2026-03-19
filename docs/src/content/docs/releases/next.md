@@ -6,6 +6,45 @@ sidebar:
 
 This page tracks changes that will be included in the next release. It is updated as pull requests are merged.
 
+## Highlights
+
+### Deprecated: sandbox `fs.writable`/`fs.deny` replaced by `fs.read`/`fs.write` sub-sections ([#236](https://github.com/fohte/runok/pull/236))
+
+The sandbox `fs` section now uses explicit `read` and `write` sub-sections instead of the flat `writable`/`deny` fields. The old format still works but emits a deprecation warning and will be removed in a future release.
+
+```yaml title="runok.yml"
+# Deprecated (emits warning)
+fs:
+  writable: ['.']
+  deny: ['.git']
+
+# New format
+fs:
+  write:
+    allow: ['.']
+    deny: ['.git']
+```
+
+## New Features
+
+### Read access control in sandbox presets ([#236](https://github.com/fohte/runok/pull/236))
+
+Sandbox presets now support denying **read access** to specific paths via `fs.read.deny`. Previously, sandboxing could only restrict write access and network access. With this change, sensitive files like `~/.ssh` and `~/.gnupg` can be made completely inaccessible to sandboxed commands.
+
+```yaml title="runok.yml"
+definitions:
+  sandbox:
+    restricted:
+      fs:
+        read:
+          deny: [~/.ssh, ~/.gnupg]
+        write:
+          allow: [., /tmp]
+          deny: [.env, .envrc]
+```
+
+See [Sandbox Overview](/sandbox/overview/) for details.
+
 ## Bug Fixes
 
 ### Remove unused `definitions.commands` field ([#235](https://github.com/fohte/runok/pull/235))

@@ -271,6 +271,9 @@ pub struct SandboxPreset {
 pub struct MergedSandboxPolicy {
     pub writable: Vec<String>,
     pub deny: Vec<String>,
+    /// Paths denied for reading. When non-empty, these paths are blocked from
+    /// both read and write access in the sandbox.
+    pub read_deny: Vec<String>,
     pub network_allowed: bool,
 }
 
@@ -290,13 +293,14 @@ impl SandboxPreset {
 
         let mut writable: Option<HashSet<String>> = None;
         let mut deny: HashSet<String> = HashSet::new();
+        let mut read_deny: HashSet<String> = HashSet::new();
         // Default to allowed; any explicit deny overrides.
         let mut network_allowed = true;
 
         for preset in presets {
-            // writable: intersection
+            // writable (write.allow): intersection
             if let Some(fs) = &preset.fs {
-                if let Some(w) = &fs.writable {
+                if let Some(w) = fs.write_allow() {
                     let w_set: HashSet<String> = w.iter().cloned().collect();
                     writable = Some(match writable {
                         Some(existing) => existing.intersection(&w_set).cloned().collect(),
@@ -304,9 +308,14 @@ impl SandboxPreset {
                     });
                 }
 
-                // deny: union
-                if let Some(d) = &fs.deny {
+                // write deny: union
+                if let Some(d) = fs.write_deny() {
                     deny.extend(d.iter().cloned());
+                }
+
+                // read deny: union
+                if let Some(rd) = fs.read_deny() {
+                    read_deny.extend(rd.iter().cloned());
                 }
             }
 
@@ -324,22 +333,152 @@ impl SandboxPreset {
         let mut deny_vec: Vec<String> = deny.into_iter().collect();
         deny_vec.sort();
 
+        let mut read_deny_vec: Vec<String> = read_deny.into_iter().collect();
+        read_deny_vec.sort();
+
         Some(MergedSandboxPolicy {
             writable: writable_vec,
             deny: deny_vec,
+            read_deny: read_deny_vec,
             network_allowed,
         })
     }
 }
 
 /// Filesystem access policy within a sandbox preset.
+///
+/// Supports a new `read`/`write` format and a deprecated legacy `writable`/`deny` format
+/// (the latter emits a warning at parse time).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FsPolicy {
+    /// Read access policy.
+    pub read: Option<FsAccessPolicy>,
+    /// Write access policy.
+    pub write: Option<FsAccessPolicy>,
+}
+
+/// Access policy for a single operation (read or write).
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
-pub struct FsPolicy {
-    /// Directories the sandboxed process is allowed to write to.
-    pub writable: Option<Vec<String>>,
-    /// Paths the sandboxed process is denied access to. Supports `<path:name>` references.
+pub struct FsAccessPolicy {
+    /// Paths that are allowed for this operation.
+    pub allow: Option<Vec<String>>,
+    /// Paths that are denied for this operation. Supports `<path:name>` references.
     pub deny: Option<Vec<String>>,
+}
+
+impl FsPolicy {
+    /// Returns write-allow paths (equivalent to legacy `writable`).
+    pub fn write_allow(&self) -> Option<&Vec<String>> {
+        self.write.as_ref().and_then(|w| w.allow.as_ref())
+    }
+
+    /// Returns write-deny paths (equivalent to legacy `deny`).
+    pub fn write_deny(&self) -> Option<&Vec<String>> {
+        self.write.as_ref().and_then(|w| w.deny.as_ref())
+    }
+
+    /// Returns read-deny paths.
+    pub fn read_deny(&self) -> Option<&Vec<String>> {
+        self.read.as_ref().and_then(|r| r.deny.as_ref())
+    }
+
+    /// Returns read-allow paths.
+    pub fn read_allow(&self) -> Option<&Vec<String>> {
+        self.read.as_ref().and_then(|r| r.allow.as_ref())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FsPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct NewFormat {
+            read: Option<FsAccessPolicy>,
+            write: Option<FsAccessPolicy>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyFormat {
+            writable: Option<Vec<String>>,
+            deny: Option<Vec<String>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum FsPolicyFormat {
+            New(NewFormat),
+            Legacy(LegacyFormat),
+        }
+
+        match FsPolicyFormat::deserialize(deserializer)? {
+            FsPolicyFormat::New(new) => Ok(FsPolicy {
+                read: new.read,
+                write: new.write,
+            }),
+            FsPolicyFormat::Legacy(legacy) => {
+                eprintln!(
+                    "warning: sandbox fs 'writable'/'deny' fields are deprecated, \
+                     use 'write: {{ allow: [...], deny: [...] }}' instead"
+                );
+                Ok(FsPolicy {
+                    read: None,
+                    write: if legacy.writable.is_some() || legacy.deny.is_some() {
+                        Some(FsAccessPolicy {
+                            allow: legacy.writable,
+                            deny: legacy.deny,
+                        })
+                    } else {
+                        None
+                    },
+                })
+            }
+        }
+    }
+}
+
+#[cfg(any(feature = "config-schema", test))]
+impl JsonSchema for FsPolicy {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "FsPolicy".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use schemars::json_schema;
+
+        json_schema!({
+            "anyOf": [
+                {
+                    "type": "object",
+                    "description": "New format with read/write sub-sections",
+                    "additionalProperties": false,
+                    "properties": {
+                        "read": generator.subschema_for::<FsAccessPolicy>(),
+                        "write": generator.subschema_for::<FsAccessPolicy>()
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "Legacy format (deprecated)",
+                    "additionalProperties": false,
+                    "properties": {
+                        "writable": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" }
+                        },
+                        "deny": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" }
+                        }
+                    }
+                }
+            ]
+        })
+    }
 }
 
 /// Network access policy within a sandbox preset.
@@ -373,29 +512,44 @@ impl Config {
             let Some(fs) = preset.fs.as_mut() else {
                 continue;
             };
-            let Some(deny) = fs.deny.as_mut() else {
-                continue;
-            };
 
-            let mut expanded = Vec::new();
-            for entry in deny.iter() {
-                if let Some(name) = entry
-                    .strip_prefix("<path:")
-                    .and_then(|s| s.strip_suffix('>'))
-                {
-                    match paths.as_ref().and_then(|p| p.get(name)) {
-                        Some(path_list) => expanded.extend(path_list.iter().cloned()),
-                        None => errors.push(format!(
-                            "sandbox preset '{}': fs.deny references undefined path '{}'. \
-                             Define it in definitions.paths.{}",
-                            preset_name, name, name
-                        )),
+            // Expand <path:name> references in all deny lists
+            let deny_fields: Vec<(&str, Option<&mut Vec<String>>)> = vec![
+                (
+                    "fs.write.deny",
+                    fs.write.as_mut().and_then(|w| w.deny.as_mut()),
+                ),
+                (
+                    "fs.read.deny",
+                    fs.read.as_mut().and_then(|r| r.deny.as_mut()),
+                ),
+            ];
+
+            for (field_name, deny_opt) in deny_fields {
+                let Some(deny) = deny_opt else {
+                    continue;
+                };
+
+                let mut expanded = Vec::new();
+                for entry in deny.iter() {
+                    if let Some(name) = entry
+                        .strip_prefix("<path:")
+                        .and_then(|s| s.strip_suffix('>'))
+                    {
+                        match paths.as_ref().and_then(|p| p.get(name)) {
+                            Some(path_list) => expanded.extend(path_list.iter().cloned()),
+                            None => errors.push(format!(
+                                "sandbox preset '{}': {} references undefined path '{}'. \
+                                 Define it in definitions.paths.{}",
+                                preset_name, field_name, name, name
+                            )),
+                        }
+                    } else {
+                        expanded.push(entry.clone());
                     }
-                } else {
-                    expanded.push(entry.clone());
                 }
+                *deny = expanded;
             }
-            *deny = expanded;
         }
     }
 
@@ -413,6 +567,25 @@ impl Config {
         let mut errors = Vec::new();
 
         self.expand_sandbox_path_refs(&mut errors);
+
+        // Reject fs.read.allow — it is accepted by the schema for structural
+        // consistency but has no effect at runtime (read access is allowed by
+        // default; only read.deny is enforced).
+        if let Some(defs) = &self.definitions
+            && let Some(sandbox) = &defs.sandbox
+        {
+            for (name, preset) in sandbox {
+                if let Some(fs) = &preset.fs
+                    && let Some(read) = &fs.read
+                    && read.allow.is_some()
+                {
+                    errors.push(format!(
+                        "sandbox preset '{name}': fs.read.allow is not supported. \
+                         Read access is allowed by default; use fs.read.deny to restrict it"
+                    ));
+                }
+            }
+        }
 
         // Reject <path:name> references inside definitions.paths values.
         // The <path:name> syntax is only valid in pattern contexts (rule
@@ -1132,10 +1305,10 @@ mod tests {
 
         let fs = restricted.fs.as_ref().unwrap();
         assert_eq!(
-            fs.writable,
-            Some(vec!["./tmp".to_string(), "/tmp".to_string()])
+            fs.write_allow(),
+            Some(&vec!["./tmp".to_string(), "/tmp".to_string()])
         );
-        assert_eq!(fs.deny, Some(vec!["<path:sensitive>".to_string()]));
+        assert_eq!(fs.write_deny(), Some(&vec!["<path:sensitive>".to_string()]));
 
         let network = restricted.network.as_ref().unwrap();
         assert_eq!(network.allow, Some(true));
@@ -1517,7 +1690,7 @@ mod tests {
             .and_then(|d| d.sandbox.as_ref())
             .and_then(|s| s.get("restricted"))
             .and_then(|p| p.fs.as_ref())
-            .and_then(|f| f.deny.as_ref())
+            .and_then(|f| f.write_deny())
             .unwrap();
         assert_eq!(deny, &expected_deny);
     }
@@ -1875,8 +2048,11 @@ mod tests {
                     "restricted".to_string(),
                     SandboxPreset {
                         fs: Some(FsPolicy {
-                            writable: Some(vec!["./tmp".to_string()]),
-                            deny: None,
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["./tmp".to_string()]),
+                                deny: None,
+                            }),
                         }),
                         network: None,
                     },
@@ -2172,8 +2348,11 @@ mod tests {
     fn merge_strictest_single_preset() {
         let preset = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string(), "/home".to_string()]),
-                deny: Some(vec!["/etc".to_string()]),
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(vec!["/tmp".to_string(), "/home".to_string()]),
+                    deny: Some(vec!["/etc".to_string()]),
+                }),
             }),
             network: Some(NetworkPolicy { allow: Some(true) }),
         };
@@ -2201,15 +2380,21 @@ mod tests {
     ) {
         let a = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(writable_a),
-                deny: None,
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(writable_a),
+                    deny: None,
+                }),
             }),
             network: None,
         };
         let b = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(writable_b),
-                deny: None,
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(writable_b),
+                    deny: None,
+                }),
             }),
             network: None,
         };
@@ -2221,15 +2406,21 @@ mod tests {
     fn merge_strictest_deny_union() {
         let a = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string()]),
-                deny: Some(vec!["/etc/passwd".to_string()]),
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(vec!["/tmp".to_string()]),
+                    deny: Some(vec!["/etc/passwd".to_string()]),
+                }),
             }),
             network: None,
         };
         let b = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string()]),
-                deny: Some(vec!["/etc/shadow".to_string()]),
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(vec!["/tmp".to_string()]),
+                    deny: Some(vec!["/etc/shadow".to_string()]),
+                }),
             }),
             network: None,
         };
@@ -2279,8 +2470,11 @@ mod tests {
     fn merge_strictest_no_fs_preserves_other() {
         let a = SandboxPreset {
             fs: Some(FsPolicy {
-                writable: Some(vec!["/tmp".to_string()]),
-                deny: Some(vec!["/etc".to_string()]),
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(vec!["/tmp".to_string()]),
+                    deny: Some(vec!["/etc".to_string()]),
+                }),
             }),
             network: None,
         };

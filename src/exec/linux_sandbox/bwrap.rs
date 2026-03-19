@@ -65,6 +65,51 @@ pub fn build_bwrap_args(
         }
     }
 
+    // Hide read-deny paths by bind-mounting /dev/null over them (files) or
+    // using tmpfs (directories). This prevents any read access.
+    for deny_path in &policy.read_deny_paths {
+        let path_str = deny_path.to_string_lossy().to_string();
+
+        if is_glob_pattern(&path_str) {
+            eprintln!(
+                "warning: glob read-deny pattern {path_str:?} is expanded \
+                 before sandbox execution; files created later will not be protected. \
+                 Use literal paths for complete coverage."
+            );
+            if path_str.starts_with('/') {
+                expand_and_hide(&path_str, &mut args);
+            } else {
+                for root in &policy.writable_roots {
+                    let full = root.join(&path_str);
+                    expand_and_hide(&full.to_string_lossy(), &mut args);
+                }
+            }
+        } else if deny_path.is_relative() {
+            // Resolve relative paths against each writable_root
+            for root in &policy.writable_roots {
+                let full_path = root.join(&path_str);
+                if full_path.is_dir() {
+                    args.extend([
+                        "--tmpfs".to_string(),
+                        full_path.to_string_lossy().to_string(),
+                    ]);
+                } else if full_path.exists() {
+                    args.extend([
+                        "--ro-bind".to_string(),
+                        "/dev/null".to_string(),
+                        full_path.to_string_lossy().to_string(),
+                    ]);
+                }
+            }
+        } else if deny_path.is_dir() {
+            // Absolute path: for directories, use tmpfs to hide contents
+            args.extend(["--tmpfs".to_string(), path_str]);
+        } else if deny_path.exists() {
+            // Absolute path: for files, bind-mount /dev/null over them
+            args.extend(["--ro-bind".to_string(), "/dev/null".to_string(), path_str]);
+        }
+    }
+
     // /tmp should be writable (tmpfs) unless a writable root is /tmp itself,
     // a parent of /tmp (e.g. "/"), or a child under /tmp (e.g. "/tmp/myproject").
     // In the child case, --tmpfs /tmp would mount over the writable bind and hide it.
@@ -115,6 +160,36 @@ fn is_glob_pattern(path: &str) -> bool {
 /// Prevents excessive memory usage and E2BIG errors when invoking bwrap.
 const MAX_GLOB_MATCHES: usize = 10_000;
 
+/// Expand a glob pattern and hide each match by bind-mounting /dev/null (files)
+/// or tmpfs (directories).
+fn expand_and_hide(pattern: &str, args: &mut Vec<String>) {
+    let mut count = 0;
+    for expanded in crate::exec::glob_utils::expand_braces(pattern) {
+        let Ok(paths) = glob::glob(&expanded) else {
+            continue;
+        };
+        for entry in paths {
+            if count >= MAX_GLOB_MATCHES {
+                eprintln!(
+                    "warning: glob pattern {pattern:?} matched \
+                     more than {MAX_GLOB_MATCHES} paths; remaining matches are ignored"
+                );
+                return;
+            }
+            let Ok(path) = entry else {
+                continue;
+            };
+            let path_str = path.to_string_lossy().to_string();
+            if path.is_dir() {
+                args.extend(["--tmpfs".to_string(), path_str]);
+            } else {
+                args.extend(["--ro-bind".to_string(), "/dev/null".to_string(), path_str]);
+            }
+            count += 1;
+        }
+    }
+}
+
 /// Expand a glob pattern and append `--ro-bind` arguments for each match.
 ///
 /// The `glob` crate does not support brace expansion (`{a,b}`), so braces
@@ -159,6 +234,7 @@ mod tests {
         SandboxPolicy {
             writable_roots: vec![PathBuf::from("/home/user/project")],
             read_only_subpaths: vec![PathBuf::from("/home/user/project/.git")],
+            read_deny_paths: vec![],
             network_allowed: false,
         }
     }
@@ -217,6 +293,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed,
         };
         let args = build_bwrap_args(
@@ -290,6 +367,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/home/user")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -310,6 +388,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -330,6 +409,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -350,6 +430,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![PathBuf::from("/tmp/myproject")],
             read_only_subpaths: vec![],
+            read_deny_paths: vec![],
             network_allowed: true,
         };
         let args = build_bwrap_args(
@@ -434,6 +515,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -469,6 +551,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(".env*")],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -501,6 +584,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(
@@ -535,6 +619,7 @@ mod tests {
         let policy = SandboxPolicy {
             writable_roots: vec![dir.path().to_path_buf()],
             read_only_subpaths: vec![PathBuf::from(&glob_pattern)],
+            read_deny_paths: vec![],
             network_allowed: false,
         };
         let args = build_bwrap_args(

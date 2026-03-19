@@ -23,7 +23,8 @@ Linux sandboxing requires a **two-stage execution** model because the different 
 
 - `/` is mounted **read-only** (the entire root file system)
 - Writable directories are re-mounted with write access
-- Protected subpaths are mounted read-only on top (mount ordering ensures deny takes priority)
+- Write-denied subpaths are mounted read-only on top (mount ordering ensures deny takes priority)
+- Read-denied paths are hidden via tmpfs (directories) or `/dev/null` bind-mounts (files)
 - `/proc` and `/dev` are set up for the sandboxed process
 - `/tmp` gets a private tmpfs (unless it overlaps with a writable root)
 - All namespaces are unshared (`--unshare-all`), with network selectively shared back if allowed
@@ -70,15 +71,29 @@ This effectively blocks TCP (`AF_INET`) and IPv6 (`AF_INET6`) connections while 
 
 All other system calls are unaffected — seccomp is only used for network control, not for general system call filtering.
 
-## Deny path handling
+## Write-deny path handling
 
-The `deny` list in the sandbox configuration is enforced through bubblewrap's mount ordering:
+The `write.deny` list is enforced through bubblewrap's mount ordering:
 
 - **Literal paths** (e.g., `.git`, `/etc/shadow`) are mounted read-only via `--ro-bind`
 - **Glob patterns** (e.g., `.env*`, `~/.ssh/**`) are expanded against the filesystem at startup, and each matched real path is mounted read-only
 
 :::caution
-Glob expansion happens before the sandbox starts. Files created after the sandbox is running that match a glob pattern will **not** be protected. For guaranteed protection, use literal paths in the `deny` list.
+Glob expansion happens before the sandbox starts. Files created after the sandbox is running that match a glob pattern will **not** be protected. For guaranteed protection, use literal paths.
+:::
+
+## Read-deny path handling
+
+The `read.deny` list is enforced by hiding paths entirely via bubblewrap mounts:
+
+- **Directories** are replaced with an empty `--tmpfs` mount, making the original contents invisible
+- **Files** are replaced by bind-mounting `/dev/null` over them, so reads return empty content and the original data is inaccessible
+- **Glob patterns** are expanded at startup and each match is hidden using the appropriate method above
+
+Since Landlock rules are additive and cannot revoke the baseline read-only access granted to `/`, read-deny enforcement relies entirely on bubblewrap's mount operations.
+
+:::caution
+The same glob expansion caveat applies: files created after the sandbox starts that match a glob pattern will not be hidden.
 :::
 
 ## Related
