@@ -33,6 +33,95 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  update-release-docs:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Update release docs
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          version="${TAG_NAME#v}"
+          version_slug="${version//./-}"
+          release_date="$(date -u +%Y-%m-%d)"
+          releases_dir="docs/src/content/docs/releases"
+
+          # Find the previous version tag for the changelog link
+          prev_tag="$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -2 | tail -1)"
+
+          # Increment sidebar.order for all existing version files (v*.md)
+          for file in "$releases_dir"/v*.md; do
+            [ -f "$file" ] || continue
+            current_order="$(sed -n 's/^  order: \([0-9]*\)/\1/p' "$file")"
+            if [ -n "$current_order" ]; then
+              new_order=$((current_order + 1))
+              sed -i "s/^  order: ${current_order}/  order: ${new_order}/" "$file"
+            fi
+          done
+
+          # Create the versioned release file from next.md
+          {
+            # Replace frontmatter
+            echo '---'
+            echo "title: v${version}"
+            echo 'sidebar:'
+            echo '  order: 2'
+            echo '---'
+            echo ""
+            echo "Released on ${release_date}. [Full changelog](https://github.com/${{ github.repository }}/compare/${prev_tag}...${TAG_NAME})"
+
+            # Append the body of next.md (skip frontmatter and the first description line)
+            awk '
+              BEGIN { fm=0; skip_header=1 }
+              fm<2 && /^---$/ { fm++; next }
+              fm<2 { next }
+              # Skip blank lines and the description line before the first content
+              skip_header && /^$/ { next }
+              skip_header && /^This page tracks changes/ { next }
+              { skip_header=0; print }
+            ' "$releases_dir/next.md"
+          } > "$releases_dir/v${version_slug}.md"
+
+          # Reset next.md
+          printf '%s\n' \
+            '---' \
+            'title: Next (unreleased)' \
+            'sidebar:' \
+            '  order: 1' \
+            '---' \
+            '' \
+            'No unreleased changes yet.' \
+            > "$releases_dir/next.md"
+
+      - name: Commit and push
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/src/content/docs/releases/
+          git diff --cached --quiet || {
+            git commit -m "docs(releases): add ${TAG_NAME} release notes"
+            git push
+          }
+
   publish-crates-io:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
