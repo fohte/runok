@@ -21,7 +21,7 @@ version_slug="${version//./-}"
 release_date="${RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
 
 # Find the previous version tag for the changelog link
-prev_tag="$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -2 | tail -1)"
+prev_tag="$(git tag --sort=-v:refname | grep -E '^v[0-9]' | grep -v "^${TAG_NAME}$" | head -1)"
 
 # Increment sidebar.order for all existing version files (v*.md)
 for file in "$releases_dir"/v*.md; do
@@ -63,5 +63,5 @@ printf '%s\n' \
   '  order: 1' \
   '---' \
   '' \
-  'No unreleased changes yet.' \
+  'This page tracks changes that will be included in the next release. It is updated as pull requests are merged.' \
   > "$releases_dir/next.md"
