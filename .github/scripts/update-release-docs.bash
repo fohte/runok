@@ -46,9 +46,9 @@ done
 
   # Append the body of next.md (skip frontmatter, start from first ## heading)
   awk '
-    /^---$/ { c++; next }
-    c == 1 { next }
-    c > 1 && /^## / { p=1 }
+    /^---$/ && !after_fm { fm++; if (fm == 2) after_fm = 1; next }
+    fm < 2 { next }
+    after_fm && /^## / { p = 1 }
     p { print }
   ' "$releases_dir/next.md"
 } > "$releases_dir/v${version_slug}.md"
