@@ -283,11 +283,14 @@ fn sandbox_read_deny_blocks_directory_listing() {
         network_allowed: true,
     };
 
-    let exit_code = run_sandboxed(
-        &policy,
-        &["sh", "-c", &format!("ls {}", protected_dir.display())],
+    // On Linux, bwrap uses tmpfs to hide read-denied directories, so `ls`
+    // sees an empty directory (exit 0). Verify by reading a file inside it.
+    let id_rsa = protected_dir.join("id_rsa");
+    let exit_code = run_sandboxed(&policy, &["sh", "-c", &format!("cat {}", id_rsa.display())]);
+    assert_ne!(
+        exit_code, 0,
+        "reading file inside read-denied directory should fail"
     );
-    assert_ne!(exit_code, 0, "listing read-denied directory should fail");
 }
 
 #[rstest]
