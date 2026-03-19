@@ -1,4 +1,5 @@
 use indoc::indoc;
+use predicates::prelude::PredicateBooleanExt;
 use rstest::rstest;
 
 use super::helpers::TestEnv;
@@ -23,7 +24,11 @@ fn legacy_format_emits_deprecation_warning() {
         .args(["check", "--", "echo", "hello"])
         .assert()
         .code(0)
-        .stderr(predicates::str::contains("deprecated"));
+        .stderr(
+            predicates::str::contains("runok warning:")
+                .and(predicates::str::contains("deprecated"))
+                .and(predicates::str::contains("runok.yml")),
+        );
 }
 
 #[rstest]
