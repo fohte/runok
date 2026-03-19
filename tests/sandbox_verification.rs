@@ -261,6 +261,109 @@ fn sandbox_allows_read_when_writes_denied() {
     );
 }
 
+// === Read deny ===
+
+#[rstest]
+fn sandbox_read_deny_blocks_file_read() {
+    if !bwrap_available() {
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().unwrap();
+    let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+    let secret_dir = canonical_dir.join("secrets");
+    std::fs::create_dir(&secret_dir).unwrap();
+    let secret_file = secret_dir.join("key.pem");
+    std::fs::write(&secret_file, "secret-content").unwrap();
+
+    let normal_file = canonical_dir.join("normal.txt");
+    std::fs::write(&normal_file, "normal-content").unwrap();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        read_deny_paths: vec![secret_dir],
+        network_allowed: true,
+    };
+
+    // Normal file is readable
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("cat {}", normal_file.display())],
+    );
+    assert_eq!(exit_code, 0, "reading normal file should succeed");
+
+    // Secret file is NOT readable
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("cat {}", secret_file.display())],
+    );
+    assert_ne!(exit_code, 0, "reading read-denied file should fail");
+}
+
+#[rstest]
+fn sandbox_read_deny_blocks_directory_listing() {
+    if !bwrap_available() {
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().unwrap();
+    let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+    let protected_dir = canonical_dir.join(".ssh");
+    std::fs::create_dir(&protected_dir).unwrap();
+    std::fs::write(protected_dir.join("id_rsa"), "private-key").unwrap();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        read_deny_paths: vec![protected_dir.clone()],
+        network_allowed: true,
+    };
+
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("ls {}", protected_dir.display())],
+    );
+    assert_ne!(exit_code, 0, "listing read-denied directory should fail");
+}
+
+#[rstest]
+fn sandbox_read_deny_does_not_affect_other_paths() {
+    if !bwrap_available() {
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().unwrap();
+    let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+    let secret_dir = canonical_dir.join("secrets");
+    std::fs::create_dir(&secret_dir).unwrap();
+
+    let src_dir = canonical_dir.join("src");
+    std::fs::create_dir(&src_dir).unwrap();
+    let readable_file = src_dir.join("main.rs");
+    std::fs::write(&readable_file, "fn main() {}").unwrap();
+
+    let policy = SandboxPolicy {
+        writable_roots: vec![canonical_dir],
+        read_only_subpaths: vec![],
+        read_deny_paths: vec![secret_dir],
+        network_allowed: true,
+    };
+
+    // Files outside read-deny paths are still readable
+    let exit_code = run_sandboxed(
+        &policy,
+        &["sh", "-c", &format!("cat {}", readable_file.display())],
+    );
+    assert_eq!(
+        exit_code, 0,
+        "reading files outside read-deny paths should succeed"
+    );
+}
+
 // === Basic execution ===
 
 #[rstest]

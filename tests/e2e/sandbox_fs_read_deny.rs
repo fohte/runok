@@ -1,201 +1,52 @@
 use indoc::indoc;
 use rstest::rstest;
-use serde_json::Value;
 
 use super::helpers::TestEnv;
 
-// === Sandbox preset in JSON output: parameterized ===
+// === Legacy format emits deprecation warning ===
 
 #[rstest]
-#[case::new_format_full(
-    indoc! {"
-        rules:
-          - allow: 'cat *'
-            sandbox: restricted
-        definitions:
-          sandbox:
-            restricted:
-              fs:
-                read:
-                  deny: [~/.ssh, ~/.gnupg]
-                write:
-                  allow: [., /tmp]
-                  deny: [.env, .envrc]
-              network:
-                allow: true
-    "},
-    &["cat", "/etc/passwd"],
-    "restricted",
-)]
-#[case::new_format_write_only(
-    indoc! {"
+fn exec_legacy_format_emits_deprecation_warning() {
+    let env = TestEnv::new(indoc! {"
         rules:
           - allow: 'echo *'
-            sandbox: write_only
+            sandbox: legacy
         definitions:
           sandbox:
-            write_only:
+            legacy:
+              fs:
+                writable: [.]
+                deny: [.git]
+    "});
+    let assert = env.command().args(["exec", "--", "echo", "hello"]).assert();
+    assert
+        .code(0)
+        .stderr(predicates::str::contains("deprecated"))
+        .stdout(predicates::str::contains("hello"));
+}
+
+#[rstest]
+fn exec_new_format_does_not_emit_deprecation_warning() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - allow: 'echo *'
+            sandbox: new
+        definitions:
+          sandbox:
+            new:
               fs:
                 write:
                   allow: [.]
                   deny: [.git]
-    "},
-    &["echo", "hello"],
-    "write_only",
-)]
-#[case::new_format_read_deny_only(
-    indoc! {"
-        rules:
-          - allow: 'cat *'
-            sandbox: read_deny
-        definitions:
-          sandbox:
-            read_deny:
-              fs:
-                read:
-                  deny: [~/.ssh]
-    "},
-    &["cat", "file.txt"],
-    "read_deny",
-)]
-#[case::legacy_format(
-    indoc! {"
-        rules:
-          - allow: 'echo *'
-            sandbox: legacy
-        definitions:
-          sandbox:
-            legacy:
-              fs:
-                writable: [.]
-                deny: [.git]
-              network:
-                allow: false
-    "},
-    &["echo", "hello"],
-    "legacy",
-)]
-fn check_sandbox_preset_in_json_output(
-    #[case] config: &str,
-    #[case] command: &[&str],
-    #[case] expected_preset: &str,
-) {
-    let env = TestEnv::new(config);
-    let assert = env
-        .command()
-        .args(["check", "--output-format", "json", "--"])
-        .args(command)
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert!(
-        json["sandbox"].is_object(),
-        "sandbox info should be present"
-    );
-    assert_eq!(json["sandbox"]["preset"], expected_preset);
-}
-
-// === Path reference expansion in new format: parameterized ===
-
-#[rstest]
-#[case::write_deny(
-    indoc! {"
-        rules:
-          - allow: 'echo *'
-            sandbox: with_refs
-        definitions:
-          paths:
-            sensitive:
-              - .env
-              - .envrc
-          sandbox:
-            with_refs:
-              fs:
-                write:
-                  allow: [.]
-                  deny: ['<path:sensitive>']
-    "},
-    &["echo", "hello"],
-)]
-#[case::read_deny(
-    indoc! {"
-        rules:
-          - allow: 'cat *'
-            sandbox: with_refs
-        definitions:
-          paths:
-            secrets:
-              - ~/.ssh
-              - ~/.gnupg
-          sandbox:
-            with_refs:
-              fs:
-                read:
-                  deny: ['<path:secrets>']
-    "},
-    &["cat", "file.txt"],
-)]
-fn check_path_ref_in_new_format(#[case] config: &str, #[case] command: &[&str]) {
-    let env = TestEnv::new(config);
-    let assert = env
-        .command()
-        .args(["check", "--output-format", "json", "--"])
-        .args(command)
-        .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["decision"], "allow");
-    assert_eq!(json["sandbox"]["preset"], "with_refs");
-}
-
-// === Validation: runok test with different formats: parameterized ===
-
-#[rstest]
-#[case::new_format(
-    indoc! {"
-        rules:
-          - allow: 'cat *'
-            sandbox: restricted
-            tests:
-              - allow: 'cat /etc/passwd'
-        definitions:
-          sandbox:
-            restricted:
-              fs:
-                read:
-                  deny: [~/.ssh]
-                write:
-                  allow: [., /tmp]
-    "},
-)]
-#[case::legacy_format(
-    indoc! {"
-        rules:
-          - allow: 'echo *'
-            sandbox: legacy
-            tests:
-              - allow: 'echo hello'
-        definitions:
-          sandbox:
-            legacy:
-              fs:
-                writable: [.]
-                deny: [.git]
-    "},
-)]
-fn test_command_with_fs_format(#[case] config: &str) {
-    let env = TestEnv::new(config);
-    env.command()
-        .args(["test"])
-        .assert()
+    "});
+    let assert = env.command().args(["exec", "--", "echo", "hello"]).assert();
+    assert
         .code(0)
-        .stdout(predicates::str::contains("1 passed"));
+        .stderr(predicates::str::is_empty())
+        .stdout(predicates::str::contains("hello"));
 }
 
-// === Validation error: undefined path ref in new format ===
+// === Config validation: undefined path ref in read.deny ===
 
 #[rstest]
 fn config_error_on_undefined_path_ref_in_read_deny() {
@@ -210,26 +61,69 @@ fn config_error_on_undefined_path_ref_in_read_deny() {
                 read:
                   deny: ['<path:nonexistent>']
     "});
-    // check with an invalid config should fail with config error (exit 2)
-    let assert = env
-        .command()
+    env.command()
         .args(["check", "--", "cat", "file.txt"])
-        .assert();
-    assert.code(2);
+        .assert()
+        .code(2);
 }
 
-// === macOS sandbox: read deny enforcement ===
+// === macOS sandbox: actual enforcement via runok exec ===
 
 #[cfg(target_os = "macos")]
-mod macos_sandbox_read_deny {
+mod macos_sandbox {
     use super::*;
 
     fn skip_if_nested_sandbox() -> bool {
         std::env::var("SANDBOX_RUNTIME").is_ok()
     }
 
+    // --- write.allow / write.deny (new format) ---
+
     #[rstest]
-    fn exec_sandbox_denies_read_of_denied_path() {
+    fn exec_new_format_allows_write_to_writable_root() {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+        let test_file = canonical_dir.join("allowed_write");
+
+        let env = TestEnv::new(&format!(
+            indoc! {"
+                rules:
+                  - allow: 'sh *'
+                    sandbox: writable
+                definitions:
+                  sandbox:
+                    writable:
+                      fs:
+                        write:
+                          allow:
+                            - {}
+            "},
+            canonical_dir.display(),
+        ));
+
+        env.command()
+            .args([
+                "exec",
+                "--",
+                "sh",
+                "-c",
+                &format!("touch {}", test_file.display()),
+            ])
+            .assert()
+            .code(0);
+
+        assert!(
+            test_file.exists(),
+            "file should be created in writable root"
+        );
+    }
+
+    #[rstest]
+    fn exec_new_format_denies_write_outside_writable_root() {
         if skip_if_nested_sandbox() {
             return;
         }
@@ -237,13 +131,110 @@ mod macos_sandbox_read_deny {
         let tmpdir = tempfile::tempdir().unwrap();
         let canonical_dir = tmpdir.path().canonicalize().unwrap();
 
-        // Create a secret file that should be unreadable
+        let allowed_dir = canonical_dir.join("allowed");
+        std::fs::create_dir(&allowed_dir).unwrap();
+
+        let forbidden_file = canonical_dir.join("forbidden_write");
+
+        let env = TestEnv::new(&format!(
+            indoc! {"
+                rules:
+                  - allow: 'sh *'
+                    sandbox: restricted
+                definitions:
+                  sandbox:
+                    restricted:
+                      fs:
+                        write:
+                          allow:
+                            - {}
+            "},
+            allowed_dir.display(),
+        ));
+
+        env.command()
+            .args([
+                "exec",
+                "--",
+                "sh",
+                "-c",
+                &format!("touch {}", forbidden_file.display()),
+            ])
+            .assert()
+            .code(predicates::ord::ne(0));
+
+        assert!(
+            !forbidden_file.exists(),
+            "file should not be created outside writable root"
+        );
+    }
+
+    #[rstest]
+    fn exec_new_format_denies_write_to_write_deny_path() {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
+        let git_dir = canonical_dir.join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        let forbidden_file = git_dir.join("should_not_write");
+
+        // Use absolute path for deny — config path resolver resolves relative
+        // paths against the project cwd, not the writable root.
+        let env = TestEnv::new(&format!(
+            indoc! {"
+                rules:
+                  - allow: 'sh *'
+                    sandbox: protected
+                definitions:
+                  sandbox:
+                    protected:
+                      fs:
+                        write:
+                          allow:
+                            - {}
+                          deny:
+                            - {}
+            "},
+            canonical_dir.display(),
+            git_dir.display(),
+        ));
+
+        env.command()
+            .args([
+                "exec",
+                "--",
+                "sh",
+                "-c",
+                &format!("touch {}", forbidden_file.display()),
+            ])
+            .assert()
+            .code(predicates::ord::ne(0));
+
+        assert!(
+            !forbidden_file.exists(),
+            "file should not be created in write.deny path"
+        );
+    }
+
+    // --- read.deny ---
+
+    #[rstest]
+    fn exec_read_deny_blocks_file_read() {
+        if skip_if_nested_sandbox() {
+            return;
+        }
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let canonical_dir = tmpdir.path().canonicalize().unwrap();
+
         let secret_dir = canonical_dir.join("secrets");
         std::fs::create_dir(&secret_dir).unwrap();
-        let secret_file = secret_dir.join("key.pem");
-        std::fs::write(&secret_file, "secret-content").unwrap();
+        std::fs::write(secret_dir.join("key.pem"), "secret-content").unwrap();
 
-        // Create a normal file that should be readable
         let normal_file = canonical_dir.join("normal.txt");
         std::fs::write(&normal_file, "normal-content").unwrap();
 
@@ -269,25 +260,27 @@ mod macos_sandbox_read_deny {
             canonical_dir.display(),
         ));
 
-        // Reading the normal file should succeed
-        let assert = env
-            .command()
+        // Normal file is readable
+        env.command()
             .args(["exec", "--", "cat", normal_file.to_str().unwrap()])
-            .assert();
-        assert
+            .assert()
             .code(0)
             .stdout(predicates::str::contains("normal-content"));
 
-        // Reading the secret file should fail
-        let assert = env
-            .command()
-            .args(["exec", "--", "cat", secret_file.to_str().unwrap()])
-            .assert();
-        assert.code(predicates::ord::ne(0));
+        // Secret file is NOT readable
+        env.command()
+            .args([
+                "exec",
+                "--",
+                "cat",
+                secret_dir.join("key.pem").to_str().unwrap(),
+            ])
+            .assert()
+            .code(predicates::ord::ne(0));
     }
 
     #[rstest]
-    fn exec_sandbox_read_deny_blocks_directory_listing() {
+    fn exec_read_deny_blocks_directory_listing() {
         if skip_if_nested_sandbox() {
             return;
         }
@@ -303,12 +296,12 @@ mod macos_sandbox_read_deny {
             indoc! {"
                 rules:
                   - allow: 'ls *'
-                    sandbox: deny_ssh_read
+                    sandbox: deny_ssh
                   - allow: 'sh *'
-                    sandbox: deny_ssh_read
+                    sandbox: deny_ssh
                 definitions:
                   sandbox:
-                    deny_ssh_read:
+                    deny_ssh:
                       fs:
                         read:
                           deny:
@@ -317,11 +310,9 @@ mod macos_sandbox_read_deny {
             protected_dir.display(),
         ));
 
-        // Listing the protected directory should fail
-        let assert = env
-            .command()
+        env.command()
             .args(["exec", "--", "ls", protected_dir.to_str().unwrap()])
-            .assert();
-        assert.code(predicates::ord::ne(0));
+            .assert()
+            .code(predicates::ord::ne(0));
     }
 }
