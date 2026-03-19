@@ -147,7 +147,7 @@ fn run_update_presets() -> ExitCode {
 }
 
 fn run_migrate(args: &cli::MigrateArgs) -> ExitCode {
-    match runok::migrate::run(args.config.as_deref()) {
+    match runok::migrate::run(args.config.as_deref(), args.yes) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("runok: {e}");

@@ -88,6 +88,10 @@ pub struct MigrateArgs {
     /// Path to a specific config file to migrate
     #[arg(short = 'c', long)]
     pub config: Option<std::path::PathBuf>,
+
+    /// Apply all changes without prompting
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
 
 #[derive(clap::Args)]
@@ -256,15 +260,19 @@ mod tests {
     )]
     #[case::migrate_default(
         &["runok", "migrate"],
-        Commands::Migrate(MigrateArgs { config: None }),
+        Commands::Migrate(MigrateArgs { config: None, yes: false }),
     )]
     #[case::migrate_with_config_short(
         &["runok", "migrate", "-c", "path/to/runok.yml"],
-        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("path/to/runok.yml")) }),
+        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("path/to/runok.yml")), yes: false }),
     )]
     #[case::migrate_with_config_long(
         &["runok", "migrate", "--config", "runok.yml"],
-        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("runok.yml")) }),
+        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("runok.yml")), yes: false }),
+    )]
+    #[case::migrate_with_yes(
+        &["runok", "migrate", "-y"],
+        Commands::Migrate(MigrateArgs { config: None, yes: true }),
     )]
     #[case::test_default(
         &["runok", "test"],
