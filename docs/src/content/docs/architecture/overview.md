@@ -65,8 +65,9 @@ If a matching rule specifies a `sandbox` preset name, the adapter resolves it to
 1. Look up the preset in `definitions.sandbox`
 2. Resolve CWD-relative paths to absolute paths
 3. For compound commands, merge all sub-command policies using a strictest-wins strategy:
-   - `writable` paths: intersection (more restrictive)
-   - `deny` paths: union (all denied paths combined)
+   - `write.allow` paths: intersection (more restrictive)
+   - `write.deny` paths: union (all denied paths combined)
+   - `read.deny` paths: union (all denied paths combined)
    - `network`: AND (denied if either denies)
 
 If no rule-level sandbox is specified, the global `defaults.sandbox` is applied as a fallback.
