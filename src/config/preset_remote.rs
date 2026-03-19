@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use super::cache::{CacheMetadata, CacheStatus, PresetCache};
 use super::git_client::GitClient;
-use super::{Config, ConfigError, PresetError, parse_config};
+use super::{Config, ConfigError, ParsedConfig, PresetError, parse_config_with_warnings};
 
 /// Parsed preset reference indicating where to load a preset from.
 #[derive(Debug, Clone, PartialEq)]
@@ -299,7 +299,10 @@ pub fn resolve_preset_file_path(
 pub fn read_preset_from_dir(dir: &Path, preset_path: Option<&str>) -> Result<Config, ConfigError> {
     let path = resolve_preset_file_path(dir, preset_path)?;
     let content = std::fs::read_to_string(&path)?;
-    let config = parse_config(&content)?;
+    let ParsedConfig { config, warnings } = parse_config_with_warnings(&content)?;
+    for warning in &warnings {
+        eprintln!("runok warning: {warning}\n  --> {}", path.display());
+    }
     Ok(config)
 }
 

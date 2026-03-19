@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use super::cache::PresetCache;
 use super::git_client::{GitClient, ProcessGitClient};
 use super::preset_remote::{PresetReference, load_remote_preset, parse_preset_reference};
-use super::{Config, ConfigError, PresetError, parse_config};
+use super::{Config, ConfigError, PresetError, parse_config_with_warnings};
 
 const MAX_EXTENDS_DEPTH: usize = 10;
 
@@ -121,7 +121,11 @@ pub fn load_local_preset(reference: &str, base_dir: &Path) -> Result<Config, Con
     }
 
     let yaml = std::fs::read_to_string(&path)?;
-    let mut config = parse_config(&yaml)?;
+    let parsed = parse_config_with_warnings(&yaml)?;
+    for warning in &parsed.warnings {
+        eprintln!("runok warning: {warning}\n  --> {}", path.display());
+    }
+    let mut config = parsed.config;
 
     // Resolve paths in the preset relative to the preset file's parent directory
     let preset_base_dir = path.parent().unwrap_or(base_dir);
@@ -362,6 +366,7 @@ mod tests {
     use super::*;
     use crate::config::cache::CacheMetadata;
     use crate::config::git_client::mock::MockGitClient;
+    use crate::config::parse_config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;

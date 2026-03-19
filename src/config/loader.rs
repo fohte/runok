@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::cache::PresetCache;
 use super::preset::resolve_extends;
-use super::{Config, ConfigError, parse_config};
+use super::{Config, ConfigError, ParsedConfig, parse_config_with_warnings};
 
 /// Trait for loading and merging configuration files.
 pub trait ConfigLoader {
@@ -110,7 +110,11 @@ impl DefaultConfigLoader {
 
     fn read_and_parse(path: &Path) -> Result<Config, ConfigError> {
         let yaml = std::fs::read_to_string(path)?;
-        parse_config(&yaml)
+        let ParsedConfig { config, warnings } = parse_config_with_warnings(&yaml)?;
+        for warning in &warnings {
+            eprintln!("runok warning: {warning}\n  --> {}", path.display());
+        }
+        Ok(config)
     }
 }
 
@@ -119,7 +123,7 @@ impl DefaultConfigLoader {
 fn strip_audit(mut config: Config, source: &str) -> Config {
     if config.audit.is_some() {
         eprintln!(
-            "warning: 'audit' section in {source} is ignored \
+            "runok warning: 'audit' section in {source} is ignored \
              (audit settings can only be configured in the global config)"
         );
         config.audit = None;

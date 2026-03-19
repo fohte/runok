@@ -1,9 +1,23 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 #[cfg(any(feature = "config-schema", test))]
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::Deserializer;
+
+thread_local! {
+    static PARSE_WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Collect warnings emitted during config parsing (e.g. deprecated fields).
+fn take_parse_warnings() -> Vec<String> {
+    PARSE_WARNINGS.with(|w| w.borrow_mut().drain(..).collect())
+}
+
+fn push_parse_warning(msg: String) {
+    PARSE_WARNINGS.with(|w| w.borrow_mut().push(msg));
+}
 
 /// Top-level runok configuration.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
@@ -421,9 +435,10 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
                 write: new.write,
             }),
             FsPolicyFormat::Legacy(legacy) => {
-                eprintln!(
-                    "warning: sandbox fs 'writable'/'deny' fields are deprecated, \
-                     use 'write: {{ allow: [...], deny: [...] }}' instead"
+                push_parse_warning(
+                    "sandbox fs 'writable'/'deny' fields are deprecated, \
+                     use 'write: { allow: [...], deny: [...] }' instead"
+                        .to_string(),
                 );
                 Ok(FsPolicy {
                     read: None,
@@ -1056,10 +1071,28 @@ fn default_audit_dir() -> std::path::PathBuf {
     }
 }
 
+/// Result of parsing a config, including any warnings.
+pub struct ParsedConfig {
+    pub config: Config,
+    pub warnings: Vec<String>,
+}
+
 /// Parse a YAML string into a `Config`.
 pub fn parse_config(yaml: &str) -> Result<Config, crate::config::ConfigError> {
+    // Discard any warnings; callers that need warnings should use
+    // `parse_config_with_warnings` instead.
+    take_parse_warnings();
     let config: Config = serde_saphyr::from_str(yaml)?;
+    take_parse_warnings();
     Ok(config)
+}
+
+/// Parse a YAML string into a `Config`, collecting deprecation warnings.
+pub fn parse_config_with_warnings(yaml: &str) -> Result<ParsedConfig, crate::config::ConfigError> {
+    take_parse_warnings();
+    let config: Config = serde_saphyr::from_str(yaml)?;
+    let warnings = take_parse_warnings();
+    Ok(ParsedConfig { config, warnings })
 }
 
 #[cfg(test)]

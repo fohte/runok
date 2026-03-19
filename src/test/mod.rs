@@ -6,8 +6,8 @@ use owo_colors::OwoColorize;
 use owo_colors::Stream::Stdout;
 
 use crate::config::{
-    ActionKind, Config, ConfigError, InlineTestEntry, PresetCache, parse_config,
-    resolve_config_paths, resolve_extends,
+    ActionKind, Config, ConfigError, InlineTestEntry, ParsedConfig, PresetCache,
+    parse_config_with_warnings, resolve_config_paths, resolve_extends,
 };
 use crate::rules::RuleError;
 use crate::rules::rule_engine::{Action, EvalContext, evaluate_compound};
@@ -324,7 +324,13 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
     };
 
     let yaml = std::fs::read_to_string(&path)?;
-    let mut config = parse_config(&yaml)?;
+    let ParsedConfig {
+        mut config,
+        warnings,
+    } = parse_config_with_warnings(&yaml)?;
+    for warning in &warnings {
+        eprintln!("runok warning: {warning}\n  --> {}", path.display());
+    }
 
     let base_dir = path.parent().unwrap_or(Path::new("."));
     resolve_config_paths(&mut config, base_dir).map_err(ConfigError::from)?;
@@ -358,7 +364,13 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
                 return Err(TestError::ConfigNotFound { path: extend_path });
             }
             let extend_yaml = std::fs::read_to_string(&extend_path)?;
-            let mut extend_config = parse_config(&extend_yaml)?;
+            let ParsedConfig {
+                config: mut extend_config,
+                warnings: extend_warnings,
+            } = parse_config_with_warnings(&extend_yaml)?;
+            for warning in &extend_warnings {
+                eprintln!("runok warning: {warning}\n  --> {}", extend_path.display());
+            }
             let extend_base = extend_path.parent().unwrap_or(Path::new("."));
             resolve_config_paths(&mut extend_config, extend_base).map_err(ConfigError::from)?;
 
@@ -392,6 +404,7 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::parse_config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
