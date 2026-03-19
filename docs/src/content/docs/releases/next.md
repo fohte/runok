@@ -45,7 +45,11 @@ definitions:
 
 See [Sandbox Overview](/sandbox/overview/) for details.
 
-## Bug fixes
+## Bug Fixes
+
+### Remove unused `definitions.commands` field ([#235](https://github.com/fohte/runok/pull/235))
+
+The `definitions.commands` configuration field has been removed. This field was parsed and merged but never referenced by the rule engine or command parser, so it had no effect at runtime. If your configuration includes `definitions.commands`, simply remove it — no other changes are needed.
 
 ### `runok test` no longer evaluates inline tests from remote presets
 

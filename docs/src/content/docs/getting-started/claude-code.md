@@ -155,7 +155,7 @@ The [runok Claude Code plugin](https://github.com/fohte/runok-claude-code-plugin
 
 - **Configuration reading** -- Discovers and reads global (`~/.config/runok/runok.yml`), project (`./runok.yml`), and override (`./runok.local.yml`) configuration files.
 - **Rule management** -- Add, edit, and remove `allow`/`deny`/`ask` rules with full pattern syntax support (wildcards, alternation, negation, optional groups, quoted literals, `when` clauses).
-- **Definitions management** -- Manage `paths`, `wrappers`, `sandbox` presets, and `commands` under the `definitions` section.
+- **Definitions management** -- Manage `paths`, `wrappers`, and `sandbox` presets under the `definitions` section.
 - **Extends management** -- Add and remove shared presets via local paths, GitHub shorthand (`github:org/repo@ref`), or Git URLs.
 - **Initialization** -- Generate a starter `runok.yml` for new projects with sensible defaults.
 
