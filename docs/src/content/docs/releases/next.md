@@ -47,6 +47,15 @@ See [Sandbox Overview](/sandbox/overview/) for details.
 
 ## Bug Fixes
 
+### Deprecation warnings now identify their source ([#242](https://github.com/fohte/runok/pull/242))
+
+Deprecation warnings are now prefixed with `runok warning:` and include the config file path, making them distinguishable from warnings emitted by other tools in stderr.
+
+```
+runok warning: sandbox fs 'writable'/'deny' fields are deprecated, use 'write: { allow: [...], deny: [...] }' instead
+  --> /path/to/runok.yml
+```
+
 ### Remove unused `definitions.commands` field ([#235](https://github.com/fohte/runok/pull/235))
 
 The `definitions.commands` configuration field has been removed. This field was parsed and merged but never referenced by the rule engine or command parser, so it had no effect at runtime. If your configuration includes `definitions.commands`, simply remove it — no other changes are needed.
