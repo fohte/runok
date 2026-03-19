@@ -25,7 +25,7 @@ seccompiler = "=0.5.0"
 anyhow = "=1.0.102"
 chrono = { version = "=0.4.44", features = ["clock", "serde"] }
 cel-interpreter = "=0.10.0"
-clap = { version = "=4.5.60", features = ["derive"] }
+clap = { version = "=4.5.61", features = ["derive"] }
 owo-colors = { version = "=4.3.0", features = ["supports-colors"] }
 terminal_size = "=0.4.3"
 fs2 = "=0.4.3"
