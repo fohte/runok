@@ -33,6 +33,43 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  update-release-docs:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Update release docs
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: .github/scripts/update-release-docs.bash
+
+      - name: Commit and push
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/src/content/docs/releases/
+          git diff --cached --quiet || {
+            git commit -m "docs(releases): add ${TAG_NAME} release notes"
+            git push
+          }
+
   publish-crates-io:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
