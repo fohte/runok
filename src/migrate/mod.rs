@@ -53,7 +53,6 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
         let migrated = sandbox_fs::migrate_sandbox_fs(&original);
 
         if migrated == original {
-            eprintln!("no changes: {}", path.display());
             continue;
         }
 
@@ -82,6 +81,8 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
             "\n{migrated_count} file{} updated.",
             if migrated_count == 1 { "" } else { "s" }
         );
+    } else {
+        eprintln!("Already up to date.");
     }
 
     Ok(())
