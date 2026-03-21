@@ -25,7 +25,7 @@ fs:
     deny: ['.git']
 ```
 
-### `runok migrate` command for automatic config migration
+### `runok migrate` command for automatic config migration ([#252](https://github.com/fohte/runok/pull/252))
 
 Run `runok migrate` to automatically update deprecated config syntax to the latest format. Currently migrates legacy sandbox `fs.writable`/`fs.deny` fields to the new `fs.write.allow`/`fs.write.deny` structure. The deprecation warning now includes a hint to run this command.
 
