@@ -17,7 +17,7 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}

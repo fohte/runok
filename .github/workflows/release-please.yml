@@ -22,7 +22,7 @@ jobs:
       prs_created: ${{ steps.release.outputs.prs_created }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -53,7 +53,7 @@ jobs:
           echo "head_branch=$head_branch" >> "$GITHUB_OUTPUT"
           echo "tag_name=v${version}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -246,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
