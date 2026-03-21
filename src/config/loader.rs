@@ -90,22 +90,20 @@ impl DefaultConfigLoader {
     pub fn find_config_paths(&self, cwd: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
-        if let Some(dir) = &self.global_dir {
+        let mut collect = |dir: &Path| {
             if let Some(p) = Self::find_config(dir, CONFIG_FILENAMES) {
                 paths.push(p);
             }
             if let Some(p) = Self::find_config(dir, LOCAL_OVERRIDE_FILENAMES) {
                 paths.push(p);
             }
-        }
+        };
 
+        if let Some(dir) = &self.global_dir {
+            collect(dir);
+        }
         if let Some(dir) = self.find_project_dir(cwd) {
-            if let Some(p) = Self::find_config(&dir, CONFIG_FILENAMES) {
-                paths.push(p);
-            }
-            if let Some(p) = Self::find_config(&dir, LOCAL_OVERRIDE_FILENAMES) {
-                paths.push(p);
-            }
+            collect(&dir);
         }
 
         paths

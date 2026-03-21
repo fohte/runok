@@ -4,51 +4,35 @@ use std::fs;
 use tempfile::TempDir;
 
 #[rstest]
-fn migrate_rewrites_legacy_sandbox_fs() {
-    let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("runok.yml");
-    fs::write(
-        &config_path,
-        indoc! {"
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    writable: [./tmp, /tmp]
-                    deny:
-                      - .env
-                  network:
-                    allow: true
-        "},
-    )
-    .unwrap();
-
-    // yes=true to skip interactive prompt in tests
-    runok::migrate::run(Some(&config_path), true).unwrap();
-
-    let result = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(
-        result,
-        indoc! {"
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    write:
-                      allow: [./tmp, /tmp]
-                      deny:
-                        - .env
-                  network:
-                    allow: true
-        "},
-    );
-}
-
-#[rstest]
-fn migrate_no_changes_when_already_new_format() {
-    let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("runok.yml");
-    let content = indoc! {"
+#[case::rewrites_legacy_sandbox_fs(
+    "runok.yml",
+    indoc! {"
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp, /tmp]
+                deny:
+                  - .env
+              network:
+                allow: true
+    "},
+    indoc! {"
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                write:
+                  allow: [./tmp, /tmp]
+                  deny:
+                    - .env
+              network:
+                allow: true
+    "},
+)]
+#[case::no_changes_when_already_new_format(
+    "runok.yml",
+    indoc! {"
         definitions:
           sandbox:
             restricted:
@@ -56,45 +40,66 @@ fn migrate_no_changes_when_already_new_format() {
                 write:
                   allow: [./tmp]
                   deny: [.env]
-    "};
-    fs::write(&config_path, content).unwrap();
-
-    runok::migrate::run(Some(&config_path), true).unwrap();
-
-    let result = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(result, content);
-}
-
-#[rstest]
-fn migrate_with_config_path_targets_specific_file() {
+    "},
+    indoc! {"
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                write:
+                  allow: [./tmp]
+                  deny: [.env]
+    "},
+)]
+#[case::targets_specific_file(
+    "custom.yml",
+    indoc! {"
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "},
+    indoc! {"
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                write:
+                  allow: [./tmp]
+    "},
+)]
+#[case::skips_remote_extends(
+    "runok.yml",
+    indoc! {"
+        extends:
+          - github:fohte/runok-presets
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "},
+    indoc! {"
+        extends:
+          - github:fohte/runok-presets
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                write:
+                  allow: [./tmp]
+    "},
+)]
+fn migrate_single_file(#[case] filename: &str, #[case] input: &str, #[case] expected: &str) {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("custom.yml");
-    fs::write(
-        &config_path,
-        indoc! {"
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    writable: [./tmp]
-        "},
-    )
-    .unwrap();
+    let config_path = tmp.path().join(filename);
+    fs::write(&config_path, input).unwrap();
 
     runok::migrate::run(Some(&config_path), true).unwrap();
 
     let result = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(
-        result,
-        indoc! {"
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    write:
-                      allow: [./tmp]
-        "},
-    );
+    assert_eq!(result, expected);
 }
 
 #[rstest]
@@ -155,44 +160,6 @@ fn migrate_follows_local_extends() {
                     write:
                       allow: [/tmp]
                       deny: [.env]
-        "},
-    );
-}
-
-#[rstest]
-fn migrate_skips_remote_extends() {
-    let tmp = TempDir::new().unwrap();
-
-    // Main config that extends a remote preset (should not try to follow it)
-    let config_path = tmp.path().join("runok.yml");
-    fs::write(
-        &config_path,
-        indoc! {"
-            extends:
-              - github:fohte/runok-presets
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    writable: [./tmp]
-        "},
-    )
-    .unwrap();
-
-    runok::migrate::run(Some(&config_path), true).unwrap();
-
-    let result = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(
-        result,
-        indoc! {"
-            extends:
-              - github:fohte/runok-presets
-            definitions:
-              sandbox:
-                restricted:
-                  fs:
-                    write:
-                      allow: [./tmp]
         "},
     );
 }

@@ -22,9 +22,12 @@ pub fn migrate_sandbox_fs(input: &str) -> String {
             while i < lines.len() && is_child_line(lines[i], indent) {
                 let child = lines[i];
                 let child_stripped = child.trim_start();
-                let child_indent = &child[..child.len() - child_stripped.len()];
-                // Add 2 spaces of extra indent (under `allow:`)
-                result.push(format!("{child_indent}  {child_stripped}"));
+                if child_stripped.is_empty() {
+                    result.push(String::new());
+                } else {
+                    let child_indent = &child[..child.len() - child_stripped.len()];
+                    result.push(format!("{child_indent}  {child_stripped}"));
+                }
                 i += 1;
             }
             continue;
@@ -77,8 +80,9 @@ pub fn migrate_sandbox_fs(input: &str) -> String {
 /// Returns true if `line` is a child (more deeply indented) of the given `parent_indent`.
 fn is_child_line(line: &str, parent_indent: &str) -> bool {
     let stripped = line.trim_start();
-    // Blank lines and comments within the block are considered children
-    if stripped.is_empty() || stripped.starts_with('#') {
+    if stripped.is_empty() {
+        // Truly empty lines are ambiguous; treat as children only within blocks.
+        // We rely on the next non-empty line to break the loop.
         return true;
     }
     let line_indent = line.len() - stripped.len();
@@ -309,6 +313,54 @@ mod tests {
         indoc! {"
             rules:
               - deny: rm -rf /
+        "},
+    )]
+    #[case::blank_line_between_blocks(
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable:
+                      - ./tmp
+
+                  network:
+                    allow: true
+        "},
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    write:
+                      allow:
+                        - ./tmp
+
+                  network:
+                    allow: true
+        "},
+    )]
+    #[case::comment_between_blocks(
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    writable: [./tmp]
+                  # network settings
+                  network:
+                    allow: true
+        "},
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    write:
+                      allow: [./tmp]
+                  # network settings
+                  network:
+                    allow: true
         "},
     )]
     #[case::with_network(
