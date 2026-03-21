@@ -13,9 +13,13 @@ pub fn migrate_sandbox_fs(input: &str) -> String {
         let indent = &line[..line.len() - stripped.len()];
 
         if let Some(rest) = stripped.strip_prefix("writable:") {
-            // Replace `writable:` with `write:\n{indent}  allow:`
-            result.push(format!("{indent}write:"));
-            result.push(format!("{indent}  allow:{rest}"));
+            if should_nest_under_existing_write(&result, indent) {
+                // `deny:` was already converted and created a `write:` block
+                result.push(format!("{indent}  allow:{rest}"));
+            } else {
+                result.push(format!("{indent}write:"));
+                result.push(format!("{indent}  allow:{rest}"));
+            }
             i += 1;
 
             // Consume continuation lines (list items at deeper indent)
@@ -58,8 +62,12 @@ pub fn migrate_sandbox_fs(input: &str) -> String {
             while i < lines.len() && is_child_line(lines[i], indent) {
                 let child = lines[i];
                 let child_stripped = child.trim_start();
-                let child_indent = &child[..child.len() - child_stripped.len()];
-                result.push(format!("{child_indent}  {child_stripped}"));
+                if child_stripped.is_empty() {
+                    result.push(String::new());
+                } else {
+                    let child_indent = &child[..child.len() - child_stripped.len()];
+                    result.push(format!("{child_indent}  {child_stripped}"));
+                }
                 i += 1;
             }
             continue;
@@ -384,6 +392,25 @@ mod tests {
                       deny: [.env]
                   network:
                     allow: true
+        "},
+    )]
+    #[case::deny_before_writable(
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    deny: [.env]
+                    writable: [./tmp]
+        "},
+        indoc! {"
+            definitions:
+              sandbox:
+                restricted:
+                  fs:
+                    write:
+                      deny: [.env]
+                      allow: [./tmp]
         "},
     )]
     fn test_migrate_sandbox_fs(#[case] input: &str, #[case] expected: &str) {
