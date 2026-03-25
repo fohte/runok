@@ -437,7 +437,8 @@ impl<'de> serde::Deserialize<'de> for FsPolicy {
             FsPolicyFormat::Legacy(legacy) => {
                 push_parse_warning(
                     "sandbox fs 'writable'/'deny' fields are deprecated, \
-                     use 'write: { allow: [...], deny: [...] }' instead"
+                     use 'write: { allow: [...], deny: [...] }' instead. \
+                     Run `runok migrate` to update automatically"
                         .to_string(),
                 );
                 Ok(FsPolicy {

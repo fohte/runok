@@ -26,6 +26,8 @@ pub enum Commands {
     Test(TestArgs),
     /// Initialize runok configuration
     Init(InitArgs),
+    /// Migrate config files to the latest format
+    Migrate(MigrateArgs),
     /// Force-update all remote presets referenced via extends
     UpdatePresets,
     /// Print the JSON Schema for runok.yml to stdout
@@ -78,6 +80,18 @@ pub struct SandboxExecArgs {
     /// The command and its arguments to execute.
     #[arg(last = true, required = true)]
     pub command: Vec<String>,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct MigrateArgs {
+    /// Path to a specific config file to migrate
+    #[arg(short = 'c', long)]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Apply all changes without prompting
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
 
 #[derive(clap::Args)]
@@ -243,6 +257,22 @@ mod tests {
     #[case::init_all_flags(
         &["runok", "init", "--scope", "user", "-y"],
         Commands::Init(InitArgs { scope: Some(InitScope::User), yes: true }),
+    )]
+    #[case::migrate_default(
+        &["runok", "migrate"],
+        Commands::Migrate(MigrateArgs { config: None, yes: false }),
+    )]
+    #[case::migrate_with_config_short(
+        &["runok", "migrate", "-c", "path/to/runok.yml"],
+        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("path/to/runok.yml")), yes: false }),
+    )]
+    #[case::migrate_with_config_long(
+        &["runok", "migrate", "--config", "runok.yml"],
+        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("runok.yml")), yes: false }),
+    )]
+    #[case::migrate_with_yes(
+        &["runok", "migrate", "-y"],
+        Commands::Migrate(MigrateArgs { config: None, yes: true }),
     )]
     #[case::test_default(
         &["runok", "test"],

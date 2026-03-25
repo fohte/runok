@@ -3,6 +3,7 @@ mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod extends_resolution;
 mod init_wizard;
+mod migrate_config;
 mod optional_notation_and_path_ref;
 mod path_resolution;
 mod property_based;
