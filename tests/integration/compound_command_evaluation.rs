@@ -730,6 +730,18 @@ fn command_substitution_extraction(
     "case x in a) echo hello;; b) rm -rf /;; esac",
     assert_deny as ActionAssertion,
 )]
+#[case::negated_command_allowed(
+    "! echo hello",
+    assert_allow as ActionAssertion,
+)]
+#[case::negated_command_deny(
+    "! rm -rf /",
+    assert_deny as ActionAssertion,
+)]
+#[case::negated_command_in_if_allowed(
+    "if ! true; then echo hello; fi",
+    assert_allow as ActionAssertion,
+)]
 fn control_structure_subcommand_extraction(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
