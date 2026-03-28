@@ -968,6 +968,7 @@ mod tests {
         "if ! grep -q test /dev/null; then echo no; fi",
         vec!["grep -q test /dev/null", "echo no"],
     )]
+    #[case::negated_pipeline_in_subshell("! (echo a | grep a)", vec!["echo a", "grep a"])]
     fn extract_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);

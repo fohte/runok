@@ -74,7 +74,7 @@ runok warning: sandbox fs 'writable'/'deny' fields are deprecated, use 'write: {
 
 The `definitions.commands` configuration field has been removed. This field was parsed and merged but never referenced by the rule engine or command parser, so it had no effect at runtime. If your configuration includes `definitions.commands`, simply remove it — no other changes are needed.
 
-### Negated commands (`! command`) now evaluated correctly
+### Negated commands (`! command`) now evaluated correctly ([#266](https://github.com/fohte/runok/pull/266))
 
 Commands prefixed with the shell negation operator `!` (e.g., `! grep -q pattern file`) were not being parsed correctly. The `!` prefix caused the command to be treated as a single opaque string (`\! grep -q pattern file`), which failed to match rules. Now, `! command` is recognized as a transparent shell construct, and the inner command is extracted and evaluated against rules as expected.
 
