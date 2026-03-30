@@ -27,7 +27,7 @@ chrono = { version = "=0.4.44", features = ["clock", "serde"] }
 cel-interpreter = "=0.10.0"
 clap = { version = "=4.6.0", features = ["derive"] }
 owo-colors = { version = "=4.3.0", features = ["supports-colors"] }
-terminal_size = "=0.4.3"
+terminal_size = "=0.4.4"
 fs2 = "=0.4.3"
 dialoguer = "=0.12.0"
 schemars = { version = "=1.2.1", optional = true }
