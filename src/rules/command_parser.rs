@@ -298,7 +298,8 @@ fn collect_commands(
         | "process_substitution"
         | "while_statement"
         | "if_statement"
-        | "elif_clause" => {
+        | "elif_clause"
+        | "negated_command" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 collect_commands(child, source, commands, pipe_info, redirects);
@@ -962,6 +963,12 @@ mod tests {
     #[case::case_statement("case $x in a) echo a;; b) echo b;; esac", vec!["echo a", "echo b"])]
     #[case::compound_statement("{ echo a; echo b; }", vec!["echo a", "echo b"])]
     #[case::function_def("f() { echo hello; }", vec!["echo hello"])]
+    #[case::negated_command("! echo hello", vec!["echo hello"])]
+    #[case::negated_command_in_if(
+        "if ! grep -q test /dev/null; then echo no; fi",
+        vec!["grep -q test /dev/null", "echo no"],
+    )]
+    #[case::negated_pipeline_in_subshell("! (echo a | grep a)", vec!["echo a", "grep a"])]
     fn extract_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
