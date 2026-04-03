@@ -1,0 +1,42 @@
+name: PR title check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title-check:
+    runs-on: ubuntu-slim
+
+    steps:
+      - name: Check PR title follows Conventional Commits
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # Conventional Commits v1.0.0:
+          #   <type>[optional scope][optional !]: <description>
+          #
+          # Valid:   feat: ..., feat!: ..., feat(scope): ..., feat(scope)!: ...
+          # Invalid: feat!(scope): ... (! must come after scope, before :)
+          allowed_types="feat|fix|perf|deps|revert|chore|docs|style|refactor|test|build|ci"
+          pattern="^(${allowed_types})(\([a-zA-Z0-9_./* -]+\))?(!)?: .+"
+
+          if [[ "${PR_TITLE}" =~ ${pattern} ]]; then
+            echo "PR title is valid: ${PR_TITLE}"
+          else
+            echo "::error::PR title does not follow Conventional Commits format."
+            echo ""
+            echo "Expected: <type>[optional scope][optional !]: <description>"
+            echo "  Allowed types: ${allowed_types//|/, }"
+            echo ""
+            echo "Examples:"
+            echo "  feat: add new feature"
+            echo "  fix(parser): handle edge case"
+            echo "  feat(api)!: change response format"
+            echo ""
+            echo "Got: ${PR_TITLE}"
+            exit 1
+          fi
