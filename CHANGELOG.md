@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.1](https://github.com/fohte/runok/compare/v0.2.0...v0.2.1) (2026-04-03)
+
+
+### Features
+
+* **cli:** support `runok migrate` command to auto-convert deprecated sandbox fs config ([#252](https://github.com/fohte/runok/issues/252)) ([3dccd3e](https://github.com/fohte/runok/commit/3dccd3e75cb101b8d2e5d03accd4a122db0e66ab))
+* **sandbox:** support read/write sub-sections in sandbox fs config with read denial ([#236](https://github.com/fohte/runok/issues/236)) ([9f06e51](https://github.com/fohte/runok/commit/9f06e5158abbd92e167cefe016fcf50e26a50bc2))
+
+
+### Bug Fixes
+
+* **command_parser:** handle `negated_command` as a transparent container ([#266](https://github.com/fohte/runok/issues/266)) ([3aebc80](https://github.com/fohte/runok/commit/3aebc80e8c56b04d2010360d0eb9fe4a14104e0a))
+* **config:** add `runok warning:` prefix and config file path to deprecation warnings ([#242](https://github.com/fohte/runok/issues/242)) ([1706f2e](https://github.com/fohte/runok/commit/1706f2e58546f55a4d636bca1b0819076658ec9c))
+* **config:** remove unused `definitions.commands` field ([#235](https://github.com/fohte/runok/issues/235)) ([31ebb2c](https://github.com/fohte/runok/commit/31ebb2c565d25407a51003af10e037cb9a7b338d))
+* **test:** strip inline tests from remote presets on load ([#227](https://github.com/fohte/runok/issues/227)) ([725cf6e](https://github.com/fohte/runok/commit/725cf6e1a52890bd440ee89159bec55b895b7d5e))
+
+
+### Dependencies
+
+* update rust crate clap to v4.5.61 ([#241](https://github.com/fohte/runok/issues/241)) ([42992c9](https://github.com/fohte/runok/commit/42992c9177e1b92b81a210da26b6cc0b54eaeb81))
+* update rust crate clap to v4.6.0 ([#245](https://github.com/fohte/runok/issues/245)) ([39cd8c8](https://github.com/fohte/runok/commit/39cd8c8de5d6ab80273ca06d3f6b2f7adb1b6f75))
+* update rust crate libc to v0.2.183 ([#220](https://github.com/fohte/runok/issues/220)) ([22e7f27](https://github.com/fohte/runok/commit/22e7f2766d72c600048a798aa48ee86c715c5fac))
+* update rust crate serde-saphyr to v0.0.22 ([#259](https://github.com/fohte/runok/issues/259)) ([123c2f1](https://github.com/fohte/runok/commit/123c2f196c8dfb473e835f98551249f0c0fd4763))
+* update rust crate terminal_size to v0.4.4 ([#268](https://github.com/fohte/runok/issues/268)) ([14a436a](https://github.com/fohte/runok/commit/14a436ad6c504f6b0535668373d2b30032143f0f))
+* update rust crate tree-sitter to v0.26.7 ([#254](https://github.com/fohte/runok/issues/254)) ([983c835](https://github.com/fohte/runok/commit/983c8351198bc4294e574f4e3e943f5c3ba057bb))
+
 ## [0.2.0](https://github.com/fohte/runok/compare/v0.1.5...v0.2.0) (2026-03-15)
 
 
