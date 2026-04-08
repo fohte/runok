@@ -188,6 +188,46 @@ rules:
 The `vars` map only contains entries for `<var:name>` placeholders that were present in the matched pattern. If the pattern doesn't use `<var:name>`, the `vars` map is empty. Use `has(vars.name)` to safely check for a variable before accessing it.
 :::
 
+### `flag_groups` -- Captured flag group values
+
+A map of values captured by [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) placeholders, keyed by flag group name. **Each value is always a list**, even when only one flag value was captured, so `when` clauses can use list-aware CEL macros (`exists`, `all`, `size`) uniformly.
+
+```yaml
+definitions:
+  flag_groups:
+    field-flag: ['-f', '-F', '--field', '--raw-field']
+
+rules:
+  # Allow gh api graphql queries, but ask before mutations.
+  - allow: 'gh api graphql <flag:field-flag> *'
+    when: '!flag_groups["field-flag"].exists(v, v.startsWith("query=mutation"))'
+  - ask: 'gh api graphql <flag:field-flag> *'
+```
+
+The captured list contains every occurrence of any aliased flag's value. For example, `gh api graphql -f query=query{...} -f variables={}` produces:
+
+```cel
+flag_groups["field-flag"] == ["query=query{...}", "variables={}"]
+```
+
+`flag_groups[name]` is always present for every group declared in `definitions.flag_groups`, even when the matched rule did not use `<flag:name>` for that group — the value is then an empty list `[]`. This means `flag_groups["name"]` never raises an "undeclared reference" error.
+
+```yaml
+# Block curl invocations that send a sensitive file as request body
+definitions:
+  flag_groups:
+    data-flag: ['-d', '--data', '--data-raw', '--data-binary']
+
+rules:
+  - deny: 'curl <flag:data-flag> * *'
+    when: 'flag_groups["data-flag"].exists(v, v.startsWith("@/etc/"))'
+    message: 'Refused: do not send /etc/* as request body'
+```
+
+:::note
+Use bracket notation (`flag_groups["name"]`) when the group name contains hyphens. CEL's dot notation (`flag_groups.name`) only supports identifiers without hyphens.
+:::
+
 ## Operators
 
 CEL supports standard operators for building conditions:

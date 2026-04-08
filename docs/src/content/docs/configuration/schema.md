@@ -382,6 +382,28 @@ values:
 Variable definitions must contain concrete values. `<var:name>` or `<path:name>` references inside `definitions.vars` values are not allowed.
 :::
 
+#### `definitions.flag_groups`
+
+Named flag alias groups referenced by `<flag:name>` in rule patterns. Each group lists every flag spelling that shares semantic meaning (e.g. `-f`, `-F`, `--field`, `--raw-field` for `gh api`'s field flag). When a `<flag:name>` placeholder matches a command, every occurrence of any aliased flag is captured into the `flag_groups[name]` list available in `when` clauses.
+
+**Type:** `map[str, list[str]]`\
+**Default:** `{}`
+
+```yaml title="runok.yml"
+definitions:
+  flag_groups:
+    field-flag: ['-f', '-F', '--field', '--raw-field']
+    header-flag: ['-H', '--header']
+```
+
+##### Validation rules
+
+- Each entry must contain at least one flag.
+- Every flag name must start with `-` (long flags use `--`). The bare `--` separator is rejected because it is positional.
+- Rules referencing `<flag:name>` must reference a group defined here; undefined references are rejected at config load time.
+
+See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups----captured-flag-group-values) for details on how the captured values are exposed to `when` expressions.
+
 ### `audit`
 
 Audit log settings. Controls whether command evaluations are recorded and where log files are stored. Audit settings can only be configured in the **global** `runok.yml` — audit sections in project or local override configs are silently ignored.

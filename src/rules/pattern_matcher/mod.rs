@@ -23,37 +23,58 @@ use token_matching::{
     normalize_path, resolve_paths,
 };
 
-/// Result of a successful pattern match, containing both wildcard captures
-/// and variable reference captures.
+/// Result of a successful pattern match, containing wildcard captures,
+/// variable reference captures, and flag group captures.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchCaptures {
     /// Tokens captured by wildcards (`*`) in the pattern.
     pub wildcards: Vec<String>,
     /// Values captured by `<var:name>` references, keyed by variable name.
     pub vars: HashMap<String, String>,
+    /// Values captured by `<flag:name>` references, keyed by flag group name.
+    /// Always populated as a list (even when only one value matched) so that
+    /// `when` clauses can use list-aware CEL macros (`exists`, `all`, etc.)
+    /// uniformly. Groups defined in `definitions.flag_groups` but not present
+    /// in the matched command are populated as empty lists by the rule engine.
+    pub flag_groups: HashMap<String, Vec<String>>,
 }
 
 /// Maximum number of recursive steps allowed during pattern matching.
 /// Prevents exponential blowup from patterns with multiple consecutive wildcards.
 const MAX_MATCH_STEPS: usize = 10_000;
 
-/// Collect all flag aliases from `FlagWithValue` tokens in the pattern token
-/// list.  Used by the Literal matcher to identify value-flag tokens whose
-/// values should also be skipped when searching for the first positional
-/// argument in `cmd_tokens`.
-fn collect_value_flag_aliases<'a>(tokens: &'a [PatternToken], aliases: &mut HashSet<&'a str>) {
+/// Collect all flag aliases from `FlagWithValue` and `FlagGroupRef` tokens in
+/// the pattern token list.  Used by the Literal matcher to identify value-flag
+/// tokens whose values should also be skipped when searching for the first
+/// positional argument in `cmd_tokens`.
+fn collect_value_flag_aliases(
+    tokens: &[PatternToken],
+    definitions: &Definitions,
+    aliases: &mut HashSet<String>,
+) {
     for token in tokens {
-        if let PatternToken::FlagWithValue {
-            aliases: flag_aliases,
-            ..
-        } = token
-        {
-            for a in flag_aliases {
-                aliases.insert(a.as_str());
+        match token {
+            PatternToken::FlagWithValue {
+                aliases: flag_aliases,
+                ..
+            } => {
+                for a in flag_aliases {
+                    aliases.insert(a.clone());
+                }
             }
-        }
-        if let PatternToken::Optional(inner) = token {
-            collect_value_flag_aliases(inner, aliases);
+            PatternToken::FlagGroupRef { name, .. } => {
+                if let Some(group_aliases) =
+                    definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                {
+                    for a in group_aliases {
+                        aliases.insert(a.clone());
+                    }
+                }
+            }
+            PatternToken::Optional(inner) => {
+                collect_value_flag_aliases(inner, definitions, aliases);
+            }
+            _ => {}
         }
     }
 }
@@ -61,7 +82,10 @@ fn collect_value_flag_aliases<'a>(tokens: &'a [PatternToken], aliases: &mut Hash
 /// Find the index of the first positional (non-flag) token in `cmd_tokens`,
 /// skipping over flag tokens and their associated values based on
 /// `value_flag_aliases`.  Returns `None` if no positional token is found.
-fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &HashSet<&str>) -> Option<usize> {
+fn find_first_positional(
+    cmd_tokens: &[&str],
+    value_flag_aliases: &HashSet<String>,
+) -> Option<usize> {
     let mut i = 0;
     while i < cmd_tokens.len() {
         let t = cmd_tokens[i];
@@ -132,6 +156,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
         let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let var_captures = RefCell::new(HashMap::new());
+        let flag_group_captures = RefCell::new(HashMap::new());
         if match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -141,6 +166,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
             None,
             &after_dd,
             &var_captures,
+            &flag_group_captures,
         )
         .unwrap_or(false)
         {
@@ -169,6 +195,7 @@ pub fn matches_with_captures(
         let after_dd = Cell::new(false);
         let mut captures = Vec::new();
         let var_captures = RefCell::new(HashMap::new());
+        let flag_group_captures = RefCell::new(HashMap::new());
 
         // Capture command-position var ref value.
         if let CommandPattern::VarRef(name) = &pattern.command {
@@ -188,12 +215,14 @@ pub fn matches_with_captures(
             None,
             &after_dd,
             &var_captures,
+            &flag_group_captures,
         )
         .unwrap_or(false)
         {
             return Some(MatchCaptures {
                 wildcards: captures.into_iter().map(|s| s.to_string()).collect(),
                 vars: var_captures.into_inner(),
+                flag_groups: flag_group_captures.into_inner(),
             });
         }
     }
@@ -224,6 +253,7 @@ pub fn extract_placeholder(
         let after_dd = Cell::new(false);
         let mut captured = Vec::new();
         let var_captures = RefCell::new(HashMap::new());
+        let flag_group_captures = RefCell::new(HashMap::new());
         match_engine(
             &pattern.tokens,
             &cmd_tokens[skip..],
@@ -233,6 +263,7 @@ pub fn extract_placeholder(
             Some((&mut captured, &mut all_candidates)),
             &after_dd,
             &var_captures,
+            &flag_group_captures,
         )?;
     }
     Ok(all_candidates
@@ -274,6 +305,7 @@ fn match_engine<'a>(
     mut extract: Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
     after_double_dash: &Cell<bool>,
     var_captures: &RefCell<HashMap<String, String>>,
+    flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
 ) -> Result<bool, RuleError> {
     let count = steps.get() + 1;
     steps.set(count);
@@ -309,6 +341,7 @@ fn match_engine<'a>(
                         Some((captured, all_candidates)),
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )?;
                 } else if let Some(caps) = &mut captures {
                     let saved_len = caps.len();
@@ -322,6 +355,7 @@ fn match_engine<'a>(
                         None,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )? {
                         return Ok(true);
                     }
@@ -335,6 +369,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )? {
                     return Ok(true);
                 }
@@ -363,6 +398,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     );
                 }
                 return Ok(false);
@@ -381,6 +417,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     );
                 }
                 return Ok(false);
@@ -391,7 +428,7 @@ fn match_engine<'a>(
             // removed; skipped flag tokens are kept for later FlagWithValue
             // or flag-only Alternation matching.
             let mut value_aliases = HashSet::new();
-            collect_value_flag_aliases(rest, &mut value_aliases);
+            collect_value_flag_aliases(rest, definitions, &mut value_aliases);
             let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
                 return Ok(false);
             };
@@ -406,6 +443,7 @@ fn match_engine<'a>(
                     extract,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )
             } else {
                 Ok(false)
@@ -443,6 +481,7 @@ fn match_engine<'a>(
                                 None,
                                 after_double_dash,
                                 var_captures,
+                                flag_group_captures,
                             )? {
                                 return Ok(true);
                             }
@@ -456,6 +495,7 @@ fn match_engine<'a>(
                             None,
                             after_double_dash,
                             var_captures,
+                            flag_group_captures,
                         )? {
                             return Ok(true);
                         }
@@ -484,6 +524,7 @@ fn match_engine<'a>(
                                 None,
                                 after_double_dash,
                                 var_captures,
+                                flag_group_captures,
                             )? {
                                 return Ok(true);
                             }
@@ -497,6 +538,7 @@ fn match_engine<'a>(
                             None,
                             after_double_dash,
                             var_captures,
+                            flag_group_captures,
                         )? {
                             return Ok(true);
                         }
@@ -520,6 +562,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     );
                 }
                 return Ok(false);
@@ -529,7 +572,7 @@ fn match_engine<'a>(
             // find the first positional argument, consistent with
             // Literal matching.
             let mut value_aliases = HashSet::new();
-            collect_value_flag_aliases(rest, &mut value_aliases);
+            collect_value_flag_aliases(rest, definitions, &mut value_aliases);
             let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
                 return Ok(false);
             };
@@ -544,10 +587,119 @@ fn match_engine<'a>(
                     extract,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )
             } else {
                 Ok(false)
             }
+        }
+
+        PatternToken::FlagGroupRef { name, value } => {
+            // Resolve the alias list from definitions.flag_groups. If the
+            // group is undefined, the pattern matches nothing — same policy
+            // as undefined `<path:name>` and `<var:name>` references.
+            let Some(aliases) = definitions
+                .flag_groups
+                .as_ref()
+                .and_then(|g| g.get(name))
+                .cloned()
+            else {
+                return Ok(false);
+            };
+
+            // Collect every command token that matches any alias, capturing
+            // each occurrence's value into `flag_group_captures[name]`. We
+            // greedily consume all matching occurrences (rather than only
+            // the first) so that `when` clauses can inspect every value.
+            let mut matched_indices: Vec<usize> = Vec::new();
+            let mut captured_values: Vec<String> = Vec::new();
+
+            for i in 0..cmd_tokens.len() {
+                let token = cmd_tokens[i];
+
+                // Case 1: space-separated flag and value (e.g. `-f value`)
+                if aliases.iter().any(|a| a.as_str() == token)
+                    && i + 1 < cmd_tokens.len()
+                    && match_single_token(value, cmd_tokens[i + 1], definitions)
+                {
+                    // Skip if either index is already consumed (e.g. the
+                    // value of a previous match would be misread as a flag).
+                    if matched_indices.contains(&i) || matched_indices.contains(&(i + 1)) {
+                        continue;
+                    }
+                    matched_indices.push(i);
+                    matched_indices.push(i + 1);
+                    captured_values.push(cmd_tokens[i + 1].to_string());
+                    continue;
+                }
+
+                // Case 2: `=`-joined flag and value (e.g. `--field=value`)
+                if let Some((flag_part, value_part)) = split_flag_equals(token)
+                    && aliases.iter().any(|a| a.as_str() == flag_part)
+                    && match_single_token(value, value_part, definitions)
+                {
+                    if matched_indices.contains(&i) {
+                        continue;
+                    }
+                    matched_indices.push(i);
+                    captured_values.push(value_part.to_string());
+                    continue;
+                }
+
+                // Case 3: fused short flag and value (e.g. `-fvalue`)
+                if let Some((_flag_part, value_part)) = split_short_flag_value(token, &aliases)
+                    && match_single_token(value, value_part, definitions)
+                {
+                    if matched_indices.contains(&i) {
+                        continue;
+                    }
+                    matched_indices.push(i);
+                    captured_values.push(value_part.to_string());
+                }
+            }
+
+            // The placeholder behaves like a flag alternation: at least one
+            // occurrence must be present for the pattern to match.
+            if captured_values.is_empty() {
+                return Ok(false);
+            }
+
+            // Record captured values into the per-attempt flag-group map.
+            // We use `extend` instead of `insert` so that, if the same
+            // group name appears in multiple `<flag:name>` placeholders
+            // within one pattern (an unusual but legal case), every
+            // matched value is preserved.
+            let saved_fg = flag_group_captures.borrow().clone();
+            flag_group_captures
+                .borrow_mut()
+                .entry(name.clone())
+                .or_default()
+                .extend(captured_values);
+
+            matched_indices.sort_unstable();
+            let remaining = remove_indices(cmd_tokens, &matched_indices);
+
+            let saved_dd = after_double_dash.get();
+            let saved_vc = var_captures.borrow().clone();
+            let result = match_engine(
+                rest,
+                &remaining,
+                definitions,
+                steps,
+                captures,
+                extract,
+                after_double_dash,
+                var_captures,
+                flag_group_captures,
+            );
+            if !matches!(result, Ok(true)) {
+                // Restore on failure so that backtracking does not retain
+                // partial captures from a non-matching alternative.
+                after_double_dash.set(saved_dd);
+                *var_captures.borrow_mut() = saved_vc;
+                *flag_group_captures.borrow_mut() = saved_fg;
+            }
+            result
         }
 
         PatternToken::FlagWithValue { aliases, value } => {
@@ -572,6 +724,7 @@ fn match_engine<'a>(
                         capture_val,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )? {
                         return Ok(true);
                     }
@@ -599,6 +752,7 @@ fn match_engine<'a>(
                         capture_val,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )? {
                         return Ok(true);
                     }
@@ -626,6 +780,7 @@ fn match_engine<'a>(
                         capture_val,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )? {
                         return Ok(true);
                     }
@@ -652,6 +807,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )
                 } else {
                     Ok(false)
@@ -672,6 +828,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )
                 } else {
                     Ok(false)
@@ -683,7 +840,7 @@ fn match_engine<'a>(
                 // Order-independent: skip flags to find the first positional,
                 // then check negation against it.
                 let mut value_aliases = HashSet::new();
-                collect_value_flag_aliases(rest, &mut value_aliases);
+                collect_value_flag_aliases(rest, definitions, &mut value_aliases);
                 let Some(pos) = find_first_positional(cmd_tokens, &value_aliases) else {
                     return Ok(false);
                 };
@@ -699,6 +856,7 @@ fn match_engine<'a>(
                         extract,
                         after_double_dash,
                         var_captures,
+                        flag_group_captures,
                     )
                 } else {
                     Ok(false)
@@ -732,6 +890,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )? {
                     return Ok(true);
                 }
@@ -745,6 +904,7 @@ fn match_engine<'a>(
                 None,
                 after_double_dash,
                 var_captures,
+                flag_group_captures,
             )? {
                 return Ok(true);
             }
@@ -761,6 +921,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 );
             }
             Ok(false)
@@ -788,6 +949,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )
             } else {
                 Ok(false)
@@ -818,6 +980,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )
             } else {
                 Ok(false)
@@ -862,6 +1025,7 @@ fn match_engine<'a>(
                             Some((captured, all_candidates)),
                             after_double_dash,
                             var_captures,
+                            flag_group_captures,
                         )?;
                         captured.truncate(saved_len);
                     }
@@ -881,6 +1045,7 @@ fn match_engine<'a>(
                     None,
                     after_double_dash,
                     var_captures,
+                    flag_group_captures,
                 )
             }
         }
@@ -896,6 +1061,7 @@ fn match_engine<'a>(
                 extract,
                 after_double_dash,
                 var_captures,
+                flag_group_captures,
             )
         }
 
@@ -910,6 +1076,7 @@ fn match_engine<'a>(
                 extract,
                 after_double_dash,
                 var_captures,
+                flag_group_captures,
             )
         }
     }
@@ -931,6 +1098,7 @@ fn try_recurse_flag_value<'a>(
     capture_val: Option<&'a str>,
     after_double_dash: &Cell<bool>,
     var_captures: &RefCell<HashMap<String, String>>,
+    flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
 ) -> Result<bool, RuleError> {
     if let Some((captured, all_candidates)) = extract {
         match_engine(
@@ -942,6 +1110,7 @@ fn try_recurse_flag_value<'a>(
             Some((captured, all_candidates)),
             after_double_dash,
             var_captures,
+            flag_group_captures,
         )?;
         // In extract mode, always continue scanning (don't return true)
         Ok(false)
@@ -959,6 +1128,7 @@ fn try_recurse_flag_value<'a>(
             None,
             after_double_dash,
             var_captures,
+            flag_group_captures,
         )? {
             return Ok(true);
         }
@@ -974,6 +1144,7 @@ fn try_recurse_flag_value<'a>(
             None,
             after_double_dash,
             var_captures,
+            flag_group_captures,
         )
     }
 }
