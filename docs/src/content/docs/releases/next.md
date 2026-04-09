@@ -35,4 +35,4 @@ This unlocks several common security checks that were previously awkward or impo
 - **`docker run -v ...`** -- inspect every `--volume` mount, not just the first one.
 - **`git -c key=value ...`** -- check every `-c`/`--config` override at once.
 
-See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups----captured-flag-group-values) for details.
+See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups--captured-flag-group-values) for details.
