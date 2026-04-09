@@ -595,6 +595,14 @@ fn match_engine<'a>(
         }
 
         PatternToken::FlagGroupRef { name, value } => {
+            // TODO: only value-taking flags are handled here. Each of the
+            // three matching cases below requires the aliased flag to carry
+            // a value, so a boolean flag (e.g. `--force`) listed in
+            // `definitions.flag_groups` would never produce a capture and
+            // the pattern would silently fail to match. Add a separate
+            // value-less branch (and a way to expose presence-only captures
+            // in CEL) once a real use case appears.
+
             // Resolve the alias list from definitions.flag_groups. If the
             // group is undefined, the pattern matches nothing — same policy
             // as undefined `<path:name>` and `<var:name>` references.

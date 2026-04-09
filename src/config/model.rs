@@ -137,6 +137,11 @@ pub struct Definitions {
     /// that share semantic meaning. When a `<flag:name>` placeholder matches a
     /// command, every occurrence of any aliased flag is captured into the
     /// `flag_groups[name]` list available in `when` clauses.
+    ///
+    /// TODO: only value-taking flags are currently supported. Boolean flags
+    /// (e.g. `--force`, `-v` without an argument) are not yet representable
+    /// here because the matcher always pairs a `<flag:name>` placeholder with
+    /// a value pattern.
     pub flag_groups: Option<HashMap<String, Vec<String>>>,
 }
 

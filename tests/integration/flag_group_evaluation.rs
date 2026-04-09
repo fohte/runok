@@ -208,6 +208,29 @@ fn flag_group_validation_errors(#[case] yaml: &str, #[case] needles: &[&str]) {
     assert_message_contains(&err.to_string(), needles);
 }
 
+#[rstest]
+fn flag_group_inside_optional_group_is_rejected_at_evaluation(empty_context: EvalContext) {
+    // The pattern parser rejects `<flag:name>` inside `[...]` because the
+    // matcher's optional-absent path cannot detect grouped flags. The error
+    // surfaces at evaluation time as a PatternParse failure, not at config
+    // validate time, since `Config::validate()` only inspects definitions for
+    // `flag_groups` and skips patterns that fail to parse.
+    let yaml = indoc! {r#"
+        definitions:
+          flag_groups:
+            field-flag: ['-f', '--field']
+        rules:
+          - allow: 'gh api graphql [<flag:field-flag> *]'
+    "#};
+    let config = parse_config(yaml).unwrap();
+    let err = evaluate_command(&config, "gh api graphql -f query=hello", &empty_context)
+        .expect_err("expected pattern parse error");
+    assert_message_contains(
+        &err.to_string(),
+        &["not supported inside an optional group"],
+    );
+}
+
 // ========================================
 // Existing functionality is unaffected
 // ========================================

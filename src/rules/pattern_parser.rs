@@ -277,6 +277,18 @@ fn build_pattern_tokens(
                                 .into(),
                         ));
                     }
+                    // Reject `<flag:name>` inside `[...]` Optional groups.
+                    // `optional_flags_absent` only knows about FlagWithValue
+                    // aliases, so it cannot detect that grouped flags are
+                    // still present in the command tokens — taking the
+                    // "absent" path would silently drop captured values and
+                    // produce an incorrect match. Disallow the construct
+                    // upfront until matching gains first-class support.
+                    if inside_group {
+                        return Err(PatternParseError::InvalidSyntax(format!(
+                            "<flag:{name}> is not supported inside an optional group `[...]`"
+                        )));
+                    }
                     let Some((_, next_token)) = iter.next() else {
                         return Err(PatternParseError::InvalidSyntax(format!(
                             "<flag:{name}> must be followed by a value pattern (e.g. <flag:{name}> *)"
@@ -993,5 +1005,11 @@ mod tests {
     fn parse_flag_group_ref_empty_name_is_error() {
         let err = parse("gh <flag:> *").unwrap_err();
         assert_err_message_contains(&err, "requires a group name");
+    }
+
+    #[test]
+    fn parse_flag_group_ref_inside_optional_group_is_error() {
+        let err = parse("gh api graphql [<flag:field-flag> *]").unwrap_err();
+        assert_err_message_contains(&err, "not supported inside an optional group");
     }
 }
