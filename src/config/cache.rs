@@ -69,9 +69,18 @@ impl PresetCache {
 
     /// Compute the SHA256-based cache key for a reference string.
     pub fn cache_key(reference: &str) -> String {
+        use std::fmt::Write;
+
         use sha2::{Digest, Sha256};
+        // sha2 0.11 returns `hybrid_array::Array`, which no longer implements
+        // `LowerHex`, so format each byte manually to produce a lowercase hex string.
         let hash = Sha256::digest(reference.as_bytes());
-        format!("{hash:x}")
+        let mut out = String::with_capacity(hash.len() * 2);
+        for byte in hash.iter() {
+            // Writing to a `String` via `fmt::Write` cannot fail.
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
     }
 
     /// Return the cache directory path for a given reference.
