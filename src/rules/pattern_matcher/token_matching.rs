@@ -152,8 +152,9 @@ pub(crate) fn match_single_token(
         }
         PatternToken::VarRef(name) => match_var_ref(name, cmd_token, definitions),
         PatternToken::Placeholder(_) => true,
-        // FlagWithValue, Optional, Opts, and Vars don't make sense as single-token matches
+        // FlagWithValue, FlagGroupRef, Optional, Opts, and Vars don't make sense as single-token matches
         PatternToken::FlagWithValue { .. }
+        | PatternToken::FlagGroupRef { .. }
         | PatternToken::Optional(_)
         | PatternToken::Opts
         | PatternToken::Vars => false,

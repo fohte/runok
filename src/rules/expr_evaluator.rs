@@ -5,7 +5,7 @@ use super::command_parser::{PipeInfo, RedirectInfo};
 
 /// Context for CEL expression evaluation, providing access to
 /// environment variables, parsed flags, positional arguments, path lists,
-/// redirect operators, and pipeline position.
+/// redirect operators, pipeline position, captured variables, and flag groups.
 pub struct ExprContext {
     pub env: HashMap<String, String>,
     pub flags: HashMap<String, Option<String>>,
@@ -14,6 +14,12 @@ pub struct ExprContext {
     pub redirects: Vec<RedirectInfo>,
     pub pipe: PipeInfo,
     pub vars: HashMap<String, String>,
+    /// Values captured by `<flag:name>` placeholders, keyed by flag group
+    /// name. Always exposed as a list so that `when` clauses can use the
+    /// list-aware CEL macros (`exists`, `all`, etc.). Groups defined in
+    /// `definitions.flag_groups` but not matched by the rule are still
+    /// present as empty lists, so `flag_groups["name"]` always succeeds.
+    pub flag_groups: HashMap<String, Vec<String>>,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -91,6 +97,10 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
 
     cel_context.add_variable_from_value("vars", context.vars.clone());
 
+    cel_context
+        .add_variable("flag_groups", &context.flag_groups)
+        .map_err(|e| ExprError::Eval(e.to_string()))?;
+
     let result = program
         .execute(&cel_context)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
@@ -115,6 +125,7 @@ mod tests {
             redirects: Vec::new(),
             pipe: PipeInfo::default(),
             vars: HashMap::new(),
+            flag_groups: HashMap::new(),
         }
     }
 
@@ -250,6 +261,46 @@ mod tests {
     fn vars_empty_when_no_var_captured() {
         let context = empty_context();
         assert!(evaluate("vars.size() == 0", &context).unwrap());
+    }
+
+    // === Flag group access ===
+
+    #[rstest]
+    #[case::exists_matches_mutation(
+        "field-flag",
+        vec!["query=mutation { ... }".to_string(), "variables={}".to_string()],
+        "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=mutation\"))",
+        true,
+    )]
+    #[case::exists_no_match(
+        "field-flag",
+        vec!["query=mutation { ... }".to_string(), "variables={}".to_string()],
+        "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=query\"))",
+        false,
+    )]
+    #[case::size_one(
+        "header-flag",
+        vec!["Authorization: Bearer".to_string()],
+        "size(flag_groups[\"header-flag\"]) == 1",
+        true,
+    )]
+    #[case::size_zero_when_group_unmatched(
+        "field-flag",
+        Vec::new(),
+        "size(flag_groups[\"field-flag\"]) == 0",
+        true
+    )]
+    fn flag_groups_access(
+        #[case] key: &str,
+        #[case] values: Vec<String>,
+        #[case] expr: &str,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            flag_groups: HashMap::from([(key.to_string(), values)]),
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
     }
 
     // === Logical operators ===

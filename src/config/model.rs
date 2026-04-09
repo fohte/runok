@@ -120,7 +120,7 @@ pub struct TestSection {
     pub cases: Option<Vec<InlineTestEntry>>,
 }
 
-/// Reusable definitions for paths, sandbox presets, wrappers, and variables.
+/// Reusable definitions for paths, sandbox presets, wrappers, variables, and flag groups.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Definitions {
@@ -132,6 +132,17 @@ pub struct Definitions {
     pub wrappers: Option<Vec<String>>,
     /// Typed variable definitions referenced by `<var:name>` in rule patterns.
     pub vars: Option<HashMap<String, VarDefinition>>,
+    /// Named flag alias groups referenced by `<flag:name>` in rule patterns.
+    /// Each value is a list of flag names (e.g. `["-f", "--field", "--raw-field"]`)
+    /// that share semantic meaning. When a `<flag:name>` placeholder matches a
+    /// command, every occurrence of any aliased flag is captured into the
+    /// `flag_groups[name]` list available in `when` clauses.
+    ///
+    /// TODO: only value-taking flags are currently supported. Boolean flags
+    /// (e.g. `--force`, `-v` without an argument) are not yet representable
+    /// here because the matcher always pairs a `<flag:name>` placeholder with
+    /// a value pattern.
+    pub flag_groups: Option<HashMap<String, Vec<String>>>,
 }
 
 /// Type of a variable definition, controlling how values are matched.
@@ -638,6 +649,61 @@ impl Config {
             }
         }
 
+        // Validate definitions.flag_groups: every entry must be a non-empty list
+        // of flag names that start with `-`. The bare `--` separator is rejected
+        // because it is positional, not a flag.
+        if let Some(defs) = &self.definitions
+            && let Some(flag_groups) = &defs.flag_groups
+        {
+            for (key, flags) in flag_groups {
+                if flags.is_empty() {
+                    errors.push(format!(
+                        "definitions.flag_groups.{key}: flag group must contain at least one flag"
+                    ));
+                    continue;
+                }
+                for flag in flags {
+                    if !flag.starts_with('-') || flag == "--" {
+                        errors.push(format!(
+                            "definitions.flag_groups.{key}: '{flag}' is not a valid flag name \
+                             (must start with `-` and not be the bare `--` separator)"
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate that every `<flag:name>` reference in a rule pattern
+        // resolves to a group defined in `definitions.flag_groups`.
+        let defined_flag_groups: std::collections::HashSet<&str> = self
+            .definitions
+            .as_ref()
+            .and_then(|d| d.flag_groups.as_ref())
+            .map(|g| g.keys().map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+
+        if let Some(rules) = &self.rules {
+            for (i, rule) in rules.iter().enumerate() {
+                let Some((_, pattern_str)) = rule.action_and_pattern() else {
+                    continue;
+                };
+                let parsed = match crate::rules::pattern_parser::parse_multi(pattern_str) {
+                    Ok(patterns) => patterns,
+                    Err(_) => continue, // Pattern parse errors are surfaced at evaluation time.
+                };
+                for pattern in &parsed {
+                    collect_flag_group_refs(&pattern.tokens, &mut |name| {
+                        if !defined_flag_groups.contains(name) {
+                            errors.push(format!(
+                                "rules[{i}]: pattern references undefined flag group \
+                                 '<flag:{name}>'. Define it in definitions.flag_groups."
+                            ));
+                        }
+                    });
+                }
+            }
+        }
+
         let rules = match &self.rules {
             Some(rules) => rules,
             None => {
@@ -738,6 +804,7 @@ impl Config {
                 wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
 
                 vars: Self::merge_vars(b.vars, o.vars),
+                flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
             }),
         }
     }
@@ -821,6 +888,23 @@ impl Config {
             (Some(b), Some(o)) => Some(RotationConfig {
                 retention_days: o.retention_days.or(b.retention_days),
             }),
+        }
+    }
+}
+
+/// Walk a pattern token tree and invoke `report` for every `<flag:name>`
+/// reference encountered. Used by config validation to detect undefined flag
+/// group references upfront.
+fn collect_flag_group_refs(
+    tokens: &[crate::rules::pattern_parser::PatternToken],
+    report: &mut impl FnMut(&str),
+) {
+    use crate::rules::pattern_parser::PatternToken;
+    for token in tokens {
+        match token {
+            PatternToken::FlagGroupRef { name, .. } => report(name),
+            PatternToken::Optional(inner) => collect_flag_group_refs(inner, report),
+            _ => {}
         }
     }
 }

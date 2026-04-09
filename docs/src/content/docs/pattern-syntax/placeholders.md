@@ -7,13 +7,14 @@ sidebar:
 
 Tokens wrapped in `<...>` are **placeholders** — special tokens that match dynamically rather than by exact string comparison.
 
-| Placeholder                                  | Description                                              |
-| -------------------------------------------- | -------------------------------------------------------- |
-| [`<cmd>`](#command-cmd)                      | Captures the wrapped command for further rule evaluation |
-| [`<opts>`](#options-opts)                    | Absorbs zero or more flag-like tokens                    |
-| [`<vars>`](#variables-vars)                  | Absorbs zero or more `KEY=VALUE` tokens                  |
-| [`<path:name>`](#path-references-pathname)   | Matches against a named list of paths                    |
-| [`<var:name>`](#variable-references-varname) | Matches against a typed variable definition              |
+| Placeholder                                  | Description                                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| [`<cmd>`](#command-cmd)                      | Captures the wrapped command for further rule evaluation                      |
+| [`<opts>`](#options-opts)                    | Absorbs zero or more flag-like tokens                                         |
+| [`<vars>`](#variables-vars)                  | Absorbs zero or more `KEY=VALUE` tokens                                       |
+| [`<path:name>`](#path-references-pathname)   | Matches against a named list of paths                                         |
+| [`<var:name>`](#variable-references-varname) | Matches against a typed variable definition                                   |
+| [`<flag:name>`](#flag-groups-flagname)       | Matches and captures every occurrence of any flag in a named flag alias group |
 
 ## Command (`<cmd>`)
 
@@ -254,6 +255,62 @@ definitions:
 ### Undefined Variable Names
 
 If a pattern references a variable name that is not defined in `definitions.vars`, the pattern **never matches**.
+
+## Flag Groups (`<flag:name>`)
+
+The `<flag:name>` placeholder matches **any flag** that belongs to a named flag alias group defined in [`definitions.flag_groups`](/configuration/schema/#definitionsflag_groups). It is purpose-built for two common needs:
+
+1. **Treating flag aliases uniformly.** Many CLIs accept the same flag under several spellings — `gh api` exposes `-f`, `-F`, `--field`, and `--raw-field`; `curl` accepts `-d`, `--data`, `--data-raw`, etc. With a single flag-group definition, you can match every alias with one placeholder.
+2. **Inspecting every value of a repeatable flag.** Repeatable flags (`-d` for `curl`, `-v` for `docker`, `-f` for `gh api graphql`) take multiple values per invocation. The `<flag:name>` placeholder collects every captured value into a list, exposed to `when` clauses via `flag_groups[name]`.
+
+### Defining Flag Groups
+
+```yaml title="runok.yml"
+definitions:
+  flag_groups:
+    field-flag: ['-f', '-F', '--field', '--raw-field']
+    header-flag: ['-H', '--header']
+```
+
+### Using Flag Groups
+
+`<flag:name>` is **always** followed by a value pattern (a wildcard or literal). The value pattern is matched against the value of every captured flag:
+
+```yaml title="runok.yml"
+rules:
+  # Allow any gh api graphql call where every -f/-F/--field/--raw-field
+  # value is a query (not a mutation).
+  - allow: 'gh api graphql <flag:field-flag> *'
+    when: '!flag_groups["field-flag"].exists(v, v.startsWith("query=mutation"))'
+  - ask: 'gh api graphql <flag:field-flag> *'
+```
+
+| Command                                              | `flag_groups["field-flag"]`            |
+| ---------------------------------------------------- | -------------------------------------- |
+| `gh api graphql -f query=query{...}`                 | `["query=query{...}"]`                 |
+| `gh api graphql --raw-field query=query{...}`        | `["query=query{...}"]`                 |
+| `gh api graphql --raw-field=query=query{...}`        | `["query=query{...}"]`                 |
+| `gh api graphql -f query=query{...} -f variables={}` | `["query=query{...}", "variables={}"]` |
+| `gh api graphql -F query=mutation{...}`              | `["query=mutation{...}"]`              |
+
+### Matching Behavior
+
+- The pattern matches **only when at least one** of the group's aliases appears in the command (mirroring how a `-f|--field|--raw-field VALUE` alternation behaves today).
+- Every space-separated (`-f value`), `=`-joined (`-f=value` or `--field=value`), and fused short-flag (`-fvalue`) form is recognized.
+- Each captured value is also validated against the value pattern; if any captured value fails to match, the whole rule does not apply.
+
+### Why Not Use Alternation?
+
+You could write `-f|-F|--field|--raw-field VALUE` as a flag alternation, but two limitations push you toward `<flag:name>`:
+
+- The alternation only matches the **first** occurrence of any alias (the rest are silently kept around). For repeatable flags this loses information.
+- The captured value is exposed to `when` clauses through `flags`, where each spelling (`-f` vs `--field`) lives under a different key, making list-aware checks like `exists(v, ...)` impossible.
+
+`<flag:name>` solves both problems: it captures every occurrence and surfaces the values as a single list under `flag_groups[name]`.
+
+### Undefined Flag Group Names
+
+Referencing a flag group that is not defined in `definitions.flag_groups` is a **validation error** at config load time. Unlike `<path:name>` and `<var:name>` (which silently fail to match), undefined flag groups always indicate a typo or missing definition, so they are reported eagerly.
 
 ## Combining Placeholders
 

@@ -433,7 +433,7 @@ fn evaluate_simple_command(
         // Try each expanded pattern (multi-word alternation produces multiple patterns);
         // use the first matching pattern for this rule.
         for pattern in &patterns {
-            let schema = build_flag_schema(pattern);
+            let schema = build_flag_schema(pattern, definitions);
             let parsed_command = parse_command(command, &schema)?;
 
             let match_captures = matches_with_captures(pattern, &parsed_command, definitions);
@@ -548,7 +548,7 @@ fn try_unwrap_wrapper(
         // Try each expanded pattern for this wrapper definition
         let mut all_candidates: Vec<Vec<String>> = Vec::new();
         for pattern in &patterns {
-            let schema = build_flag_schema(pattern);
+            let schema = build_flag_schema(pattern, definitions);
             let parsed_command = parse_command(command, &schema)?;
 
             let candidates = extract_placeholder(pattern, &parsed_command, definitions)?;
@@ -693,14 +693,22 @@ struct MatchedRule<'a> {
     pattern_str: String,
 }
 
-/// Build a FlagSchema from a pattern's FlagWithValue tokens.
-fn build_flag_schema(pattern: &Pattern) -> FlagSchema {
+/// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef tokens.
+///
+/// FlagGroupRef aliases are resolved through `definitions.flag_groups` so the
+/// command parser knows that the grouped flags consume the next token as
+/// their value.
+fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
     let mut value_flags = HashSet::new();
-    collect_value_flags(&pattern.tokens, &mut value_flags);
+    collect_value_flags(&pattern.tokens, definitions, &mut value_flags);
     FlagSchema { value_flags }
 }
 
-fn collect_value_flags(tokens: &[PatternToken], value_flags: &mut HashSet<String>) {
+fn collect_value_flags(
+    tokens: &[PatternToken],
+    definitions: &Definitions,
+    value_flags: &mut HashSet<String>,
+) {
     for token in tokens {
         match token {
             PatternToken::FlagWithValue { aliases, .. } => {
@@ -708,7 +716,16 @@ fn collect_value_flags(tokens: &[PatternToken], value_flags: &mut HashSet<String
                     value_flags.insert(alias.clone());
                 }
             }
-            PatternToken::Optional(inner) => collect_value_flags(inner, value_flags),
+            PatternToken::FlagGroupRef { name, .. } => {
+                if let Some(group_aliases) =
+                    definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                {
+                    for alias in group_aliases {
+                        value_flags.insert(alias.clone());
+                    }
+                }
+            }
+            PatternToken::Optional(inner) => collect_value_flags(inner, definitions, value_flags),
             _ => {}
         }
     }
@@ -736,6 +753,19 @@ fn build_expr_context(
 
     let paths = definitions.paths.clone().unwrap_or_default();
 
+    // Seed flag_groups with every group declared in definitions so that
+    // `flag_groups["name"]` always succeeds in CEL (returning an empty list
+    // when no flag from the group was matched). Then overlay the values
+    // captured during pattern matching.
+    let mut flag_groups: HashMap<String, Vec<String>> = definitions
+        .flag_groups
+        .as_ref()
+        .map(|g| g.keys().map(|k| (k.clone(), Vec::new())).collect())
+        .unwrap_or_default();
+    for (name, values) in &match_captures.flag_groups {
+        flag_groups.insert(name.clone(), values.clone());
+    }
+
     ExprContext {
         env: eval_context.env.clone(),
         flags,
@@ -744,6 +774,7 @@ fn build_expr_context(
         redirects: redirects.to_vec(),
         pipe: pipe.clone(),
         vars: match_captures.vars.clone(),
+        flag_groups,
     }
 }
 

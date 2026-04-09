@@ -135,9 +135,22 @@
       }
     },
     "Definitions": {
-      "description": "Reusable definitions for paths, sandbox presets, wrappers, and variables.",
+      "description": "Reusable definitions for paths, sandbox presets, wrappers, variables, and flag groups.",
       "type": "object",
       "properties": {
+        "flag_groups": {
+          "description": "Named flag alias groups referenced by `<flag:name>` in rule patterns.\nEach value is a list of flag names (e.g. `[\"-f\", \"--field\", \"--raw-field\"]`)\nthat share semantic meaning. When a `<flag:name>` placeholder matches a\ncommand, every occurrence of any aliased flag is captured into the\n`flag_groups[name]` list available in `when` clauses.\n\nTODO: only value-taking flags are currently supported. Boolean flags\n(e.g. `--force`, `-v` without an argument) are not yet representable\nhere because the matcher always pairs a `<flag:name>` placeholder with\na value pattern.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
         "paths": {
           "description": "Named path lists referenced by `<path:name>` in sandbox deny rules.",
           "type": [

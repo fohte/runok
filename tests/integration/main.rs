@@ -2,6 +2,7 @@ mod audit_log_integration;
 mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod extends_resolution;
+mod flag_group_evaluation;
 mod init_wizard;
 mod migrate_config;
 mod optional_notation_and_path_ref;
