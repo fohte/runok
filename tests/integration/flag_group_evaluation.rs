@@ -179,41 +179,33 @@ fn assert_message_contains(haystack: &str, needles: &[&str]) {
 }
 
 #[rstest]
-fn undefined_flag_group_validation_error() {
-    let mut config = parse_config(indoc! {r#"
+#[case::undefined_flag_group_reference(
+    indoc! {r#"
         rules:
           - allow: 'gh api graphql <flag:undefined> *'
-    "#})
-    .unwrap();
-    let err = config.validate().unwrap_err();
-    assert_message_contains(
-        &err.to_string(),
-        &["undefined flag group", "<flag:undefined>"],
-    );
-}
-
-#[rstest]
-fn flag_group_with_invalid_flag_name_validation_error() {
-    let mut config = parse_config(indoc! {r#"
+    "#},
+    &["undefined flag group", "<flag:undefined>"],
+)]
+#[case::invalid_flag_name(
+    indoc! {r#"
         definitions:
           flag_groups:
             bad: ["notaflag"]
-    "#})
-    .unwrap();
-    let err = config.validate().unwrap_err();
-    assert_message_contains(&err.to_string(), &["not a valid flag name"]);
-}
-
-#[rstest]
-fn flag_group_empty_list_validation_error() {
-    let mut config = parse_config(indoc! {r#"
+    "#},
+    &["not a valid flag name"],
+)]
+#[case::empty_flag_list(
+    indoc! {r#"
         definitions:
           flag_groups:
             empty: []
-    "#})
-    .unwrap();
+    "#},
+    &["must contain at least one flag"],
+)]
+fn flag_group_validation_errors(#[case] yaml: &str, #[case] needles: &[&str]) {
+    let mut config = parse_config(yaml).unwrap();
     let err = config.validate().unwrap_err();
-    assert_message_contains(&err.to_string(), &["must contain at least one flag"]);
+    assert_message_contains(&err.to_string(), needles);
 }
 
 // ========================================

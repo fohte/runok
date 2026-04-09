@@ -265,53 +265,42 @@ mod tests {
 
     // === Flag group access ===
 
-    #[test]
-    fn flag_groups_exists_macro() {
+    #[rstest]
+    #[case::exists_matches_mutation(
+        "field-flag",
+        vec!["query=mutation { ... }".to_string(), "variables={}".to_string()],
+        "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=mutation\"))",
+        true,
+    )]
+    #[case::exists_no_match(
+        "field-flag",
+        vec!["query=mutation { ... }".to_string(), "variables={}".to_string()],
+        "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=query\"))",
+        false,
+    )]
+    #[case::size_one(
+        "header-flag",
+        vec!["Authorization: Bearer".to_string()],
+        "size(flag_groups[\"header-flag\"]) == 1",
+        true,
+    )]
+    #[case::size_zero_when_group_unmatched(
+        "field-flag",
+        Vec::new(),
+        "size(flag_groups[\"field-flag\"]) == 0",
+        true
+    )]
+    fn flag_groups_access(
+        #[case] key: &str,
+        #[case] values: Vec<String>,
+        #[case] expr: &str,
+        #[case] expected: bool,
+    ) {
         let context = ExprContext {
-            flag_groups: HashMap::from([(
-                "field-flag".to_string(),
-                vec![
-                    "query=mutation { ... }".to_string(),
-                    "variables={}".to_string(),
-                ],
-            )]),
+            flag_groups: HashMap::from([(key.to_string(), values)]),
             ..empty_context()
         };
-        assert!(
-            evaluate(
-                "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=mutation\"))",
-                &context
-            )
-            .unwrap()
-        );
-        assert!(
-            !evaluate(
-                "flag_groups[\"field-flag\"].exists(v, v.startsWith(\"query=query\"))",
-                &context
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn flag_groups_size_check() {
-        let context = ExprContext {
-            flag_groups: HashMap::from([(
-                "header-flag".to_string(),
-                vec!["Authorization: Bearer".to_string()],
-            )]),
-            ..empty_context()
-        };
-        assert!(evaluate("size(flag_groups[\"header-flag\"]) == 1", &context).unwrap());
-    }
-
-    #[test]
-    fn flag_groups_empty_list_when_group_unmatched() {
-        let context = ExprContext {
-            flag_groups: HashMap::from([("field-flag".to_string(), Vec::new())]),
-            ..empty_context()
-        };
-        assert!(evaluate("size(flag_groups[\"field-flag\"]) == 0", &context).unwrap());
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
     }
 
     // === Logical operators ===

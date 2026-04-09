@@ -296,7 +296,7 @@ rules:
 ### Matching Behavior
 
 - The pattern matches **only when at least one** of the group's aliases appears in the command (mirroring how a `-f|--field|--raw-field VALUE` alternation behaves today).
-- Every space-separated (`-f value`), `=`-joined (`--field=value`), and fused short-flag (`-fvalue`) form is recognized.
+- Every space-separated (`-f value`), `=`-joined (`-f=value` or `--field=value`), and fused short-flag (`-fvalue`) form is recognized.
 - Each captured value is also validated against the value pattern; if any captured value fails to match, the whole rule does not apply.
 
 ### Why Not Use Alternation?
