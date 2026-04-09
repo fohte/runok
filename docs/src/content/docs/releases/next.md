@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### Flag alias groups with `<flag:name>` placeholder
+### Flag alias groups with `<flag:name>` placeholder ([#278](https://github.com/fohte/runok/pull/278))
 
 `when` clauses can now inspect every value of a repeated or aliased flag through the new `<flag:name>` placeholder and the corresponding `flag_groups` CEL variable.
 

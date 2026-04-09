@@ -1225,7 +1225,7 @@ mod tests {
     /// Helper: parse pattern and command, then check matching.
     fn check_match(pattern_str: &str, command_str: &str, definitions: &Definitions) -> bool {
         let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern);
+        let schema = build_schema_from_pattern(&pattern, definitions);
         let command = parse_command(command_str, &schema).unwrap();
         matches(&pattern, &command, definitions)
     }
@@ -1236,7 +1236,7 @@ mod tests {
         definitions: &Definitions,
     ) -> Option<Vec<String>> {
         let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern);
+        let schema = build_schema_from_pattern(&pattern, definitions);
         let command = parse_command(command_str, &schema).unwrap();
         matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
     }
@@ -1247,19 +1247,26 @@ mod tests {
         definitions: &Definitions,
     ) -> Option<HashMap<String, String>> {
         let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern);
+        let schema = build_schema_from_pattern(&pattern, definitions);
         let command = parse_command(command_str, &schema).unwrap();
         matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
     }
 
-    /// Build a FlagSchema from a pattern's FlagWithValue tokens.
-    fn build_schema_from_pattern(pattern: &Pattern) -> FlagSchema {
+    /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef
+    /// tokens. Mirrors the production helper in `rule_engine::build_flag_schema`
+    /// so unit tests using `<flag:name>` see the same value-flag set the real
+    /// command parser does.
+    fn build_schema_from_pattern(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
         let mut value_flags = HashSet::new();
-        collect_value_flags(&pattern.tokens, &mut value_flags);
+        collect_value_flags(&pattern.tokens, definitions, &mut value_flags);
         FlagSchema { value_flags }
     }
 
-    fn collect_value_flags(tokens: &[PatternToken], value_flags: &mut HashSet<String>) {
+    fn collect_value_flags(
+        tokens: &[PatternToken],
+        definitions: &Definitions,
+        value_flags: &mut HashSet<String>,
+    ) {
         for token in tokens {
             match token {
                 PatternToken::FlagWithValue { aliases, .. } => {
@@ -1267,7 +1274,18 @@ mod tests {
                         value_flags.insert(alias.clone());
                     }
                 }
-                PatternToken::Optional(inner) => collect_value_flags(inner, value_flags),
+                PatternToken::FlagGroupRef { name, .. } => {
+                    if let Some(group_aliases) =
+                        definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                    {
+                        for alias in group_aliases {
+                            value_flags.insert(alias.clone());
+                        }
+                    }
+                }
+                PatternToken::Optional(inner) => {
+                    collect_value_flags(inner, definitions, value_flags)
+                }
                 _ => {}
             }
         }
@@ -1486,6 +1504,64 @@ mod tests {
     ) {
         assert_eq!(
             check_match(pattern_str, command_str, &empty_defs()),
+            expected
+        );
+    }
+
+    // ========================================
+    // <flag:name> matching at the matcher level
+    // ========================================
+
+    /// Build a Definitions whose only flag group is the field-flag set used by
+    /// the matcher-level `<flag:name>` tests below.
+    fn field_flag_defs() -> Definitions {
+        Definitions {
+            flag_groups: Some(HashMap::from([(
+                "field-flag".to_string(),
+                vec![
+                    "-f".to_string(),
+                    "-F".to_string(),
+                    "--field".to_string(),
+                    "--raw-field".to_string(),
+                ],
+            )])),
+            ..Definitions::default()
+        }
+    }
+
+    #[rstest]
+    #[case::short_space(
+        "gh api graphql <flag:field-flag> *",
+        "gh api graphql -f query=hello",
+        true
+    )]
+    #[case::long_space(
+        "gh api graphql <flag:field-flag> *",
+        "gh api graphql --raw-field query=hello",
+        true
+    )]
+    #[case::long_equals(
+        "gh api graphql <flag:field-flag> *",
+        "gh api graphql --raw-field=query=hello",
+        true
+    )]
+    #[case::no_field_flag(
+        "gh api graphql <flag:field-flag> *",
+        "gh api graphql query=hello",
+        false
+    )]
+    fn flag_group_ref_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        // Without the test helper learning about FlagGroupRef, the schema would
+        // miss `-f`/`-F`/`--field`/`--raw-field` and `parse_command` would
+        // mis-parse `-f query=hello` as a boolean flag plus a positional
+        // argument, breaking these cases. This test would have failed before
+        // the helper was taught about FlagGroupRef.
+        assert_eq!(
+            check_match(pattern_str, command_str, &field_flag_defs()),
             expected
         );
     }
@@ -1974,7 +2050,7 @@ mod tests {
         definitions: &Definitions,
     ) -> Vec<Vec<String>> {
         let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern);
+        let schema = build_schema_from_pattern(&pattern, definitions);
         let command = parse_command(command_str, &schema).unwrap();
         extract_placeholder(&pattern, &command, definitions).unwrap()
     }
@@ -2120,7 +2196,7 @@ mod tests {
 
         let patterns = parse_multi(pattern_str).unwrap();
         for pattern in &patterns {
-            let schema = build_schema_from_pattern(pattern);
+            let schema = build_schema_from_pattern(pattern, definitions);
             let command = parse_command(command_str, &schema).unwrap();
             if matches(pattern, &command, definitions) {
                 return true;
