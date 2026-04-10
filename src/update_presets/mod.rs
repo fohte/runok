@@ -8,9 +8,9 @@ use similar::ChangeTag;
 use crate::config::cache::{CacheMetadata, CacheStatus, PresetCache};
 use crate::config::git_client::{GitClient, ProcessGitClient, RemoteRef};
 use crate::config::preset_remote::{PresetReference, parse_preset_reference, resolve_git_params};
-use crate::config::{Config, parse_config};
+use crate::config::{Config, ConfigError, load_and_resolve_preset_with, parse_config};
 
-use semver_utils::{find_latest_upgrade, parse_version_spec};
+use semver_utils::{find_upgrade_candidates, parse_version_spec};
 
 /// A remote preset reference paired with the config file it came from.
 struct TrackedReference {
@@ -163,6 +163,13 @@ fn update_single_preset<G: GitClient>(
 }
 
 /// Try to upgrade a version-tagged preset to the latest compatible version.
+///
+/// Candidate tags are tried from newest to oldest. For each candidate the
+/// preset (and all of its transitive `extends`) is fully loaded so that every
+/// file's `required_runok_version` is checked against the current runok
+/// binary. The first candidate that loads cleanly is adopted. If every
+/// candidate fails the version check, the preset is reported as up to date
+/// (the caller will then try `force_refetch` for branches/Latest).
 fn try_tag_upgrade<G: GitClient>(
     reference: &str,
     current_tag: &str,
@@ -181,65 +188,115 @@ fn try_tag_upgrade<G: GitClient>(
     };
 
     let ref_names: Vec<String> = remote_refs.iter().map(|r| r.name.clone()).collect();
-    let new_tag = match find_latest_upgrade(current_tag, &ref_names) {
-        Some(t) => t,
-        None => return UpdateResult::UpToDate,
-    };
+    let candidates = find_upgrade_candidates(current_tag, &ref_names);
+    if candidates.is_empty() {
+        return UpdateResult::UpToDate;
+    }
 
-    let new_reference = build_updated_reference(reference, current_tag, &new_tag);
+    let mut skipped: Vec<String> = Vec::new();
 
-    // Fetch the new version into its own cache slot
-    let new_cache_dir = cache.cache_dir(&new_reference);
-    let new_parsed = match parse_preset_reference(&new_reference) {
-        Ok(p) => p,
-        Err(e) => return UpdateResult::Error(format!("invalid new reference: {e}")),
-    };
+    for new_tag in candidates {
+        let new_reference = build_updated_reference(reference, current_tag, &new_tag);
+
+        match materialize_candidate(&new_reference, cache, git_client) {
+            Ok(()) => {}
+            Err(msg) => return UpdateResult::Error(msg),
+        }
+
+        // Fully load the candidate preset (including its transitive extends)
+        // so every file's `required_runok_version` is checked by the shared
+        // config-loading pipeline.
+        match load_and_resolve_preset_with(
+            &new_reference,
+            &cache.cache_dir(&new_reference),
+            git_client,
+            cache,
+        ) {
+            Ok(_) => {
+                return UpdateResult::Upgraded {
+                    old_reference: reference.to_string(),
+                    new_reference,
+                };
+            }
+            Err(ConfigError::UnsupportedRunokVersion {
+                source_label,
+                requirement,
+                current,
+            }) => {
+                skipped.push(format!(
+                    "  {new_tag}: {source_label} requires runok {requirement} (current: {current})"
+                ));
+                continue;
+            }
+            Err(e) => {
+                return UpdateResult::Error(format!("failed to load candidate tag {new_tag}: {e}"));
+            }
+        }
+    }
+
+    if !skipped.is_empty() {
+        eprintln!(
+            "No compatible upgrade for {reference} (skipped {} candidate(s)):",
+            skipped.len()
+        );
+        for line in &skipped {
+            eprintln!("{line}");
+        }
+    }
+    UpdateResult::UpToDate
+}
+
+/// Ensure a candidate reference is materialized in the preset cache so that
+/// it can be loaded by `load_and_resolve_preset_with`. This mirrors the
+/// fetch/clone bookkeeping that `try_tag_upgrade` used to inline, extracted
+/// so that multiple candidates can reuse it.
+fn materialize_candidate<G: GitClient>(
+    new_reference: &str,
+    cache: &PresetCache,
+    git_client: &G,
+) -> Result<(), String> {
+    let new_cache_dir = cache.cache_dir(new_reference);
+    let new_parsed =
+        parse_preset_reference(new_reference).map_err(|e| format!("invalid new reference: {e}"))?;
     let new_params = resolve_git_params(&new_parsed);
 
-    let _lock = match cache.acquire_lock(&new_reference) {
-        Ok(l) => l,
-        Err(e) => return UpdateResult::Error(e.to_string()),
-    };
+    let _lock = cache
+        .acquire_lock(new_reference)
+        .map_err(|e| e.to_string())?;
 
-    // Check if already cached
-    match cache.check(&new_reference, new_params.is_immutable) {
-        CacheStatus::Hit(_) => {}
+    match cache.check(new_reference, new_params.is_immutable) {
+        CacheStatus::Hit(_) => Ok(()),
         CacheStatus::Stale(_) | CacheStatus::Miss => {
             if !new_cache_dir.exists() {
-                if let Some(parent) = new_cache_dir.parent()
-                    && let Err(e) = std::fs::create_dir_all(parent)
-                {
-                    return UpdateResult::Error(format!("failed to create cache directory: {e}"));
+                if let Some(parent) = new_cache_dir.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("failed to create cache directory: {e}"))?;
                 }
-                if let Err(e) = git_client.clone_shallow(
-                    &new_params.url,
-                    &new_cache_dir,
-                    new_params.git_ref.as_deref(),
-                ) {
-                    return UpdateResult::Error(format!("clone failed: {e}"));
-                }
+                git_client
+                    .clone_shallow(
+                        &new_params.url,
+                        &new_cache_dir,
+                        new_params.git_ref.as_deref(),
+                    )
+                    .map_err(|e| format!("clone failed: {e}"))?;
             } else {
-                if let Err(e) = git_client.fetch(&new_cache_dir, new_params.git_ref.as_deref()) {
-                    return UpdateResult::Error(format!("fetch failed: {e}"));
-                }
-                if let Err(e) = git_client.checkout(&new_cache_dir, "FETCH_HEAD") {
-                    return UpdateResult::Error(format!("checkout failed: {e}"));
-                }
+                git_client
+                    .fetch(&new_cache_dir, new_params.git_ref.as_deref())
+                    .map_err(|e| format!("fetch failed: {e}"))?;
+                git_client
+                    .checkout(&new_cache_dir, "FETCH_HEAD")
+                    .map_err(|e| format!("checkout failed: {e}"))?;
             }
             let resolved_sha = git_client.rev_parse_head(&new_cache_dir).ok();
             let metadata = CacheMetadata {
                 fetched_at: current_timestamp(),
                 is_immutable: new_params.is_immutable,
-                reference: new_reference.clone(),
+                reference: new_reference.to_string(),
                 resolved_sha,
             };
             let _ = PresetCache::write_metadata(&new_cache_dir, &metadata);
+            Ok(())
         }
-    }
-
-    UpdateResult::Upgraded {
-        old_reference: reference.to_string(),
-        new_reference,
     }
 }
 
@@ -829,6 +886,134 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    // === required_runok_version fallback ===
+
+    use crate::config::VersionOverrideGuard;
+    use semver::Version;
+
+    /// Set up a cache entry for a specific reference with the given preset body.
+    /// Mirrors `run_update_scenario` setup but allows each cache dir to hold
+    /// distinct content, which is what candidate-fallback tests need.
+    fn seed_cache_entry(cache: &PresetCache, reference: &str, body: &str) {
+        let cache_dir = cache.cache_dir(reference);
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(cache_dir.join("runok.yml"), body).unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference.to_string(),
+            resolved_sha: Some("abc123".to_string()),
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+    }
+
+    /// Shared preset body used by the candidate-fallback scenarios.
+    fn preset_body(required: &str) -> String {
+        format!("required_runok_version: '{required}'\nrules:\n  - allow: 'echo *'\n")
+    }
+
+    #[rstest]
+    fn try_tag_upgrade_adopts_newest_compatible_candidate(tmp: TempDir) {
+        // Pretend the runok binary is exactly 0.2.0 so that upper-bounded
+        // requirements like `">=0.3, <0.4"` genuinely reject candidates.
+        let _guard = VersionOverrideGuard::set(Version::new(0, 2, 0));
+
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        let reference = "github:org/repo@v1.0.0";
+        seed_cache_entry(&cache, reference, "rules: []");
+
+        // v1.3.0 is compatible (the newest compatible candidate).
+        seed_cache_entry(
+            &cache,
+            "github:org/repo@v1.3.0",
+            &preset_body(">=0.2, <0.3"),
+        );
+        seed_cache_entry(
+            &cache,
+            "github:org/repo@v1.2.0",
+            &preset_body(">=0.2, <0.3"),
+        );
+        seed_cache_entry(
+            &cache,
+            "github:org/repo@v1.1.0",
+            &preset_body(">=0.2, <0.3"),
+        );
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_refs(Ok(refs(&[
+            ("v1.0.0", T),
+            ("v1.1.0", T),
+            ("v1.2.0", T),
+            ("v1.3.0", T),
+        ])));
+
+        let mut refs_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
+        match result {
+            UpdateResult::Upgraded { new_reference, .. } => {
+                assert_eq!(new_reference, "github:org/repo@v1.3.0");
+            }
+            other => panic!("expected Upgraded to v1.3.0, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn try_tag_upgrade_skips_incompatible_newest_and_picks_older(tmp: TempDir) {
+        // Current runok simulated as 0.2.0. v1.2.0 requires runok 0.3+ and
+        // is skipped; v1.1.0 is compatible and adopted.
+        let _guard = VersionOverrideGuard::set(Version::new(0, 2, 0));
+
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        let reference = "github:org/repo@v1.0.0";
+        seed_cache_entry(&cache, reference, "rules: []");
+
+        seed_cache_entry(&cache, "github:org/repo@v1.2.0", &preset_body(">=0.3.0"));
+        seed_cache_entry(&cache, "github:org/repo@v1.1.0", &preset_body(">=0.2.0"));
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)])));
+
+        let mut refs_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
+        match result {
+            UpdateResult::Upgraded { new_reference, .. } => {
+                assert_eq!(new_reference, "github:org/repo@v1.1.0");
+            }
+            other => panic!("expected Upgraded to v1.1.0, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn try_tag_upgrade_reports_up_to_date_when_all_candidates_incompatible(tmp: TempDir) {
+        // Every newer tag requires runok 0.3+ but the simulated current is 0.2.0,
+        // so try_tag_upgrade yields UpToDate and update_single_preset then
+        // falls through to force_refetch (requires fetch/checkout/rev_parse mocks).
+        let _guard = VersionOverrideGuard::set(Version::new(0, 2, 0));
+
+        let cache = PresetCache::with_config(tmp.path().to_path_buf(), Duration::from_secs(3600));
+
+        let reference = "github:org/repo@v1.0.0";
+        seed_cache_entry(&cache, reference, "rules: []");
+
+        seed_cache_entry(&cache, "github:org/repo@v1.2.0", &preset_body(">=0.3.0"));
+        seed_cache_entry(&cache, "github:org/repo@v1.1.0", &preset_body(">=0.3.0"));
+
+        let git_client = MockGitClient::new();
+        git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)])));
+        git_client.on_fetch(Ok(()));
+        git_client.on_checkout(Ok(()));
+        git_client.on_rev_parse(Ok("abc123".to_string()));
+
+        let mut refs_cache = HashMap::new();
+        let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
+        assert!(
+            matches!(result, UpdateResult::UpToDate),
+            "expected UpToDate, got {result:?}"
+        );
     }
 
     // === collect_tracked_from_dir ===

@@ -23,6 +23,11 @@ fn push_parse_warning(msg: String) {
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Config {
+    /// Minimum runok version required to load this file. Semver requirement
+    /// expression (e.g. `">=0.3.0"`, `">=0.3, <0.5"`). When set, loading the
+    /// file with an older runok fails with a clear error, so preset authors
+    /// can guard files that depend on newer schema or features.
+    pub required_runok_version: Option<String>,
     /// List of configuration files to inherit from. Supports local paths and
     /// remote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).
     pub extends: Option<Vec<String>>,
@@ -769,6 +774,10 @@ impl Config {
     /// - tests: override (local wins; test definitions are not merged across layers)
     pub fn merge(self, other: Config) -> Config {
         Config {
+            // required_runok_version is enforced at load time per file, so
+            // the merged value is informational only. Prefer the override
+            // (most specific layer) to match the rest of the merge policy.
+            required_runok_version: other.required_runok_version.or(self.required_runok_version),
             extends: Self::merge_vecs(self.extends, other.extends),
             defaults: Self::merge_defaults(self.defaults, other.defaults),
             rules: Self::merge_vecs(self.rules, other.rules),
@@ -1639,6 +1648,7 @@ mod tests {
     #[test]
     fn validate_errors_on_rule_with_no_action() {
         let mut config = Config {
+            required_runok_version: None,
             extends: None,
             defaults: None,
             rules: Some(vec![RuleEntry {
@@ -1662,6 +1672,7 @@ mod tests {
     #[test]
     fn validate_errors_on_rule_with_multiple_actions() {
         let mut config = Config {
+            required_runok_version: None,
             extends: None,
             defaults: None,
             rules: Some(vec![RuleEntry {
@@ -1873,6 +1884,7 @@ mod tests {
     #[test]
     fn validate_collects_all_errors() {
         let mut config = Config {
+            required_runok_version: None,
             extends: None,
             defaults: None,
             audit: None,

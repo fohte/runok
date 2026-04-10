@@ -8,6 +8,25 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
+### `required_runok_version` field for version guards
+
+Every config and preset file can now declare a `required_runok_version` — a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) expression such as `">=0.3.0"` or `">=0.3, <0.5"`. When runok loads a file whose constraint is not satisfied by the running binary, loading fails with an error that names the exact file and the constraint, rather than silently ignoring newer schema fields.
+
+```yaml title="preset that depends on a newer runok feature"
+required_runok_version: '>=0.3.0'
+definitions:
+  flag_groups:
+    field-flag: ['-f', '--field']
+```
+
+The check runs per file, so the project `runok.yml`, any file pulled in via `extends`, and every transitively extended preset are all validated independently.
+
+`runok update-presets` now respects this field when choosing upgrade tags. Candidate tags are inspected from newest to oldest, and the newest candidate whose preset tree (including transitive `extends`) satisfies the current runok binary is adopted. This lets preset repositories ship schema-incompatible changes under newer tags without breaking users who are still on older runok.
+
+Nightly builds (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of version checks, so any `>=X.Y.Z` constraint passes automatically. Upper-bounded ranges still reject nightly intentionally.
+
+See [Configuration Schema — `required_runok_version`](/configuration/schema/#required_runok_version) for details.
+
 ### Flag alias groups with `<flag:name>` placeholder ([#278](https://github.com/fohte/runok/pull/278))
 
 `when` clauses can now inspect every value of a repeated or aliased flag through the new `<flag:name>` placeholder and the corresponding `flag_groups` CEL variable.
