@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::cache::PresetCache;
 use super::preset::resolve_extends;
+use super::required_version::{check_required_runok_version, current_runok_version};
 use super::{Config, ConfigError, ParsedConfig, parse_config_with_warnings};
 
 /// Trait for loading and merging configuration files.
@@ -140,6 +141,14 @@ impl DefaultConfigLoader {
         for warning in &warnings {
             eprintln!("runok warning: {warning}\n  --> {}", path.display());
         }
+        // Enforce `required_runok_version` as soon as the file is parsed so
+        // that the error message points at the exact file that carries the
+        // constraint.
+        check_required_runok_version(
+            config.required_runok_version.as_deref(),
+            &current_runok_version(),
+            &path.display().to_string(),
+        )?;
         Ok(config)
     }
 }

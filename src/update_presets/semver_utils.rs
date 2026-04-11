@@ -66,43 +66,54 @@ pub fn parse_semver_tag(tag: &str) -> Option<Version> {
     Version::parse(stripped).ok()
 }
 
-/// Find the latest upgrade for a version tag from available remote tags.
+/// Return only the newest compatible upgrade, matching the pre-candidate API
+/// used by the tests. Kept as a thin wrapper so the existing table-driven
+/// tests continue to exercise the candidate logic end-to-end.
+#[cfg(test)]
+fn find_latest_upgrade(current_tag: &str, available_tags: &[String]) -> Option<String> {
+    find_upgrade_candidates(current_tag, available_tags)
+        .into_iter()
+        .next()
+}
+
+/// Return all compatible upgrade candidates for `current_tag`, ordered from
+/// newest to oldest. The caller can iterate through candidates and pick the
+/// first one that satisfies additional constraints (e.g. `required_runok_version`).
 ///
-/// Upgrade rules depend on the precision of the current tag:
-/// - `v1` (Major): upgrades to the latest major version (e.g., `v1` → `v2`)
-/// - `v1.0` (MajorMinor): upgrades to the latest minor within the same major (e.g., `v1.0` → `v1.3`)
-/// - `v1.0.0` (Full): upgrades to the latest patch/minor within the same major (e.g., `v1.0.0` → `v1.2.0`)
-///
-/// Returns the new tag string, or `None` if no upgrade is available.
-/// Matches v-prefix convention. Pre-release versions are excluded.
-pub fn find_latest_upgrade(current_tag: &str, available_tags: &[String]) -> Option<String> {
-    let spec = parse_version_spec(current_tag)?;
+/// Returns an empty `Vec` if `current_tag` is not a recognized version spec
+/// or no newer versions are available.
+pub fn find_upgrade_candidates(current_tag: &str, available_tags: &[String]) -> Vec<String> {
+    let Some(spec) = parse_version_spec(current_tag) else {
+        return Vec::new();
+    };
 
     match spec {
         VersionSpec::Major { major, v_prefix } => {
-            find_latest_major(major, v_prefix, available_tags)
+            find_major_candidates(major, v_prefix, available_tags)
         }
         VersionSpec::MajorMinor {
             major,
             minor,
             v_prefix,
-        } => find_latest_minor(major, minor, v_prefix, available_tags),
+        } => find_minor_candidates(major, minor, v_prefix, available_tags),
         VersionSpec::Full(ref version, v_prefix) => {
-            find_latest_full(version, v_prefix, available_tags)
+            find_full_candidates(version, v_prefix, available_tags)
         }
     }
 }
 
-/// Find the latest major version tag greater than `current_major`.
+/// Return all candidate major versions greater than `current_major`, as tag
+/// strings in the same `v`-prefix format, ordered from newest to oldest.
 ///
-/// Scans all available tags (both partial and full) to determine the highest
-/// major version, then returns a partial tag in the same format (e.g., `v2`).
-fn find_latest_major(
+/// Scans all available tags (both partial and full) to determine candidate
+/// major versions, then formats them as partial tags (e.g., `v2`). Each
+/// major is emitted only once, even if multiple tags share it.
+fn find_major_candidates(
     current_major: u64,
     v_prefix: bool,
     available_tags: &[String],
-) -> Option<String> {
-    let best = available_tags
+) -> Vec<String> {
+    let mut majors: Vec<u64> = available_tags
         .iter()
         .filter(|t| t.starts_with('v') == v_prefix)
         .filter_map(|t| {
@@ -113,26 +124,26 @@ fn find_latest_major(
                 VersionSpec::Full(ref v, _) if v.pre.is_empty() => v.major,
                 _ => return None,
             };
-            if candidate_major > current_major {
-                Some(candidate_major)
-            } else {
-                None
-            }
+            (candidate_major > current_major).then_some(candidate_major)
         })
-        .max()?;
+        .collect();
+
+    majors.sort_unstable_by(|a, b| b.cmp(a));
+    majors.dedup();
 
     let prefix = if v_prefix { "v" } else { "" };
-    Some(format!("{prefix}{best}"))
+    majors.into_iter().map(|m| format!("{prefix}{m}")).collect()
 }
 
-/// Find the latest minor version within the same major, greater than `current_minor`.
-fn find_latest_minor(
+/// Return all candidate minor versions within the same major, greater than
+/// `current_minor`, as partial tag strings ordered from newest to oldest.
+fn find_minor_candidates(
     current_major: u64,
     current_minor: u64,
     v_prefix: bool,
     available_tags: &[String],
-) -> Option<String> {
-    let best = available_tags
+) -> Vec<String> {
+    let mut minors: Vec<u64> = available_tags
         .iter()
         .filter(|t| t.starts_with('v') == v_prefix)
         .filter_map(|t| {
@@ -142,25 +153,28 @@ fn find_latest_minor(
                 VersionSpec::Full(ref v, _) if v.pre.is_empty() => (v.major, v.minor),
                 _ => return None,
             };
-            if major == current_major && minor > current_minor {
-                Some(minor)
-            } else {
-                None
-            }
+            (major == current_major && minor > current_minor).then_some(minor)
         })
-        .max()?;
+        .collect();
+
+    minors.sort_unstable_by(|a, b| b.cmp(a));
+    minors.dedup();
 
     let prefix = if v_prefix { "v" } else { "" };
-    Some(format!("{prefix}{current_major}.{best}"))
+    minors
+        .into_iter()
+        .map(|m| format!("{prefix}{current_major}.{m}"))
+        .collect()
 }
 
-/// Find the latest full semver tag within the same major version.
-fn find_latest_full(
+/// Return all full semver tags within the same major version that are newer
+/// than `current_version`, ordered from newest to oldest.
+fn find_full_candidates(
     current_version: &Version,
     v_prefix: bool,
     available_tags: &[String],
-) -> Option<String> {
-    available_tags
+) -> Vec<String> {
+    let mut candidates: Vec<(String, Version)> = available_tags
         .iter()
         .filter(|t| t.starts_with('v') == v_prefix)
         .filter_map(|t| {
@@ -174,8 +188,10 @@ fn find_latest_full(
                 None
             }
         })
-        .max_by(|a, b| a.1.cmp(&b.1))
-        .map(|(tag, _)| tag)
+        .collect();
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.into_iter().map(|(tag, _)| tag).collect()
 }
 
 #[cfg(test)]

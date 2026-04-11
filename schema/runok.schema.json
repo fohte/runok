@@ -47,6 +47,13 @@
         "type": "string"
       }
     },
+    "required_runok_version": {
+      "description": "Minimum runok version required to load this file. Semver requirement\nexpression (e.g. `\">=0.3.0\"`, `\">=0.3, <0.5\"`). When set, loading the\nfile with an older runok fails with a clear error, so preset authors\ncan guard files that depend on newer schema or features.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "rules": {
       "description": "Ordered list of permission rules evaluated against each command.",
       "type": [

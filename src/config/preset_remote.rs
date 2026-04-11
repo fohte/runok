@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use super::cache::{CacheMetadata, CacheStatus, PresetCache};
 use super::git_client::GitClient;
+use super::required_version::{check_required_runok_version, current_runok_version};
 use super::{Config, ConfigError, ParsedConfig, PresetError, parse_config_with_warnings};
 
 /// Parsed preset reference indicating where to load a preset from.
@@ -381,6 +382,19 @@ pub fn load_remote_preset<G: GitClient>(
     }
 }
 
+/// Handle a stale cache entry during automatic refresh.
+///
+/// Flow (level A: never touch the working tree with an unvalidated revision):
+/// 1. `git fetch` (working tree unchanged)
+/// 2. Inspect the fetched commit via `git show FETCH_HEAD:<path>` and verify
+///    that every `required_runok_version` constraint in the new preset and its
+///    same-repo `extends` chain is satisfied by the current runok build.
+/// 3. All constraints satisfied → `git checkout FETCH_HEAD` (only now the
+///    working tree is updated) and return the new content.
+/// 4. Any constraint violated (or inspection failed) → leave the working tree
+///    untouched and return the old cached content silently. The metadata
+///    `fetched_at` is still bumped so we do not retry on every subsequent
+///    load until the TTL expires again.
 fn handle_stale_cache<G: GitClient>(
     git_client: &G,
     dir: &Path,
@@ -390,30 +404,54 @@ fn handle_stale_cache<G: GitClient>(
 ) -> Result<Config, ConfigError> {
     match git_client.fetch(dir, params.git_ref.as_deref()) {
         Ok(()) => {
-            // Always checkout FETCH_HEAD after fetch to update the working tree.
-            // `git fetch` updates remote tracking refs but not the working tree,
-            // and `git checkout <branch>` is a no-op if already on that branch.
-            // FETCH_HEAD always points to the just-fetched commit.
-            let checkout_ref = "FETCH_HEAD";
-            if let Err(e) = git_client.checkout(dir, checkout_ref) {
-                eprintln!(
-                    "warning: checkout failed for '{original_reference}': {e}, \
-                     using cached version"
-                );
-                return read_preset_from_dir(dir, preset_path);
-            }
+            let required_ok =
+                inspect_candidate_required_versions(git_client, dir, "FETCH_HEAD", preset_path);
 
-            // Update metadata only after successful fetch + checkout
-            let resolved_sha = git_client.rev_parse_head(dir).ok();
-            let metadata = CacheMetadata {
-                fetched_at: current_timestamp(),
-                is_immutable: params.is_immutable,
-                reference: original_reference.to_string(),
-                resolved_sha,
+            // Regardless of the outcome below, remember that we successfully
+            // fetched so we do not loop on TTL failures for the whole TTL
+            // window.
+            let touch_metadata = |resolved_sha: Option<String>| {
+                let metadata = CacheMetadata {
+                    fetched_at: current_timestamp(),
+                    is_immutable: params.is_immutable,
+                    reference: original_reference.to_string(),
+                    resolved_sha,
+                };
+                let _ = PresetCache::write_metadata(dir, &metadata);
             };
-            let _ = PresetCache::write_metadata(dir, &metadata);
 
-            read_preset_from_dir(dir, preset_path)
+            match required_ok {
+                CandidateInspection::Compatible => {
+                    // All constraints satisfied: commit the new revision to the
+                    // working tree.
+                    if let Err(e) = git_client.checkout(dir, "FETCH_HEAD") {
+                        eprintln!(
+                            "warning: checkout failed for '{original_reference}': {e}, \
+                             using cached version"
+                        );
+                        touch_metadata(None);
+                        return read_preset_from_dir(dir, preset_path);
+                    }
+                    let resolved_sha = git_client.rev_parse_head(dir).ok();
+                    touch_metadata(resolved_sha);
+                    read_preset_from_dir(dir, preset_path)
+                }
+                CandidateInspection::Incompatible { .. } => {
+                    // New revision violates `required_runok_version`. Keep the
+                    // old working tree in place; no warning, no error, because
+                    // automatic refresh must not break normal operations.
+                    touch_metadata(None);
+                    read_preset_from_dir(dir, preset_path)
+                }
+                CandidateInspection::InspectionFailed => {
+                    // We could not read / parse the candidate. Fall back to the
+                    // old working tree (same behaviour as before the refresh
+                    // started). This is intentional: safer to keep working than
+                    // to propagate an internal git-show error.
+                    touch_metadata(None);
+                    read_preset_from_dir(dir, preset_path)
+                }
+            }
         }
         Err(_) => {
             // Fetch failed: use stale cache with a warning
@@ -423,6 +461,292 @@ fn handle_stale_cache<G: GitClient>(
             read_preset_from_dir(dir, preset_path)
         }
     }
+}
+
+/// Outcome of inspecting a candidate revision for `required_runok_version`.
+///
+/// Exposed at crate level so that both the automatic stale-refresh path
+/// (`handle_stale_cache`) and the manual `update-presets` path can share the
+/// same level-A inspection logic.
+pub enum CandidateInspection {
+    /// The candidate revision and every same-repo `extends` child satisfy the
+    /// current runok version.
+    Compatible,
+    /// At least one file under the candidate revision declares a
+    /// `required_runok_version` that the current runok build does not meet.
+    /// The `source_label` identifies the first offending file.
+    Incompatible {
+        source_label: String,
+        requirement: String,
+        current: String,
+    },
+    /// The candidate revision could not be inspected (missing file, parse
+    /// error, unrelated git error). Caller should treat it as "unknown" and
+    /// fall back to the old working tree.
+    InspectionFailed,
+}
+
+/// Inspect the given `git_ref` in `dir` by reading `preset_path` via
+/// `git show` and checking its `required_runok_version`. Recurses into
+/// `extends` entries that point to files in the same repository, so every
+/// transitively referenced file is validated without touching the working
+/// tree. Remote (cross-repository) `extends` entries are skipped: they live
+/// in their own cache and are validated separately when loaded.
+/// Inspect the given `git_ref` in an already-cloned repository by reading
+/// files via `git show`. Returns whether the referenced preset (and every
+/// same-repo child it `extends`) satisfies the current runok version.
+///
+/// The working tree of `dir` is not touched at any point, so this can be run
+/// safely in parallel with other runok processes that are reading the same
+/// cache (level A).
+pub fn inspect_candidate_required_versions<G: GitClient>(
+    git_client: &G,
+    dir: &Path,
+    git_ref: &str,
+    preset_path: Option<&str>,
+) -> CandidateInspection {
+    let Some((root_rel, root_content)) = candidate_root_file(git_client, dir, git_ref, preset_path)
+    else {
+        return CandidateInspection::InspectionFailed;
+    };
+
+    let current = current_runok_version();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    visited.insert(root_rel.clone());
+
+    match inspect_candidate_content(
+        git_client,
+        dir,
+        git_ref,
+        &root_rel,
+        &root_content,
+        &current,
+        &mut visited,
+    ) {
+        Ok(()) => CandidateInspection::Compatible,
+        Err(CandidateInspectionError::Unsupported {
+            source_label,
+            requirement,
+            current,
+        }) => CandidateInspection::Incompatible {
+            source_label,
+            requirement,
+            current,
+        },
+        Err(CandidateInspectionError::Other) => CandidateInspection::InspectionFailed,
+    }
+}
+
+/// Internal error kind for `inspect_candidate_recursive`.
+enum CandidateInspectionError {
+    /// A file declared a `required_runok_version` that current runok does not
+    /// satisfy. Carries the details of the first offending file so that the
+    /// caller can surface them in a warning.
+    Unsupported {
+        source_label: String,
+        requirement: String,
+        current: String,
+    },
+    /// Parse error, missing file, git error, etc. Treated as "unknown" at the
+    /// top level.
+    Other,
+}
+
+/// Determine the preset file path (relative to the repo root) to inspect and
+/// return its contents. The caller may have been loading `runok.yml` or
+/// `runok.yaml`, or a preset under a subpath with either extension. We probe
+/// the candidate revision in a fixed order so that a preset that changes
+/// extensions across versions still works.
+///
+/// Returns `(relative_path, file_content)`. Keeping the content lets the
+/// recursive inspector avoid a second `git show` call for the same file,
+/// which matters when mocks are stateful.
+fn candidate_root_file<G: GitClient>(
+    git_client: &G,
+    dir: &Path,
+    git_ref: &str,
+    preset_path: Option<&str>,
+) -> Option<(String, String)> {
+    let candidates: Vec<String> = match preset_path {
+        Some(p) => vec![format!("{p}.yml"), format!("{p}.yaml")],
+        None => vec!["runok.yml".to_string(), "runok.yaml".to_string()],
+    };
+
+    for candidate in candidates {
+        if let Ok(content) = git_client.show_file(dir, git_ref, &candidate) {
+            return Some((candidate, content));
+        }
+    }
+    None
+}
+
+fn inspect_candidate_recursive<G: GitClient>(
+    git_client: &G,
+    dir: &Path,
+    git_ref: &str,
+    rel_path: &str,
+    current: &semver::Version,
+    visited: &mut std::collections::HashSet<String>,
+) -> Result<(), CandidateInspectionError> {
+    if !visited.insert(rel_path.to_string()) {
+        // Already inspected (cycle or shared dependency). Do not re-check.
+        return Ok(());
+    }
+
+    let content = git_client
+        .show_file(dir, git_ref, rel_path)
+        .map_err(|_| CandidateInspectionError::Other)?;
+
+    inspect_candidate_content(
+        git_client, dir, git_ref, rel_path, &content, current, visited,
+    )
+}
+
+/// Like `inspect_candidate_recursive`, but accepts the pre-fetched file
+/// content so the caller can avoid an extra `git show` when the root file
+/// has already been read (e.g. by `candidate_root_file`).
+fn inspect_candidate_content<G: GitClient>(
+    git_client: &G,
+    dir: &Path,
+    git_ref: &str,
+    rel_path: &str,
+    content: &str,
+    current: &semver::Version,
+    visited: &mut std::collections::HashSet<String>,
+) -> Result<(), CandidateInspectionError> {
+    let parsed =
+        parse_config_with_warnings(content).map_err(|_| CandidateInspectionError::Other)?;
+    let config = parsed.config;
+
+    // Per-file version check. The source label includes the candidate git ref
+    // so that, if this ever bubbled up to the user, they could identify the
+    // exact offending revision. In automatic refresh the error is silenced
+    // before it reaches the user.
+    let source_label = format!("{git_ref}:{rel_path}");
+    match check_required_runok_version(
+        config.required_runok_version.as_deref(),
+        current,
+        &source_label,
+    ) {
+        Ok(()) => {}
+        Err(ConfigError::UnsupportedRunokVersion {
+            source_label,
+            requirement,
+            current,
+        }) => {
+            return Err(CandidateInspectionError::Unsupported {
+                source_label,
+                requirement,
+                current,
+            });
+        }
+        Err(_) => return Err(CandidateInspectionError::Other),
+    }
+
+    // Recurse into local (same-repo) extends. Remote extends live in their
+    // own cache and will be validated independently when they are loaded, so
+    // skip them here. Path-based extends are resolved relative to the parent
+    // directory of the file that contains the `extends` entry.
+    let Some(extends) = config.extends.as_ref() else {
+        return Ok(());
+    };
+
+    let parent_dir = Path::new(rel_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+
+    for reference in extends {
+        let parsed_ref = match parse_preset_reference(reference) {
+            Ok(p) => p,
+            Err(_) => continue, // ignore unparseable entries, not our problem
+        };
+        let PresetReference::Local(local_path) = parsed_ref else {
+            // Cross-repository reference: validated via its own cache.
+            continue;
+        };
+
+        // Only plain repo-relative paths are reachable via `git show`. Absolute
+        // paths and `~/`-prefixed paths are not in the repository at all, so
+        // skip them. Same for paths that walk out of the repo with `..`.
+        let rel_str = local_path.to_string_lossy().to_string();
+        if rel_str.starts_with('/') || rel_str.starts_with("~/") {
+            continue;
+        }
+
+        let joined = parent_dir.join(&local_path);
+        let Some(normalized) = normalize_repo_relative(&joined) else {
+            continue;
+        };
+
+        // Try both extensions if the reference does not already include one.
+        let has_extension = Path::new(&normalized)
+            .extension()
+            .is_some_and(|e| e == "yml" || e == "yaml");
+        let paths_to_try: Vec<String> = if has_extension {
+            vec![normalized]
+        } else {
+            vec![format!("{normalized}.yml"), format!("{normalized}.yaml")]
+        };
+
+        let mut any_exists = false;
+        let mut unsupported_err: Option<CandidateInspectionError> = None;
+        let mut last_other = false;
+        for candidate in &paths_to_try {
+            match inspect_candidate_recursive(git_client, dir, git_ref, candidate, current, visited)
+            {
+                Ok(()) => {
+                    any_exists = true;
+                    unsupported_err = None;
+                    last_other = false;
+                    break;
+                }
+                Err(e @ CandidateInspectionError::Unsupported { .. }) => {
+                    any_exists = true;
+                    unsupported_err = Some(e);
+                    break;
+                }
+                Err(CandidateInspectionError::Other) => {
+                    last_other = true;
+                    // keep trying the other extension
+                }
+            }
+        }
+
+        if let Some(err) = unsupported_err {
+            return Err(err);
+        }
+        if !any_exists && last_other {
+            return Err(CandidateInspectionError::Other);
+        }
+    }
+
+    Ok(())
+}
+
+/// Logically normalize a path (resolving `.` / `..`) relative to the repo
+/// root. Returns `None` if the path walks out of the repository (e.g. starts
+/// with `..`), which would escape the cached clone and cannot be inspected
+/// via `git show`.
+fn normalize_repo_relative(path: &Path) -> Option<String> {
+    use std::path::Component;
+    let mut stack: Vec<String> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                stack.pop()?;
+            }
+            Component::Normal(c) => {
+                stack.push(c.to_string_lossy().to_string());
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                // Absolute path: not a repo-relative reference.
+                return None;
+            }
+        }
+    }
+    Some(stack.join("/"))
 }
 
 fn handle_cache_miss<G: GitClient>(
@@ -1029,6 +1353,18 @@ mod tests {
         mock.on_fetch(Ok(()));
         mock.on_checkout(Ok(()));
         mock.on_rev_parse(Ok("def456".to_string()));
+        // The refresh path inspects the candidate with `git show` before
+        // touching the working tree. Return a permissive preset (no
+        // `required_runok_version`) so the inspection is Compatible and
+        // the working tree is updated.
+        mock.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                rules:
+                  - allow: 'cargo test'
+            "},
+        );
 
         let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
 
@@ -1043,6 +1379,218 @@ mod tests {
         assert!(
             has_checkout_fetch_head,
             "expected checkout with FETCH_HEAD for Latest reference"
+        );
+    }
+
+    // === stale refresh + required_runok_version (level A) ===
+
+    /// When the fetched revision satisfies the current runok version, the
+    /// working tree is updated via `git checkout FETCH_HEAD` and the refresh
+    /// returns the new content.
+    #[rstest]
+    fn stale_refresh_compatible_candidate_updates_working_tree(cache_fixture: CacheFixture) {
+        use crate::config::required_version::VersionOverrideGuard;
+        let _guard = VersionOverrideGuard::set(semver::Version::new(0, 3, 0));
+
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@v1.0.0";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        // Existing (stale) working tree has the "old" preset that we should
+        // read if the refresh bails out.
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'old rule'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        // The candidate revision's preset is compatible with current runok.
+        mock.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                required_runok_version: '>=0.2'
+                rules:
+                  - allow: 'new rule'
+            "},
+        );
+        // After inspection succeeds, the refresh path should checkout
+        // FETCH_HEAD to materialize the new revision, and then re-read the
+        // file from disk. Simulate that by also updating the working tree
+        // through a checkout hook: the mock does not actually run git, so
+        // we emulate the checkout side-effect by rewriting the file just
+        // before calling `load_remote_preset` below is not possible — we
+        // instead assert the call sequence rather than the returned content.
+        mock.on_checkout(Ok(()));
+        mock.on_rev_parse(Ok("deadbeef".to_string()));
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let calls = mock.calls.borrow();
+        // Must have inspected the candidate via show_file before touching
+        // the working tree.
+        let show_pos = calls.iter().position(|c| {
+            matches!(
+                c,
+                crate::config::git_client::mock::GitCall::ShowFile { git_ref, path }
+                if git_ref == "FETCH_HEAD" && path == "runok.yml"
+            )
+        });
+        let checkout_pos = calls.iter().position(|c| {
+            matches!(
+                c,
+                crate::config::git_client::mock::GitCall::Checkout { git_ref, .. }
+                if git_ref == "FETCH_HEAD"
+            )
+        });
+        assert!(show_pos.is_some(), "expected show_file to be called");
+        assert!(
+            checkout_pos.is_some(),
+            "expected checkout FETCH_HEAD when compatible"
+        );
+        assert!(
+            show_pos.unwrap() < checkout_pos.unwrap(),
+            "inspection must precede checkout (level A)"
+        );
+    }
+
+    /// When the fetched revision declares a `required_runok_version` that
+    /// current runok does not satisfy, the working tree must NOT be touched
+    /// by `git checkout`. The refresh silently falls back to the old cached
+    /// content so that normal operations keep working.
+    #[rstest]
+    fn stale_refresh_incompatible_candidate_keeps_working_tree(cache_fixture: CacheFixture) {
+        use crate::config::required_version::VersionOverrideGuard;
+        let _guard = VersionOverrideGuard::set(semver::Version::new(0, 2, 0));
+
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@main";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'still valid'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        // The new revision requires runok 0.3+, but the override pins the
+        // current binary to 0.2.0.
+        mock.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                required_runok_version: '>=0.3'
+                rules:
+                  - allow: 'needs newer runok'
+            "},
+        );
+
+        let config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        // The returned content should come from the existing working tree,
+        // not the new (rejected) revision.
+        let rules = config.rules.unwrap();
+        assert_eq!(rules[0].allow.as_deref(), Some("still valid"));
+
+        // Most importantly, there must have been NO checkout call: the
+        // working tree stays exactly as it was so concurrent runok processes
+        // never observe a preset that is too new for them.
+        let calls = mock.calls.borrow();
+        let had_checkout = calls
+            .iter()
+            .any(|c| matches!(c, crate::config::git_client::mock::GitCall::Checkout { .. }));
+        assert!(
+            !had_checkout,
+            "checkout must not be called when the candidate is incompatible (level A)"
+        );
+    }
+
+    /// If a child file reachable via `extends` declares a
+    /// `required_runok_version` that current runok does not satisfy, the
+    /// parent revision is treated as incompatible as a whole. The working
+    /// tree is left unchanged just like the single-file case.
+    #[rstest]
+    fn stale_refresh_incompatible_extends_child_rejects_parent(cache_fixture: CacheFixture) {
+        use crate::config::required_version::VersionOverrideGuard;
+        let _guard = VersionOverrideGuard::set(semver::Version::new(0, 2, 0));
+
+        let cache = &cache_fixture.cache;
+        let reference_str = "github:org/repo@main";
+        let parsed = parse_preset_reference(reference_str).unwrap();
+        let cache_dir = cache.cache_dir(reference_str);
+
+        write_runok_yml(
+            &cache_dir,
+            indoc! {"
+                rules:
+                  - allow: 'existing'
+            "},
+        );
+        let metadata = CacheMetadata {
+            fetched_at: 0,
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        mock.on_fetch(Ok(()));
+        // Parent preset itself is compatible.
+        mock.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                extends:
+                  - ./rules/aws.yml
+                rules:
+                  - allow: 'parent ok'
+            "},
+        );
+        // Child preset requires a newer runok than the override provides.
+        mock.on_show_file(
+            "FETCH_HEAD",
+            "rules/aws.yml",
+            indoc! {"
+                required_runok_version: '>=0.9'
+                rules:
+                  - allow: 'aws'
+            "},
+        );
+
+        let _config = load_remote_preset(&parsed, reference_str, &mock, cache).unwrap();
+
+        let calls = mock.calls.borrow();
+        let had_checkout = calls
+            .iter()
+            .any(|c| matches!(c, crate::config::git_client::mock::GitCall::Checkout { .. }));
+        assert!(
+            !had_checkout,
+            "checkout must not be called when an extends child is incompatible"
         );
     }
 

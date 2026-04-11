@@ -10,6 +10,20 @@ pub enum ConfigError {
     Preset(#[from] PresetError),
     #[error("validation errors:\n{}", .0.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n"))]
     Validation(Vec<String>),
+    #[error(
+        "{source_label}: required_runok_version '{requirement}' is not a valid semver requirement: {message}"
+    )]
+    InvalidVersionRequirement {
+        source_label: String,
+        requirement: String,
+        message: String,
+    },
+    #[error("{source_label}: requires runok {requirement}, but current version is {current}")]
+    UnsupportedRunokVersion {
+        source_label: String,
+        requirement: String,
+        current: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

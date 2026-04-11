@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use super::cache::PresetCache;
 use super::git_client::{GitClient, ProcessGitClient};
 use super::preset_remote::{PresetReference, load_remote_preset, parse_preset_reference};
+use super::required_version::{check_required_runok_version, current_runok_version};
 use super::{Config, ConfigError, PresetError, parse_config_with_warnings};
 
 const MAX_EXTENDS_DEPTH: usize = 10;
@@ -127,6 +128,14 @@ pub fn load_local_preset(reference: &str, base_dir: &Path) -> Result<Config, Con
     }
     let mut config = parsed.config;
 
+    // Enforce `required_runok_version` per file so that violations are
+    // attributed to the preset that declares the constraint.
+    check_required_runok_version(
+        config.required_runok_version.as_deref(),
+        &current_runok_version(),
+        &path.display().to_string(),
+    )?;
+
     // Resolve paths in the preset relative to the preset file's parent directory
     let preset_base_dir = path.parent().unwrap_or(base_dir);
     super::path_resolver::resolve_config_paths(&mut config, preset_base_dir)?;
@@ -161,6 +170,16 @@ pub fn load_preset_with<G: GitClient>(
         PresetReference::Local(_) => load_local_preset(reference, base_dir),
         _ => {
             let mut config = load_remote_preset(&parsed, reference, git_client, cache)?;
+
+            // Enforce `required_runok_version` per file. For remote presets
+            // the source label is the reference string so users can trace
+            // the failure back to the exact preset entry they wrote.
+            check_required_runok_version(
+                config.required_runok_version.as_deref(),
+                &current_runok_version(),
+                reference,
+            )?;
+
             // Resolve paths in the remote preset relative to the cache directory
             let cache_dir = cache.cache_dir(reference);
             super::path_resolver::resolve_config_paths(&mut config, &cache_dir)?;
@@ -178,6 +197,28 @@ pub fn load_preset_with<G: GitClient>(
             Ok(config)
         }
     }
+}
+
+/// Fully load a preset by reference and recursively resolve its `extends`.
+///
+/// This is a convenience helper for callers that need to materialize the
+/// entire preset tree at a given reference — for example `update-presets`,
+/// which must probe every file under a candidate tag to verify that all of
+/// them satisfy the current `required_runok_version`.
+///
+/// The returned `Config` contains the merged result of the preset and every
+/// file it transitively extends. Any `ConfigError` raised while loading or
+/// checking a child file (including `UnsupportedRunokVersion`) is propagated
+/// unchanged so the caller can inspect the reason.
+pub fn load_and_resolve_preset_with<G: GitClient>(
+    reference: &str,
+    base_dir: &Path,
+    git_client: &G,
+    cache: &PresetCache,
+) -> Result<Config, ConfigError> {
+    let config = load_preset_with(reference, base_dir, git_client, cache)?;
+    let preset_base_dir = determine_preset_base_dir(reference, base_dir, cache);
+    resolve_extends_with(config, &preset_base_dir, reference, git_client, cache)
 }
 
 /// Resolve all `extends` references in a config, recursively loading and merging presets.

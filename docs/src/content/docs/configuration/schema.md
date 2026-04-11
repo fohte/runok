@@ -19,7 +19,7 @@ rules:
   - ask: 'npm *'
 ```
 
-The top-level keys are `extends`, `defaults`, `rules`, `definitions`, `audit`, and `tests`. All are optional.
+The top-level keys are `required_runok_version`, `extends`, `defaults`, `rules`, `definitions`, `audit`, and `tests`. All are optional.
 
 ### JSON Schema
 
@@ -34,6 +34,22 @@ rules:
 ```
 
 ## Top-Level Fields
+
+### `required_runok_version`
+
+Minimum runok version required to load this file, expressed as a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) (e.g. `">=0.3.0"`, `"^0.3"`, `">=0.3, <0.5"`). If the current runok binary does not satisfy the requirement, loading fails with an error that names the file and the constraint. The check runs per file, so every file in an `extends` chain is validated independently.
+
+See [Extends -- Version Guards](/configuration/extends/#version-guards-required_runok_version) for preset authoring guidance and how `update-presets` and automatic refresh interact with this field.
+
+**Type:** `str`\
+**Default:** None\
+**Required:** No
+
+```yaml title="runok.yml"
+required_runok_version: '>=0.3.0'
+rules:
+  - allow: 'echo *'
+```
 
 ### `extends`
 

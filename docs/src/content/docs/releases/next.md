@@ -8,6 +8,27 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
+### `required_runok_version` field for version guards
+
+Every config and preset file can now declare a `required_runok_version` — a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) expression such as `">=0.3.0"` or `">=0.3, <0.5"`. When runok loads a file whose constraint is not satisfied by the running binary, loading fails with an error that names the exact file and the constraint, rather than silently ignoring newer schema fields.
+
+```yaml title="preset that depends on a newer runok feature"
+required_runok_version: '>=0.3.0'
+definitions:
+  flag_groups:
+    field-flag: ['-f', '--field']
+```
+
+The check runs per file, so the project `runok.yml`, any file pulled in via `extends`, and every transitively extended preset are all validated independently.
+
+`runok update-presets` now respects this field when choosing upgrade tags. Candidate tags are inspected from newest to oldest, and the newest candidate whose preset tree (including transitive `extends`) satisfies the current runok binary is adopted. This lets preset repositories ship schema-incompatible changes under newer tags without breaking users who are still on older runok. When one or more newer candidates are skipped, `update-presets` emits a warning so you know that upgrading the runok binary would unlock newer preset versions.
+
+Automatic preset refresh (the TTL-driven background update that runs inside `runok check`, `runok exec`, and similar commands) now applies the same check. The cache working tree is only advanced to a new revision after `required_runok_version` has been verified via `git show`, so concurrent runok processes never see a partially-updated preset that is too new for them. If the new revision is incompatible the refresh is silently skipped and the existing cached preset is used — the warning is reserved for `update-presets` so that normal operations stay quiet.
+
+Nightly builds (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of version checks, so any `>=X.Y.Z` constraint passes automatically. Upper-bounded ranges still reject nightly intentionally.
+
+See [Extends -- Version Guards](/configuration/extends/#version-guards-required_runok_version) for preset authoring guidance and [Configuration Schema -- `required_runok_version`](/configuration/schema/#required_runok_version) for the field reference.
+
 ### Flag alias groups with `<flag:name>` placeholder ([#278](https://github.com/fohte/runok/pull/278))
 
 `when` clauses can now inspect every value of a repeated or aliased flag through the new `<flag:name>` placeholder and the corresponding `flag_groups` CEL variable.

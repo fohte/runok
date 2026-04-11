@@ -107,6 +107,35 @@ Circular references are detected and rejected. runok normalizes file paths befor
 
 The maximum extends depth is **10** levels. Exceeding this limit produces an error.
 
+## Version Guards (`required_runok_version`)
+
+A preset file can declare the minimum runok version it needs by setting the top-level `required_runok_version` field to a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) expression. Preset authors should set this whenever a file depends on schema features introduced in a newer runok, so that older runok binaries refuse the preset cleanly instead of silently ignoring unknown fields or surfacing confusing parse errors.
+
+```yaml title="preset using a newer runok feature"
+required_runok_version: '>=0.3.0'
+definitions:
+  flag_groups:
+    field-flag: ['-f', '--field']
+```
+
+The check is enforced per file: the project `runok.yml`, every file pulled in via `extends`, and every transitively extended preset are validated independently. If any file's requirement is not satisfied, loading fails with an error that names the exact file and the constraint.
+
+### Interaction with `update-presets`
+
+`runok update-presets` honors `required_runok_version` when selecting which tag to upgrade a remote preset to. Candidate tags are inspected from newest to oldest, and the newest tag whose entire preset tree (including every file it transitively extends) satisfies the current runok version is adopted. Candidates that require a newer runok are reported as a warning so that the user knows upgrading the runok binary would unlock newer preset versions.
+
+This lets a preset repository ship schema-incompatible changes under a newer tag without breaking users still on older runok — they will stay on the previous compatible tag until they upgrade runok themselves.
+
+### Interaction with automatic refresh
+
+The same check also guards the background refresh that happens when a cached remote preset goes stale. A new revision fetched from the remote is only written to the cache working tree after its `required_runok_version` has been verified. If the new revision (or any file it extends in the same repository) is incompatible, the refresh is silently skipped and the existing cached preset is kept, so that normal `runok check` / `runok exec` operations are never broken by a preset upgrade that the current runok cannot read.
+
+No warning is emitted in this path on purpose — warnings about "a newer tag exists" are reserved for the explicit `update-presets` command so that normal operations stay quiet.
+
+### Nightly builds
+
+Nightly builds of runok (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of this check, so any `>=X.Y.Z` requirement passes automatically. Upper-bounded ranges such as `">=0.2, <0.4"` intentionally reject nightly builds because nightly is modeled as strictly greater than every released version.
+
 ## Caching
 
 Remote presets are cached locally to avoid repeated network fetches.

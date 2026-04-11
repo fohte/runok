@@ -151,12 +151,42 @@ impl PresetCache {
     }
 
     /// Write metadata to a `metadata.json` file inside `cache_dir`.
+    ///
+    /// The write is atomic: the serialized JSON is first written to a sibling
+    /// temporary file and then renamed into place. Concurrent readers therefore
+    /// see either the previous metadata or the new one, never a half-written
+    /// intermediate state.
     pub fn write_metadata(cache_dir: &Path, metadata: &CacheMetadata) -> Result<(), PresetError> {
+        use std::io::Write;
+
         let path = cache_dir.join("metadata.json");
         let json = serde_json::to_string_pretty(metadata)
             .map_err(|e| PresetError::Cache(format!("failed to serialize cache metadata: {e}")))?;
-        std::fs::write(&path, json)
-            .map_err(|e| PresetError::Cache(format!("failed to write metadata: {e}")))?;
+
+        // Use a unique suffix so parallel writers in the same directory do not
+        // clobber each other's temporary files before the rename lands.
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let tmp_path = cache_dir.join(format!("metadata.json.tmp.{pid}.{nanos}"));
+
+        {
+            let mut file = File::create(&tmp_path)
+                .map_err(|e| PresetError::Cache(format!("failed to create metadata tmp: {e}")))?;
+            file.write_all(json.as_bytes())
+                .map_err(|e| PresetError::Cache(format!("failed to write metadata tmp: {e}")))?;
+            file.sync_all()
+                .map_err(|e| PresetError::Cache(format!("failed to fsync metadata tmp: {e}")))?;
+        }
+
+        std::fs::rename(&tmp_path, &path).map_err(|e| {
+            // Best-effort cleanup if the rename failed.
+            let _ = std::fs::remove_file(&tmp_path);
+            PresetError::Cache(format!("failed to rename metadata into place: {e}"))
+        })?;
+
         Ok(())
     }
 }
