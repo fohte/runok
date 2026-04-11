@@ -39,7 +39,7 @@ See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [Whe
 
 ## Bug Fixes
 
-### Wrapper recognition for subshell-wrapped compound commands ([#000](https://github.com/fohte/runok/pull/000))
+### Wrapper recognition for subshell-wrapped compound commands ([#297](https://github.com/fohte/runok/pull/297))
 
 Commands of the form `<wrapper> (<compound>)` -- for example `time (lefthook run pre-commit 2>&1 | tail -40)` -- are now recognized by wrapper patterns such as `time <cmd>`. The subshell is captured as a single `<cmd>` argument, then its body is split into sub-commands (`lefthook run pre-commit`, `tail -40`) and each is evaluated individually with Explicit Deny Wins.
 
