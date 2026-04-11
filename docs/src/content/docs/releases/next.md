@@ -21,7 +21,9 @@ definitions:
 
 The check runs per file, so the project `runok.yml`, any file pulled in via `extends`, and every transitively extended preset are all validated independently.
 
-`runok update-presets` now respects this field when choosing upgrade tags. Candidate tags are inspected from newest to oldest, and the newest candidate whose preset tree (including transitive `extends`) satisfies the current runok binary is adopted. This lets preset repositories ship schema-incompatible changes under newer tags without breaking users who are still on older runok.
+`runok update-presets` now respects this field when choosing upgrade tags. Candidate tags are inspected from newest to oldest, and the newest candidate whose preset tree (including transitive `extends`) satisfies the current runok binary is adopted. This lets preset repositories ship schema-incompatible changes under newer tags without breaking users who are still on older runok. When one or more newer candidates are skipped, `update-presets` emits a warning so you know that upgrading the runok binary would unlock newer preset versions.
+
+Automatic preset refresh (the TTL-driven background update that runs inside `runok check`, `runok exec`, and similar commands) now applies the same check. The cache working tree is only advanced to a new revision after `required_runok_version` has been verified via `git show`, so concurrent runok processes never see a partially-updated preset that is too new for them. If the new revision is incompatible the refresh is silently skipped and the existing cached preset is used — the warning is reserved for `update-presets` so that normal operations stay quiet.
 
 Nightly builds (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of version checks, so any `>=X.Y.Z` constraint passes automatically. Upper-bounded ranges still reject nightly intentionally.
 

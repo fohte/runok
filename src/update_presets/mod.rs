@@ -7,7 +7,10 @@ use similar::ChangeTag;
 
 use crate::config::cache::{CacheMetadata, CacheStatus, PresetCache};
 use crate::config::git_client::{GitClient, ProcessGitClient, RemoteRef};
-use crate::config::preset_remote::{PresetReference, parse_preset_reference, resolve_git_params};
+use crate::config::preset_remote::{
+    CandidateInspection, PresetReference, inspect_candidate_required_versions,
+    parse_preset_reference, preset_path_from_reference, resolve_git_params,
+};
 use crate::config::{Config, ConfigError, load_and_resolve_preset_with, parse_config};
 
 use semver_utils::{find_upgrade_candidates, parse_version_spec};
@@ -79,21 +82,41 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+/// A candidate tag that was rejected because of a `required_runok_version`
+/// constraint the current runok build does not satisfy. Surfaced so that the
+/// `update-presets` command can emit a single consolidated warning.
+#[derive(Debug, Clone)]
+struct SkippedCandidate {
+    tag: String,
+    source_label: String,
+    requirement: String,
+    current: String,
+}
+
 /// Result of updating a single preset.
 enum UpdateResult {
     /// Preset content was refreshed with changes (branch/Latest).
     Updated {
         old_sha: Option<String>,
         new_sha: Option<String>,
+        /// Candidates that were inspected but skipped because they required a
+        /// newer runok version. Populated only when there were candidates to
+        /// skip; empty otherwise.
+        skipped_candidates: Vec<SkippedCandidate>,
     },
     /// Preset was already up to date (no changes).
-    UpToDate,
+    UpToDate {
+        skipped_candidates: Vec<SkippedCandidate>,
+    },
     /// Preset is immutable (commit SHA), skipped.
     Skipped,
     /// A newer version tag was found and the preset was upgraded.
     Upgraded {
         old_reference: String,
         new_reference: String,
+        /// Candidates newer than the adopted one that were skipped because
+        /// they required a newer runok version.
+        skipped_candidates: Vec<SkippedCandidate>,
     },
     /// Error occurred during update.
     Error(String),
@@ -142,38 +165,69 @@ fn update_single_preset<G: GitClient>(
     }
 
     // Check if this is a version tag that can be upgraded
+    let mut skipped_from_upgrade: Vec<SkippedCandidate> = Vec::new();
     if let Some(current_tag) = extract_version_tag(&parsed) {
         let result = try_tag_upgrade(
             reference,
             current_tag,
             &params.url,
+            &parsed,
             cache,
             git_client,
             refs_cache,
         );
         // If no upgrade was found, the tag might actually be a branch (e.g., `v1` in
         // GitHub Actions style). Fall through to force_refetch so it still gets updated.
-        if !matches!(result, UpdateResult::UpToDate) {
-            return result;
+        match result {
+            UpdateResult::UpToDate { skipped_candidates } => {
+                skipped_from_upgrade = skipped_candidates;
+            }
+            other => return other,
         }
     }
 
-    // Branch/Latest (or version tag with no upgrade): force re-fetch
-    force_refetch(reference, &params, cache, git_client)
+    // Branch/Latest (or version tag with no upgrade): force re-fetch.
+    // Preserve any candidates that were skipped during `try_tag_upgrade` so
+    // the final warn report still mentions them.
+    let mut refetched = force_refetch(reference, &params, cache, git_client);
+    attach_skipped(&mut refetched, skipped_from_upgrade);
+    refetched
+}
+
+/// Attach a list of skipped candidates to the result returned by
+/// `force_refetch`, merging with any pre-existing list.
+fn attach_skipped(result: &mut UpdateResult, mut extra: Vec<SkippedCandidate>) {
+    if extra.is_empty() {
+        return;
+    }
+    match result {
+        UpdateResult::Updated {
+            skipped_candidates, ..
+        }
+        | UpdateResult::UpToDate { skipped_candidates }
+        | UpdateResult::Upgraded {
+            skipped_candidates, ..
+        } => {
+            skipped_candidates.append(&mut extra);
+        }
+        UpdateResult::Skipped | UpdateResult::Error(_) => {}
+    }
 }
 
 /// Try to upgrade a version-tagged preset to the latest compatible version.
 ///
-/// Candidate tags are tried from newest to oldest. For each candidate the
-/// preset (and all of its transitive `extends`) is fully loaded so that every
-/// file's `required_runok_version` is checked against the current runok
-/// binary. The first candidate that loads cleanly is adopted. If every
-/// candidate fails the version check, the preset is reported as up to date
-/// (the caller will then try `force_refetch` for branches/Latest).
+/// Candidate tags are tried from newest to oldest. Each candidate is inspected
+/// with `git show` against the *existing* cache directory so the working tree
+/// is never touched with an unvalidated revision (level A). Only after a
+/// candidate is confirmed compatible is the new reference materialized in its
+/// own cache directory. If every candidate fails the version check, the
+/// preset is reported as up to date and the caller proceeds with
+/// `force_refetch` for branches/Latest.
 fn try_tag_upgrade<G: GitClient>(
     reference: &str,
     current_tag: &str,
     url: &str,
+    parsed_ref: &PresetReference,
     cache: &PresetCache,
     git_client: &G,
     refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
@@ -190,60 +244,131 @@ fn try_tag_upgrade<G: GitClient>(
     let ref_names: Vec<String> = remote_refs.iter().map(|r| r.name.clone()).collect();
     let candidates = find_upgrade_candidates(current_tag, &ref_names);
     if candidates.is_empty() {
-        return UpdateResult::UpToDate;
+        return UpdateResult::UpToDate {
+            skipped_candidates: Vec::new(),
+        };
     }
 
-    let mut skipped: Vec<String> = Vec::new();
+    let preset_path = preset_path_from_reference(parsed_ref).map(|s| s.to_string());
+    let old_cache_dir = cache.cache_dir(reference);
+
+    let mut skipped: Vec<SkippedCandidate> = Vec::new();
 
     for new_tag in candidates {
         let new_reference = build_updated_reference(reference, current_tag, &new_tag);
 
-        match materialize_candidate(&new_reference, cache, git_client) {
-            Ok(()) => {}
-            Err(msg) => return UpdateResult::Error(msg),
-        }
+        // Decide how to inspect the candidate.
+        //
+        // - If we already have a cache directory for the *current* reference,
+        //   use it as a scratch pad: fetch the candidate tag into its existing
+        //   clone and run `git show <tag>:<path>` to inspect the revision
+        //   without touching the working tree. This preserves level A: no
+        //   concurrent runok process ever sees a partially-updated cache.
+        //
+        // - Otherwise we have no existing clone to inspect. Fall back to the
+        //   old behavior of materializing the candidate in a fresh cache
+        //   directory; this is still level-A-safe because no concurrent
+        //   process is reading that cache (it did not exist before).
+        let inspection = if old_cache_dir.exists() {
+            // Acquire a lock on the old cache to serialize against concurrent
+            // auto-refresh. The fetch-only phase does not modify the working
+            // tree, but we still lock to match existing conventions and to
+            // prevent the working tree from being pulled out from under us.
+            let _lock = match cache.acquire_lock(reference) {
+                Ok(l) => l,
+                Err(e) => return UpdateResult::Error(format!("lock failed: {e}")),
+            };
 
-        // Fully load the candidate preset (including its transitive extends)
-        // so every file's `required_runok_version` is checked by the shared
-        // config-loading pipeline.
-        match load_and_resolve_preset_with(
-            &new_reference,
-            &cache.cache_dir(&new_reference),
-            git_client,
-            cache,
-        ) {
-            Ok(_) => {
+            if let Err(e) = git_client.fetch(&old_cache_dir, Some(&new_tag)) {
+                skipped.push(SkippedCandidate {
+                    tag: new_tag.clone(),
+                    source_label: format!("fetch failed: {e}"),
+                    requirement: String::new(),
+                    current: String::new(),
+                });
+                continue;
+            }
+
+            inspect_candidate_required_versions(
+                git_client,
+                &old_cache_dir,
+                "FETCH_HEAD",
+                preset_path.as_deref(),
+            )
+        } else {
+            // No existing clone: materialize into the new cache dir so we can
+            // inspect it directly. This path is taken only for presets that
+            // were never loaded before (`update-presets` is usually run after
+            // presets have been used, so this is rare).
+            match materialize_candidate(&new_reference, cache, git_client) {
+                Ok(()) => {}
+                Err(msg) => return UpdateResult::Error(msg),
+            }
+            let new_cache_dir = cache.cache_dir(&new_reference);
+            // Inspect by reading files directly from the working tree via
+            // `load_and_resolve_preset_with`, which walks the real extends
+            // chain. This matches the previous implementation for first-use.
+            match load_and_resolve_preset_with(&new_reference, &new_cache_dir, git_client, cache) {
+                Ok(_) => CandidateInspection::Compatible,
+                Err(ConfigError::UnsupportedRunokVersion {
+                    source_label,
+                    requirement,
+                    current,
+                }) => CandidateInspection::Incompatible {
+                    source_label,
+                    requirement,
+                    current,
+                },
+                Err(e) => {
+                    return UpdateResult::Error(format!(
+                        "failed to load candidate tag {new_tag}: {e}"
+                    ));
+                }
+            }
+        };
+
+        match inspection {
+            CandidateInspection::Compatible => {
+                // If we inspected via the old cache dir, the new reference
+                // has not yet been materialized; do it now so that subsequent
+                // loads can find it in the cache.
+                if old_cache_dir.exists()
+                    && let Err(msg) = materialize_candidate(&new_reference, cache, git_client)
+                {
+                    return UpdateResult::Error(msg);
+                }
                 return UpdateResult::Upgraded {
                     old_reference: reference.to_string(),
                     new_reference,
+                    skipped_candidates: skipped,
                 };
             }
-            Err(ConfigError::UnsupportedRunokVersion {
+            CandidateInspection::Incompatible {
                 source_label,
                 requirement,
                 current,
-            }) => {
-                skipped.push(format!(
-                    "  {new_tag}: {source_label} requires runok {requirement} (current: {current})"
-                ));
+            } => {
+                skipped.push(SkippedCandidate {
+                    tag: new_tag.clone(),
+                    source_label,
+                    requirement,
+                    current,
+                });
                 continue;
             }
-            Err(e) => {
-                return UpdateResult::Error(format!("failed to load candidate tag {new_tag}: {e}"));
+            CandidateInspection::InspectionFailed => {
+                // Could not inspect (missing preset file, parse error, etc.).
+                // Treat the same as "not a valid upgrade target" and keep
+                // trying older tags. Do not append to `skipped` because we
+                // do not know whether this was a version-constraint failure.
+                continue;
             }
         }
     }
 
-    if !skipped.is_empty() {
-        eprintln!(
-            "No compatible upgrade for {reference} (skipped {} candidate(s)):",
-            skipped.len()
-        );
-        for line in &skipped {
-            eprintln!("{line}");
-        }
+    UpdateResult::UpToDate {
+        skipped_candidates: skipped,
     }
-    UpdateResult::UpToDate
 }
 
 /// Ensure a candidate reference is materialized in the preset cache so that
@@ -338,9 +463,15 @@ fn force_refetch<G: GitClient>(
             let _ = PresetCache::write_metadata(&cache_dir, &metadata);
 
             if old_sha == new_sha {
-                UpdateResult::UpToDate
+                UpdateResult::UpToDate {
+                    skipped_candidates: Vec::new(),
+                }
             } else {
-                UpdateResult::Updated { old_sha, new_sha }
+                UpdateResult::Updated {
+                    old_sha,
+                    new_sha,
+                    skipped_candidates: Vec::new(),
+                }
             }
         }
         CacheStatus::Miss => {
@@ -373,9 +504,38 @@ fn force_refetch<G: GitClient>(
             UpdateResult::Updated {
                 old_sha: None,
                 new_sha,
+                skipped_candidates: Vec::new(),
             }
         }
     }
+}
+
+/// Emit a warning listing tag candidates that were rejected because of a
+/// `required_runok_version` constraint. Called only from the manual
+/// `update-presets` path; the automatic stale-refresh path is intentionally
+/// silent so that normal operations never surface preset-author messages
+/// about the runok binary version.
+fn warn_skipped_candidates(reference: &str, skipped: &[SkippedCandidate]) {
+    if skipped.is_empty() {
+        return;
+    }
+    eprintln!(
+        "\x1b[33mwarning:\x1b[0m {} candidate upgrade(s) for {reference} \
+         were skipped because the current runok binary is too old:",
+        skipped.len()
+    );
+    for entry in skipped {
+        if entry.requirement.is_empty() {
+            // Inspection failure (e.g. fetch error). Surface the raw detail.
+            eprintln!("  {}: {}", entry.tag, entry.source_label);
+        } else {
+            eprintln!(
+                "  {}: {} requires runok {} (current: {})",
+                entry.tag, entry.source_label, entry.requirement, entry.current
+            );
+        }
+    }
+    eprintln!("  Upgrade runok to pick up newer preset versions.");
 }
 
 /// Replace a preset reference in a config file, preserving formatting.
@@ -427,14 +587,20 @@ fn run_with<G: GitClient>(
     for tracked in &tracked_refs {
         let reference = &tracked.reference;
         match update_single_preset(reference, cache, git_client, &mut refs_cache) {
-            UpdateResult::Updated { old_sha, new_sha } => {
+            UpdateResult::Updated {
+                old_sha,
+                new_sha,
+                skipped_candidates,
+            } => {
                 let old = old_sha.as_deref().map_or("(none)", |s| s);
                 let new = new_sha.as_deref().map_or("(unknown)", |s| s);
                 eprintln!("\x1b[1mUpdated:\x1b[0m {reference} ({old} \u{2192} {new})");
+                warn_skipped_candidates(reference, &skipped_candidates);
                 updated_count += 1;
             }
-            UpdateResult::UpToDate => {
+            UpdateResult::UpToDate { skipped_candidates } => {
                 eprintln!("Already up to date: {reference}");
+                warn_skipped_candidates(reference, &skipped_candidates);
                 up_to_date_count += 1;
             }
             UpdateResult::Skipped => {
@@ -444,8 +610,10 @@ fn run_with<G: GitClient>(
             UpdateResult::Upgraded {
                 old_reference,
                 new_reference,
+                skipped_candidates,
             } => {
                 eprintln!("\x1b[1mUpgraded:\x1b[0m {old_reference} \u{2192} {new_reference}");
+                warn_skipped_candidates(&old_reference, &skipped_candidates);
 
                 // Read config file content before updating
                 let config_before =
@@ -661,8 +829,12 @@ mod tests {
     /// - Sets up old cache with preset content.
     /// - If `expected` is `Upgraded(new_ref)`, pre-creates the upgrade target cache with
     ///   different content so the diff is non-empty.
-    /// - Mocks `ls_remote_refs` with `remote_refs` (empty for non-version references).
-    /// - Mocks fetch/checkout/rev_parse for the force_refetch fallback path.
+    /// - Mocks `ls_remote_refs` with `remote_refs`.
+    /// - Mocks fetch/checkout/rev_parse for the force_refetch fallback path
+    ///   and for the per-candidate inspection fetches in the upgrade path.
+    /// - Mocks `show_file` to return a permissive preset (no
+    ///   `required_runok_version`) for every candidate, simulating the case
+    ///   where every tag passes the version check.
     fn run_update_scenario(
         tmp: &TempDir,
         reference: &str,
@@ -717,12 +889,26 @@ mod tests {
             git_client.on_ls_remote_refs(Ok(remote_refs));
         }
 
-        // Mock fetch/checkout/rev_parse for upgrade path or force_refetch fallback
-        if !is_sha {
+        // Per-candidate inspection fetches: queue a generous number of Ok
+        // results so each `git fetch origin <tag>` the upgrade path issues
+        // succeeds. The `force_refetch` fallback also needs one more.
+        for _ in 0..32 {
             git_client.on_fetch(Ok(()));
+        }
+        if !is_sha {
             git_client.on_checkout(Ok(()));
             git_client.on_rev_parse(Ok("abc123".to_string()));
         }
+        // Every candidate inspection tries `show_file("FETCH_HEAD", "runok.yml")`.
+        // Queue a permissive preset so the compatibility check always passes.
+        git_client.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+            "},
+        );
 
         let mut refs_cache = HashMap::new();
         update_single_preset(reference, &cache, &git_client, &mut refs_cache)
@@ -840,7 +1026,7 @@ mod tests {
             },
             Expected::UpToDate => {
                 assert!(
-                    matches!(result, UpdateResult::UpToDate),
+                    matches!(result, UpdateResult::UpToDate { .. }),
                     "expected UpToDate, got {result:?}"
                 );
             }
@@ -914,6 +1100,20 @@ mod tests {
         format!("required_runok_version: '{required}'\nrules:\n  - allow: 'echo *'\n")
     }
 
+    /// Queue enough `fetch`/`clone`/`checkout`/`rev_parse` outcomes that the
+    /// upgrade path can repeatedly probe candidate tags and still materialize
+    /// the adopted one afterwards. Tests that exercise the candidate fallback
+    /// do not care about the exact call count — only that each subsequent
+    /// call has a success available.
+    fn stub_upgrade_mocks(mock: &MockGitClient, ok_count: usize) {
+        for _ in 0..ok_count {
+            mock.on_fetch(Ok(()));
+            mock.on_clone(Ok(()));
+            mock.on_checkout(Ok(()));
+            mock.on_rev_parse(Ok("abc123".to_string()));
+        }
+    }
+
     #[rstest]
     fn try_tag_upgrade_adopts_newest_compatible_candidate(tmp: TempDir) {
         // Pretend the runok binary is exactly 0.2.0 so that upper-bounded
@@ -925,23 +1125,6 @@ mod tests {
         let reference = "github:org/repo@v1.0.0";
         seed_cache_entry(&cache, reference, "rules: []");
 
-        // v1.3.0 is compatible (the newest compatible candidate).
-        seed_cache_entry(
-            &cache,
-            "github:org/repo@v1.3.0",
-            &preset_body(">=0.2, <0.3"),
-        );
-        seed_cache_entry(
-            &cache,
-            "github:org/repo@v1.2.0",
-            &preset_body(">=0.2, <0.3"),
-        );
-        seed_cache_entry(
-            &cache,
-            "github:org/repo@v1.1.0",
-            &preset_body(">=0.2, <0.3"),
-        );
-
         let git_client = MockGitClient::new();
         git_client.on_ls_remote_refs(Ok(refs(&[
             ("v1.0.0", T),
@@ -949,6 +1132,10 @@ mod tests {
             ("v1.2.0", T),
             ("v1.3.0", T),
         ])));
+        // Candidate order is newest first: v1.3.0 is inspected first and is
+        // compatible, so it is adopted immediately.
+        git_client.push_show_file("FETCH_HEAD", "runok.yml", &preset_body(">=0.2, <0.3"));
+        stub_upgrade_mocks(&git_client, 4);
 
         let mut refs_cache = HashMap::new();
         let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
@@ -971,17 +1158,26 @@ mod tests {
         let reference = "github:org/repo@v1.0.0";
         seed_cache_entry(&cache, reference, "rules: []");
 
-        seed_cache_entry(&cache, "github:org/repo@v1.2.0", &preset_body(">=0.3.0"));
-        seed_cache_entry(&cache, "github:org/repo@v1.1.0", &preset_body(">=0.2.0"));
-
         let git_client = MockGitClient::new();
         git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)])));
+        // First inspection = v1.2.0 (Unsupported), second = v1.1.0 (Compatible).
+        git_client.push_show_file("FETCH_HEAD", "runok.yml", &preset_body(">=0.3.0"));
+        git_client.push_show_file("FETCH_HEAD", "runok.yml", &preset_body(">=0.2.0"));
+        stub_upgrade_mocks(&git_client, 4);
 
         let mut refs_cache = HashMap::new();
         let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
         match result {
-            UpdateResult::Upgraded { new_reference, .. } => {
+            UpdateResult::Upgraded {
+                new_reference,
+                skipped_candidates,
+                ..
+            } => {
                 assert_eq!(new_reference, "github:org/repo@v1.1.0");
+                // The skipped newer candidate should be reported so that
+                // `update-presets` can warn about it.
+                assert_eq!(skipped_candidates.len(), 1);
+                assert_eq!(skipped_candidates[0].tag, "v1.2.0");
             }
             other => panic!("expected Upgraded to v1.1.0, got {other:?}"),
         }
@@ -999,21 +1195,23 @@ mod tests {
         let reference = "github:org/repo@v1.0.0";
         seed_cache_entry(&cache, reference, "rules: []");
 
-        seed_cache_entry(&cache, "github:org/repo@v1.2.0", &preset_body(">=0.3.0"));
-        seed_cache_entry(&cache, "github:org/repo@v1.1.0", &preset_body(">=0.3.0"));
-
         let git_client = MockGitClient::new();
         git_client.on_ls_remote_refs(Ok(refs(&[("v1.0.0", T), ("v1.1.0", T), ("v1.2.0", T)])));
-        git_client.on_fetch(Ok(()));
-        git_client.on_checkout(Ok(()));
-        git_client.on_rev_parse(Ok("abc123".to_string()));
+        // Both candidates are incompatible.
+        git_client.push_show_file("FETCH_HEAD", "runok.yml", &preset_body(">=0.3.0"));
+        git_client.push_show_file("FETCH_HEAD", "runok.yml", &preset_body(">=0.3.0"));
+        stub_upgrade_mocks(&git_client, 4);
 
         let mut refs_cache = HashMap::new();
         let result = update_single_preset(reference, &cache, &git_client, &mut refs_cache);
-        assert!(
-            matches!(result, UpdateResult::UpToDate),
-            "expected UpToDate, got {result:?}"
-        );
+        match result {
+            UpdateResult::UpToDate { skipped_candidates } => {
+                // Both candidates should be reported as skipped so the manual
+                // update-presets command can warn about them.
+                assert_eq!(skipped_candidates.len(), 2);
+            }
+            other => panic!("expected UpToDate, got {other:?}"),
+        }
     }
 
     // === collect_tracked_from_dir ===
@@ -1255,6 +1453,27 @@ mod tests {
             git_client.on_rev_parse(r);
         }
 
+        // Queue permissive padding for the level-A upgrade path: each
+        // candidate tag issues an additional fetch + show_file inspection
+        // before materializing. Scenarios that expect upgrades don't bother
+        // listing these explicitly, so provide a generous buffer of
+        // successful outcomes that will simply be unused by scenarios that
+        // don't reach the upgrade path.
+        for _ in 0..8 {
+            git_client.on_fetch(Ok(()));
+            git_client.on_clone(Ok(()));
+            git_client.on_checkout(Ok(()));
+            git_client.on_rev_parse(Ok("abc123".to_string()));
+        }
+        git_client.on_show_file(
+            "FETCH_HEAD",
+            "runok.yml",
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+            "},
+        );
+
         let tracked: Vec<TrackedReference> = scenario
             .references
             .iter()
@@ -1418,7 +1637,7 @@ mod tests {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 UpdateResult::Updated { .. } => write!(f, "Updated"),
-                UpdateResult::UpToDate => write!(f, "UpToDate"),
+                UpdateResult::UpToDate { .. } => write!(f, "UpToDate"),
                 UpdateResult::Skipped => write!(f, "Skipped"),
                 UpdateResult::Upgraded { .. } => write!(f, "Upgraded"),
                 UpdateResult::Error(msg) => write!(f, "Error({msg})"),

@@ -41,6 +41,16 @@ pub trait GitClient {
     /// Run `git ls-remote --tags --heads --refs <url>` and return remote refs
     /// with their kind (tag or branch).
     fn ls_remote_refs(&self, url: &str) -> Result<Vec<RemoteRef>, PresetError>;
+
+    /// Run `git show <git_ref>:<path>` in `repo_dir` and return the file
+    /// contents as a UTF-8 string.
+    ///
+    /// This is used by preset refresh to read a candidate file at a specific
+    /// ref without touching the working tree. The working tree must stay
+    /// untouched until the candidate has been validated, so concurrent runok
+    /// processes never observe an inconsistent intermediate state
+    /// (level A guarantee).
+    fn show_file(&self, repo_dir: &Path, git_ref: &str, path: &str) -> Result<String, PresetError>;
 }
 
 /// Strip credentials from a URL for safe use in error messages.
@@ -168,6 +178,35 @@ impl GitClient for ProcessGitClient {
         }
     }
 
+    fn show_file(&self, repo_dir: &Path, git_ref: &str, path: &str) -> Result<String, PresetError> {
+        let mut cmd = Self::git_command(repo_dir);
+        // Use the `<rev>:<path>` form so that `git show` prints only the blob
+        // contents to stdout (no commit header, no diff). `git show` treats
+        // this as a single argument and does not accept a `--` separator
+        // before it, so rely on the fact that git refs and preset paths do
+        // not start with `-` in practice.
+        let spec = format!("{git_ref}:{path}");
+        cmd.args(["show", spec.as_str()]);
+
+        let output = cmd.output().map_err(|e| PresetError::GitClone {
+            reference: format!("{git_ref}:{path}"),
+            message: format!("failed to execute git show: {e}"),
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PresetError::GitClone {
+                reference: format!("{git_ref}:{path}"),
+                message: format!("git show failed: {}", stderr.trim()),
+            });
+        }
+
+        String::from_utf8(output.stdout).map_err(|e| PresetError::GitClone {
+            reference: format!("{git_ref}:{path}"),
+            message: format!("git show returned non-UTF8 output: {e}"),
+        })
+    }
+
     fn ls_remote_refs(&self, url: &str) -> Result<Vec<RemoteRef>, PresetError> {
         let mut cmd = Command::new("git");
         cmd.env_remove("GIT_DIR");
@@ -228,6 +267,19 @@ pub mod mock {
         Checkout { git_ref: String },
         RevParseHead,
         LsRemoteRefs { url: String },
+        ShowFile { git_ref: String, path: String },
+    }
+
+    /// Key used to look up a `show_file` mock result: `(git_ref, path)`.
+    type ShowFileKey = (String, String);
+
+    /// Mock outcome for a `show_file` call. `PresetError` is not `Clone`, so
+    /// entries store either the blob content or an error message and a new
+    /// error is constructed on each lookup.
+    #[derive(Debug, Clone)]
+    pub enum ShowFileOutcome {
+        Ok(String),
+        Err(String),
     }
 
     /// Test double for `GitClient` that returns pre-configured results.
@@ -237,6 +289,15 @@ pub mod mock {
         checkout_results: RefCell<VecDeque<Result<(), PresetError>>>,
         rev_parse_results: RefCell<VecDeque<Result<String, PresetError>>>,
         ls_remote_refs_results: RefCell<VecDeque<Result<Vec<RemoteRef>, PresetError>>>,
+        /// Mapping from `(git_ref, path)` to the content returned by
+        /// `show_file`. Each entry may be queried repeatedly.
+        show_file_results: RefCell<std::collections::HashMap<ShowFileKey, ShowFileOutcome>>,
+        /// FIFO queue of outcomes used when repeated calls for the same
+        /// `(git_ref, path)` need to return different contents (e.g. the
+        /// upgrade path fetches several candidate tags into `FETCH_HEAD` in
+        /// sequence). When a queued entry exists it takes precedence over
+        /// the static `show_file_results` map.
+        show_file_queue: RefCell<std::collections::HashMap<ShowFileKey, VecDeque<ShowFileOutcome>>>,
         pub calls: RefCell<Vec<GitCall>>,
     }
 
@@ -254,8 +315,45 @@ pub mod mock {
                 checkout_results: RefCell::new(VecDeque::new()),
                 rev_parse_results: RefCell::new(VecDeque::new()),
                 ls_remote_refs_results: RefCell::new(VecDeque::new()),
+                show_file_results: RefCell::new(std::collections::HashMap::new()),
+                show_file_queue: RefCell::new(std::collections::HashMap::new()),
                 calls: RefCell::new(Vec::new()),
             }
+        }
+
+        /// Append an outcome to the FIFO queue for a `(git_ref, path)` pair.
+        /// Each matching `show_file` call pops the oldest entry until the
+        /// queue is empty, at which point the static map (populated via
+        /// `on_show_file`) is consulted.
+        pub fn push_show_file(&self, git_ref: &str, path: &str, content: &str) -> &Self {
+            self.show_file_queue
+                .borrow_mut()
+                .entry((git_ref.to_string(), path.to_string()))
+                .or_default()
+                .push_back(ShowFileOutcome::Ok(content.to_string()));
+            self
+        }
+
+        /// Register the blob content returned by `show_file` for a specific
+        /// `(git_ref, path)` pair.
+        pub fn on_show_file(&self, git_ref: &str, path: &str, content: &str) -> &Self {
+            self.show_file_results.borrow_mut().insert(
+                (git_ref.to_string(), path.to_string()),
+                ShowFileOutcome::Ok(content.to_string()),
+            );
+            self
+        }
+
+        /// Register an error for a specific `(git_ref, path)` pair, simulating
+        /// a missing file at that revision.
+        pub fn on_show_file_missing(&self, git_ref: &str, path: &str) -> &Self {
+            self.show_file_results.borrow_mut().insert(
+                (git_ref.to_string(), path.to_string()),
+                ShowFileOutcome::Err(format!(
+                    "fatal: path '{path}' does not exist in '{git_ref}'"
+                )),
+            );
+            self
         }
 
         /// Queue a result for the next `clone_shallow` call.
@@ -335,6 +433,43 @@ pub mod mock {
                 url: url.to_string(),
             });
             Self::pop_result(&self.ls_remote_refs_results)
+        }
+
+        fn show_file(
+            &self,
+            _repo_dir: &Path,
+            git_ref: &str,
+            path: &str,
+        ) -> Result<String, PresetError> {
+            self.calls.borrow_mut().push(GitCall::ShowFile {
+                git_ref: git_ref.to_string(),
+                path: path.to_string(),
+            });
+            let key = (git_ref.to_string(), path.to_string());
+            // Prefer queued per-call outcomes so the upgrade path can stage a
+            // sequence of different FETCH_HEAD contents.
+            if let Some(queue) = self.show_file_queue.borrow_mut().get_mut(&key)
+                && let Some(outcome) = queue.pop_front()
+            {
+                return match outcome {
+                    ShowFileOutcome::Ok(content) => Ok(content),
+                    ShowFileOutcome::Err(msg) => Err(PresetError::GitClone {
+                        reference: format!("{git_ref}:{path}"),
+                        message: msg,
+                    }),
+                };
+            }
+            match self.show_file_results.borrow().get(&key) {
+                Some(ShowFileOutcome::Ok(content)) => Ok(content.clone()),
+                Some(ShowFileOutcome::Err(msg)) => Err(PresetError::GitClone {
+                    reference: format!("{git_ref}:{path}"),
+                    message: msg.clone(),
+                }),
+                None => Err(PresetError::GitClone {
+                    reference: format!("{git_ref}:{path}"),
+                    message: "no mock result for show_file".to_string(),
+                }),
+            }
         }
     }
 }
