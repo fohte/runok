@@ -1,4 +1,16 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json
 
+definitions:
+  vars:
+    runok:
+      values:
+        - runok
+        - 'cargo run --'
+        - type: path
+          value: target/debug/runok
+        - type: path
+          value: target/release/runok
+
 rules:
   - allow: 'cargo run --features config-schema -- config-schema'
+  - allow: '<var:runok> check *'
