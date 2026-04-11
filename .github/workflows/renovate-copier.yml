@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Commit and push changes
-        uses: suzuki-shunsuke/commit-action@v0.1.1
+        uses: suzuki-shunsuke/commit-action@f12e2d628a4ab72dcefe7890ae07e8dbf1e201b9 # v0.1.1
         with:
           commit_message: 'chore: restore executable bit on scripts/bootstrap'
           workflow: deny

@@ -22,13 +22,13 @@ jobs:
       prs_created: ${{ steps.release.outputs.prs_created }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -53,7 +53,7 @@ jobs:
           echo "head_branch=$head_branch" >> "$GITHUB_OUTPUT"
           echo "tag_name=v${version}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -71,7 +71,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: .github/scripts/update-release-docs.bash
 
-      - uses: suzuki-shunsuke/commit-action@v0.1.1
+      - uses: suzuki-shunsuke/commit-action@f12e2d628a4ab72dcefe7890ae07e8dbf1e201b9 # v0.1.1
         with:
           commit_message: 'docs(releases): add ${{ steps.pr-info.outputs.tag_name }} release notes'
           branch: ${{ steps.pr-info.outputs.head_branch }}
@@ -91,7 +91,7 @@ jobs:
       - run: rustup show
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Authenticate to crates.io
         uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
@@ -130,7 +130,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
 
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -176,7 +176,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
 
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       - name: Determine nightly version
         id: version
@@ -195,7 +195,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf ../../../runok-${{ matrix.target }}.tar.gz runok
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runok-nightly-${{ matrix.target }}
           path: runok-${{ matrix.target }}.tar.gz
@@ -246,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
