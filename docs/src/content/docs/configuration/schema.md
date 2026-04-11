@@ -37,9 +37,9 @@ rules:
 
 ### `required_runok_version`
 
-Minimum runok version required to load this file. The value is a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) expression such as `">=0.3.0"`, `"^0.3"`, or `">=0.3, <0.5"`. If the current runok binary does not satisfy the requirement, loading fails with a clear error that names the file and the constraint.
+Minimum runok version required to load this file, expressed as a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) (e.g. `">=0.3.0"`, `"^0.3"`, `">=0.3, <0.5"`). If the current runok binary does not satisfy the requirement, loading fails with an error that names the file and the constraint. The check runs per file, so every file in an `extends` chain is validated independently.
 
-This field is checked on every file that runok loads — the project `runok.yml`, any file pulled in via `extends`, and every transitively extended preset — so preset authors can guard files that depend on newer runok features.
+See [Extends -- Version Guards](/configuration/extends/#version-guards-required_runok_version) for preset authoring guidance and how `update-presets` and automatic refresh interact with this field.
 
 **Type:** `str`\
 **Default:** None\
@@ -50,24 +50,6 @@ required_runok_version: '>=0.3.0'
 rules:
   - allow: 'echo *'
 ```
-
-```yaml title="preset using a newer runok feature"
-# Preset authors pin the minimum runok version that their file needs.
-# Older runok binaries will refuse to load this preset instead of silently
-# ignoring newer fields.
-required_runok_version: '>=0.3.0'
-definitions:
-  flag_groups:
-    field-flag: ['-f', '--field']
-```
-
-:::tip[update-presets interaction]
-`runok update-presets` honors `required_runok_version` when choosing which tag to upgrade a remote preset to. Candidate tags are inspected from newest to oldest, and the newest candidate that (along with every file it transitively extends) satisfies the current runok version is adopted. This lets preset repositories ship schema-incompatible changes under newer tags without breaking users on older runok.
-:::
-
-:::note[Nightly builds]
-Nightly builds of runok (`X.Y.Z-nightly+<sha>`) are treated as "latest" for version-check purposes, so any `>=X.Y.Z` requirement is satisfied. Upper-bounded ranges such as `">=0.2, <0.4"` will still reject nightly builds because nightly is modeled as strictly greater than every released version.
-:::
 
 ### `extends`
 

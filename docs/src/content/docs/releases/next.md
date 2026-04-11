@@ -27,7 +27,7 @@ Automatic preset refresh (the TTL-driven background update that runs inside `run
 
 Nightly builds (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of version checks, so any `>=X.Y.Z` constraint passes automatically. Upper-bounded ranges still reject nightly intentionally.
 
-See [Configuration Schema — `required_runok_version`](/configuration/schema/#required_runok_version) for details.
+See [Extends -- Version Guards](/configuration/extends/#version-guards-required_runok_version) for preset authoring guidance and [Configuration Schema -- `required_runok_version`](/configuration/schema/#required_runok_version) for the field reference.
 
 ### Flag alias groups with `<flag:name>` placeholder ([#278](https://github.com/fohte/runok/pull/278))
 
