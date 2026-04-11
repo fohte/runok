@@ -75,8 +75,15 @@ pub struct ExtractedCommand {
 /// Combined short flags (`-am`) are not split into individual flags.
 /// Rules match tokens literally ("What You See Is How It Parses"),
 /// so `-m` in a rule won't match `-am` in the input.
+///
+/// Tokenization prefers a tree-sitter-bash walk (so shell groupings such
+/// as `(subshell)`, `$(command substitution)`, and `` `...` `` are kept
+/// as single tokens, which is what wrapper patterns like `time <cmd>`
+/// expect). Inputs that are not a single top-level command — pipelines,
+/// lists, unparseable fragments, etc. — fall back to the whitespace-based
+/// [`tokenize`].
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
-    let raw_tokens = tokenize(input)?;
+    let raw_tokens = tokenize_command_aware(input)?;
     let command = raw_tokens[0].clone();
 
     let mut flags = HashMap::new();
@@ -131,12 +138,6 @@ pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, 
 ///   unknown escapes preserve the backslash to match shell behavior)
 /// - Backslash escapes outside of quotes
 /// - Empty quoted strings (`""`, `''`) are preserved as empty tokens
-/// - Balanced shell groupings kept as a single token (preserving inner
-///   whitespace verbatim): subshells `(...)`, command substitutions
-///   `$(...)` / `` `...` ``. Nesting and quoted content inside the
-///   grouping are respected. This allows forms like `time (a | b)` to
-///   tokenize as `["time", "(a | b)"]` so wrapper patterns such as
-///   `time <cmd>` can capture the subshell as a single placeholder.
 pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -204,36 +205,6 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
                     None => {} // trailing backslash is ignored
                 }
             }
-            // Subshell `(...)`: read the balanced paren group as a single
-            // token atom (including the parens themselves and any inner
-            // whitespace). Only triggered when `(` appears at a word
-            // boundary — mid-token `(` is unusual in shell and left to
-            // the regular character branch.
-            '(' if !has_token => {
-                has_token = true;
-                read_balanced_group(&mut chars, &mut current, '(', ')')?;
-            }
-            // Backtick command substitution `` `...` ``: treated as a
-            // single atom inside the current token, preserving whitespace.
-            '`' => {
-                has_token = true;
-                current.push('`');
-                chars.next(); // consume opening backtick
-                read_backtick_body(&mut chars, &mut current)?;
-            }
-            // `$(...)` command substitution: keep as a single atom.
-            // `${...}` parameter expansion: keep as a single atom.
-            // Other `$`-prefixed forms fall through to regular character.
-            '$' => {
-                chars.next(); // consume `$`
-                has_token = true;
-                current.push('$');
-                match chars.peek() {
-                    Some('(') => read_balanced_group(&mut chars, &mut current, '(', ')')?,
-                    Some('{') => read_balanced_group(&mut chars, &mut current, '{', '}')?,
-                    _ => {}
-                }
-            }
             // Regular character
             _ => {
                 has_token = true;
@@ -254,147 +225,137 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     Ok(tokens)
 }
 
-/// Consume a balanced `open..close` group from `chars` and append it to
-/// `current` (including the delimiters).
+/// Tokenize a command string, preferring a tree-sitter-bash walk so that
+/// shell groupings (`(...)`, `$(...)`, `` `...` ``) appear as a single
+/// token with their delimiters intact.
 ///
-/// Tracked contexts inside the body so that a closing delimiter embedded
-/// in them does not prematurely terminate the outer group:
+/// When the input parses as exactly one top-level `command` node —
+/// optionally wrapped in a `program` / `list` container or attached to a
+/// `redirected_statement` — each of its named children (command name,
+/// `word` / `string` / `concatenation` args, subshells, command
+/// substitutions, etc.) becomes one token, preserved verbatim from the
+/// source text. Prefix `variable_assignment`s (`FOO=bar cmd`) and
+/// `redirect` fields are skipped here so that downstream flag parsing
+/// sees the same shape as before.
 ///
-/// - Nested `open` delimiters of the same kind (e.g. `(( ... ))`).
-/// - Single-quoted strings `'...'` (no escape processing).
-/// - Double-quoted strings `"..."` (respects `\"` and `\\`).
-/// - Backtick command substitutions `` `...` ``.
-/// - Nested dollar-prefixed groupings `$(...)` and `${...}`.
-/// - Backslash escapes.
-///
-/// For example, `(echo ${FOO:-)} done)` is read as a single subshell
-/// even though a bare `)` appears inside the parameter expansion.
-///
-/// Returns `SyntaxError` if the group is unterminated.
-fn read_balanced_group(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    current: &mut String,
-    open: char,
-    close: char,
-) -> Result<(), CommandParseError> {
-    // Consume opening delimiter.
-    let Some(first) = chars.next() else {
-        return Err(CommandParseError::SyntaxError);
-    };
-    debug_assert_eq!(first, open);
-    current.push(open);
-
-    let mut depth: usize = 1;
-    while let Some(c) = chars.next() {
-        match c {
-            // Nested group of the same kind.
-            c if c == open => {
-                depth += 1;
-                current.push(c);
-            }
-            c if c == close => {
-                depth -= 1;
-                current.push(c);
-                if depth == 0 {
-                    return Ok(());
-                }
-            }
-            // Single-quoted string: no escape processing.
-            '\'' => {
-                current.push('\'');
-                loop {
-                    match chars.next() {
-                        Some('\'') => {
-                            current.push('\'');
-                            break;
-                        }
-                        Some(ch) => current.push(ch),
-                        None => return Err(CommandParseError::UnclosedQuote),
-                    }
-                }
-            }
-            // Double-quoted string: respect `\"` and `\\` escapes.
-            '"' => {
-                current.push('"');
-                loop {
-                    match chars.next() {
-                        Some('"') => {
-                            current.push('"');
-                            break;
-                        }
-                        Some('\\') => {
-                            current.push('\\');
-                            if let Some(next) = chars.next() {
-                                current.push(next);
-                            } else {
-                                return Err(CommandParseError::UnclosedQuote);
-                            }
-                        }
-                        Some(ch) => current.push(ch),
-                        None => return Err(CommandParseError::UnclosedQuote),
-                    }
-                }
-            }
-            // Backtick command substitution: skip over the body so that
-            // delimiters embedded inside (e.g. `` `echo )` ``) do not
-            // terminate the outer group.
-            '`' => {
-                current.push('`');
-                read_backtick_body(chars, current)?;
-            }
-            // Nested dollar-prefixed grouping: `$(...)` or `${...}`.
-            // Other `$`-prefixed forms (e.g. `$VAR`) pass through.
-            '$' => {
-                current.push('$');
-                match chars.peek() {
-                    Some('(') => read_balanced_group(chars, current, '(', ')')?,
-                    Some('{') => read_balanced_group(chars, current, '{', '}')?,
-                    _ => {}
-                }
-            }
-            // Backslash escape: preserve verbatim (the inner content is
-            // passed through unchanged for downstream parsers).
-            '\\' => {
-                current.push('\\');
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                } else {
-                    return Err(CommandParseError::SyntaxError);
-                }
-            }
-            _ => current.push(c),
-        }
+/// Anything that is not a single command at the top level (pipelines,
+/// `&&`/`||`/`;`, control structures, syntax errors, ...) falls back to
+/// the whitespace-based [`tokenize`]. Those inputs never reach wrapper
+/// placeholder extraction with a grouped `<cmd>` argument anyway, so the
+/// fallback preserves existing behaviour.
+fn tokenize_command_aware(input: &str) -> Result<Vec<String>, CommandParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(CommandParseError::EmptyCommand);
     }
-    Err(CommandParseError::SyntaxError)
+
+    if let Some(tokens) = tokenize_via_ast(trimmed) {
+        return Ok(tokens);
+    }
+    tokenize(trimmed)
 }
 
-/// Consume a backtick command substitution body from `chars` up to and
-/// including the terminating `` ` ``, appending everything to `current`.
-/// The opening `` ` `` must already have been pushed by the caller.
+/// Walk `input` with tree-sitter-bash and, if it resolves to a single
+/// `command` node, return that node's token shape (name + visible
+/// arguments, with groupings kept as single tokens).
 ///
-/// Backslash escapes inside are preserved verbatim — the content is
-/// passed through unchanged for downstream parsers.
-fn read_backtick_body(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    current: &mut String,
-) -> Result<(), CommandParseError> {
-    loop {
-        match chars.next() {
-            Some('`') => {
-                current.push('`');
-                return Ok(());
-            }
-            Some('\\') => {
-                current.push('\\');
-                if let Some(c) = chars.next() {
-                    current.push(c);
-                } else {
-                    return Err(CommandParseError::SyntaxError);
-                }
-            }
-            Some(c) => current.push(c),
-            None => return Err(CommandParseError::SyntaxError),
+/// Returns `None` when the input is not a single command — which covers
+/// parse errors, pipelines, lists, and any control-flow construct — so
+/// that callers can fall back to the character-level tokenizer without
+/// having to distinguish syntactic failure from "not applicable here".
+fn tokenize_via_ast(input: &str) -> Option<Vec<String>> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .ok()?;
+    let tree = parser.parse(input, None)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let command_node = find_single_command_node(root)?;
+    let source = input.as_bytes();
+
+    let mut tokens: Vec<String> = Vec::new();
+    for i in 0..command_node.child_count() {
+        let child = command_node.child(i as u32)?;
+        if !child.is_named() {
+            continue;
         }
+        // Prefix assignments (`FOO=bar cmd`) are handled upstream by
+        // `collect_commands`, which strips them before the command text
+        // reaches `parse_command`; if we see one here it means the input
+        // came in unstripped, and keeping it out of `raw_tokens` matches
+        // the existing whitespace-tokenizer's post-processing.
+        if child.kind() == "variable_assignment" {
+            continue;
+        }
+        // Redirects are attached to the command with the `redirect`
+        // field name. They participate in redirect metadata, not token
+        // matching, so drop them here.
+        if command_node.field_name_for_child(i as u32) == Some("redirect") {
+            continue;
+        }
+        let text = source.get(child.start_byte()..child.end_byte())?;
+        let text = std::str::from_utf8(text).ok()?;
+        match child.kind() {
+            // Groupings are kept verbatim (delimiters included) so that
+            // downstream wrapper placeholder extraction sees a single
+            // token with whitespace preserved: `time <cmd>` capturing
+            // `(ls | tail -40)` is the whole point of this AST walk.
+            "subshell" | "command_substitution" | "process_substitution" => {
+                tokens.push(text.to_string());
+            }
+            // Anything else (command_name, word, string, concatenation,
+            // number, simple_expansion, ...) is passed through the
+            // whitespace tokenizer so that shell quoting is handled the
+            // same way as the non-AST path: a double-quoted `"a b"` or
+            // single-quoted `'a b'` argument becomes one token with the
+            // delimiters stripped. The slice always covers exactly one
+            // token, so we take the first entry.
+            _ => {
+                let mut pieces = tokenize(text).ok()?;
+                if pieces.len() != 1 {
+                    // Shouldn't happen for a single AST node, but guard
+                    // against it by bailing to the fallback tokenizer.
+                    return None;
+                }
+                tokens.push(pieces.remove(0));
+            }
+        }
+    }
+
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(tokens)
+}
+
+/// Descend through transparent containers (`program`, `list`,
+/// `redirected_statement`) looking for a single `command` node.
+///
+/// The whole point is to distinguish "a command, possibly wrapped in a
+/// few pass-through nodes" from "anything more structured" (pipelines,
+/// `&&`/`||`/`;`, control flow). Only the former is a candidate for
+/// AST-aware tokenization; the latter always routes through the
+/// whitespace tokenizer.
+fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    match node.kind() {
+        "command" => Some(node),
+        "program" | "list" => {
+            let mut cursor = node.walk();
+            let named: Vec<_> = node.named_children(&mut cursor).collect();
+            if named.len() != 1 {
+                return None;
+            }
+            find_single_command_node(named[0])
+        }
+        "redirected_statement" => {
+            let body = node.child_by_field_name("body")?;
+            find_single_command_node(body)
+        }
+        _ => None,
     }
 }
 
@@ -602,7 +563,7 @@ fn collect_commands(
         // (environment variable prefixes like `FOO=bar echo hello`), strip
         // redirect children (herestring_redirect, etc. that tree-sitter
         // attaches directly to a command node), extract nested
-        // command_substitution nodes, and emit the remaining text.
+        // command_substitution / subshell nodes, and emit the remaining text.
         "command" => {
             let mut cmd_redirects = redirects.to_vec();
             for i in 0..node.child_count() {
@@ -622,7 +583,14 @@ fn collect_commands(
                     collect_substitutions_recursive(child, source, commands);
                 } else {
                     match child.kind() {
-                        "command_substitution" => {
+                        // A subshell argument (e.g. `time (ls | tail -40)`)
+                        // or a command substitution (e.g. `echo $(ls foo)`)
+                        // runs in its own process, so sub-commands must be
+                        // extracted without inheriting the outer pipe /
+                        // redirect context. The outer command text is still
+                        // emitted below and handled by the self-reference
+                        // filter in `evaluate_command_inner`.
+                        "command_substitution" | "subshell" => {
                             collect_commands(child, source, commands, &PipeInfo::default(), &[]);
                         }
                         "variable_assignment" => {
@@ -981,90 +949,67 @@ mod tests {
     }
 
     // ========================================
-    // tokenize: balanced shell groupings
+    // tokenize_command_aware: AST-driven tokenization
     //
-    // Subshells `(...)`, command substitutions `$(...)` / `` `...` ``,
-    // and parameter expansions `${...}` are kept as single tokens even
-    // when they contain whitespace. This lets wrapper patterns such as
-    // `time <cmd>` capture a subshell (`time (ls | tail -40)`) as a
-    // single placeholder for recursive evaluation.
+    // Shell groupings attached as arguments to a single command
+    // (`subshell`, `command_substitution`, `process_substitution`) must
+    // come out as one token each, with their source text preserved
+    // verbatim. This is what lets wrapper patterns like `time <cmd>`
+    // capture a whole subshell body as one placeholder.
+    //
+    // Inputs that are not a single top-level command must fall back to
+    // the whitespace tokenizer.
     // ========================================
 
     #[rstest]
-    #[case::bare_subshell("(ls)", vec!["(ls)"])]
-    #[case::time_subshell_single("time (ls)", vec!["time", "(ls)"])]
-    #[case::time_subshell_multi_arg(
-        "time (lefthook run pre-commit)",
-        vec!["time", "(lefthook run pre-commit)"]
-    )]
-    #[case::time_subshell_pipeline(
+    #[case::bare_subshell("time (ls)", vec!["time", "(ls)"])]
+    #[case::subshell_pipeline(
         "time (ls | tail -40)",
         vec!["time", "(ls | tail -40)"]
     )]
-    #[case::time_subshell_redirect_pipeline(
+    #[case::subshell_multi_arg(
         "time (lefthook run pre-commit 2>&1 | tail -40)",
         vec!["time", "(lefthook run pre-commit 2>&1 | tail -40)"]
     )]
     #[case::nested_subshell("time (a | (b && c))", vec!["time", "(a | (b && c))"])]
-    #[case::subshell_with_quoted_paren(
-        r#"time (echo ")" foo)"#,
-        vec!["time", r#"(echo ")" foo)"#]
-    )]
-    #[case::subshell_with_single_quoted_paren(
-        "time (echo ')' foo)",
-        vec!["time", "(echo ')' foo)"]
-    )]
-    #[case::dollar_subshell_whitespace(
+    #[case::dollar_substitution_with_whitespace(
         "echo $(date -u)",
         vec!["echo", "$(date -u)"]
     )]
-    #[case::dollar_subshell_embedded(
-        "curl -H Authorization:$(cat token) url",
-        vec!["curl", "-H", "Authorization:$(cat token)", "url"]
-    )]
-    #[case::backtick_subshell(
+    #[case::backtick_substitution(
         "echo `date -u`",
         vec!["echo", "`date -u`"]
     )]
-    #[case::dollar_brace_param("echo ${FOO:-bar baz}", vec!["echo", "${FOO:-bar baz}"])]
-    // Regression: a close delimiter embedded in an inner context must not
-    // terminate the outer group prematurely. Before `read_balanced_group`
-    // learned about backticks and nested `$(...)`/`${...}`, these inputs
-    // lost the trailing content of the outer subshell.
-    #[case::subshell_with_inner_backtick_paren(
-        "time (echo `ls )` done)",
-        vec!["time", "(echo `ls )` done)"]
+    #[case::process_substitution(
+        "diff <(ls a) <(ls b)",
+        vec!["diff", "<(ls a)", "<(ls b)"]
     )]
-    #[case::subshell_with_inner_dollar_paren(
-        "time (echo $(date -u) done)",
-        vec!["time", "(echo $(date -u) done)"]
+    // Quoted-string args still come back with quotes stripped, matching
+    // the whitespace tokenizer's shape.
+    #[case::double_quoted_arg(
+        r#"curl -H "Content-Type: application/json" https://example.com"#,
+        vec!["curl", "-H", "Content-Type: application/json", "https://example.com"]
     )]
-    #[case::subshell_with_inner_dollar_brace_with_paren(
-        "time (echo ${FOO:-)} done)",
-        vec!["time", "(echo ${FOO:-)} done)"]
+    #[case::single_quoted_arg(
+        "git commit -m 'initial commit'",
+        vec!["git", "commit", "-m", "initial commit"]
     )]
-    #[case::dollar_paren_with_inner_backtick(
-        "echo $(echo `ls )` done)",
-        vec!["echo", "$(echo `ls )` done)"]
-    )]
-    fn tokenize_balanced_groups(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    fn tokenize_command_aware_groupings(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command_aware(input).unwrap();
         assert_eq!(result, expected);
     }
 
-    // Unterminated groupings surface as SyntaxError (or UnclosedQuote when
-    // the unterminated fragment is a quoted string inside the group).
+    // Inputs that are not a single top-level command must still
+    // tokenize without error (via the whitespace fallback).
     #[rstest]
-    #[case::unclosed_subshell("time (ls", CommandParseError::SyntaxError)]
-    #[case::unclosed_dollar_subshell("echo $(date", CommandParseError::SyntaxError)]
-    #[case::unclosed_backtick("echo `date", CommandParseError::SyntaxError)]
-    #[case::unclosed_dollar_brace("echo ${FOO", CommandParseError::SyntaxError)]
-    fn tokenize_unclosed_groups(#[case] input: &str, #[case] expected: CommandParseError) {
-        let result = tokenize(input);
-        assert_eq!(
-            std::mem::discriminant(&result.unwrap_err()),
-            std::mem::discriminant(&expected),
-        );
+    #[case::pipeline("ls | tail -40", vec!["ls", "|", "tail", "-40"])]
+    #[case::and_list("ls && rm foo", vec!["ls", "&&", "rm", "foo"])]
+    fn tokenize_command_aware_falls_back_for_compounds(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let result = tokenize_command_aware(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     // ========================================

@@ -43,10 +43,4 @@ See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [Whe
 
 Commands of the form `<wrapper> (<compound>)` -- for example `time (lefthook run pre-commit 2>&1 | tail -40)` -- are now recognized by wrapper patterns such as `time <cmd>`. The subshell is captured as a single `<cmd>` argument, then its body is split into sub-commands (`lefthook run pre-commit`, `tail -40`) and each is evaluated individually with Explicit Deny Wins.
 
-Previously the command tokenizer split on whitespace only, so `time (ls | tail -40)` tokenized as `time`, `(ls`, `|`, `tail`, `-40)` and matched neither the wrapper pattern nor the compound-command path. The tokenizer now keeps balanced shell groupings as single atoms:
-
-- Subshells `(...)`
-- Command substitutions `$(...)` and `` `...` ``
-- Parameter expansions `${...}`
-
-Nested groups and quoted content inside a grouping are respected, so forms like `time (a | (b && c))` and `time (echo ")" foo)` also round-trip correctly.
+Previously the wrapper path flattened the input to whitespace-delimited tokens, so `time (ls | tail -40)` came out as `time`, `(ls`, `|`, `tail`, `-40)` and matched neither the `time <cmd>` wrapper nor the compound-command path, falling through to `defaults.action`. Rule evaluation now uses a tree-sitter-bash walk to tokenize single commands, preserving shell groupings (`(...)`, `$(...)`, `` `...` ``, `<(...)`) as one token each so wrapper placeholder extraction can capture them whole. In the same fix, the compound extractor also recurses into bare subshells attached to a command, which keeps `time (...)` symmetric with the long-standing handling of `echo $(...)`.
