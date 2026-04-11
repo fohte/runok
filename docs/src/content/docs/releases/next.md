@@ -36,3 +36,17 @@ This unlocks several common security checks that were previously awkward or impo
 - **`git -c key=value ...`** -- check every `-c`/`--config` override at once.
 
 See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups--captured-flag-group-values) for details.
+
+## Bug Fixes
+
+### Wrapper recognition for subshell-wrapped compound commands ([#000](https://github.com/fohte/runok/pull/000))
+
+Commands of the form `<wrapper> (<compound>)` -- for example `time (lefthook run pre-commit 2>&1 | tail -40)` -- are now recognized by wrapper patterns such as `time <cmd>`. The subshell is captured as a single `<cmd>` argument, then its body is split into sub-commands (`lefthook run pre-commit`, `tail -40`) and each is evaluated individually with Explicit Deny Wins.
+
+Previously the command tokenizer split on whitespace only, so `time (ls | tail -40)` tokenized as `time`, `(ls`, `|`, `tail`, `-40)` and matched neither the wrapper pattern nor the compound-command path. The tokenizer now keeps balanced shell groupings as single atoms:
+
+- Subshells `(...)`
+- Command substitutions `$(...)` and `` `...` ``
+- Parameter expansions `${...}`
+
+Nested groups and quoted content inside a grouping are respected, so forms like `time (a | (b && c))` and `time (echo ")" foo)` also round-trip correctly.

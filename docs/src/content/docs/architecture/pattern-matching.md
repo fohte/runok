@@ -162,6 +162,7 @@ The command parser operates on the input command (not the pattern). It provides:
 - Single and double quotes
 - Backslash escapes
 - Empty quoted strings (preserved as empty tokens)
+- Balanced shell groupings kept as single tokens (subshells `(...)`, command substitutions `$(...)` / `` `...` ``, parameter expansions `${...}`). This lets wrapper patterns such as `time <cmd>` capture a whole subshell (`time (ls | tail -40)`) as one `<cmd>` placeholder before recursing into it.
 
 ### Structural parsing
 

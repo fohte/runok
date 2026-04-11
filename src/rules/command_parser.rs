@@ -131,6 +131,12 @@ pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, 
 ///   unknown escapes preserve the backslash to match shell behavior)
 /// - Backslash escapes outside of quotes
 /// - Empty quoted strings (`""`, `''`) are preserved as empty tokens
+/// - Balanced shell groupings kept as a single token (preserving inner
+///   whitespace verbatim): subshells `(...)`, command substitutions
+///   `$(...)` / `` `...` ``. Nesting and quoted content inside the
+///   grouping are respected. This allows forms like `time (a | b)` to
+///   tokenize as `["time", "(a | b)"]` so wrapper patterns such as
+///   `time <cmd>` can capture the subshell as a single placeholder.
 pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -198,6 +204,55 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
                     None => {} // trailing backslash is ignored
                 }
             }
+            // Subshell `(...)`: read the balanced paren group as a single
+            // token atom (including the parens themselves and any inner
+            // whitespace). Only triggered when `(` appears at a word
+            // boundary — mid-token `(` is unusual in shell and left to
+            // the regular character branch.
+            '(' if !has_token => {
+                has_token = true;
+                read_balanced_group(&mut chars, &mut current, '(', ')')?;
+            }
+            // Backtick command substitution `` `...` ``: treated as a
+            // single atom inside the current token, preserving whitespace.
+            '`' => {
+                has_token = true;
+                current.push('`');
+                chars.next();
+                loop {
+                    match chars.next() {
+                        Some('`') => {
+                            current.push('`');
+                            break;
+                        }
+                        Some('\\') => {
+                            // Preserve escapes verbatim inside backticks;
+                            // the content is not interpreted here.
+                            current.push('\\');
+                            if let Some(c) = chars.next() {
+                                current.push(c);
+                            } else {
+                                return Err(CommandParseError::SyntaxError);
+                            }
+                        }
+                        Some(c) => current.push(c),
+                        None => return Err(CommandParseError::SyntaxError),
+                    }
+                }
+            }
+            // `$(...)` command substitution: keep as a single atom.
+            // `${...}` parameter expansion: keep as a single atom.
+            // Other `$`-prefixed forms fall through to regular character.
+            '$' => {
+                chars.next(); // consume `$`
+                has_token = true;
+                current.push('$');
+                match chars.peek() {
+                    Some('(') => read_balanced_group(&mut chars, &mut current, '(', ')')?,
+                    Some('{') => read_balanced_group(&mut chars, &mut current, '{', '}')?,
+                    _ => {}
+                }
+            }
             // Regular character
             _ => {
                 has_token = true;
@@ -216,6 +271,92 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     }
 
     Ok(tokens)
+}
+
+/// Consume a balanced `open..close` group from `chars` and append it to
+/// `current` (including the delimiters). Nested `open` delimiters and
+/// single/double-quoted regions inside are tracked so that closing
+/// delimiters embedded in strings do not terminate the group prematurely.
+///
+/// Returns `SyntaxError` if the group is unterminated.
+fn read_balanced_group(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    current: &mut String,
+    open: char,
+    close: char,
+) -> Result<(), CommandParseError> {
+    // Consume opening delimiter.
+    let Some(first) = chars.next() else {
+        return Err(CommandParseError::SyntaxError);
+    };
+    debug_assert_eq!(first, open);
+    current.push(open);
+
+    let mut depth: usize = 1;
+    while let Some(c) = chars.next() {
+        match c {
+            // Nested group of the same kind.
+            c if c == open => {
+                depth += 1;
+                current.push(c);
+            }
+            c if c == close => {
+                depth -= 1;
+                current.push(c);
+                if depth == 0 {
+                    return Ok(());
+                }
+            }
+            // Single-quoted string: no escape processing.
+            '\'' => {
+                current.push('\'');
+                loop {
+                    match chars.next() {
+                        Some('\'') => {
+                            current.push('\'');
+                            break;
+                        }
+                        Some(ch) => current.push(ch),
+                        None => return Err(CommandParseError::UnclosedQuote),
+                    }
+                }
+            }
+            // Double-quoted string: respect `\"` and `\\` escapes.
+            '"' => {
+                current.push('"');
+                loop {
+                    match chars.next() {
+                        Some('"') => {
+                            current.push('"');
+                            break;
+                        }
+                        Some('\\') => {
+                            current.push('\\');
+                            if let Some(next) = chars.next() {
+                                current.push(next);
+                            } else {
+                                return Err(CommandParseError::UnclosedQuote);
+                            }
+                        }
+                        Some(ch) => current.push(ch),
+                        None => return Err(CommandParseError::UnclosedQuote),
+                    }
+                }
+            }
+            // Backslash escape: preserve verbatim (the inner content is
+            // passed through unchanged for downstream parsers).
+            '\\' => {
+                current.push('\\');
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                } else {
+                    return Err(CommandParseError::SyntaxError);
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    Err(CommandParseError::SyntaxError)
 }
 
 /// Extract individual command strings from a potentially compound shell input.
@@ -798,6 +939,73 @@ mod tests {
     fn tokenize_equals_flags(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = tokenize(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // tokenize: balanced shell groupings
+    //
+    // Subshells `(...)`, command substitutions `$(...)` / `` `...` ``,
+    // and parameter expansions `${...}` are kept as single tokens even
+    // when they contain whitespace. This lets wrapper patterns such as
+    // `time <cmd>` capture a subshell (`time (ls | tail -40)`) as a
+    // single placeholder for recursive evaluation.
+    // ========================================
+
+    #[rstest]
+    #[case::bare_subshell("(ls)", vec!["(ls)"])]
+    #[case::time_subshell_single("time (ls)", vec!["time", "(ls)"])]
+    #[case::time_subshell_multi_arg(
+        "time (lefthook run pre-commit)",
+        vec!["time", "(lefthook run pre-commit)"]
+    )]
+    #[case::time_subshell_pipeline(
+        "time (ls | tail -40)",
+        vec!["time", "(ls | tail -40)"]
+    )]
+    #[case::time_subshell_redirect_pipeline(
+        "time (lefthook run pre-commit 2>&1 | tail -40)",
+        vec!["time", "(lefthook run pre-commit 2>&1 | tail -40)"]
+    )]
+    #[case::nested_subshell("time (a | (b && c))", vec!["time", "(a | (b && c))"])]
+    #[case::subshell_with_quoted_paren(
+        r#"time (echo ")" foo)"#,
+        vec!["time", r#"(echo ")" foo)"#]
+    )]
+    #[case::subshell_with_single_quoted_paren(
+        "time (echo ')' foo)",
+        vec!["time", "(echo ')' foo)"]
+    )]
+    #[case::dollar_subshell_whitespace(
+        "echo $(date -u)",
+        vec!["echo", "$(date -u)"]
+    )]
+    #[case::dollar_subshell_embedded(
+        "curl -H Authorization:$(cat token) url",
+        vec!["curl", "-H", "Authorization:$(cat token)", "url"]
+    )]
+    #[case::backtick_subshell(
+        "echo `date -u`",
+        vec!["echo", "`date -u`"]
+    )]
+    #[case::dollar_brace_param("echo ${FOO:-bar baz}", vec!["echo", "${FOO:-bar baz}"])]
+    fn tokenize_balanced_groups(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // Unterminated groupings surface as SyntaxError (or UnclosedQuote when
+    // the unterminated fragment is a quoted string inside the group).
+    #[rstest]
+    #[case::unclosed_subshell("time (ls", CommandParseError::SyntaxError)]
+    #[case::unclosed_dollar_subshell("echo $(date", CommandParseError::SyntaxError)]
+    #[case::unclosed_backtick("echo `date", CommandParseError::SyntaxError)]
+    #[case::unclosed_dollar_brace("echo ${FOO", CommandParseError::SyntaxError)]
+    fn tokenize_unclosed_groups(#[case] input: &str, #[case] expected: CommandParseError) {
+        let result = tokenize(input);
+        assert_eq!(
+            std::mem::discriminant(&result.unwrap_err()),
+            std::mem::discriminant(&expected),
+        );
     }
 
     // ========================================
