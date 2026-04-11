@@ -57,3 +57,11 @@ This unlocks several common security checks that were previously awkward or impo
 - **`git -c key=value ...`** -- check every `-c`/`--config` override at once.
 
 See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups--captured-flag-group-values) for details.
+
+## Bug Fixes
+
+### Wrapper recognition for subshell-wrapped compound commands ([#297](https://github.com/fohte/runok/pull/297))
+
+Commands of the form `<wrapper> (<compound>)` -- for example `time (lefthook run pre-commit 2>&1 | tail -40)` -- are now recognized by wrapper patterns such as `time <cmd>`. The subshell is captured as a single `<cmd>` argument, then its body is split into sub-commands (`lefthook run pre-commit`, `tail -40`) and each is evaluated individually with Explicit Deny Wins.
+
+Previously the wrapper path flattened the input to whitespace-delimited tokens, so `time (ls | tail -40)` came out as `time`, `(ls`, `|`, `tail`, `-40)` and matched neither the `time <cmd>` wrapper nor the compound-command path, falling through to `defaults.action`. Rule evaluation now uses a tree-sitter-bash walk to tokenize single commands, preserving shell groupings (`(...)`, `$(...)`, `` `...` ``, `<(...)`) as one token each so wrapper placeholder extraction can capture them whole. In the same fix, the compound extractor also recurses into bare subshells attached to a command, which keeps `time (...)` symmetric with the long-standing handling of `echo $(...)`.

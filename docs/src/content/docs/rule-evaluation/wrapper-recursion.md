@@ -98,6 +98,30 @@ Command: `bash -c "ls /tmp; rm -rf /"`
 4. `rm -rf /` → `deny`
 5. Merged result: **deny** (strictest wins)
 
+### Subshell-wrapped compound commands
+
+Wrapper arguments may also be bare subshells (`(...)`), which is a common pattern when you want to time or sandbox an entire pipeline without shell-quoting it:
+
+```yaml
+definitions:
+  wrappers:
+    - 'time <cmd>'
+
+rules:
+  - allow: 'lefthook run *'
+  - allow: 'tail *'
+  - deny: 'rm -rf *'
+```
+
+Command: `time (lefthook run pre-commit 2>&1 | tail -40)`
+
+1. `time <cmd>` captures the subshell `(lefthook run pre-commit 2>&1 | tail -40)` as a single `<cmd>` token.
+2. The subshell body is split into `lefthook run pre-commit` and `tail -40`.
+3. Both sub-commands match their respective `allow` rules.
+4. Merged result: **allow**.
+
+The same path handles `time (rm -rf /)` — the inner `rm -rf /` still triggers the deny rule under Explicit Deny Wins.
+
 ## Recursion depth limit
 
 To prevent infinite recursion (e.g., `sudo sudo sudo ...`), runok enforces a maximum recursion depth of **10**. If this limit is exceeded, the evaluation returns a `RecursionDepthExceeded` error.

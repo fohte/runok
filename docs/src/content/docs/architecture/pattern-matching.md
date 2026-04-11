@@ -157,7 +157,15 @@ The command parser operates on the input command (not the pattern). It provides:
 
 ### Tokenization
 
-`tokenize()` splits a shell command string into tokens, respecting:
+Command tokenization prefers a tree-sitter-bash walk: when the input parses as a single `command` node (optionally inside a `program` / `list` / `redirected_statement` container), each named child becomes one token with source text preserved verbatim for shell groupings. This lets wrapper patterns such as `time <cmd>` capture a whole subshell (`time (ls | tail -40)`) as one `<cmd>` placeholder before recursing into it.
+
+Groupings kept as single tokens via the AST walk:
+
+- Subshells `(...)`
+- Command substitutions `$(...)` and `` `...` ``
+- Process substitutions `<(...)` / `>(...)`
+
+Anything that is not a single top-level command (pipelines, `&&` / `||` / `;`, control structures, parse errors) falls back to a whitespace-based tokenizer that respects:
 
 - Single and double quotes
 - Backslash escapes

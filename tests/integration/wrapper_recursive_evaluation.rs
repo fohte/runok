@@ -816,3 +816,86 @@ fn find_exec_wrapper_evaluates_inner(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Subshell-wrapped inner commands
+//
+// Regression: `time (lefthook run pre-commit 2>&1 | tail -40)` and similar
+// forms where a wrapper's `<cmd>` argument is a parenthesised subshell
+// whose body is a compound command must be unwrapped through the wrapper
+// and then split into sub-commands for individual evaluation.
+// ========================================
+
+#[rstest]
+#[case::time_plain("time ls", assert_allow as ActionAssertion)]
+#[case::time_subshell_single("time (ls)", assert_allow as ActionAssertion)]
+#[case::time_subshell_single_multi_arg(
+    "time (lefthook run pre-commit)",
+    assert_allow as ActionAssertion
+)]
+#[case::time_subshell_pipeline("time (ls | tail -40)", assert_allow as ActionAssertion)]
+#[case::time_subshell_pipeline_multi_arg(
+    "time (lefthook run pre-commit | tail -40)",
+    assert_allow as ActionAssertion
+)]
+#[case::time_subshell_redirect_pipeline(
+    "time (lefthook run pre-commit 2>&1 | tail -40)",
+    assert_allow as ActionAssertion
+)]
+#[case::time_subshell_and_list(
+    "time (ls && lefthook run pre-commit)",
+    assert_allow as ActionAssertion
+)]
+#[case::time_subshell_inner_deny("time (rm -rf /)", assert_deny as ActionAssertion)]
+#[case::time_subshell_inner_deny_mixed(
+    "time (ls | rm -rf /)",
+    assert_deny as ActionAssertion
+)]
+fn time_subshell_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'ls *'
+          - allow: 'ls'
+          - allow: 'tail *'
+          - allow: 'lefthook run *'
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'time <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// Regression: subshell-wrapped inner commands must also work with other
+// wrappers (e.g. `sudo`), not just `time`. Ensures the fix lives in
+// command tokenization, not in a `time`-specific code path.
+#[rstest]
+#[case::sudo_subshell_single("sudo (ls)", assert_allow as ActionAssertion)]
+#[case::sudo_subshell_pipeline("sudo (ls | tail -40)", assert_allow as ActionAssertion)]
+#[case::sudo_subshell_inner_deny("sudo (rm -rf /)", assert_deny as ActionAssertion)]
+fn sudo_subshell_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = format!(
+        "{}\n{}",
+        config_with_standard_wrappers(),
+        indoc! {"
+            rules:
+              - deny: 'rm -rf *'
+              - allow: 'ls *'
+              - allow: 'tail *'
+        "}
+    );
+    let config = parse_config(&yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

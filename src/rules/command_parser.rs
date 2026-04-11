@@ -75,8 +75,15 @@ pub struct ExtractedCommand {
 /// Combined short flags (`-am`) are not split into individual flags.
 /// Rules match tokens literally ("What You See Is How It Parses"),
 /// so `-m` in a rule won't match `-am` in the input.
+///
+/// Tokenization prefers a tree-sitter-bash walk (so shell groupings such
+/// as `(subshell)`, `$(command substitution)`, and `` `...` `` are kept
+/// as single tokens, which is what wrapper patterns like `time <cmd>`
+/// expect). Inputs that are not a single top-level command — pipelines,
+/// lists, unparseable fragments, etc. — fall back to the whitespace-based
+/// [`tokenize`].
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
-    let raw_tokens = tokenize(input)?;
+    let raw_tokens = tokenize_command_aware(input)?;
     let command = raw_tokens[0].clone();
 
     let mut flags = HashMap::new();
@@ -216,6 +223,140 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
     }
 
     Ok(tokens)
+}
+
+/// Tokenize a command string, preferring a tree-sitter-bash walk so that
+/// shell groupings (`(...)`, `$(...)`, `` `...` ``) appear as a single
+/// token with their delimiters intact.
+///
+/// When the input parses as exactly one top-level `command` node —
+/// optionally wrapped in a `program` / `list` container or attached to a
+/// `redirected_statement` — each of its named children (command name,
+/// `word` / `string` / `concatenation` args, subshells, command
+/// substitutions, etc.) becomes one token, preserved verbatim from the
+/// source text. Prefix `variable_assignment`s (`FOO=bar cmd`) and
+/// `redirect` fields are skipped here so that downstream flag parsing
+/// sees the same shape as before.
+///
+/// Anything that is not a single command at the top level (pipelines,
+/// `&&`/`||`/`;`, control structures, syntax errors, ...) falls back to
+/// the whitespace-based [`tokenize`]. Those inputs never reach wrapper
+/// placeholder extraction with a grouped `<cmd>` argument anyway, so the
+/// fallback preserves existing behaviour.
+fn tokenize_command_aware(input: &str) -> Result<Vec<String>, CommandParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(CommandParseError::EmptyCommand);
+    }
+
+    if let Some(tokens) = tokenize_via_ast(trimmed) {
+        return Ok(tokens);
+    }
+    tokenize(trimmed)
+}
+
+/// Walk `input` with tree-sitter-bash and, if it resolves to a single
+/// `command` node, return that node's token shape (name + visible
+/// arguments, with groupings kept as single tokens).
+///
+/// Returns `None` when the input is not a single command — which covers
+/// parse errors, pipelines, lists, and any control-flow construct — so
+/// that callers can fall back to the character-level tokenizer without
+/// having to distinguish syntactic failure from "not applicable here".
+fn tokenize_via_ast(input: &str) -> Option<Vec<String>> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .ok()?;
+    let tree = parser.parse(input, None)?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let command_node = find_single_command_node(root)?;
+    let source = input.as_bytes();
+
+    let mut tokens: Vec<String> = Vec::new();
+    for i in 0..command_node.child_count() {
+        let child = command_node.child(i as u32)?;
+        if !child.is_named() {
+            continue;
+        }
+        // Prefix assignments (`FOO=bar cmd`) are handled upstream by
+        // `collect_commands`, which strips them before the command text
+        // reaches `parse_command`; if we see one here it means the input
+        // came in unstripped, and keeping it out of `raw_tokens` matches
+        // the existing whitespace-tokenizer's post-processing.
+        if child.kind() == "variable_assignment" {
+            continue;
+        }
+        // Redirects are attached to the command with the `redirect`
+        // field name. They participate in redirect metadata, not token
+        // matching, so drop them here.
+        if command_node.field_name_for_child(i as u32) == Some("redirect") {
+            continue;
+        }
+        let text = source.get(child.start_byte()..child.end_byte())?;
+        let text = std::str::from_utf8(text).ok()?;
+        match child.kind() {
+            // Groupings are kept verbatim (delimiters included) so that
+            // downstream wrapper placeholder extraction sees a single
+            // token with whitespace preserved: `time <cmd>` capturing
+            // `(ls | tail -40)` is the whole point of this AST walk.
+            "subshell" | "command_substitution" | "process_substitution" => {
+                tokens.push(text.to_string());
+            }
+            // Anything else (command_name, word, string, concatenation,
+            // number, simple_expansion, ...) is passed through the
+            // whitespace tokenizer so that shell quoting is handled the
+            // same way as the non-AST path: a double-quoted `"a b"` or
+            // single-quoted `'a b'` argument becomes one token with the
+            // delimiters stripped. The slice always covers exactly one
+            // token, so we take the first entry.
+            _ => {
+                let mut pieces = tokenize(text).ok()?;
+                if pieces.len() != 1 {
+                    // Shouldn't happen for a single AST node, but guard
+                    // against it by bailing to the fallback tokenizer.
+                    return None;
+                }
+                tokens.push(pieces.remove(0));
+            }
+        }
+    }
+
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(tokens)
+}
+
+/// Descend through transparent containers (`program`, `list`,
+/// `redirected_statement`) looking for a single `command` node.
+///
+/// The whole point is to distinguish "a command, possibly wrapped in a
+/// few pass-through nodes" from "anything more structured" (pipelines,
+/// `&&`/`||`/`;`, control flow). Only the former is a candidate for
+/// AST-aware tokenization; the latter always routes through the
+/// whitespace tokenizer.
+fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    match node.kind() {
+        "command" => Some(node),
+        "program" | "list" => {
+            let mut cursor = node.walk();
+            let named: Vec<_> = node.named_children(&mut cursor).collect();
+            if named.len() != 1 {
+                return None;
+            }
+            find_single_command_node(named[0])
+        }
+        "redirected_statement" => {
+            let body = node.child_by_field_name("body")?;
+            find_single_command_node(body)
+        }
+        _ => None,
+    }
 }
 
 /// Extract individual command strings from a potentially compound shell input.
@@ -422,7 +563,7 @@ fn collect_commands(
         // (environment variable prefixes like `FOO=bar echo hello`), strip
         // redirect children (herestring_redirect, etc. that tree-sitter
         // attaches directly to a command node), extract nested
-        // command_substitution nodes, and emit the remaining text.
+        // command_substitution / subshell nodes, and emit the remaining text.
         "command" => {
             let mut cmd_redirects = redirects.to_vec();
             for i in 0..node.child_count() {
@@ -442,7 +583,14 @@ fn collect_commands(
                     collect_substitutions_recursive(child, source, commands);
                 } else {
                     match child.kind() {
-                        "command_substitution" => {
+                        // A subshell argument (e.g. `time (ls | tail -40)`)
+                        // or a command substitution (e.g. `echo $(ls foo)`)
+                        // runs in its own process, so sub-commands must be
+                        // extracted without inheriting the outer pipe /
+                        // redirect context. The outer command text is still
+                        // emitted below and handled by the self-reference
+                        // filter in `evaluate_command_inner`.
+                        "command_substitution" | "subshell" => {
                             collect_commands(child, source, commands, &PipeInfo::default(), &[]);
                         }
                         "variable_assignment" => {
@@ -797,6 +945,70 @@ mod tests {
     #[case("git diff --word-diff=color", vec!["git", "diff", "--word-diff=color"])]
     fn tokenize_equals_flags(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = tokenize(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // tokenize_command_aware: AST-driven tokenization
+    //
+    // Shell groupings attached as arguments to a single command
+    // (`subshell`, `command_substitution`, `process_substitution`) must
+    // come out as one token each, with their source text preserved
+    // verbatim. This is what lets wrapper patterns like `time <cmd>`
+    // capture a whole subshell body as one placeholder.
+    //
+    // Inputs that are not a single top-level command must fall back to
+    // the whitespace tokenizer.
+    // ========================================
+
+    #[rstest]
+    #[case::bare_subshell("time (ls)", vec!["time", "(ls)"])]
+    #[case::subshell_pipeline(
+        "time (ls | tail -40)",
+        vec!["time", "(ls | tail -40)"]
+    )]
+    #[case::subshell_multi_arg(
+        "time (lefthook run pre-commit 2>&1 | tail -40)",
+        vec!["time", "(lefthook run pre-commit 2>&1 | tail -40)"]
+    )]
+    #[case::nested_subshell("time (a | (b && c))", vec!["time", "(a | (b && c))"])]
+    #[case::dollar_substitution_with_whitespace(
+        "echo $(date -u)",
+        vec!["echo", "$(date -u)"]
+    )]
+    #[case::backtick_substitution(
+        "echo `date -u`",
+        vec!["echo", "`date -u`"]
+    )]
+    #[case::process_substitution(
+        "diff <(ls a) <(ls b)",
+        vec!["diff", "<(ls a)", "<(ls b)"]
+    )]
+    // Quoted-string args still come back with quotes stripped, matching
+    // the whitespace tokenizer's shape.
+    #[case::double_quoted_arg(
+        r#"curl -H "Content-Type: application/json" https://example.com"#,
+        vec!["curl", "-H", "Content-Type: application/json", "https://example.com"]
+    )]
+    #[case::single_quoted_arg(
+        "git commit -m 'initial commit'",
+        vec!["git", "commit", "-m", "initial commit"]
+    )]
+    fn tokenize_command_aware_groupings(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command_aware(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // Inputs that are not a single top-level command must still
+    // tokenize without error (via the whitespace fallback).
+    #[rstest]
+    #[case::pipeline("ls | tail -40", vec!["ls", "|", "tail", "-40"])]
+    #[case::and_list("ls && rm foo", vec!["ls", "&&", "rm", "foo"])]
+    fn tokenize_command_aware_falls_back_for_compounds(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let result = tokenize_command_aware(input).unwrap();
         assert_eq!(result, expected);
     }
 
