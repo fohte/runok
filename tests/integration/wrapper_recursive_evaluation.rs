@@ -886,8 +886,14 @@ fn sudo_subshell_wrapper_evaluates_inner(
     empty_context: EvalContext,
 ) {
     let yaml = format!(
-        "{}\nrules:\n  - deny: 'rm -rf *'\n  - allow: 'ls *'\n  - allow: 'tail *'\n",
-        config_with_standard_wrappers()
+        "{}\n{}",
+        config_with_standard_wrappers(),
+        indoc! {"
+            rules:
+              - deny: 'rm -rf *'
+              - allow: 'ls *'
+              - allow: 'tail *'
+        "}
     );
     let config = parse_config(&yaml).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();

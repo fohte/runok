@@ -218,27 +218,8 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
             '`' => {
                 has_token = true;
                 current.push('`');
-                chars.next();
-                loop {
-                    match chars.next() {
-                        Some('`') => {
-                            current.push('`');
-                            break;
-                        }
-                        Some('\\') => {
-                            // Preserve escapes verbatim inside backticks;
-                            // the content is not interpreted here.
-                            current.push('\\');
-                            if let Some(c) = chars.next() {
-                                current.push(c);
-                            } else {
-                                return Err(CommandParseError::SyntaxError);
-                            }
-                        }
-                        Some(c) => current.push(c),
-                        None => return Err(CommandParseError::SyntaxError),
-                    }
-                }
+                chars.next(); // consume opening backtick
+                read_backtick_body(&mut chars, &mut current)?;
             }
             // `$(...)` command substitution: keep as a single atom.
             // `${...}` parameter expansion: keep as a single atom.
@@ -274,9 +255,20 @@ pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
 }
 
 /// Consume a balanced `open..close` group from `chars` and append it to
-/// `current` (including the delimiters). Nested `open` delimiters and
-/// single/double-quoted regions inside are tracked so that closing
-/// delimiters embedded in strings do not terminate the group prematurely.
+/// `current` (including the delimiters).
+///
+/// Tracked contexts inside the body so that a closing delimiter embedded
+/// in them does not prematurely terminate the outer group:
+///
+/// - Nested `open` delimiters of the same kind (e.g. `(( ... ))`).
+/// - Single-quoted strings `'...'` (no escape processing).
+/// - Double-quoted strings `"..."` (respects `\"` and `\\`).
+/// - Backtick command substitutions `` `...` ``.
+/// - Nested dollar-prefixed groupings `$(...)` and `${...}`.
+/// - Backslash escapes.
+///
+/// For example, `(echo ${FOO:-)} done)` is read as a single subshell
+/// even though a bare `)` appears inside the parameter expansion.
 ///
 /// Returns `SyntaxError` if the group is unterminated.
 fn read_balanced_group(
@@ -343,6 +335,23 @@ fn read_balanced_group(
                     }
                 }
             }
+            // Backtick command substitution: skip over the body so that
+            // delimiters embedded inside (e.g. `` `echo )` ``) do not
+            // terminate the outer group.
+            '`' => {
+                current.push('`');
+                read_backtick_body(chars, current)?;
+            }
+            // Nested dollar-prefixed grouping: `$(...)` or `${...}`.
+            // Other `$`-prefixed forms (e.g. `$VAR`) pass through.
+            '$' => {
+                current.push('$');
+                match chars.peek() {
+                    Some('(') => read_balanced_group(chars, current, '(', ')')?,
+                    Some('{') => read_balanced_group(chars, current, '{', '}')?,
+                    _ => {}
+                }
+            }
             // Backslash escape: preserve verbatim (the inner content is
             // passed through unchanged for downstream parsers).
             '\\' => {
@@ -357,6 +366,36 @@ fn read_balanced_group(
         }
     }
     Err(CommandParseError::SyntaxError)
+}
+
+/// Consume a backtick command substitution body from `chars` up to and
+/// including the terminating `` ` ``, appending everything to `current`.
+/// The opening `` ` `` must already have been pushed by the caller.
+///
+/// Backslash escapes inside are preserved verbatim — the content is
+/// passed through unchanged for downstream parsers.
+fn read_backtick_body(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    current: &mut String,
+) -> Result<(), CommandParseError> {
+    loop {
+        match chars.next() {
+            Some('`') => {
+                current.push('`');
+                return Ok(());
+            }
+            Some('\\') => {
+                current.push('\\');
+                if let Some(c) = chars.next() {
+                    current.push(c);
+                } else {
+                    return Err(CommandParseError::SyntaxError);
+                }
+            }
+            Some(c) => current.push(c),
+            None => return Err(CommandParseError::SyntaxError),
+        }
+    }
 }
 
 /// Extract individual command strings from a potentially compound shell input.
@@ -988,6 +1027,26 @@ mod tests {
         vec!["echo", "`date -u`"]
     )]
     #[case::dollar_brace_param("echo ${FOO:-bar baz}", vec!["echo", "${FOO:-bar baz}"])]
+    // Regression: a close delimiter embedded in an inner context must not
+    // terminate the outer group prematurely. Before `read_balanced_group`
+    // learned about backticks and nested `$(...)`/`${...}`, these inputs
+    // lost the trailing content of the outer subshell.
+    #[case::subshell_with_inner_backtick_paren(
+        "time (echo `ls )` done)",
+        vec!["time", "(echo `ls )` done)"]
+    )]
+    #[case::subshell_with_inner_dollar_paren(
+        "time (echo $(date -u) done)",
+        vec!["time", "(echo $(date -u) done)"]
+    )]
+    #[case::subshell_with_inner_dollar_brace_with_paren(
+        "time (echo ${FOO:-)} done)",
+        vec!["time", "(echo ${FOO:-)} done)"]
+    )]
+    #[case::dollar_paren_with_inner_backtick(
+        "echo $(echo `ls )` done)",
+        vec!["echo", "$(echo `ls )` done)"]
+    )]
     fn tokenize_balanced_groups(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = tokenize(input).unwrap();
         assert_eq!(result, expected);
