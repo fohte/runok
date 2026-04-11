@@ -762,7 +762,7 @@ mod tests {
     use crate::config::cache::PresetCache;
     use crate::config::git_client::RefKind;
     use crate::config::git_client::mock::MockGitClient;
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::{fixture, rstest};
     use std::fs;
     use std::time::Duration;
@@ -1097,7 +1097,11 @@ mod tests {
 
     /// Shared preset body used by the candidate-fallback scenarios.
     fn preset_body(required: &str) -> String {
-        format!("required_runok_version: '{required}'\nrules:\n  - allow: 'echo *'\n")
+        formatdoc! {"
+            required_runok_version: '{required}'
+            rules:
+              - allow: 'echo *'
+        "}
     }
 
     /// Queue enough `fetch`/`clone`/`checkout`/`rev_parse` outcomes that the
