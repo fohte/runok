@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.2](https://github.com/fohte/runok/compare/v0.2.1...v0.2.2) (2026-04-12)
+
+
+### Features
+
+* **config:** declare version guards with `required_runok_version` ([#299](https://github.com/fohte/runok/issues/299)) ([2990a0e](https://github.com/fohte/runok/commit/2990a0e3463013ab1c0ead5c29648701142ef887))
+* **rules:** add `<flag:name>` placeholder to inspect every value of repeated and aliased flags in `when` clauses ([#278](https://github.com/fohte/runok/issues/278)) ([2fe0c76](https://github.com/fohte/runok/commit/2fe0c766ee6eeecfceee2a2be5d2746299ec3516))
+
+
+### Bug Fixes
+
+* **rules:** evaluate subshell-wrapped arguments through the wrapper path ([#297](https://github.com/fohte/runok/issues/297)) ([5afc9c8](https://github.com/fohte/runok/commit/5afc9c85be0911dafa1530095360d34064151950))
+
+
+### Dependencies
+
+* update rust crate libc to v0.2.184 ([#279](https://github.com/fohte/runok/issues/279)) ([474b911](https://github.com/fohte/runok/commit/474b911de3b6ed48422ca6501287b239abbb06d9))
+* update rust crate semver to v1.0.28 ([#295](https://github.com/fohte/runok/issues/295)) ([a6ef431](https://github.com/fohte/runok/commit/a6ef43158a1bb6107519dc386abb0a97b885f154))
+* update rust crate serde-saphyr to v0.0.23 ([#282](https://github.com/fohte/runok/issues/282)) ([addc72d](https://github.com/fohte/runok/commit/addc72d8a2d9e6c8fd383501f84a1ff88054240f))
+* update rust crate sha2 to v0.11.0 ([#272](https://github.com/fohte/runok/issues/272)) ([5cdf128](https://github.com/fohte/runok/commit/5cdf128d68f4e95df599cb9b8081a52cf6e5425d))
+* update rust crate tree-sitter to v0.26.8 ([#283](https://github.com/fohte/runok/issues/283)) ([35e011b](https://github.com/fohte/runok/commit/35e011bbe4477762bd5b19a837fe414cd5c1a2b1))
+
 ## [0.2.1](https://github.com/fohte/runok/compare/v0.2.0...v0.2.1) (2026-04-03)
 
 
