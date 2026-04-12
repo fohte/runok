@@ -117,7 +117,26 @@ See [Why runok?](https://runok.fohte.net/getting-started/why-runok/) for a full 
 - Conditional `when` clauses with CEL expressions for environment-aware decisions
 - OS-level sandboxing (macOS Seatbelt / Linux Landlock) for file and network restrictions
 
-**And more** -- [rule testing](https://runok.fohte.net/cli/test/), [audit logging](https://runok.fohte.net/cli/audit/), [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/), [Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin) for natural-language configuration assistance
+**Official presets** -- get started instantly with curated rule sets
+
+- [`base`](https://runok.fohte.net/configuration/official-presets/) -- bundles all presets below plus `--help`/`--version` rules (recommended starting point)
+- `readonly-unix` -- common read-only Unix commands (`cat`, `grep`, `find`, `ls`, ...)
+- `readonly-git` -- read-only Git subcommands (`status`, `diff`, `log`, ...)
+- `readonly-gh` -- read-only GitHub CLI commands (`pr list`, `issue view`, ...)
+- `definitions` -- wrapper definitions for `bash -c`, `sudo`, `xargs`, `find -exec`, ...
+
+```yaml
+extends:
+  - 'github:fohte/runok-presets/base@v1'
+```
+
+**[Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin)** -- configure runok rules in natural language directly from Claude Code
+
+```
+/plugin install runok@runok-claude-code-plugin
+```
+
+**And more** -- [rule testing](https://runok.fohte.net/cli/test/), [audit logging](https://runok.fohte.net/cli/audit/), [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/)
 
 ## Quick start
 
@@ -145,15 +164,18 @@ The fastest way to get started is with the interactive setup wizard:
 runok init
 ```
 
-This creates a `runok.yml`, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
+This creates a `runok.yml` with official presets, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
 
 You can also configure manually. Create `~/.config/runok/runok.yml`:
 
 ```yaml
+# Start with official presets -- covers common read-only commands,
+# Git, GitHub CLI, and wrapper definitions out of the box
+extends:
+  - 'github:fohte/runok-presets/base@v1'
+
 rules:
-  - allow: 'git status'
-  - allow: 'git diff *'
-  - allow: 'git log *'
+  # Add your own rules on top of the presets
   - ask: 'git push *'
   - deny: 'git push -f|--force *'
     message: 'Force push is not allowed'
