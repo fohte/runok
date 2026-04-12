@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/fohte/runok/compare/v0.2.2...v0.2.3) (2026-04-12)
+
+
+### Features
+
+* **flag_groups:** use pattern syntax for flag group definitions, support bool flags and value constraints ([#300](https://github.com/fohte/runok/issues/300)) ([ec284c3](https://github.com/fohte/runok/commit/ec284c3b62d4d4d1234ebd8d5e9a3667b5efd437))
+
 ## [0.2.2](https://github.com/fohte/runok/compare/v0.2.1...v0.2.2) (2026-04-12)
 
 
