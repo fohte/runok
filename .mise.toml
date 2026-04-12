@@ -3,8 +3,9 @@ lefthook = "2.1.4"
 "github:ast-grep/ast-grep" = "0.42.0"
 
 # lefthook hooks
-actionlint = "1.7.11"
-node = "24.14.0"
+actionlint = "1.7.12"
+node = "24.14.1"
+pinact = "3.9.0"
 "github:fohte/basefmt" = "0.1.0"
 "npm:@commitlint/cli" = "20.5.0"
 "npm:prettier" = "3.8.1"

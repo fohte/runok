@@ -3,7 +3,6 @@ const { join } = require('path')
 
 // Plugin file exists only in public repos (controlled by copier is_public parameter)
 const pluginPath = join(__dirname, 'commitlint-plugin-no-external-refs.cjs')
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const noExternalGitHubRefsPlugin = existsSync(pluginPath)
   ? require(pluginPath)
   : null
