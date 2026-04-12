@@ -164,7 +164,7 @@ The fastest way to get started is with the interactive setup wizard:
 runok init
 ```
 
-This creates a `runok.yml` with official presets, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
+This creates a `runok.yml`, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
 
 You can also configure manually. Create `~/.config/runok/runok.yml`:
 
