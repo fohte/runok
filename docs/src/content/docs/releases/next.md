@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Breaking Changes
 
-### Flag group definitions use pattern syntax instead of arrays
+### Flag group definitions use pattern syntax instead of arrays ([#300](https://github.com/fohte/runok/pull/300))
 
 `definitions.flag_groups` values have changed from arrays of flag names to pattern strings. The new format uses the same syntax as rule patterns, with aliases separated by `|` and an optional value pattern suffix.
 
@@ -32,7 +32,7 @@ The `*` at the end indicates this is a value flag (captures the flag and its val
 
 ## New Features
 
-### Bool flag groups
+### Bool flag groups ([#300](https://github.com/fohte/runok/pull/300))
 
 Flag groups can now represent boolean flags (flags without a value). Define a flag group without a value pattern:
 
@@ -46,7 +46,7 @@ rules:
     when: 'size(flag_groups["verbose"]) > 0'
 ```
 
-### Value-restricted flag groups
+### Value-restricted flag groups ([#300](https://github.com/fohte/runok/pull/300))
 
 Flag group definitions can restrict which values are accepted:
 
@@ -61,7 +61,7 @@ rules:
 
 Only `GET`, `HEAD`, and `OPTIONS` will match. Other values like `POST` will not be captured, causing the rule to be skipped.
 
-### `<flag:name>` no longer requires a trailing value pattern
+### `<flag:name>` no longer requires a trailing value pattern ([#300](https://github.com/fohte/runok/pull/300))
 
 The `<flag:name>` placeholder now stands alone in rule patterns. Whether the flag takes a value is determined by the flag group definition, not by the pattern:
 

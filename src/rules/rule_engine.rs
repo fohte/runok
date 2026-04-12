@@ -717,9 +717,10 @@ fn collect_value_flags(
                 }
             }
             PatternToken::FlagGroupRef { name } => {
-                if let Some(definition) = definitions.flag_groups.as_ref().and_then(|g| g.get(name))
-                    && let Ok(parsed) =
-                        crate::rules::pattern_parser::parse_flag_group_definition(definition)
+                if let Some(parsed) = definitions
+                    .parsed_flag_groups
+                    .as_ref()
+                    .and_then(|g| g.get(name))
                     && parsed.value_pattern.is_some()
                 {
                     // Only add aliases for value-taking flags (those with

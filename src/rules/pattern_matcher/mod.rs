@@ -63,9 +63,10 @@ fn collect_value_flag_aliases(
                 }
             }
             PatternToken::FlagGroupRef { name, .. } => {
-                if let Some(definition) = definitions.flag_groups.as_ref().and_then(|g| g.get(name))
-                    && let Ok(parsed) =
-                        crate::rules::pattern_parser::parse_flag_group_definition(definition)
+                if let Some(parsed) = definitions
+                    .parsed_flag_groups
+                    .as_ref()
+                    .and_then(|g| g.get(name))
                     && parsed.value_pattern.is_some()
                 {
                     // Only register value-taking flags (those with a value
@@ -600,11 +601,12 @@ fn match_engine<'a>(
         }
 
         PatternToken::FlagGroupRef { name } => {
-            // Resolve the flag group definition from definitions.flag_groups.
-            // If the group is undefined, the pattern matches nothing — same
-            // policy as undefined `<path:name>` and `<var:name>` references.
-            let Some(definition) = definitions
-                .flag_groups
+            // Look up the pre-parsed flag group from the cache. If the group
+            // is undefined (or was never resolved), the pattern matches
+            // nothing — same policy as undefined `<path:name>` and
+            // `<var:name>` references.
+            let Some(parsed) = definitions
+                .parsed_flag_groups
                 .as_ref()
                 .and_then(|g| g.get(name))
                 .cloned()
@@ -612,9 +614,6 @@ fn match_engine<'a>(
                 return Ok(false);
             };
 
-            // Parse the definition string to extract aliases and value pattern.
-            let parsed = crate::rules::pattern_parser::parse_flag_group_definition(&definition)
-                .map_err(crate::rules::RuleError::PatternParse)?;
             let aliases = &parsed.aliases;
 
             // Collect every command token that matches any alias, capturing
@@ -1288,10 +1287,10 @@ mod tests {
                     }
                 }
                 PatternToken::FlagGroupRef { name, .. } => {
-                    if let Some(definition) =
-                        definitions.flag_groups.as_ref().and_then(|g| g.get(name))
-                        && let Ok(parsed) =
-                            crate::rules::pattern_parser::parse_flag_group_definition(definition)
+                    if let Some(parsed) = definitions
+                        .parsed_flag_groups
+                        .as_ref()
+                        .and_then(|g| g.get(name))
                         && parsed.value_pattern.is_some()
                     {
                         for alias in &parsed.aliases {
@@ -1531,13 +1530,15 @@ mod tests {
     /// Build a Definitions whose only flag group is the field-flag set used by
     /// the matcher-level `<flag:name>` tests below.
     fn field_flag_defs() -> Definitions {
-        Definitions {
+        let mut defs = Definitions {
             flag_groups: Some(HashMap::from([(
                 "field-flag".to_string(),
                 "-f|-F|--field|--raw-field *".to_string(),
             )])),
             ..Definitions::default()
-        }
+        };
+        defs.resolve_flag_groups();
+        defs
     }
 
     #[rstest]

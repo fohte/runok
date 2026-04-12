@@ -146,6 +146,34 @@ pub struct Definitions {
     /// - `"-v|--verbose"` — bool flag (captures flag presence only)
     /// - `"-X|--method GET|HEAD|OPTIONS"` — value flag with restricted values
     pub flag_groups: Option<HashMap<String, String>>,
+
+    /// Pre-parsed flag group definitions, populated by `resolve_flag_groups()`.
+    /// Avoids re-parsing the same definition string on every `<flag:name>` match.
+    #[serde(skip)]
+    #[cfg_attr(any(feature = "config-schema", test), schemars(skip))]
+    pub parsed_flag_groups: Option<HashMap<String, crate::rules::pattern_parser::ParsedFlagGroup>>,
+}
+
+impl Definitions {
+    /// Parse all `flag_groups` definition strings and cache the results in
+    /// `parsed_flag_groups`. Call this once after deserialization / merging
+    /// so that `<flag:name>` lookups during pattern matching never re-parse.
+    pub fn resolve_flag_groups(&mut self) {
+        let Some(groups) = &self.flag_groups else {
+            self.parsed_flag_groups = None;
+            return;
+        };
+
+        let mut parsed = HashMap::with_capacity(groups.len());
+        for (name, definition) in groups {
+            if let Ok(pg) = crate::rules::pattern_parser::parse_flag_group_definition(definition) {
+                parsed.insert(name.clone(), pg);
+            }
+            // Invalid definitions are silently skipped here; validation
+            // already reports errors for them separately.
+        }
+        self.parsed_flag_groups = Some(parsed);
+    }
 }
 
 /// Type of a variable definition, controlling how values are matched.
@@ -749,6 +777,11 @@ impl Config {
         }
 
         if errors.is_empty() {
+            // Pre-parse flag group definitions so pattern matching never
+            // has to re-parse them on every `<flag:name>` encounter.
+            if let Some(defs) = &mut self.definitions {
+                defs.resolve_flag_groups();
+            }
             Ok(())
         } else {
             Err(crate::config::ConfigError::Validation(errors))
@@ -802,14 +835,18 @@ impl Config {
             (None, None) => None,
             (Some(b), None) => Some(b),
             (None, Some(o)) => Some(o),
-            (Some(b), Some(o)) => Some(Definitions {
-                paths: Self::merge_paths(b.paths, o.paths),
-                sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
-                wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
-
-                vars: Self::merge_vars(b.vars, o.vars),
-                flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
-            }),
+            (Some(b), Some(o)) => {
+                let mut merged = Definitions {
+                    paths: Self::merge_paths(b.paths, o.paths),
+                    sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
+                    wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
+                    vars: Self::merge_vars(b.vars, o.vars),
+                    flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
+                    parsed_flag_groups: None,
+                };
+                merged.resolve_flag_groups();
+                Some(merged)
+            }
         }
     }
 
@@ -1171,16 +1208,26 @@ pub fn parse_config(yaml: &str) -> Result<Config, crate::config::ConfigError> {
     // Discard any warnings; callers that need warnings should use
     // `parse_config_with_warnings` instead.
     take_parse_warnings();
-    let config: Config = serde_saphyr::from_str(yaml)?;
+    let mut config: Config = serde_saphyr::from_str(yaml)?;
     take_parse_warnings();
+    // Eagerly populate the parsed flag group cache so callers that
+    // skip `validate()` (e.g. tests) still get cached lookups.
+    if let Some(defs) = &mut config.definitions {
+        defs.resolve_flag_groups();
+    }
     Ok(config)
 }
 
 /// Parse a YAML string into a `Config`, collecting deprecation warnings.
 pub fn parse_config_with_warnings(yaml: &str) -> Result<ParsedConfig, crate::config::ConfigError> {
     take_parse_warnings();
-    let config: Config = serde_saphyr::from_str(yaml)?;
+    let mut config: Config = serde_saphyr::from_str(yaml)?;
     let warnings = take_parse_warnings();
+    // Eagerly populate the parsed flag group cache so callers that
+    // skip `validate()` still get cached lookups.
+    if let Some(defs) = &mut config.definitions {
+        defs.resolve_flag_groups();
+    }
     Ok(ParsedConfig { config, warnings })
 }
 
