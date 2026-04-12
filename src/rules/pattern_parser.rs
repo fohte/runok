@@ -441,66 +441,73 @@ pub struct ParsedFlagGroup {
 
 /// Parse a flag group definition string into aliases and an optional value pattern.
 ///
-/// The definition string uses the same syntax as rule patterns:
-/// - Aliases are separated by `|` (e.g. `"-f|-F|--field"`)
-/// - An optional value pattern follows after a space (e.g. `"-f|--field *"`)
-/// - Value patterns can be wildcards (`*`), literals, or alternations
-///
-/// Returns an error if the definition is empty, contains no valid flags,
-/// or has an invalid value pattern.
+/// Reuses the existing pattern lexer and token builder so that flag group
+/// definitions follow exactly the same syntax as rule patterns.
+/// For example, `"-f|-F|--field *"` is lexed and parsed just like the
+/// flag-with-value pattern `-f|-F|--field *` in a rule, producing
+/// aliases `["-f", "-F", "--field"]` with `value_pattern = Some(Wildcard)`.
 pub fn parse_flag_group_definition(
     definition: &str,
 ) -> Result<ParsedFlagGroup, super::PatternParseError> {
+    use super::PatternParseError;
+
     let definition = definition.trim();
     if definition.is_empty() {
-        return Err(super::PatternParseError::InvalidSyntax(
+        return Err(PatternParseError::InvalidSyntax(
             "flag group definition must not be empty".into(),
         ));
     }
 
-    // Split into space-separated parts. The first part is the flag aliases
-    // (pipe-separated), and the remaining parts form the value pattern.
-    let parts: Vec<&str> = definition.split_whitespace().collect();
-
-    // Parse aliases from the first part
-    let aliases: Vec<String> = parts[0].split('|').map(|s| s.to_string()).collect();
-
-    if aliases.is_empty() {
-        return Err(super::PatternParseError::InvalidSyntax(
-            "flag group definition must contain at least one flag".into(),
+    let lex_tokens = super::pattern_lexer::tokenize(definition)?;
+    if lex_tokens.is_empty() {
+        return Err(PatternParseError::InvalidSyntax(
+            "flag group definition must not be empty".into(),
         ));
     }
 
-    // Validate that all aliases look like flags
-    for alias in &aliases {
-        if !is_flag(alias) {
-            return Err(super::PatternParseError::InvalidSyntax(format!(
-                "'{alias}' is not a valid flag name \
-                 (must start with `-` and not be the bare `--` separator)"
-            )));
-        }
+    // Use the standard token builder to parse the definition.
+    // `inside_group = true` so that a trailing `*` is consumed as the
+    // flag's value pattern rather than treated as a standalone wildcard
+    // (the `should_consume_as_value` heuristic only consumes a trailing
+    // `*` when `inside_group` is set or more tokens follow).
+    let tokens = build_pattern_tokens(&lex_tokens, true)?;
+
+    // A valid flag group definition must produce exactly one token:
+    // - FlagWithValue { aliases, value } for value-taking flags
+    // - Alternation(aliases) for bool flags (no value)
+    if tokens.len() != 1 {
+        return Err(PatternParseError::InvalidSyntax(format!(
+            "flag group definition must be a flag alternation with an optional \
+             value pattern, got {} tokens",
+            tokens.len()
+        )));
     }
 
-    // Parse the value pattern from remaining parts, if any
-    let value_pattern = if parts.len() > 1 {
-        let value_str = parts[1..].join(" ");
-        // Check for alternation in the value pattern
-        if value_str.contains('|') {
-            let alts: Vec<String> = value_str.split('|').map(|s| s.to_string()).collect();
-            Some(PatternToken::Alternation(alts))
-        } else if value_str == "*" {
-            Some(PatternToken::Wildcard)
-        } else {
-            Some(PatternToken::Literal(value_str))
+    match &tokens[0] {
+        PatternToken::FlagWithValue { aliases, value } => Ok(ParsedFlagGroup {
+            aliases: aliases.clone(),
+            value_pattern: Some(*value.clone()),
+        }),
+        PatternToken::Alternation(alts) => {
+            // Verify all elements are flags
+            for alt in alts {
+                if !is_flag(alt) {
+                    return Err(PatternParseError::InvalidSyntax(format!(
+                        "'{alt}' is not a valid flag name \
+                         (must start with `-` and not be the bare `--` separator)"
+                    )));
+                }
+            }
+            Ok(ParsedFlagGroup {
+                aliases: alts.clone(),
+                value_pattern: None,
+            })
         }
-    } else {
-        None
-    };
-
-    Ok(ParsedFlagGroup {
-        aliases,
-        value_pattern,
-    })
+        other => Err(PatternParseError::InvalidSyntax(format!(
+            "flag group definition must start with a flag (e.g. `-f` or \
+             `-f|--field`), got {other:?}"
+        ))),
+    }
 }
 
 #[cfg(test)]

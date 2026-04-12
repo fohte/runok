@@ -252,7 +252,7 @@ fn assert_message_contains(haystack: &str, needles: &[&str]) {
           flag_groups:
             bad: "notaflag"
     "#},
-    &["not a valid flag name"],
+    &["must start with a flag"],
 )]
 #[case::empty_definition(
     indoc! {r#"
