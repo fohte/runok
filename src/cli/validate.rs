@@ -1,32 +1,48 @@
 /// Flag definition: name and whether it takes a value argument.
 struct FlagDef {
     name: &'static str,
+    short: Option<&'static str>,
     takes_value: bool,
 }
 
 /// Known flags for each subcommand.
 const EXEC_FLAGS: &[FlagDef] = &[
     FlagDef {
+        name: "--config",
+        short: Some("-c"),
+        takes_value: true,
+    },
+    FlagDef {
         name: "--sandbox",
+        short: None,
         takes_value: true,
     },
     FlagDef {
         name: "--verbose",
+        short: None,
         takes_value: false,
     },
 ];
 
 const CHECK_FLAGS: &[FlagDef] = &[
     FlagDef {
+        name: "--config",
+        short: Some("-c"),
+        takes_value: true,
+    },
+    FlagDef {
         name: "--input-format",
+        short: None,
         takes_value: true,
     },
     FlagDef {
         name: "--output-format",
+        short: None,
         takes_value: true,
     },
     FlagDef {
         name: "--verbose",
+        short: None,
         takes_value: false,
     },
 ];
@@ -77,10 +93,12 @@ pub fn validate_no_unknown_flags(raw_args: &[String], subcommand: &str) -> Resul
             continue;
         }
 
-        // Check if it's a known flag (exact match or `--flag=value` form)
-        let matched_flag = flags
-            .iter()
-            .find(|f| token == f.name || token.starts_with(&format!("{}=", f.name)));
+        // Check if it's a known flag (exact match, short form, or `--flag=value` form)
+        let matched_flag = flags.iter().find(|f| {
+            token == f.name
+                || token.starts_with(&format!("{}=", f.name))
+                || f.short.is_some_and(|s| token == s)
+        });
 
         match matched_flag {
             Some(flag) => {
@@ -132,6 +150,11 @@ mod tests {
     #[case::exec_help_short("runok exec -h")]
     #[case::check_help("runok check --help")]
     #[case::check_help_short("runok check -h")]
+    #[case::exec_config_long("runok exec --config path/to/config.yml -- ls")]
+    #[case::exec_config_short("runok exec -c path/to/config.yml -- ls")]
+    #[case::exec_config_eq("runok exec --config=path/to/config.yml -- ls")]
+    #[case::check_config_long("runok check --config path/to/config.yml -- ls")]
+    #[case::check_config_short("runok check -c path/to/config.yml -- ls")]
     #[case::exec_version("runok exec --version")]
     #[case::exec_version_short("runok exec -V")]
     fn valid_args(#[case] input: &str) {
@@ -151,12 +174,6 @@ mod tests {
 
     #[rstest]
     #[case::exec_unknown_flag("runok exec --unknown -- ls", "exec", "--unknown")]
-    #[case::exec_unknown_before_known(
-        "runok exec --config foo --verbose -- ls",
-        "exec",
-        "--config"
-    )]
-    #[case::check_unknown_flag("runok check --config foo -- break", "check", "--config")]
     #[case::check_unknown_short_flag("runok check -x -- ls", "check", "-x")]
     #[case::exec_unknown_no_double_dash("runok exec --unknown ls", "exec", "--unknown")]
     fn invalid_args(#[case] input: &str, #[case] subcommand: &str, #[case] expected_flag: &str) {

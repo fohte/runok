@@ -21,6 +21,10 @@ Use `--input-format claude-code-hook` to force Claude Code hook parsing.
 
 ## Flags
 
+### `-c, --config <path>`
+
+See [Global Flags](/cli/overview/#global-flags).
+
 ### `--input-format <format>`
 
 Input format for stdin. Currently supports `claude-code-hook`. When omitted, the format is auto-detected from the stdin content. Has no effect when command arguments are provided.
