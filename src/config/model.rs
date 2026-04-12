@@ -138,16 +138,42 @@ pub struct Definitions {
     /// Typed variable definitions referenced by `<var:name>` in rule patterns.
     pub vars: Option<HashMap<String, VarDefinition>>,
     /// Named flag alias groups referenced by `<flag:name>` in rule patterns.
-    /// Each value is a list of flag names (e.g. `["-f", "--field", "--raw-field"]`)
-    /// that share semantic meaning. When a `<flag:name>` placeholder matches a
-    /// command, every occurrence of any aliased flag is captured into the
-    /// `flag_groups[name]` list available in `when` clauses.
+    /// Each value is a pattern string using the same syntax as rule patterns:
+    /// alternation for aliases, with an optional value pattern suffix.
     ///
-    /// TODO: only value-taking flags are currently supported. Boolean flags
-    /// (e.g. `--force`, `-v` without an argument) are not yet representable
-    /// here because the matcher always pairs a `<flag:name>` placeholder with
-    /// a value pattern.
-    pub flag_groups: Option<HashMap<String, Vec<String>>>,
+    /// Examples:
+    /// - `"-f|-F|--field|--raw-field *"` — value flag (captures flag + value)
+    /// - `"-v|--verbose"` — bool flag (captures flag presence only)
+    /// - `"-X|--method GET|HEAD|OPTIONS"` — value flag with restricted values
+    pub flag_groups: Option<HashMap<String, String>>,
+
+    /// Pre-parsed flag group definitions, populated by `resolve_flag_groups()`.
+    /// Avoids re-parsing the same definition string on every `<flag:name>` match.
+    #[serde(skip)]
+    #[cfg_attr(any(feature = "config-schema", test), schemars(skip))]
+    pub parsed_flag_groups: Option<HashMap<String, crate::rules::pattern_parser::ParsedFlagGroup>>,
+}
+
+impl Definitions {
+    /// Parse all `flag_groups` definition strings and cache the results in
+    /// `parsed_flag_groups`. Call this once after deserialization / merging
+    /// so that `<flag:name>` lookups during pattern matching never re-parse.
+    pub fn resolve_flag_groups(&mut self) {
+        let Some(groups) = &self.flag_groups else {
+            self.parsed_flag_groups = None;
+            return;
+        };
+
+        let mut parsed = HashMap::with_capacity(groups.len());
+        for (name, definition) in groups {
+            if let Ok(pg) = crate::rules::pattern_parser::parse_flag_group_definition(definition) {
+                parsed.insert(name.clone(), pg);
+            }
+            // Invalid definitions are silently skipped here; validation
+            // already reports errors for them separately.
+        }
+        self.parsed_flag_groups = Some(parsed);
+    }
 }
 
 /// Type of a variable definition, controlling how values are matched.
@@ -654,25 +680,22 @@ impl Config {
             }
         }
 
-        // Validate definitions.flag_groups: every entry must be a non-empty list
-        // of flag names that start with `-`. The bare `--` separator is rejected
-        // because it is positional, not a flag.
+        // Validate definitions.flag_groups: each value is a pattern string
+        // that must parse successfully and contain at least one valid flag alias.
         if let Some(defs) = &self.definitions
             && let Some(flag_groups) = &defs.flag_groups
         {
-            for (key, flags) in flag_groups {
-                if flags.is_empty() {
-                    errors.push(format!(
-                        "definitions.flag_groups.{key}: flag group must contain at least one flag"
-                    ));
-                    continue;
-                }
-                for flag in flags {
-                    if !flag.starts_with('-') || flag == "--" {
-                        errors.push(format!(
-                            "definitions.flag_groups.{key}: '{flag}' is not a valid flag name \
-                             (must start with `-` and not be the bare `--` separator)"
-                        ));
+            for (key, definition) in flag_groups {
+                match crate::rules::pattern_parser::parse_flag_group_definition(definition) {
+                    Ok(parsed) => {
+                        if parsed.aliases.is_empty() {
+                            errors.push(format!(
+                                "definitions.flag_groups.{key}: flag group must contain at least one flag"
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("definitions.flag_groups.{key}: {e}"));
                     }
                 }
             }
@@ -754,6 +777,11 @@ impl Config {
         }
 
         if errors.is_empty() {
+            // Pre-parse flag group definitions so pattern matching never
+            // has to re-parse them on every `<flag:name>` encounter.
+            if let Some(defs) = &mut self.definitions {
+                defs.resolve_flag_groups();
+            }
             Ok(())
         } else {
             Err(crate::config::ConfigError::Validation(errors))
@@ -807,14 +835,18 @@ impl Config {
             (None, None) => None,
             (Some(b), None) => Some(b),
             (None, Some(o)) => Some(o),
-            (Some(b), Some(o)) => Some(Definitions {
-                paths: Self::merge_paths(b.paths, o.paths),
-                sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
-                wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
-
-                vars: Self::merge_vars(b.vars, o.vars),
-                flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
-            }),
+            (Some(b), Some(o)) => {
+                let mut merged = Definitions {
+                    paths: Self::merge_paths(b.paths, o.paths),
+                    sandbox: Self::merge_hashmaps(b.sandbox, o.sandbox),
+                    wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
+                    vars: Self::merge_vars(b.vars, o.vars),
+                    flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
+                    parsed_flag_groups: None,
+                };
+                merged.resolve_flag_groups();
+                Some(merged)
+            }
         }
     }
 
@@ -1176,16 +1208,26 @@ pub fn parse_config(yaml: &str) -> Result<Config, crate::config::ConfigError> {
     // Discard any warnings; callers that need warnings should use
     // `parse_config_with_warnings` instead.
     take_parse_warnings();
-    let config: Config = serde_saphyr::from_str(yaml)?;
+    let mut config: Config = serde_saphyr::from_str(yaml)?;
     take_parse_warnings();
+    // Eagerly populate the parsed flag group cache so callers that
+    // skip `validate()` (e.g. tests) still get cached lookups.
+    if let Some(defs) = &mut config.definitions {
+        defs.resolve_flag_groups();
+    }
     Ok(config)
 }
 
 /// Parse a YAML string into a `Config`, collecting deprecation warnings.
 pub fn parse_config_with_warnings(yaml: &str) -> Result<ParsedConfig, crate::config::ConfigError> {
     take_parse_warnings();
-    let config: Config = serde_saphyr::from_str(yaml)?;
+    let mut config: Config = serde_saphyr::from_str(yaml)?;
     let warnings = take_parse_warnings();
+    // Eagerly populate the parsed flag group cache so callers that
+    // skip `validate()` still get cached lookups.
+    if let Some(defs) = &mut config.definitions {
+        defs.resolve_flag_groups();
+    }
     Ok(ParsedConfig { config, warnings })
 }
 

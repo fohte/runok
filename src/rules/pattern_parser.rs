@@ -53,14 +53,13 @@ pub enum PatternToken {
         aliases: Vec<String>,
         value: Box<PatternToken>,
     },
-    /// Flag group reference with its value (e.g., `<flag:field-flag> *`).
-    /// Resolved to a flag alternation at evaluation time using
-    /// `definitions.flag_groups[name]`. Every match is captured into the
-    /// `flag_groups` map available in `when` clauses.
-    FlagGroupRef {
-        name: String,
-        value: Box<PatternToken>,
-    },
+    /// Flag group reference (e.g., `<flag:field-flag>`).
+    /// Resolved at evaluation time using the pattern string in
+    /// `definitions.flag_groups[name]`, which encodes the flag aliases
+    /// and an optional value pattern (e.g. `"-f|--field *"`).
+    /// Every match is captured into the `flag_groups` map available
+    /// in `when` clauses.
+    FlagGroupRef { name: String },
     /// Negation (e.g., !GET, !describe|get|list-*)
     Negation(Box<PatternToken>),
     /// Optional group (e.g., [-X GET] -> matches with or without)
@@ -264,12 +263,6 @@ fn build_pattern_tokens(
             }
 
             LexToken::Placeholder(content) => {
-                // `<flag:name>` placeholders always consume the next lex token
-                // as their flag value, regardless of `should_consume_as_value`.
-                // The placeholder is unambiguously a flag-with-value construct,
-                // so the wildcard or literal that follows is always the value
-                // (and the placeholder itself, not the wildcard, owns the
-                // "rest of args" semantics through subsequent pattern tokens).
                 if let Some(name) = content.strip_prefix("flag:") {
                     if name.is_empty() {
                         return Err(PatternParseError::InvalidSyntax(
@@ -289,24 +282,8 @@ fn build_pattern_tokens(
                             "<flag:{name}> is not supported inside an optional group `[...]`"
                         )));
                     }
-                    let Some((_, next_token)) = iter.next() else {
-                        return Err(PatternParseError::InvalidSyntax(format!(
-                            "<flag:{name}> must be followed by a value pattern (e.g. <flag:{name}> *)"
-                        )));
-                    };
-                    // Reject another flag or end-of-options separator as the
-                    // value, since `<flag:name> -X` is almost certainly a typo.
-                    if let LexToken::Literal(s) = next_token
-                        && (is_flag(s) || s == "--")
-                    {
-                        return Err(PatternParseError::InvalidSyntax(format!(
-                            "<flag:{name}> must be followed by a value pattern, not another flag '{s}'"
-                        )));
-                    }
-                    let value = lex_to_pattern_value(next_token)?;
                     result.push(PatternToken::FlagGroupRef {
                         name: name.to_string(),
-                        value: Box::new(value),
                     });
                 } else {
                     let pt = parse_placeholder(content)?;
@@ -393,13 +370,12 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
     }
 
     if content.starts_with("flag:") {
-        // <flag:name> is processed by build_pattern_tokens because it must
-        // consume the next lex token as its value. Reaching this branch means
-        // the placeholder appeared in a position that does not allow value
-        // attachment (e.g. as a flag value or wrapper-pattern token).
+        // <flag:name> is processed by build_pattern_tokens directly.
+        // Reaching this branch means the placeholder appeared in a
+        // position that does not allow it (e.g. as a flag value or
+        // wrapper-pattern token).
         return Err(super::PatternParseError::InvalidSyntax(format!(
-            "<{content}> can only appear in argument position followed by a value pattern \
-             (e.g. <{content}> *)"
+            "<{content}> can only appear in argument position (e.g. <{content}>)"
         )));
     }
 
@@ -449,6 +425,89 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
 /// independent matching to ignore its position in the command.
 fn is_flag(s: &str) -> bool {
     s.starts_with('-') && s != "--"
+}
+
+/// Parsed representation of a flag group definition string.
+///
+/// A definition like `"-f|-F|--field *"` is parsed into aliases
+/// `["-f", "-F", "--field"]` with `value_pattern = Some(Wildcard)`.
+/// A definition like `"-v|--verbose"` is parsed into aliases
+/// `["-v", "--verbose"]` with `value_pattern = None` (bool flag).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedFlagGroup {
+    pub aliases: Vec<String>,
+    pub value_pattern: Option<PatternToken>,
+}
+
+/// Parse a flag group definition string into aliases and an optional value pattern.
+///
+/// Reuses the existing pattern lexer and token builder so that flag group
+/// definitions follow exactly the same syntax as rule patterns.
+/// For example, `"-f|-F|--field *"` is lexed and parsed just like the
+/// flag-with-value pattern `-f|-F|--field *` in a rule, producing
+/// aliases `["-f", "-F", "--field"]` with `value_pattern = Some(Wildcard)`.
+pub fn parse_flag_group_definition(
+    definition: &str,
+) -> Result<ParsedFlagGroup, super::PatternParseError> {
+    use super::PatternParseError;
+
+    let definition = definition.trim();
+    if definition.is_empty() {
+        return Err(PatternParseError::InvalidSyntax(
+            "flag group definition must not be empty".into(),
+        ));
+    }
+
+    let lex_tokens = super::pattern_lexer::tokenize(definition)?;
+    if lex_tokens.is_empty() {
+        return Err(PatternParseError::InvalidSyntax(
+            "flag group definition must not be empty".into(),
+        ));
+    }
+
+    // Use the standard token builder to parse the definition.
+    // `inside_group = true` so that a trailing `*` is consumed as the
+    // flag's value pattern rather than treated as a standalone wildcard
+    // (the `should_consume_as_value` heuristic only consumes a trailing
+    // `*` when `inside_group` is set or more tokens follow).
+    let tokens = build_pattern_tokens(&lex_tokens, true)?;
+
+    // A valid flag group definition must produce exactly one token:
+    // - FlagWithValue { aliases, value } for value-taking flags
+    // - Alternation(aliases) for bool flags (no value)
+    if tokens.len() != 1 {
+        return Err(PatternParseError::InvalidSyntax(format!(
+            "flag group definition must be a flag alternation with an optional \
+             value pattern, got {} tokens",
+            tokens.len()
+        )));
+    }
+
+    match &tokens[0] {
+        PatternToken::FlagWithValue { aliases, value } => Ok(ParsedFlagGroup {
+            aliases: aliases.clone(),
+            value_pattern: Some(*value.clone()),
+        }),
+        PatternToken::Alternation(alts) => {
+            // Verify all elements are flags
+            for alt in alts {
+                if !is_flag(alt) {
+                    return Err(PatternParseError::InvalidSyntax(format!(
+                        "'{alt}' is not a valid flag name \
+                         (must start with `-` and not be the bare `--` separator)"
+                    )));
+                }
+            }
+            Ok(ParsedFlagGroup {
+                aliases: alts.clone(),
+                value_pattern: None,
+            })
+        }
+        other => Err(PatternParseError::InvalidSyntax(format!(
+            "flag group definition must start with a flag (e.g. `-f` or \
+             `-f|--field`), got {other:?}"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -953,26 +1012,32 @@ mod tests {
     // === <flag:name> placeholder ===
 
     #[rstest]
-    #[case::wildcard_value("gh api graphql <flag:field-flag> *", "gh", vec![
+    #[case::standalone("gh api graphql <flag:field-flag> *", "gh", vec![
         PatternToken::Literal("api".into()),
         PatternToken::Literal("graphql".into()),
         PatternToken::FlagGroupRef {
             name: "field-flag".to_string(),
-            value: Box::new(PatternToken::Wildcard),
-        },
-    ])]
-    #[case::literal_value("curl <flag:data-flag> secret", "curl", vec![
-        PatternToken::FlagGroupRef {
-            name: "data-flag".to_string(),
-            value: Box::new(PatternToken::Literal("secret".into())),
-        },
-    ])]
-    #[case::with_trailing_wildcard("curl <flag:header-flag> * *", "curl", vec![
-        PatternToken::FlagGroupRef {
-            name: "header-flag".to_string(),
-            value: Box::new(PatternToken::Wildcard),
         },
         PatternToken::Wildcard,
+    ])]
+    #[case::with_trailing_literal("curl <flag:data-flag> https://example.com", "curl", vec![
+        PatternToken::FlagGroupRef {
+            name: "data-flag".to_string(),
+        },
+        PatternToken::Literal("https://example.com".into()),
+    ])]
+    #[case::with_trailing_wildcard("curl <flag:header-flag> *", "curl", vec![
+        PatternToken::FlagGroupRef {
+            name: "header-flag".to_string(),
+        },
+        PatternToken::Wildcard,
+    ])]
+    #[case::no_trailing_token("gh api graphql <flag:verbose>", "gh", vec![
+        PatternToken::Literal("api".into()),
+        PatternToken::Literal("graphql".into()),
+        PatternToken::FlagGroupRef {
+            name: "verbose".to_string(),
+        },
     ])]
     fn parse_flag_group_ref(
         #[case] input: &str,
@@ -990,18 +1055,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_flag_group_ref_without_value_is_error() {
-        let err = parse("gh api graphql <flag:field-flag>").unwrap_err();
-        assert_err_message_contains(&err, "must be followed by a value pattern");
-    }
-
-    #[test]
-    fn parse_flag_group_ref_followed_by_flag_is_error() {
-        let err = parse("gh <flag:field-flag> --other").unwrap_err();
-        assert_err_message_contains(&err, "not another flag");
-    }
-
-    #[test]
     fn parse_flag_group_ref_empty_name_is_error() {
         let err = parse("gh <flag:> *").unwrap_err();
         assert_err_message_contains(&err, "requires a group name");
@@ -1009,7 +1062,57 @@ mod tests {
 
     #[test]
     fn parse_flag_group_ref_inside_optional_group_is_error() {
-        let err = parse("gh api graphql [<flag:field-flag> *]").unwrap_err();
+        let err = parse("gh api graphql [<flag:field-flag>]").unwrap_err();
         assert_err_message_contains(&err, "not supported inside an optional group");
+    }
+
+    // === parse_flag_group_definition ===
+
+    #[rstest]
+    #[case::value_flag_wildcard(
+        "-f|-F|--field *",
+        ParsedFlagGroup {
+            aliases: vec!["-f".into(), "-F".into(), "--field".into()],
+            value_pattern: Some(PatternToken::Wildcard),
+        },
+    )]
+    #[case::bool_flag(
+        "-v|--verbose",
+        ParsedFlagGroup {
+            aliases: vec!["-v".into(), "--verbose".into()],
+            value_pattern: None,
+        },
+    )]
+    #[case::value_restriction(
+        "-X|--method GET|HEAD|OPTIONS",
+        ParsedFlagGroup {
+            aliases: vec!["-X".into(), "--method".into()],
+            value_pattern: Some(PatternToken::Alternation(vec!["GET".into(), "HEAD".into(), "OPTIONS".into()])),
+        },
+    )]
+    #[case::single_flag_with_value(
+        "--field *",
+        ParsedFlagGroup {
+            aliases: vec!["--field".into()],
+            value_pattern: Some(PatternToken::Wildcard),
+        },
+    )]
+    #[case::single_bool_flag(
+        "--force",
+        ParsedFlagGroup {
+            aliases: vec!["--force".into()],
+            value_pattern: None,
+        },
+    )]
+    fn test_parse_flag_group_definition(#[case] input: &str, #[case] expected: ParsedFlagGroup) {
+        assert_eq!(parse_flag_group_definition(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::not_a_flag("notaflag")]
+    #[case::bare_double_dash("--")]
+    fn test_parse_flag_group_definition_errors(#[case] input: &str) {
+        assert!(parse_flag_group_definition(input).is_err());
     }
 }

@@ -716,11 +716,17 @@ fn collect_value_flags(
                     value_flags.insert(alias.clone());
                 }
             }
-            PatternToken::FlagGroupRef { name, .. } => {
-                if let Some(group_aliases) =
-                    definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+            PatternToken::FlagGroupRef { name } => {
+                if let Some(parsed) = definitions
+                    .parsed_flag_groups
+                    .as_ref()
+                    .and_then(|g| g.get(name))
+                    && parsed.value_pattern.is_some()
                 {
-                    for alias in group_aliases {
+                    // Only add aliases for value-taking flags (those with
+                    // a value pattern). Bool flags do not consume the next
+                    // token, so they must not be registered as value flags.
+                    for alias in &parsed.aliases {
                         value_flags.insert(alias.clone());
                     }
                 }

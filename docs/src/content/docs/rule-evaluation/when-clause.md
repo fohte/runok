@@ -195,7 +195,7 @@ A map of values captured by [`<flag:name>`](/pattern-syntax/placeholders/#flag-g
 ```yaml
 definitions:
   flag_groups:
-    field-flag: ['-f', '-F', '--field', '--raw-field']
+    field-flag: '-f|-F|--field|--raw-field *'
 
 rules:
   # Allow gh api graphql queries, but ask before mutations.
@@ -210,16 +210,18 @@ The captured list contains every occurrence of any aliased flag's value. For exa
 flag_groups["field-flag"] == ["query=query{...}", "variables={}"]
 ```
 
+For boolean flag groups (defined without a value pattern, e.g. `"-v|--verbose"`), captured values are empty strings. Use `size(flag_groups["name"]) > 0` to check whether the flag was present.
+
 `flag_groups[name]` is always present for every group declared in `definitions.flag_groups`, even when the matched rule did not use `<flag:name>` for that group — the value is then an empty list `[]`. This means `flag_groups["name"]` never raises an "undeclared reference" error.
 
 ```yaml
 # Block curl invocations that send a sensitive file as request body
 definitions:
   flag_groups:
-    data-flag: ['-d', '--data', '--data-raw', '--data-binary']
+    data-flag: '-d|--data|--data-raw|--data-binary *'
 
 rules:
-  - deny: 'curl <flag:data-flag> * *'
+  - deny: 'curl <flag:data-flag> *'
     when: 'flag_groups["data-flag"].exists(v, v.startsWith("@/etc/"))'
     message: 'Refused: do not send /etc/* as request body'
 ```
