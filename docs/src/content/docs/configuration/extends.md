@@ -115,7 +115,7 @@ A preset file can declare the minimum runok version it needs by setting the top-
 required_runok_version: '>=0.3.0'
 definitions:
   flag_groups:
-    field-flag: ['-f', '--field']
+    field-flag: '-f|--field *'
 ```
 
 The check is enforced per file: the project `runok.yml`, every file pulled in via `extends`, and every transitively extended preset are validated independently. If any file's requirement is not satisfied, loading fails with an error that names the exact file and the constraint.

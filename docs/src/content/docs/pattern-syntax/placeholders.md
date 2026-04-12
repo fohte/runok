@@ -265,16 +265,22 @@ The `<flag:name>` placeholder matches **any flag** that belongs to a named flag 
 
 ### Defining Flag Groups
 
+Flag group definitions use the same pattern syntax as rule patterns. Flag aliases are separated by `|`, and an optional value pattern follows after a space:
+
 ```yaml title="runok.yml"
 definitions:
   flag_groups:
-    field-flag: ['-f', '-F', '--field', '--raw-field']
-    header-flag: ['-H', '--header']
+    # Value flag: captures flag + value
+    field-flag: '-f|-F|--field|--raw-field *'
+    # Bool flag: captures flag presence only
+    verbose: '-v|--verbose'
+    # Value-restricted flag: only matches specific values
+    method: '-X|--method GET|HEAD|OPTIONS'
 ```
 
 ### Using Flag Groups
 
-`<flag:name>` is **always** followed by a value pattern (a wildcard or literal). The value pattern is matched against the value of every captured flag:
+`<flag:name>` stands alone in the pattern — the value behavior (value-taking vs boolean) is determined entirely by the definition:
 
 ```yaml title="runok.yml"
 rules:
@@ -293,11 +299,25 @@ rules:
 | `gh api graphql -f query=query{...} -f variables={}` | `["query=query{...}", "variables={}"]` |
 | `gh api graphql -F query=mutation{...}`              | `["query=mutation{...}"]`              |
 
+### Bool Flags
+
+When a flag group is defined without a value pattern (e.g. `"-v|--verbose"`), the `<flag:name>` placeholder matches the flag's presence only. Captured values are empty strings, so use `size()` to check presence:
+
+```yaml title="runok.yml"
+definitions:
+  flag_groups:
+    verbose: '-v|--verbose'
+
+rules:
+  - ask: 'command <flag:verbose> *'
+    when: 'size(flag_groups["verbose"]) > 0'
+```
+
 ### Matching Behavior
 
-- The pattern matches **only when at least one** of the group's aliases appears in the command (mirroring how a `-f|--field|--raw-field VALUE` alternation behaves today).
-- Every space-separated (`-f value`), `=`-joined (`-f=value` or `--field=value`), and fused short-flag (`-fvalue`) form is recognized.
-- Each captured value is also validated against the value pattern; if any captured value fails to match, the whole rule does not apply.
+- The pattern matches **only when at least one** of the group's aliases appears in the command.
+- For value flags, every space-separated (`-f value`), `=`-joined (`-f=value` or `--field=value`), and fused short-flag (`-fvalue`) form is recognized.
+- Each captured value is validated against the value pattern in the definition; if any captured value fails to match, the whole rule does not apply.
 
 ### Why Not Use Alternation?
 

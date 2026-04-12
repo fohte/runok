@@ -14,7 +14,7 @@ use runok::rules::rule_engine::{EvalContext, evaluate_command};
 const FIELD_FLAG_CONFIG: &str = indoc! {r#"
     definitions:
       flag_groups:
-        field-flag: ["-f", "-F", "--raw-field", "--field"]
+        field-flag: "-f|-F|--raw-field|--field *"
     rules:
       - ask: 'gh api graphql <flag:field-flag> *'
         when: 'flag_groups["field-flag"].exists(v, v.startsWith("query=mutation"))'
@@ -84,7 +84,7 @@ fn flag_groups_empty_when_no_flag_in_group_used(empty_context: EvalContext) {
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
-            field-flag: ["-f", "--field"]
+            field-flag: "-f|--field *"
         rules:
           - allow: 'gh api graphql *'
             when: 'size(flag_groups["field-flag"]) == 0'
@@ -99,7 +99,7 @@ fn flag_groups_collects_all_occurrences(empty_context: EvalContext) {
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
-            field-flag: ["-f", "--raw-field"]
+            field-flag: "-f|--raw-field *"
         rules:
           - allow: 'gh api graphql <flag:field-flag> *'
             when: 'size(flag_groups["field-flag"]) == 3'
@@ -119,7 +119,7 @@ fn flag_groups_supports_equals_joined_values(empty_context: EvalContext) {
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
-            field-flag: ["-f", "--raw-field"]
+            field-flag: "-f|--raw-field *"
         rules:
           - allow: 'gh api graphql <flag:field-flag> *'
             when: 'flag_groups["field-flag"].exists(v, v == "query=hello")'
@@ -143,10 +143,10 @@ fn multiple_flag_groups_independent(empty_context: EvalContext) {
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
-            field-flag: ["-f", "--raw-field"]
-            header-flag: ["-H", "--header"]
+            field-flag: "-f|--raw-field *"
+            header-flag: "-H|--header *"
         rules:
-          - allow: 'curl <flag:field-flag> * <flag:header-flag> * *'
+          - allow: 'curl <flag:field-flag> <flag:header-flag> *'
             when: |
               flag_groups["field-flag"].exists(v, v.startsWith("data=")) &&
               flag_groups["header-flag"].exists(h, h.contains("Authorization"))
@@ -159,6 +159,66 @@ fn multiple_flag_groups_independent(empty_context: EvalContext) {
     )
     .unwrap();
     assert_allow(&result.action);
+}
+
+// ========================================
+// Bool flag groups
+// ========================================
+
+#[rstest]
+fn bool_flag_group_captures_presence(empty_context: EvalContext) {
+    let yaml = indoc! {r#"
+        definitions:
+          flag_groups:
+            verbose: "-v|--verbose"
+        rules:
+          - allow: 'command <flag:verbose> *'
+            when: 'size(flag_groups["verbose"]) > 0'
+    "#};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, "command --verbose foo", &empty_context).unwrap();
+    assert_allow(&result.action);
+}
+
+#[rstest]
+fn bool_flag_group_not_present_fails_match(empty_context: EvalContext) {
+    // When the bool flag is not in the command, <flag:name> does not match,
+    // so the rule is skipped entirely (falls through to default ask).
+    let yaml = indoc! {r#"
+        definitions:
+          flag_groups:
+            verbose: "-v|--verbose"
+        rules:
+          - allow: 'command <flag:verbose> *'
+    "#};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, "command foo", &empty_context).unwrap();
+    assert_ask(&result.action);
+}
+
+// ========================================
+// Value-restricted flag groups
+// ========================================
+
+#[rstest]
+#[case::allowed_value("command -X GET foo", assert_allow as ActionAssertion)]
+#[case::allowed_value_head("command --method HEAD foo", assert_allow as ActionAssertion)]
+#[case::disallowed_value("command -X POST foo", assert_ask as ActionAssertion)]
+fn value_restricted_flag_group(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {r#"
+        definitions:
+          flag_groups:
+            method: "-X|--method GET|HEAD|OPTIONS"
+        rules:
+          - allow: 'command <flag:method> *'
+    "#};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
 }
 
 // ========================================
@@ -190,17 +250,17 @@ fn assert_message_contains(haystack: &str, needles: &[&str]) {
     indoc! {r#"
         definitions:
           flag_groups:
-            bad: ["notaflag"]
+            bad: "notaflag"
     "#},
     &["not a valid flag name"],
 )]
-#[case::empty_flag_list(
+#[case::empty_definition(
     indoc! {r#"
         definitions:
           flag_groups:
-            empty: []
+            empty: ""
     "#},
-    &["must contain at least one flag"],
+    &["must not be empty"],
 )]
 fn flag_group_validation_errors(#[case] yaml: &str, #[case] needles: &[&str]) {
     let mut config = parse_config(yaml).unwrap();
@@ -210,17 +270,12 @@ fn flag_group_validation_errors(#[case] yaml: &str, #[case] needles: &[&str]) {
 
 #[rstest]
 fn flag_group_inside_optional_group_is_rejected_at_evaluation(empty_context: EvalContext) {
-    // The pattern parser rejects `<flag:name>` inside `[...]` because the
-    // matcher's optional-absent path cannot detect grouped flags. The error
-    // surfaces at evaluation time as a PatternParse failure, not at config
-    // validate time, since `Config::validate()` only inspects definitions for
-    // `flag_groups` and skips patterns that fail to parse.
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
-            field-flag: ['-f', '--field']
+            field-flag: "-f|--field *"
         rules:
-          - allow: 'gh api graphql [<flag:field-flag> *]'
+          - allow: 'gh api graphql [<flag:field-flag>]'
     "#};
     let config = parse_config(yaml).unwrap();
     let err = evaluate_command(&config, "gh api graphql -f query=hello", &empty_context)

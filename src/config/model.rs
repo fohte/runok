@@ -138,16 +138,14 @@ pub struct Definitions {
     /// Typed variable definitions referenced by `<var:name>` in rule patterns.
     pub vars: Option<HashMap<String, VarDefinition>>,
     /// Named flag alias groups referenced by `<flag:name>` in rule patterns.
-    /// Each value is a list of flag names (e.g. `["-f", "--field", "--raw-field"]`)
-    /// that share semantic meaning. When a `<flag:name>` placeholder matches a
-    /// command, every occurrence of any aliased flag is captured into the
-    /// `flag_groups[name]` list available in `when` clauses.
+    /// Each value is a pattern string using the same syntax as rule patterns:
+    /// alternation for aliases, with an optional value pattern suffix.
     ///
-    /// TODO: only value-taking flags are currently supported. Boolean flags
-    /// (e.g. `--force`, `-v` without an argument) are not yet representable
-    /// here because the matcher always pairs a `<flag:name>` placeholder with
-    /// a value pattern.
-    pub flag_groups: Option<HashMap<String, Vec<String>>>,
+    /// Examples:
+    /// - `"-f|-F|--field|--raw-field *"` — value flag (captures flag + value)
+    /// - `"-v|--verbose"` — bool flag (captures flag presence only)
+    /// - `"-X|--method GET|HEAD|OPTIONS"` — value flag with restricted values
+    pub flag_groups: Option<HashMap<String, String>>,
 }
 
 /// Type of a variable definition, controlling how values are matched.
@@ -654,25 +652,22 @@ impl Config {
             }
         }
 
-        // Validate definitions.flag_groups: every entry must be a non-empty list
-        // of flag names that start with `-`. The bare `--` separator is rejected
-        // because it is positional, not a flag.
+        // Validate definitions.flag_groups: each value is a pattern string
+        // that must parse successfully and contain at least one valid flag alias.
         if let Some(defs) = &self.definitions
             && let Some(flag_groups) = &defs.flag_groups
         {
-            for (key, flags) in flag_groups {
-                if flags.is_empty() {
-                    errors.push(format!(
-                        "definitions.flag_groups.{key}: flag group must contain at least one flag"
-                    ));
-                    continue;
-                }
-                for flag in flags {
-                    if !flag.starts_with('-') || flag == "--" {
-                        errors.push(format!(
-                            "definitions.flag_groups.{key}: '{flag}' is not a valid flag name \
-                             (must start with `-` and not be the bare `--` separator)"
-                        ));
+            for (key, definition) in flag_groups {
+                match crate::rules::pattern_parser::parse_flag_group_definition(definition) {
+                    Ok(parsed) => {
+                        if parsed.aliases.is_empty() {
+                            errors.push(format!(
+                                "definitions.flag_groups.{key}: flag group must contain at least one flag"
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("definitions.flag_groups.{key}: {e}"));
                     }
                 }
             }

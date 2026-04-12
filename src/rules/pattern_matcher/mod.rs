@@ -63,10 +63,15 @@ fn collect_value_flag_aliases(
                 }
             }
             PatternToken::FlagGroupRef { name, .. } => {
-                if let Some(group_aliases) =
-                    definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                if let Some(definition) = definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                    && let Ok(parsed) =
+                        crate::rules::pattern_parser::parse_flag_group_definition(definition)
+                    && parsed.value_pattern.is_some()
                 {
-                    for a in group_aliases {
+                    // Only register value-taking flags (those with a value
+                    // pattern) so the positional-argument finder skips their
+                    // values correctly.
+                    for a in &parsed.aliases {
                         aliases.insert(a.clone());
                     }
                 }
@@ -594,19 +599,11 @@ fn match_engine<'a>(
             }
         }
 
-        PatternToken::FlagGroupRef { name, value } => {
-            // TODO: only value-taking flags are handled here. Each of the
-            // three matching cases below requires the aliased flag to carry
-            // a value, so a boolean flag (e.g. `--force`) listed in
-            // `definitions.flag_groups` would never produce a capture and
-            // the pattern would silently fail to match. Add a separate
-            // value-less branch (and a way to expose presence-only captures
-            // in CEL) once a real use case appears.
-
-            // Resolve the alias list from definitions.flag_groups. If the
-            // group is undefined, the pattern matches nothing — same policy
-            // as undefined `<path:name>` and `<var:name>` references.
-            let Some(aliases) = definitions
+        PatternToken::FlagGroupRef { name } => {
+            // Resolve the flag group definition from definitions.flag_groups.
+            // If the group is undefined, the pattern matches nothing — same
+            // policy as undefined `<path:name>` and `<var:name>` references.
+            let Some(definition) = definitions
                 .flag_groups
                 .as_ref()
                 .and_then(|g| g.get(name))
@@ -615,6 +612,11 @@ fn match_engine<'a>(
                 return Ok(false);
             };
 
+            // Parse the definition string to extract aliases and value pattern.
+            let parsed = crate::rules::pattern_parser::parse_flag_group_definition(&definition)
+                .map_err(crate::rules::RuleError::PatternParse)?;
+            let aliases = &parsed.aliases;
+
             // Collect every command token that matches any alias, capturing
             // each occurrence's value into `flag_group_captures[name]`. We
             // greedily consume all matching occurrences (rather than only
@@ -622,47 +624,62 @@ fn match_engine<'a>(
             let mut matched_indices: Vec<usize> = Vec::new();
             let mut captured_values: Vec<String> = Vec::new();
 
-            for i in 0..cmd_tokens.len() {
-                let token = cmd_tokens[i];
+            match &parsed.value_pattern {
+                Some(value) => {
+                    // Value flag: capture flag + value pairs
+                    for i in 0..cmd_tokens.len() {
+                        let token = cmd_tokens[i];
 
-                // Case 1: space-separated flag and value (e.g. `-f value`)
-                if aliases.iter().any(|a| a.as_str() == token)
-                    && i + 1 < cmd_tokens.len()
-                    && match_single_token(value, cmd_tokens[i + 1], definitions)
-                {
-                    // Skip if either index is already consumed (e.g. the
-                    // value of a previous match would be misread as a flag).
-                    if matched_indices.contains(&i) || matched_indices.contains(&(i + 1)) {
-                        continue;
+                        // Case 1: space-separated flag and value (e.g. `-f value`)
+                        if aliases.iter().any(|a| a.as_str() == token)
+                            && i + 1 < cmd_tokens.len()
+                            && match_single_token(value, cmd_tokens[i + 1], definitions)
+                        {
+                            if matched_indices.contains(&i) || matched_indices.contains(&(i + 1)) {
+                                continue;
+                            }
+                            matched_indices.push(i);
+                            matched_indices.push(i + 1);
+                            captured_values.push(cmd_tokens[i + 1].to_string());
+                            continue;
+                        }
+
+                        // Case 2: `=`-joined flag and value (e.g. `--field=value`)
+                        if let Some((flag_part, value_part)) = split_flag_equals(token)
+                            && aliases.iter().any(|a| a.as_str() == flag_part)
+                            && match_single_token(value, value_part, definitions)
+                        {
+                            if matched_indices.contains(&i) {
+                                continue;
+                            }
+                            matched_indices.push(i);
+                            captured_values.push(value_part.to_string());
+                            continue;
+                        }
+
+                        // Case 3: fused short flag and value (e.g. `-fvalue`)
+                        if let Some((_flag_part, value_part)) =
+                            split_short_flag_value(token, aliases)
+                            && match_single_token(value, value_part, definitions)
+                        {
+                            if matched_indices.contains(&i) {
+                                continue;
+                            }
+                            matched_indices.push(i);
+                            captured_values.push(value_part.to_string());
+                        }
                     }
-                    matched_indices.push(i);
-                    matched_indices.push(i + 1);
-                    captured_values.push(cmd_tokens[i + 1].to_string());
-                    continue;
                 }
-
-                // Case 2: `=`-joined flag and value (e.g. `--field=value`)
-                if let Some((flag_part, value_part)) = split_flag_equals(token)
-                    && aliases.iter().any(|a| a.as_str() == flag_part)
-                    && match_single_token(value, value_part, definitions)
-                {
-                    if matched_indices.contains(&i) {
-                        continue;
+                None => {
+                    // Bool flag: capture flag presence only
+                    for (i, &token) in cmd_tokens.iter().enumerate() {
+                        if aliases.iter().any(|a| a.as_str() == token)
+                            && !matched_indices.contains(&i)
+                        {
+                            matched_indices.push(i);
+                            captured_values.push(String::new());
+                        }
                     }
-                    matched_indices.push(i);
-                    captured_values.push(value_part.to_string());
-                    continue;
-                }
-
-                // Case 3: fused short flag and value (e.g. `-fvalue`)
-                if let Some((_flag_part, value_part)) = split_short_flag_value(token, &aliases)
-                    && match_single_token(value, value_part, definitions)
-                {
-                    if matched_indices.contains(&i) {
-                        continue;
-                    }
-                    matched_indices.push(i);
-                    captured_values.push(value_part.to_string());
                 }
             }
 
@@ -673,10 +690,6 @@ fn match_engine<'a>(
             }
 
             // Record captured values into the per-attempt flag-group map.
-            // We use `extend` instead of `insert` so that, if the same
-            // group name appears in multiple `<flag:name>` placeholders
-            // within one pattern (an unusual but legal case), every
-            // matched value is preserved.
             let saved_fg = flag_group_captures.borrow().clone();
             flag_group_captures
                 .borrow_mut()
@@ -1275,10 +1288,13 @@ mod tests {
                     }
                 }
                 PatternToken::FlagGroupRef { name, .. } => {
-                    if let Some(group_aliases) =
+                    if let Some(definition) =
                         definitions.flag_groups.as_ref().and_then(|g| g.get(name))
+                        && let Ok(parsed) =
+                            crate::rules::pattern_parser::parse_flag_group_definition(definition)
+                        && parsed.value_pattern.is_some()
                     {
-                        for alias in group_aliases {
+                        for alias in &parsed.aliases {
                             value_flags.insert(alias.clone());
                         }
                     }
@@ -1518,12 +1534,7 @@ mod tests {
         Definitions {
             flag_groups: Some(HashMap::from([(
                 "field-flag".to_string(),
-                vec![
-                    "-f".to_string(),
-                    "-F".to_string(),
-                    "--field".to_string(),
-                    "--raw-field".to_string(),
-                ],
+                "-f|-F|--field|--raw-field *".to_string(),
             )])),
             ..Definitions::default()
         }
