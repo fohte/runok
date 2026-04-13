@@ -9,19 +9,19 @@ importers:
     dependencies:
       '@astrojs/starlight':
         specifier: 0.38.2
-        version: 0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+        version: 0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       astro:
-        specifier: 6.1.3
-        version: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+        specifier: 6.1.4
+        version: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
       sharp:
         specifier: 0.34.5
         version: 0.34.5
       starlight-links-validator:
         specifier: 0.21.0
-        version: 0.21.0(@astrojs/starlight@0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+        version: 0.21.0(@astrojs/starlight@0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       starlight-llms-txt:
         specifier: 0.8.0
-        version: 0.8.0(@astrojs/starlight@0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+        version: 0.8.0(@astrojs/starlight@0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
     devDependencies:
       wrangler:
         specifier: 4.80.0
@@ -1546,10 +1546,10 @@ packages:
     peerDependencies:
       astro: ^4.0.0-beta || ^5.0.0-beta || ^3.3.0 || ^6.0.0-beta
 
-  astro@6.1.3:
+  astro@6.1.4:
     resolution:
       {
-        integrity: sha512-FUKbBYOdYYrRNZwDd9I5CVSfR6Nj9aZeNzcjcvh1FgHwR0uXawkYFR3HiGxmdmAB2m8fs0iIkDdsiUfwGeO8qA==,
+        integrity: sha512-SRy1bONuCHkGWhI5JiWCQKVDVbeaXOikjAVZs/Nz+lvUvubtdLoZfnacmuZHQ9RL2IOkU54M8/qZYm9ypJDKrg==,
       }
     engines: { node: '>=22.12.0', npm: '>=9.6.5', pnpm: '>=7.1.0' }
     hasBin: true
@@ -3726,12 +3726,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@astrojs/mdx@5.0.3(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))':
+  '@astrojs/mdx@5.0.3(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))':
     dependencies:
       '@astrojs/markdown-remark': 7.1.0
       '@mdx-js/mdx': 3.1.1
       acorn: 8.16.0
-      astro: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+      astro: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
       es-module-lexer: 2.0.0
       estree-util-visit: 2.0.0
       hast-util-to-html: 9.0.5
@@ -3755,17 +3755,17 @@ snapshots:
       stream-replace-string: 2.0.0
       zod: 4.3.6
 
-  '@astrojs/starlight@0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))':
+  '@astrojs/starlight@0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))':
     dependencies:
       '@astrojs/markdown-remark': 7.1.0
-      '@astrojs/mdx': 5.0.3(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+      '@astrojs/mdx': 5.0.3(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       '@astrojs/sitemap': 3.7.2
       '@pagefind/default-ui': 1.4.0
       '@types/hast': 3.0.4
       '@types/js-yaml': 4.0.9
       '@types/mdast': 4.0.4
-      astro: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
-      astro-expressive-code: 0.41.7(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+      astro: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+      astro-expressive-code: 0.41.7(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       bcp-47: 2.1.0
       hast-util-from-html: 2.0.3
       hast-util-select: 6.0.4
@@ -4449,12 +4449,12 @@ snapshots:
 
   astring@1.9.0: {}
 
-  astro-expressive-code@0.41.7(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
+  astro-expressive-code@0.41.7(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
     dependencies:
-      astro: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+      astro: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
       rehype-expressive-code: 0.41.7
 
-  astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3):
+  astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3):
     dependencies:
       '@astrojs/compiler': 3.0.1
       '@astrojs/internal-helpers': 0.8.0
@@ -6010,11 +6010,11 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  starlight-links-validator@0.21.0(@astrojs/starlight@0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
+  starlight-links-validator@0.21.0(@astrojs/starlight@0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
     dependencies:
-      '@astrojs/starlight': 0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+      '@astrojs/starlight': 0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       '@types/picomatch': 4.0.3
-      astro: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+      astro: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
       github-slugger: 2.0.0
       hast-util-from-html: 2.0.3
       is-absolute-url: 5.0.0
@@ -6027,13 +6027,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  starlight-llms-txt@0.8.0(@astrojs/starlight@0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
+  starlight-llms-txt@0.8.0(@astrojs/starlight@0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)))(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)):
     dependencies:
-      '@astrojs/mdx': 5.0.3(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
-      '@astrojs/starlight': 0.38.2(astro@6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+      '@astrojs/mdx': 5.0.3(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
+      '@astrojs/starlight': 0.38.2(astro@6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3))
       '@types/hast': 3.0.4
       '@types/micromatch': 4.0.10
-      astro: 6.1.3(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
+      astro: 6.1.4(@types/node@24.12.2)(rollup@4.60.1)(yaml@2.8.3)
       github-slugger: 2.0.0
       hast-util-select: 6.0.4
       micromatch: 4.0.8
