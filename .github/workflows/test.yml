@@ -63,8 +63,8 @@ jobs:
         continue-on-error: true
         run: lefthook run pre-commit --all-files
 
-      # lefthook-config's formatters run `git add` after formatting, which stages the changes.
-      # https://github.com/fohte/lefthook-config/blob/v0.1.7/base.yml
+      # Formatters configured with `stage_fixed: true` run `git add` after formatting,
+      # which stages the changes.
       # commit-action uses `git ls-files --modified` which only detects unstaged changes.
       # https://github.com/suzuki-shunsuke/commit-action/blob/87b297f0ce551411b43d1880f4fb3cbc60381055/action.yaml#L57
       # We need to unstage the changes so commit-action can detect them.

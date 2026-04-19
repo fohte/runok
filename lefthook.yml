@@ -1,15 +1,82 @@
-remotes:
-  - git_url: https://github.com/fohte/lefthook-config.git
-    ref: v0.1.16 # renovate: datasource=github-tags depName=fohte/lefthook-config
-    configs:
-      - base.yml
-      - rust.yml
-
 pre-commit:
   commands:
+    format:
+      # Remove trailing whitespace and ensure final newline
+      run: basefmt {staged_files}
+      glob: '*'
+      stage_fixed: true
+
+    prettier:
+      run: mise x -- prettier --write --ignore-unknown --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+
+    shellcheck:
+      file_types:
+        - text/x-shellscript
+      exclude:
+        - '*.zsh'
+      run: mise x shellcheck -- shellcheck {staged_files}
+
+    shfmt:
+      file_types:
+        - text/x-shellscript
+      exclude:
+        - '*.zsh'
+      run: mise x shfmt -- shfmt --apply-ignore -w {staged_files}
+      stage_fixed: true
+
+    pinact:
+      glob: '{.github/workflows/*.{yml,yaml},.github/actions/**/action.{yml,yaml}}'
+      run: mise x pinact -- pinact run {staged_files}
+      stage_fixed: true
+
+    actionlint:
+      glob: '.github/workflows/*.{yml,yaml}'
+      run: mise x actionlint -- actionlint {staged_files}
+
+    copier-src-path:
+      glob: '.copier-answers.yml'
+      run: |
+        # Renovate does not support the `gh:` prefix in _src_path.
+        # See: https://github.com/renovatebot/renovate/issues/39938
+        for file in {staged_files}; do
+          [ -f "$file" ] || continue
+          # Handle both quoted and unquoted values (e.g. gh:org/repo or "gh:org/repo")
+          src_path=$(sed -n 's/^_src_path:[[:space:]]*//p' "$file" | head -n 1)
+          case "$src_path" in
+            gh:* | "'gh:"* | '"gh:'*)
+              suggested_path=$(echo "$src_path" | sed -e "s|^['\"]\\{0,1\\}gh:|https://github.com/|" -e "s|['\"]\\{0,1\\}$||")
+              echo "Error: $file uses 'gh:' prefix in _src_path, which is not supported by Renovate." >&2
+              echo "Please use a full 'https://' URL instead." >&2
+              printf "  Current:   %s\n  Suggested: %s\n" "$src_path" "$suggested_path" >&2
+              exit 1
+              ;;
+          esac
+        done
+
     ast-grep:
       glob: '*.rs'
       run: ast-grep scan {staged_files}
+<<<<<<< before updating
     generate-json-schema:
       glob: '*.rs'
       run: cargo run --features config-schema -- config-schema > schema/runok.schema.json && git add schema/runok.schema.json
+=======
+
+    # Using glob instead of file_types because text/x-rust is not supported
+    # by the mimetype library used by lefthook.
+    # See: https://github.com/gabriel-vasile/mimetype/blob/master/supported_mimes.md
+    cargo-fmt:
+      glob: '*.rs'
+      run: cargo fmt
+      stage_fixed: true
+
+    cargo-clippy:
+      glob: '*.rs'
+      run: cargo clippy --all-targets -- -D warnings
+
+commit-msg:
+  commands:
+    commitlint:
+      run: mise x -- commitlint --edit {1}
+>>>>>>> after updating
