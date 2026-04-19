@@ -117,7 +117,7 @@ See [Why runok?](https://runok.fohte.net/getting-started/why-runok/) for a full 
 - Conditional `when` clauses with CEL expressions for environment-aware decisions
 - OS-level sandboxing (macOS Seatbelt / Linux Landlock) for file and network restrictions
 
-**And more** -- [rule testing](https://runok.fohte.net/cli/test/), [audit logging](https://runok.fohte.net/cli/audit/), [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/), [Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin) for natural-language configuration assistance
+**And more** -- [official presets](https://runok.fohte.net/configuration/official-presets/) for instant setup, [rule testing](https://runok.fohte.net/cli/test/), [audit logging](https://runok.fohte.net/cli/audit/), [preset sharing](https://runok.fohte.net/configuration/extends/), [denial feedback](https://runok.fohte.net/configuration/denial-feedback/), [extension protocol](https://runok.fohte.net/extensions/overview/)
 
 ## Quick start
 
@@ -150,10 +150,13 @@ This creates a `runok.yml`, and if you have Claude Code configured, migrates you
 You can also configure manually. Create `~/.config/runok/runok.yml`:
 
 ```yaml
+# Start with official presets -- covers common read-only commands,
+# Git, GitHub CLI, and wrapper definitions out of the box
+extends:
+  - 'github:fohte/runok-presets/base@v1'
+
 rules:
-  - allow: 'git status'
-  - allow: 'git diff *'
-  - allow: 'git log *'
+  # Add your own rules on top of the presets
   - ask: 'git push *'
   - deny: 'git push -f|--force *'
     message: 'Force push is not allowed'
@@ -190,6 +193,15 @@ See [Claude Code Integration](https://runok.fohte.net/getting-started/claude-cod
 runok check -- git status        # => allow
 runok check -- git push -f main  # => deny
 runok check -- git push main     # => ask
+```
+
+### Use the Claude Code plugin (optional)
+
+The [runok Claude Code plugin](https://runok.fohte.net/getting-started/claude-code/#claude-code-plugin) lets you manage your `runok.yml` from inside Claude Code in natural language -- adding rules, updating presets, and answering questions about pattern syntax.
+
+```
+/plugin marketplace add fohte/runok-claude-code-plugin
+/plugin install runok@runok-claude-code-plugin
 ```
 
 ## Full Documentation

@@ -29,11 +29,15 @@ mkdir -p ~/.config/runok
 
 ```yaml
 # ~/.config/runok/runok.yml
+
+# Start with official presets -- read-only rules for common Unix
+# commands, Git, GitHub CLI, and wrapper definitions.
+# See https://runok.fohte.net/configuration/official-presets/
+extends:
+  - 'github:fohte/runok-presets/base@v1'
+
 rules:
-  # Allow safe read-only git commands
-  - allow: 'git status'
-  - allow: 'git diff *'
-  - allow: 'git log *'
+  # Add your own rules on top of the presets
 
   # Ask before pushing
   - ask: 'git push *'
@@ -49,6 +53,7 @@ defaults:
 
 ### What this does
 
+- **`extends`** pulls in shared rule sets from external sources. The [`base` preset](/configuration/official-presets/) covers common read-only commands so you don't have to write them yourself.
 - **`allow` rules** permit matching commands to run without prompting.
 - **`deny` rules** block matching commands entirely. Deny always takes priority over allow ([Explicit Deny Wins](/rule-evaluation/priority-model/)).
 - **`ask` rules** prompt for user confirmation before running the command.
@@ -85,6 +90,6 @@ See how runok is configured in practice:
 
 ## Next steps
 
-- [Official Presets (runok-presets)](/configuration/official-presets/) -- Start with ready-made rules for common read-only commands.
-- [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook.
+- [Official Presets (runok-presets)](/configuration/official-presets/) -- Customize the preset selection or learn what each preset includes.
+- [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook, and install the [Claude Code plugin](/getting-started/claude-code/#claude-code-plugin) to manage `runok.yml` from inside Claude Code.
 - [CLI Reference](/cli/overview/) -- Full reference for `runok init`, `runok check`, and `runok exec`.

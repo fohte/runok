@@ -14,6 +14,10 @@ runok integrates with [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 3. For `Bash` tool calls, runok extracts the command string and evaluates it against your `runok.yml` rules.
 4. runok returns an `approve`, `deny`, or `ask` decision back to Claude Code.
 
+:::tip[Manage runok from inside Claude Code]
+The [runok Claude Code plugin](#claude-code-plugin) lets Claude Code read and modify your `runok.yml` through natural-language requests ("add a rule to allow `cargo test`", "deny force pushes with a helpful message"). Install it after completing the steps below.
+:::
+
 ## Step 1: Set up runok
 
 If you haven't already, follow the [Quick Start](/getting-started/quickstart/) to install runok and create a `runok.yml`.
