@@ -4,7 +4,7 @@ mod validate;
 use clap::{Parser, Subcommand, ValueEnum};
 
 pub use route::{CheckRoute, route_check};
-pub use validate::validate_no_unknown_flags;
+pub use validate::{find_subcommand, validate_no_unknown_flags};
 
 #[derive(Parser)]
 #[command(name = "runok", version = env!("RUNOK_VERSION"))]

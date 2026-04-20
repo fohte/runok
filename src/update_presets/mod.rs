@@ -555,8 +555,8 @@ fn update_config_file(
 /// Finds all config files, collects remote preset references, and force-fetches each one.
 /// For semver-tagged presets, checks for newer compatible versions and updates config files.
 /// Displays a diff for presets that changed.
-pub fn run(cwd: &Path) -> Result<(), anyhow::Error> {
-    let tracked_refs = collect_all_tracked_references(cwd)?;
+pub fn run(source: &crate::config::ConfigSource) -> Result<(), anyhow::Error> {
+    let tracked_refs = collect_all_tracked_references(source)?;
 
     if tracked_refs.is_empty() {
         eprintln!("No remote presets found in configuration.");
@@ -663,33 +663,42 @@ fn run_with<G: GitClient>(
 }
 
 /// Collect all remote preset references from all config layers, tracking source files.
-fn collect_all_tracked_references(cwd: &Path) -> Result<Vec<TrackedReference>, anyhow::Error> {
+fn collect_all_tracked_references(
+    source: &crate::config::ConfigSource,
+) -> Result<Vec<TrackedReference>, anyhow::Error> {
     let mut tracked = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    let config_filenames = &["runok.yml", "runok.yaml"];
-    let local_override_filenames = &["runok.local.yml", "runok.local.yaml"];
+    match source {
+        crate::config::ConfigSource::Explicit { path } => {
+            collect_tracked_from_file(path, &mut tracked, &mut seen);
+        }
+        crate::config::ConfigSource::Default { cwd } => {
+            let config_filenames = &["runok.yml", "runok.yaml"];
+            let local_override_filenames = &["runok.local.yml", "runok.local.yaml"];
 
-    // Global config directory
-    if let Some(global_dir) = crate::config::dirs::config_dir().map(|d| d.join("runok")) {
-        collect_tracked_from_dir(&global_dir, config_filenames, &mut tracked, &mut seen);
-        collect_tracked_from_dir(
-            &global_dir,
-            local_override_filenames,
-            &mut tracked,
-            &mut seen,
-        );
-    }
+            // Global config directory
+            if let Some(global_dir) = crate::config::dirs::config_dir().map(|d| d.join("runok")) {
+                collect_tracked_from_dir(&global_dir, config_filenames, &mut tracked, &mut seen);
+                collect_tracked_from_dir(
+                    &global_dir,
+                    local_override_filenames,
+                    &mut tracked,
+                    &mut seen,
+                );
+            }
 
-    // Project config directory (walk up from cwd)
-    if let Some(project_dir) = find_project_dir(cwd) {
-        collect_tracked_from_dir(&project_dir, config_filenames, &mut tracked, &mut seen);
-        collect_tracked_from_dir(
-            &project_dir,
-            local_override_filenames,
-            &mut tracked,
-            &mut seen,
-        );
+            // Project config directory (walk up from cwd)
+            if let Some(project_dir) = find_project_dir(cwd) {
+                collect_tracked_from_dir(&project_dir, config_filenames, &mut tracked, &mut seen);
+                collect_tracked_from_dir(
+                    &project_dir,
+                    local_override_filenames,
+                    &mut tracked,
+                    &mut seen,
+                );
+            }
+        }
     }
 
     Ok(tracked)
@@ -731,8 +740,15 @@ fn collect_tracked_from_dir(
         .find(|path| path.exists());
 
     let Some(path) = path else { return };
+    collect_tracked_from_file(&path, tracked, seen);
+}
 
-    let yaml = match std::fs::read_to_string(&path) {
+fn collect_tracked_from_file(
+    path: &Path,
+    tracked: &mut Vec<TrackedReference>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let yaml = match std::fs::read_to_string(path) {
         Ok(y) => y,
         Err(_) => return,
     };
@@ -750,7 +766,7 @@ fn collect_tracked_from_dir(
         if seen.insert(key) {
             tracked.push(TrackedReference {
                 reference: r,
-                source_file: path.clone(),
+                source_file: path.to_path_buf(),
             });
         }
     }

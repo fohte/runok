@@ -5,6 +5,49 @@ struct FlagDef {
     takes_value: bool,
 }
 
+/// Global flags defined on the `Cli` struct. These can appear before or after
+/// the subcommand name, so subcommand detection must skip over them.
+const GLOBAL_FLAGS: &[FlagDef] = &[FlagDef {
+    name: "--config",
+    short: Some("-c"),
+    takes_value: true,
+}];
+
+/// Find the subcommand name in the raw CLI arguments, skipping over any
+/// leading global flags. Returns `None` if no subcommand is present.
+///
+/// Examples:
+/// - `["runok", "exec", "--", "ls"]` -> `Some("exec")`
+/// - `["runok", "-c", "config.yml", "exec", "--", "ls"]` -> `Some("exec")`
+/// - `["runok", "--config=config.yml", "check"]` -> `Some("check")`
+pub fn find_subcommand(raw_args: &[String]) -> Option<&str> {
+    let mut tokens = raw_args.iter().skip(1);
+    while let Some(token) = tokens.next() {
+        if !token.starts_with('-') {
+            return Some(token.as_str());
+        }
+
+        let matched = GLOBAL_FLAGS.iter().find(|f| {
+            token == f.name
+                || token.starts_with(&format!("{}=", f.name))
+                || f.short.is_some_and(|s| token == s)
+        });
+
+        match matched {
+            Some(flag) if flag.takes_value && !token.contains('=') => {
+                tokens.next();
+            }
+            Some(_) => {}
+            None => {
+                // Unknown token starting with `-` before any subcommand —
+                // let clap report the error later.
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// Known flags for each subcommand.
 const EXEC_FLAGS: &[FlagDef] = &[
     FlagDef {
@@ -176,6 +219,26 @@ mod tests {
     #[case::exec_unknown_flag("runok exec --unknown -- ls", "exec", "--unknown")]
     #[case::check_unknown_short_flag("runok check -x -- ls", "check", "-x")]
     #[case::exec_unknown_no_double_dash("runok exec --unknown ls", "exec", "--unknown")]
+    #[case::exec_unknown_with_leading_global_config(
+        "runok -c config.yml exec --typo -- ls",
+        "exec",
+        "--typo"
+    )]
+    #[case::check_unknown_with_leading_global_config_short(
+        "runok -c config.yml check --typo -- ls",
+        "check",
+        "--typo"
+    )]
+    #[case::check_unknown_with_leading_global_config_long(
+        "runok --config config.yml check --typo -- ls",
+        "check",
+        "--typo"
+    )]
+    #[case::check_unknown_with_leading_global_config_eq(
+        "runok --config=config.yml check --typo -- ls",
+        "check",
+        "--typo"
+    )]
     fn invalid_args(#[case] input: &str, #[case] subcommand: &str, #[case] expected_flag: &str) {
         let raw = args(input);
         let result = validate_no_unknown_flags(&raw, subcommand);
@@ -188,5 +251,20 @@ mod tests {
                  runok {subcommand} [OPTIONS] -- <COMMAND>"
             )
         );
+    }
+
+    // === find_subcommand tests ===
+
+    #[rstest]
+    #[case::simple_exec("runok exec -- ls", Some("exec"))]
+    #[case::simple_check("runok check", Some("check"))]
+    #[case::global_config_short_before("runok -c config.yml exec -- ls", Some("exec"))]
+    #[case::global_config_long_before("runok --config config.yml check -- ls", Some("check"))]
+    #[case::global_config_eq_before("runok --config=config.yml exec", Some("exec"))]
+    #[case::no_subcommand("runok", None)]
+    #[case::only_global_flag("runok -c config.yml", None)]
+    fn find_subcommand_cases(#[case] input: &str, #[case] expected: Option<&str>) {
+        let raw = args(input);
+        assert_eq!(find_subcommand(&raw), expected);
     }
 }

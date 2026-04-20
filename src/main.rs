@@ -5,11 +5,13 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{AuditArgs, CheckRoute, Cli, Commands, route_check, validate_no_unknown_flags};
+use cli::{
+    AuditArgs, CheckRoute, Cli, Commands, find_subcommand, route_check, validate_no_unknown_flags,
+};
 use runok::adapter::{self, RunOptions};
 use runok::audit::filter::{AuditFilter, TimeSpec};
 use runok::audit::reader::AuditReader;
-use runok::config::{ActionKind, Config, ConfigError, ConfigLoader, DefaultConfigLoader};
+use runok::config::{ActionKind, ConfigLoader, ConfigSource, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
 use runok::exec::command_executor::LinuxSandboxExecutor;
 #[cfg(target_os = "macos")]
@@ -45,48 +47,13 @@ fn create_executor() -> Box<dyn CommandExecutor> {
     Box::new(ProcessCommandExecutor::new_without_sandbox())
 }
 
-/// Load a single config file without the global/project config discovery.
-fn load_single_config(path: &std::path::Path) -> Result<Config, ConfigError> {
-    use runok::config::{
-        PresetCache, check_required_runok_version, current_runok_version,
-        parse_config_with_warnings, resolve_config_paths, resolve_extends,
-    };
-
-    let yaml = std::fs::read_to_string(path)?;
-    let runok::config::ParsedConfig {
-        mut config,
-        warnings,
-    } = parse_config_with_warnings(&yaml)?;
-    for warning in &warnings {
-        eprintln!("runok warning: {warning}\n  --> {}", path.display());
-    }
-    check_required_runok_version(
-        config.required_runok_version.as_deref(),
-        &current_runok_version(),
-        &path.display().to_string(),
-    )?;
-
-    let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
-    resolve_config_paths(&mut config, base_dir)?;
-
-    if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
-        let source_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("runok.yml");
-        let cache = PresetCache::from_env()?;
-        config = resolve_extends(config, base_dir, source_name, &cache)?;
-    }
-
-    config.validate()?;
-    Ok(config)
-}
-
 fn main() -> ExitCode {
     let raw_args: Vec<String> = std::env::args().collect();
 
-    // Validate unknown flags before clap parsing absorbs them into `command` Vec
-    let subcommand_name = raw_args.get(1).map(|s| s.as_str()).unwrap_or("");
+    // Validate unknown flags before clap parsing absorbs them into `command` Vec.
+    // Use `find_subcommand` so that global flags (e.g. `-c config.yml`) placed
+    // before the subcommand name do not cause the validation to be skipped.
+    let subcommand_name = find_subcommand(&raw_args).unwrap_or("");
     if matches!(subcommand_name, "exec" | "check")
         && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name)
     {
@@ -130,7 +97,7 @@ fn main() -> ExitCode {
 
     // UpdatePresets reads config files directly (not via DefaultConfigLoader)
     if matches!(cli.command, Commands::UpdatePresets) {
-        return run_update_presets();
+        return run_update_presets(cli.config.as_deref());
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -172,9 +139,10 @@ fn run_test(config: Option<&std::path::Path>) -> ExitCode {
     }
 }
 
-fn run_update_presets() -> ExitCode {
+fn run_update_presets(config: Option<&std::path::Path>) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match runok::update_presets::run(&cwd) {
+    let source = ConfigSource::from_flag(config, &cwd);
+    match runok::update_presets::run(&source) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("runok: {e}");
@@ -215,7 +183,7 @@ fn run_command(
     stdin: impl std::io::Read,
 ) -> i32 {
     if let Commands::Audit(args) = command {
-        return run_audit(args, cwd);
+        return run_audit(args, config_path, cwd);
     }
 
     // Exit code for config errors depends on the subcommand:
@@ -234,23 +202,13 @@ fn run_command(
         Commands::SandboxExec(_) => unreachable!("handled in main()"),
     };
 
-    let config = match config_path {
-        Some(path) => match load_single_config(path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("runok: config error: {e}");
-                return config_error_exit_code;
-            }
-        },
-        None => {
-            let loader = DefaultConfigLoader::new();
-            match loader.load(cwd) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("runok: config error: {e}");
-                    return config_error_exit_code;
-                }
-            }
+    let loader = DefaultConfigLoader::new();
+    let source = ConfigSource::from_flag(config_path, cwd);
+    let config = match loader.load(&source) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("runok: config error: {e}");
+            return config_error_exit_code;
         }
     };
 
@@ -342,9 +300,10 @@ fn run_sandbox_exec(args: &cli::SandboxExecArgs) -> ExitCode {
     }
 }
 
-fn run_audit(args: AuditArgs, cwd: &std::path::Path) -> i32 {
+fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::path::Path) -> i32 {
     let loader = DefaultConfigLoader::new();
-    let config = match loader.load(cwd) {
+    let source = ConfigSource::from_flag(config_path, cwd);
+    let config = match loader.load(&source) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("runok: config error: {e}");
@@ -434,58 +393,52 @@ mod tests {
     use super::*;
     use cli::CheckArgs;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
 
-    #[rstest]
-    fn run_command_check_with_command_returns_zero() {
-        let cmd = Commands::Check(CheckArgs {
+    /// Temp dir holding an empty runok.yml, used as the explicit --config
+    /// target so that run_command loads only this file and skips both
+    /// global (~/.config/runok/) and project config discovery. Keeps the
+    /// tests independent of any config on the developer's machine.
+    #[fixture]
+    fn empty_config_file() -> (TempDir, PathBuf) {
+        let tmp = TempDir::new().expect("create temp dir");
+        let path = tmp.path().join("runok.yml");
+        std::fs::write(&path, "").expect("write empty config");
+        (tmp, path)
+    }
+
+    fn check_args_with_command(command: Vec<String>) -> Commands {
+        Commands::Check(CheckArgs {
             input_format: None,
             output_format: cli::OutputFormat::Text,
             verbose: false,
-            command: vec!["echo".into(), "hello".into()],
-        });
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let exit_code = run_command(cmd, None, &cwd, std::io::empty());
-        assert_eq!(exit_code, 0);
+            command,
+        })
     }
 
     #[rstest]
-    fn run_command_check_with_empty_stdin_returns_two() {
-        let cmd = Commands::Check(CheckArgs {
-            input_format: None,
-            output_format: cli::OutputFormat::Text,
-            verbose: false,
-            command: vec![],
-        });
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let exit_code = run_command(cmd, None, &cwd, "".as_bytes());
-        assert_eq!(exit_code, 2);
-    }
-
-    #[rstest]
-    fn run_command_check_with_stdin_json_returns_zero() {
-        let cmd = Commands::Check(CheckArgs {
-            input_format: None,
-            output_format: cli::OutputFormat::Text,
-            verbose: false,
-            command: vec![],
-        });
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let exit_code = run_command(cmd, None, &cwd, r#"{"command": "ls"}"#.as_bytes());
-        assert_eq!(exit_code, 0);
-    }
-
-    #[rstest]
-    fn run_command_check_with_plaintext_stdin_returns_zero() {
-        let cmd = Commands::Check(CheckArgs {
-            input_format: None,
-            output_format: cli::OutputFormat::Text,
-            verbose: false,
-            command: vec![],
-        });
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let exit_code = run_command(cmd, None, &cwd, "echo hello\n".as_bytes());
-        assert_eq!(exit_code, 0);
+    #[case::with_command_arg(check_args_with_command(vec!["echo".into(), "hello".into()]), "".as_bytes(), 0)]
+    #[case::stdin_empty(check_args_with_command(vec![]), "".as_bytes(), 2)]
+    #[case::stdin_json(check_args_with_command(vec![]), r#"{"command": "ls"}"#.as_bytes(), 0)]
+    #[case::stdin_plaintext(check_args_with_command(vec![]), "echo hello\n".as_bytes(), 0)]
+    #[case::stdin_multiline(
+        check_args_with_command(vec![]),
+        indoc! {"
+            echo hello
+            ls -la
+        "}.as_bytes(),
+        0
+    )]
+    fn run_command_check(
+        empty_config_file: (TempDir, PathBuf),
+        #[case] cmd: Commands,
+        #[case] stdin: &[u8],
+        #[case] expected_exit: i32,
+    ) {
+        let (tmp, config_path) = empty_config_file;
+        let exit_code = run_command(cmd, Some(&config_path), tmp.path(), stdin);
+        assert_eq!(exit_code, expected_exit);
     }
 
     #[rstest]
@@ -493,23 +446,6 @@ mod tests {
         let executor = create_executor();
         // Verify executor works by validating a known command
         assert!(executor.validate(&["sh".to_string()]).is_ok());
-    }
-
-    #[rstest]
-    fn run_command_check_with_multiline_plaintext_stdin_returns_zero() {
-        let cmd = Commands::Check(CheckArgs {
-            input_format: None,
-            output_format: cli::OutputFormat::Text,
-            verbose: false,
-            command: vec![],
-        });
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let input = indoc! {"
-            echo hello
-            ls -la
-        "};
-        let exit_code = run_command(cmd, None, &cwd, input.as_bytes());
-        assert_eq!(exit_code, 0);
     }
 
     // === Linux sandbox exec ===
