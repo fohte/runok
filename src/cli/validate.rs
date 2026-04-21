@@ -5,6 +5,56 @@ struct FlagDef {
     takes_value: bool,
 }
 
+/// Result of matching a single CLI token against a set of known flags.
+enum FlagMatch {
+    /// Token consumes its value from the same token (e.g. `--config=foo`
+    /// or fused short `-cfoo`). Do not skip the next token.
+    AttachedValue,
+    /// Token is the flag name alone and takes a separate value argument
+    /// (e.g. `--config foo` or `-c foo`). The caller should skip one token.
+    SeparateValue,
+    /// Token is a boolean flag with no value (e.g. `--verbose`).
+    Boolean,
+    /// The token is not a known flag from this set.
+    Unknown,
+}
+
+/// Match a `-`/`--`-prefixed token against `flags`, supporting:
+/// - exact long form: `--config`
+/// - equals long form: `--config=value`
+/// - exact short form: `-c`
+/// - fused short form: `-cvalue`
+fn match_flag(token: &str, flags: &[FlagDef]) -> FlagMatch {
+    for f in flags {
+        if token == f.name {
+            return if f.takes_value {
+                FlagMatch::SeparateValue
+            } else {
+                FlagMatch::Boolean
+            };
+        }
+        if f.takes_value && token.starts_with(&format!("{}=", f.name)) {
+            return FlagMatch::AttachedValue;
+        }
+        if let Some(short) = f.short {
+            if token == short {
+                return if f.takes_value {
+                    FlagMatch::SeparateValue
+                } else {
+                    FlagMatch::Boolean
+                };
+            }
+            // Fused short form `-cVALUE` is only meaningful for value-taking
+            // flags: require `len > short.len()` so we don't mis-match `-c`
+            // itself.
+            if f.takes_value && token.starts_with(short) && token.len() > short.len() {
+                return FlagMatch::AttachedValue;
+            }
+        }
+    }
+    FlagMatch::Unknown
+}
+
 /// Global flags defined on the `Cli` struct. These can appear before or after
 /// the subcommand name, so subcommand detection must skip over them.
 const GLOBAL_FLAGS: &[FlagDef] = &[FlagDef {
@@ -33,21 +83,10 @@ pub fn find_subcommand(raw_args: &[String]) -> Option<(&str, usize)> {
             return Some((token.as_str(), i));
         }
 
-        let matched = GLOBAL_FLAGS.iter().find(|f| {
-            token == f.name
-                || token.starts_with(&format!("{}=", f.name))
-                || f.short.is_some_and(|s| token == s)
-        });
-
-        match matched {
-            Some(flag) if flag.takes_value && !token.contains('=') => {
-                // Skip both the flag and its value.
-                i += 2;
-            }
-            Some(_) => {
-                i += 1;
-            }
-            None => {
+        match match_flag(token, GLOBAL_FLAGS) {
+            FlagMatch::SeparateValue => i += 2,
+            FlagMatch::AttachedValue | FlagMatch::Boolean => i += 1,
+            FlagMatch::Unknown => {
                 // Unknown token starting with `-` before any subcommand —
                 // let clap report the error later.
                 return None;
@@ -147,21 +186,12 @@ pub fn validate_no_unknown_flags(
             continue;
         }
 
-        // Check if it's a known flag (exact match, short form, or `--flag=value` form)
-        let matched_flag = flags.iter().find(|f| {
-            token == f.name
-                || token.starts_with(&format!("{}=", f.name))
-                || f.short.is_some_and(|s| token == s)
-        });
-
-        match matched_flag {
-            Some(flag) => {
-                // If this known flag takes a value and isn't `--flag=value` form, skip the next token
-                if flag.takes_value && !token.contains('=') {
-                    tokens.next(); // skip value
-                }
+        match match_flag(token, flags) {
+            FlagMatch::SeparateValue => {
+                tokens.next(); // skip the separate value argument
             }
-            None => {
+            FlagMatch::AttachedValue | FlagMatch::Boolean => {}
+            FlagMatch::Unknown => {
                 return Err(format!(
                     "unknown flag '{token}' for 'runok {subcommand}'. \
                      Use '--' to separate runok flags from the command: \
@@ -207,8 +237,10 @@ mod tests {
     #[case::exec_config_long("runok exec --config path/to/config.yml -- ls")]
     #[case::exec_config_short("runok exec -c path/to/config.yml -- ls")]
     #[case::exec_config_eq("runok exec --config=path/to/config.yml -- ls")]
+    #[case::exec_config_fused_short("runok exec -cpath/to/config.yml -- ls")]
     #[case::check_config_long("runok check --config path/to/config.yml -- ls")]
     #[case::check_config_short("runok check -c path/to/config.yml -- ls")]
+    #[case::check_config_fused_short("runok check -cpath/to/config.yml -- ls")]
     #[case::exec_version("runok exec --version")]
     #[case::exec_version_short("runok exec -V")]
     fn valid_args(#[case] input: &str) {
@@ -262,6 +294,19 @@ mod tests {
         "exec",
         "--typo"
     )]
+    // Fused short-form `-cVALUE` with no space is valid clap syntax; the
+    // pre-parse validator must skip over it as a single token instead of
+    // treating it as an unknown flag, and must still detect `--typo`.
+    #[case::check_unknown_with_fused_short_config(
+        "runok -cconfig.yml check --typo -- ls",
+        "check",
+        "--typo"
+    )]
+    #[case::exec_unknown_with_fused_short_config(
+        "runok -cconfig.yml exec --typo -- ls",
+        "exec",
+        "--typo"
+    )]
     fn invalid_args(#[case] input: &str, #[case] subcommand: &str, #[case] expected_flag: &str) {
         let raw = args(input);
         let (detected_sub, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
@@ -294,6 +339,7 @@ mod tests {
         Some(("check", 3))
     )]
     #[case::global_config_eq_before("runok --config=config.yml exec", Some(("exec", 2)))]
+    #[case::global_config_fused_short_before("runok -cconfig.yml exec", Some(("exec", 2)))]
     // Regression: the value of `-c` happens to match a subcommand name.
     // The returned position must point at the real subcommand token (index 3),
     // not at the flag value (index 2).
