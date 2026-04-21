@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### Global `--config` / `-c` flag
+### Global `--config` / `-c` flag ([#315](https://github.com/fohte/runok/pull/315))
 
 All subcommands now accept a `-c` / `--config` flag to load a specific config file instead of the default config discovery (global + project). The flag can appear before or after the subcommand name.
 
