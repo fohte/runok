@@ -13,18 +13,24 @@ const GLOBAL_FLAGS: &[FlagDef] = &[FlagDef {
     takes_value: true,
 }];
 
-/// Find the subcommand name in the raw CLI arguments, skipping over any
-/// leading global flags. Returns `None` if no subcommand is present.
+/// Find the subcommand token (name and position) in the raw CLI arguments,
+/// skipping over any leading global flags. Returns `None` if no subcommand
+/// is present.
+///
+/// The position is the index into `raw_args` of the subcommand token itself,
+/// which lets callers distinguish it from a global flag value that happens
+/// to be spelled the same (e.g. `runok -c check check ...`).
 ///
 /// Examples:
-/// - `["runok", "exec", "--", "ls"]` -> `Some("exec")`
-/// - `["runok", "-c", "config.yml", "exec", "--", "ls"]` -> `Some("exec")`
-/// - `["runok", "--config=config.yml", "check"]` -> `Some("check")`
-pub fn find_subcommand(raw_args: &[String]) -> Option<&str> {
-    let mut tokens = raw_args.iter().skip(1);
-    while let Some(token) = tokens.next() {
+/// - `["runok", "exec", "--", "ls"]` -> `Some(("exec", 1))`
+/// - `["runok", "-c", "config.yml", "exec", "--", "ls"]` -> `Some(("exec", 3))`
+/// - `["runok", "--config=config.yml", "check"]` -> `Some(("check", 2))`
+pub fn find_subcommand(raw_args: &[String]) -> Option<(&str, usize)> {
+    let mut i = 1;
+    while i < raw_args.len() {
+        let token = &raw_args[i];
         if !token.starts_with('-') {
-            return Some(token.as_str());
+            return Some((token.as_str(), i));
         }
 
         let matched = GLOBAL_FLAGS.iter().find(|f| {
@@ -35,9 +41,12 @@ pub fn find_subcommand(raw_args: &[String]) -> Option<&str> {
 
         match matched {
             Some(flag) if flag.takes_value && !token.contains('=') => {
-                tokens.next();
+                // Skip both the flag and its value.
+                i += 2;
             }
-            Some(_) => {}
+            Some(_) => {
+                i += 1;
+            }
             None => {
                 // Unknown token starting with `-` before any subcommand —
                 // let clap report the error later.
@@ -96,21 +105,23 @@ const CHECK_FLAGS: &[FlagDef] = &[
 /// Because `trailing_var_arg = true` + `allow_hyphen_values = true` causes clap
 /// to silently absorb unknown flags into the `command` Vec, we must perform this
 /// check ourselves using the raw process arguments.
-pub fn validate_no_unknown_flags(raw_args: &[String], subcommand: &str) -> Result<(), String> {
+pub fn validate_no_unknown_flags(
+    raw_args: &[String],
+    subcommand: &str,
+    subcommand_pos: usize,
+) -> Result<(), String> {
     let flags = match subcommand {
         "exec" => EXEC_FLAGS,
         "check" => CHECK_FLAGS,
         _ => return Ok(()),
     };
 
-    // Find the subcommand position in raw args
-    let sub_pos = match raw_args.iter().position(|a| a == subcommand) {
-        Some(pos) => pos,
-        None => return Ok(()),
-    };
-
-    // Get args after the subcommand
-    let after_sub = &raw_args[sub_pos + 1..];
+    // Get args after the subcommand. `subcommand_pos` is supplied by the
+    // caller (via `find_subcommand`) rather than recomputed here, because a
+    // naive `position(|a| a == subcommand)` would pick up preceding
+    // global-flag values that happen to match the subcommand name
+    // (e.g. `runok -c check check --typo`).
+    let after_sub = &raw_args[subcommand_pos + 1..];
 
     // Find `--` position (relative to after_sub)
     let double_dash_pos = after_sub.iter().position(|a| a == "--");
@@ -202,13 +213,11 @@ mod tests {
     #[case::exec_version_short("runok exec -V")]
     fn valid_args(#[case] input: &str) {
         let raw = args(input);
-        let subcommand = if input.contains("exec") {
-            "exec"
-        } else {
-            "check"
-        };
+        let (subcommand, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
+            panic!("expected to find a subcommand in: {input}");
+        });
         assert!(
-            validate_no_unknown_flags(&raw, subcommand).is_ok(),
+            validate_no_unknown_flags(&raw, subcommand, sub_pos).is_ok(),
             "expected Ok for: {input}"
         );
     }
@@ -239,9 +248,30 @@ mod tests {
         "check",
         "--typo"
     )]
+    // Regression: if the value of `-c` happens to equal the subcommand name
+    // (e.g. a config file literally called "check"), naive string-position
+    // lookup picks the flag value instead of the real subcommand token, and
+    // the unknown-flag validation is silently skipped.
+    #[case::check_config_value_equals_subcommand_name(
+        "runok -c check check --typo -- ls",
+        "check",
+        "--typo"
+    )]
+    #[case::exec_config_value_equals_subcommand_name(
+        "runok -c exec exec --typo -- ls",
+        "exec",
+        "--typo"
+    )]
     fn invalid_args(#[case] input: &str, #[case] subcommand: &str, #[case] expected_flag: &str) {
         let raw = args(input);
-        let result = validate_no_unknown_flags(&raw, subcommand);
+        let (detected_sub, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
+            panic!("expected to find a subcommand in: {input}");
+        });
+        assert_eq!(
+            detected_sub, subcommand,
+            "subcommand detection mismatch for: {input}"
+        );
+        let result = validate_no_unknown_flags(&raw, subcommand, sub_pos);
         let err = result.expect_err(&format!("expected Err for: {input}"));
         assert_eq!(
             err,
@@ -256,14 +286,21 @@ mod tests {
     // === find_subcommand tests ===
 
     #[rstest]
-    #[case::simple_exec("runok exec -- ls", Some("exec"))]
-    #[case::simple_check("runok check", Some("check"))]
-    #[case::global_config_short_before("runok -c config.yml exec -- ls", Some("exec"))]
-    #[case::global_config_long_before("runok --config config.yml check -- ls", Some("check"))]
-    #[case::global_config_eq_before("runok --config=config.yml exec", Some("exec"))]
+    #[case::simple_exec("runok exec -- ls", Some(("exec", 1)))]
+    #[case::simple_check("runok check", Some(("check", 1)))]
+    #[case::global_config_short_before("runok -c config.yml exec -- ls", Some(("exec", 3)))]
+    #[case::global_config_long_before(
+        "runok --config config.yml check -- ls",
+        Some(("check", 3))
+    )]
+    #[case::global_config_eq_before("runok --config=config.yml exec", Some(("exec", 2)))]
+    // Regression: the value of `-c` happens to match a subcommand name.
+    // The returned position must point at the real subcommand token (index 3),
+    // not at the flag value (index 2).
+    #[case::config_value_equals_subcommand("runok -c check check", Some(("check", 3)))]
     #[case::no_subcommand("runok", None)]
     #[case::only_global_flag("runok -c config.yml", None)]
-    fn find_subcommand_cases(#[case] input: &str, #[case] expected: Option<&str>) {
+    fn find_subcommand_cases(#[case] input: &str, #[case] expected: Option<(&str, usize)>) {
         let raw = args(input);
         assert_eq!(find_subcommand(&raw), expected);
     }

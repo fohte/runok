@@ -52,10 +52,12 @@ fn main() -> ExitCode {
 
     // Validate unknown flags before clap parsing absorbs them into `command` Vec.
     // Use `find_subcommand` so that global flags (e.g. `-c config.yml`) placed
-    // before the subcommand name do not cause the validation to be skipped.
-    let subcommand_name = find_subcommand(&raw_args).unwrap_or("");
-    if matches!(subcommand_name, "exec" | "check")
-        && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name)
+    // before the subcommand name do not cause the validation to be skipped,
+    // and so the subcommand position survives a `-c` value that happens to
+    // match the subcommand name (e.g. `runok -c check check ...`).
+    if let Some((subcommand_name, subcommand_pos)) = find_subcommand(&raw_args)
+        && matches!(subcommand_name, "exec" | "check")
+        && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name, subcommand_pos)
     {
         // check uses exit code 2 for errors; exec uses 1
         let code: u8 = if subcommand_name == "check" { 2 } else { 1 };
