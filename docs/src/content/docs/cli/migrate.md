@@ -15,9 +15,9 @@ runok migrate [options]
 
 ## Flags
 
-### `--config`, `-c` `<path>`
+### `-c, --config <path>`
 
-Path to a specific config file to migrate. When omitted, runok discovers config files using the same logic as other commands: global config from `$XDG_CONFIG_HOME/runok/` and project config from the nearest ancestor directory containing `runok.yml`.
+See [Global Flags](/cli/overview/#global-flags). When omitted, runok discovers config files using the same logic as other commands: global config from `$XDG_CONFIG_HOME/runok/` and project config from the nearest ancestor directory containing `runok.yml`.
 
 ## What gets migrated
 
