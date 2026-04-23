@@ -57,11 +57,10 @@ pre-commit:
     ast-grep:
       glob: '*.rs'
       run: ast-grep scan {staged_files}
-<<<<<<< before updating
+
     generate-json-schema:
       glob: '*.rs'
       run: cargo run --features config-schema -- config-schema > schema/runok.schema.json && git add schema/runok.schema.json
-=======
 
     # Using glob instead of file_types because text/x-rust is not supported
     # by the mimetype library used by lefthook.
@@ -79,4 +78,3 @@ commit-msg:
   commands:
     commitlint:
       run: mise x -- commitlint --edit {1}
->>>>>>> after updating
