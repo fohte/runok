@@ -22,7 +22,7 @@ jobs:
           # Valid:   feat: ..., feat!: ..., feat(scope): ..., feat(scope)!: ...
           # Invalid: feat!(scope): ... (! must come after scope, before :)
           allowed_types="feat|fix|perf|deps|revert|chore|docs|style|refactor|test|build|ci"
-          pattern="^(${allowed_types})(\([a-zA-Z0-9_./* -]+\))?(!)?: .+"
+          pattern="^(${allowed_types})(\([^()]+\))?(!)?: .+"
 
           if [[ "${PR_TITLE}" =~ ${pattern} ]]; then
             echo "PR title is valid: ${PR_TITLE}"
