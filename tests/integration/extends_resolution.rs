@@ -271,7 +271,7 @@ fn extends_resolved_relative_to_config_dir_not_cwd(
     env: ExtendsTestEnv,
     empty_context: runok::rules::rule_engine::EvalContext,
 ) {
-    use runok::config::{ConfigLoader, DefaultConfigLoader};
+    use runok::config::{ConfigLoader, ConfigSource, DefaultConfigLoader};
 
     fs::write(
         env.project_dir.join("child.yml"),
@@ -297,7 +297,11 @@ fn extends_resolved_relative_to_config_dir_not_cwd(
     fs::create_dir_all(&subdir).unwrap();
 
     let loader = DefaultConfigLoader::with_global_dir(env.project_dir.join("nonexistent_global"));
-    let config = loader.load(&subdir).unwrap();
+    let config = loader
+        .load(&ConfigSource::Default {
+            cwd: subdir.clone(),
+        })
+        .unwrap();
 
     let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
     assert_allow(&result.action);

@@ -15,6 +15,10 @@ runok audit [options]
 
 ## Flags
 
+### `-c, --config <path>`
+
+See [Global Flags](/cli/overview/#global-flags). The audit log directory is read from the loaded config's `audit.path`.
+
 ### `--action <allow|deny|ask>`
 
 Filter entries by the evaluation result.

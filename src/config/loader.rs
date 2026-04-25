@@ -5,9 +5,39 @@ use super::preset::resolve_extends;
 use super::required_version::{check_required_runok_version, current_runok_version};
 use super::{Config, ConfigError, ParsedConfig, parse_config_with_warnings};
 
+/// Describes where the configuration should be loaded from.
+///
+/// `Default` performs the standard global-plus-project discovery rooted at
+/// `cwd`. `Explicit` loads only the given file (used by the global `-c` /
+/// `--config` flag), skipping all discovery.
+#[derive(Debug, Clone)]
+pub enum ConfigSource {
+    Default { cwd: PathBuf },
+    Explicit { path: PathBuf },
+}
+
+impl ConfigSource {
+    /// Build a `ConfigSource` from an optional explicit path and a `cwd`
+    /// fallback. `Some(path)` becomes `Explicit`; `None` falls back to
+    /// default discovery rooted at `cwd`.
+    pub fn from_flag(config_flag: Option<&Path>, cwd: &Path) -> Self {
+        match config_flag {
+            Some(path) => ConfigSource::Explicit {
+                path: path.to_path_buf(),
+            },
+            None => ConfigSource::Default {
+                cwd: cwd.to_path_buf(),
+            },
+        }
+    }
+}
+
 /// Trait for loading and merging configuration files.
 pub trait ConfigLoader {
-    fn load(&self, cwd: &Path) -> Result<Config, ConfigError>;
+    /// Load the configuration for the given source. Implementations must
+    /// honour both `Default` discovery and `Explicit` single-file loading
+    /// so that callers never have to branch on the variant themselves.
+    fn load(&self, source: &ConfigSource) -> Result<Config, ConfigError>;
 }
 
 /// Default implementation that reads from the filesystem.
@@ -118,39 +148,53 @@ impl DefaultConfigLoader {
         filenames: &[&str],
     ) -> Result<Option<Config>, ConfigError> {
         Self::find_config(dir, filenames)
-            .map(|p| {
-                let mut config = Self::read_and_parse(&p)?;
-                let base_dir = p.parent().unwrap_or(dir);
-                super::path_resolver::resolve_config_paths(&mut config, base_dir)?;
-                if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
-                    let source_name = p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("runok.yml");
-                    let cache = PresetCache::from_env()?;
-                    config = resolve_extends(config, base_dir, source_name, &cache)?;
-                }
-                Ok(config)
-            })
+            .map(|p| parse_and_resolve(&p))
             .transpose()
     }
+}
 
-    fn read_and_parse(path: &Path) -> Result<Config, ConfigError> {
-        let yaml = std::fs::read_to_string(path)?;
-        let ParsedConfig { config, warnings } = parse_config_with_warnings(&yaml)?;
-        for warning in &warnings {
-            eprintln!("runok warning: {warning}\n  --> {}", path.display());
-        }
-        // Enforce `required_runok_version` as soon as the file is parsed so
-        // that the error message points at the exact file that carries the
-        // constraint.
-        check_required_runok_version(
-            config.required_runok_version.as_deref(),
-            &current_runok_version(),
-            &path.display().to_string(),
-        )?;
-        Ok(config)
+/// Read, parse, resolve paths, and resolve extends in a config file.
+fn parse_and_resolve(path: &Path) -> Result<Config, ConfigError> {
+    let mut config = read_and_parse(path)?;
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    super::path_resolver::resolve_config_paths(&mut config, base_dir)?;
+    if config.extends.as_ref().is_some_and(|e| !e.is_empty()) {
+        let source_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("runok.yml");
+        let cache = PresetCache::from_env()?;
+        config = resolve_extends(config, base_dir, source_name, &cache)?;
     }
+    Ok(config)
+}
+
+fn read_and_parse(path: &Path) -> Result<Config, ConfigError> {
+    let yaml = std::fs::read_to_string(path)?;
+    let ParsedConfig { config, warnings } = parse_config_with_warnings(&yaml)?;
+    for warning in &warnings {
+        eprintln!("runok warning: {warning}\n  --> {}", path.display());
+    }
+    // Enforce `required_runok_version` as soon as the file is parsed so
+    // that the error message points at the exact file that carries the
+    // constraint.
+    check_required_runok_version(
+        config.required_runok_version.as_deref(),
+        &current_runok_version(),
+        &path.display().to_string(),
+    )?;
+    Ok(config)
+}
+
+/// Load a single config file without the global/project config discovery.
+///
+/// Parses the file, resolves paths and `extends`, and validates the result.
+/// No global or local override files are merged — the returned `Config`
+/// reflects only the given file (with extends resolved recursively).
+fn load_from_path(path: &Path) -> Result<Config, ConfigError> {
+    let mut config = parse_and_resolve(path)?;
+    config.validate()?;
+    Ok(config)
 }
 
 /// Strip audit settings from a config, emitting a warning.
@@ -167,7 +211,17 @@ fn strip_audit(mut config: Config, source: &str) -> Config {
 }
 
 impl ConfigLoader for DefaultConfigLoader {
-    fn load(&self, cwd: &Path) -> Result<Config, ConfigError> {
+    fn load(&self, source: &ConfigSource) -> Result<Config, ConfigError> {
+        match source {
+            ConfigSource::Default { cwd } => self.load_default(cwd),
+            ConfigSource::Explicit { path } => load_from_path(path),
+        }
+    }
+}
+
+impl DefaultConfigLoader {
+    /// Load using the standard global + project discovery.
+    fn load_default(&self, cwd: &Path) -> Result<Config, ConfigError> {
         // Resolve paths in each config file with its own base_dir before merging
         let (global, global_local_override) = match &self.global_dir {
             Some(dir) => (
@@ -246,7 +300,9 @@ mod tests {
         }
 
         fn load(&self) -> Result<Config, ConfigError> {
-            self.loader().load(&self.cwd)
+            self.loader().load(&ConfigSource::Default {
+                cwd: self.cwd.clone(),
+            })
         }
 
         fn loader_without_global(&self) -> DefaultConfigLoader {
@@ -257,7 +313,9 @@ mod tests {
         }
 
         fn load_without_global(&self) -> Result<Config, ConfigError> {
-            self.loader_without_global().load(&self.cwd)
+            self.loader_without_global().load(&ConfigSource::Default {
+                cwd: self.cwd.clone(),
+            })
         }
     }
 
@@ -826,7 +884,12 @@ mod tests {
         let subdir = env.cwd.join("src").join("lib");
         fs::create_dir_all(&subdir).unwrap();
 
-        let config = env.loader_without_global().load(&subdir).unwrap();
+        let config = env
+            .loader_without_global()
+            .load(&ConfigSource::Default {
+                cwd: subdir.clone(),
+            })
+            .unwrap();
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Deny)
@@ -852,7 +915,12 @@ mod tests {
         let subdir = env.cwd.join("src");
         fs::create_dir_all(&subdir).unwrap();
 
-        let config = env.loader_without_global().load(&subdir).unwrap();
+        let config = env
+            .loader_without_global()
+            .load(&ConfigSource::Default {
+                cwd: subdir.clone(),
+            })
+            .unwrap();
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Allow)
@@ -873,7 +941,12 @@ mod tests {
         let subdir = env.home_dir.join("projects").join("myapp");
         fs::create_dir_all(&subdir).unwrap();
 
-        let config = env.loader_without_global().load(&subdir).unwrap();
+        let config = env
+            .loader_without_global()
+            .load(&ConfigSource::Default {
+                cwd: subdir.clone(),
+            })
+            .unwrap();
         assert_eq!(config, Config::default());
     }
 
@@ -899,7 +972,10 @@ mod tests {
         )
         .unwrap();
 
-        let config = env.loader_without_global().load(&inner).unwrap();
+        let config = env
+            .loader_without_global()
+            .load(&ConfigSource::Default { cwd: inner.clone() })
+            .unwrap();
         assert_eq!(
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Allow)
@@ -912,7 +988,12 @@ mod tests {
         let subdir = env.cwd.join("deep").join("path");
         fs::create_dir_all(&subdir).unwrap();
 
-        let config = env.loader_without_global().load(&subdir).unwrap();
+        let config = env
+            .loader_without_global()
+            .load(&ConfigSource::Default {
+                cwd: subdir.clone(),
+            })
+            .unwrap();
         assert_eq!(config, Config::default());
     }
 }

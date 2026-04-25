@@ -7,6 +7,18 @@ sidebar:
 
 runok provides subcommands for initializing configuration, evaluating commands, and executing them against your permission rules.
 
+## Global Flags
+
+### `-c, --config <path>`
+
+Load a specific config file instead of the default config discovery (global + project). When specified, only the given file is loaded — global and project configs are skipped. This flag can appear before or after the subcommand name.
+
+```sh
+# These are equivalent:
+runok -c custom.yml check -- git push
+runok check -c custom.yml -- git push
+```
+
 ## Commands
 
 ### [`runok init`](/cli/init/)

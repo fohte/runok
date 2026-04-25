@@ -10,12 +10,18 @@ sidebar:
 ## Usage
 
 ```sh
-runok update-presets
+runok update-presets [options]
 ```
+
+## Flags
+
+### `-c, --config <path>`
+
+See [Global Flags](/cli/overview/#global-flags). When specified, only the given config file (and its `extends` references) is scanned — all other configuration layers are skipped.
 
 ## Behavior
 
-1. **Collect references** -- Scans all configuration layers (global, global local override, project, project local override) for remote `extends` references (GitHub shorthand and git URLs). Local file references are ignored.
+1. **Collect references** -- Scans all configuration layers (global, global local override, project, project local override) for remote `extends` references (GitHub shorthand and git URLs). Local file references are ignored. When `-c` is given, only the specified file is scanned.
 2. **Skip immutable references** -- Presets pinned to a commit SHA (40-character hex) are permanently cached and skipped.
 3. **Version tag upgrade** -- For references with a version tag, queries the remote repository for all available tags and finds the latest compatible version. The upgrade scope depends on the tag precision (see [Version upgrade rules](#version-upgrade-rules) below). If a newer compatible version exists, fetches it and updates the `extends` entry in your config file.
 4. **Branch/Latest re-fetch** -- For non-version references (e.g., `@main`, no version), forces a re-fetch regardless of cache TTL.

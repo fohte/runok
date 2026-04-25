@@ -15,9 +15,9 @@ runok test [options]
 
 ## Flags
 
-### `--config`, `-c` `<path>`
+### `-c, --config <path>`
 
-Path to the configuration file to test. When omitted, runok looks for `runok.yml` (or `runok.yaml`) in the current directory.
+See [Global Flags](/cli/overview/#global-flags). When omitted, runok looks for `runok.yml` (or `runok.yaml`) in the current directory.
 
 ```sh
 runok test -c ./path/to/runok.yml

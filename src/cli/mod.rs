@@ -4,11 +4,15 @@ mod validate;
 use clap::{Parser, Subcommand, ValueEnum};
 
 pub use route::{CheckRoute, route_check};
-pub use validate::validate_no_unknown_flags;
+pub use validate::{find_subcommand, validate_no_unknown_flags};
 
 #[derive(Parser)]
 #[command(name = "runok", version = env!("RUNOK_VERSION"))]
 pub struct Cli {
+    /// Path to the config file
+    #[arg(short = 'c', long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -85,10 +89,6 @@ pub struct SandboxExecArgs {
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct MigrateArgs {
-    /// Path to a specific config file to migrate
-    #[arg(short = 'c', long)]
-    pub config: Option<std::path::PathBuf>,
-
     /// Apply all changes without prompting
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
@@ -96,11 +96,7 @@ pub struct MigrateArgs {
 
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
-pub struct TestArgs {
-    /// Path to the config file to test
-    #[arg(short = 'c', long)]
-    pub config: Option<std::path::PathBuf>,
-}
+pub struct TestArgs {}
 
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -260,31 +256,15 @@ mod tests {
     )]
     #[case::migrate_default(
         &["runok", "migrate"],
-        Commands::Migrate(MigrateArgs { config: None, yes: false }),
-    )]
-    #[case::migrate_with_config_short(
-        &["runok", "migrate", "-c", "path/to/runok.yml"],
-        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("path/to/runok.yml")), yes: false }),
-    )]
-    #[case::migrate_with_config_long(
-        &["runok", "migrate", "--config", "runok.yml"],
-        Commands::Migrate(MigrateArgs { config: Some(std::path::PathBuf::from("runok.yml")), yes: false }),
+        Commands::Migrate(MigrateArgs { yes: false }),
     )]
     #[case::migrate_with_yes(
         &["runok", "migrate", "-y"],
-        Commands::Migrate(MigrateArgs { config: None, yes: true }),
+        Commands::Migrate(MigrateArgs { yes: true }),
     )]
     #[case::test_default(
         &["runok", "test"],
-        Commands::Test(TestArgs { config: None }),
-    )]
-    #[case::test_with_config_short(
-        &["runok", "test", "-c", "path/to/config.yml"],
-        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("path/to/config.yml")) }),
-    )]
-    #[case::test_with_config_long(
-        &["runok", "test", "--config", "runok.yml"],
-        Commands::Test(TestArgs { config: Some(std::path::PathBuf::from("runok.yml")) }),
+        Commands::Test(TestArgs {}),
     )]
     #[case::update_presets(
         &["runok", "update-presets"],
@@ -293,6 +273,32 @@ mod tests {
     fn cli_parsing(#[case] argv: &[&str], #[case] expected: Commands) {
         let cli = Cli::parse_from(argv);
         assert_eq!(cli.command, expected);
+    }
+
+    #[rstest]
+    #[case::config_before_subcommand(
+        &["runok", "-c", "path/to/config.yml", "test"],
+        Some(std::path::PathBuf::from("path/to/config.yml")),
+    )]
+    #[case::config_long_before_subcommand(
+        &["runok", "--config", "path/to/config.yml", "check", "--", "ls"],
+        Some(std::path::PathBuf::from("path/to/config.yml")),
+    )]
+    #[case::config_after_subcommand(
+        &["runok", "test", "-c", "path/to/config.yml"],
+        Some(std::path::PathBuf::from("path/to/config.yml")),
+    )]
+    #[case::config_after_migrate(
+        &["runok", "migrate", "-c", "path/to/config.yml"],
+        Some(std::path::PathBuf::from("path/to/config.yml")),
+    )]
+    #[case::no_config(
+        &["runok", "test"],
+        None,
+    )]
+    fn cli_global_config_flag(#[case] argv: &[&str], #[case] expected: Option<std::path::PathBuf>) {
+        let cli = Cli::parse_from(argv);
+        assert_eq!(cli.config, expected);
     }
 
     #[rstest]

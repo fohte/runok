@@ -19,6 +19,10 @@ A single argument after `--` is interpreted as a shell command (passed to the sh
 
 ## Flags
 
+### `-c, --config <path>`
+
+See [Global Flags](/cli/overview/#global-flags).
+
 ### `--sandbox <preset>`
 
 Apply a named [sandbox preset](/sandbox/overview/) from your runok configuration. Overrides any sandbox defined in the matching rule.

@@ -4,7 +4,7 @@ use std::fs;
 
 use indoc::indoc;
 use rstest::rstest;
-use runok::config::{ConfigLoader, DefaultConfigLoader};
+use runok::config::{ConfigLoader, ConfigSource, DefaultConfigLoader};
 use tempfile::TempDir;
 
 struct PathResolutionEnv {
@@ -61,7 +61,7 @@ fn paths_resolved_relative_to_config_file(
     };
 
     let loader = DefaultConfigLoader::with_global_dir(env.project_dir.join("nonexistent_global"));
-    let config = loader.load(&cwd)?;
+    let config = loader.load(&ConfigSource::Default { cwd: cwd.clone() })?;
 
     let defs = config.definitions.ok_or("definitions missing")?;
     let paths = defs.paths.ok_or("paths missing")?;
@@ -91,7 +91,7 @@ fn sandbox_paths_resolved_relative_to_config_file(
     };
 
     let loader = DefaultConfigLoader::with_global_dir(env.project_dir.join("nonexistent_global"));
-    let config = loader.load(&cwd)?;
+    let config = loader.load(&ConfigSource::Default { cwd: cwd.clone() })?;
 
     let defs = config.definitions.ok_or("definitions missing")?;
     let sandbox = defs.sandbox.ok_or("sandbox missing")?;
@@ -145,7 +145,9 @@ fn global_and_local_use_different_base_dirs() -> Result<(), Box<dyn std::error::
     )?;
 
     let loader = DefaultConfigLoader::with_global_dir(global_dir.clone());
-    let config = loader.load(&project_dir)?;
+    let config = loader.load(&ConfigSource::Default {
+        cwd: project_dir.clone(),
+    })?;
 
     let defs = config.definitions.ok_or("definitions missing")?;
     let paths = defs.paths.ok_or("paths missing")?;
