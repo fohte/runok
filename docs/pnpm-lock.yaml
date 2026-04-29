@@ -17,8 +17,8 @@ importers:
         specifier: 0.34.5
         version: 0.34.5
       starlight-links-validator:
-        specifier: 0.21.0
-        version: 0.21.0(@astrojs/starlight@0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
+        specifier: 0.23.0
+        version: 0.23.0(@astrojs/starlight@0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
       starlight-llms-txt:
         specifier: 0.8.0
         version: 0.8.0(@astrojs/starlight@0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
@@ -3211,10 +3211,10 @@ packages:
         integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==,
       }
 
-  starlight-links-validator@0.21.0:
+  starlight-links-validator@0.23.0:
     resolution:
       {
-        integrity: sha512-X7pQC/5Dc7peDoZW/F4L+fD5qs9JmVXo3klNHsxRcVs3mSJXp2wFKZ/38hgr7yGLkp126IFKeHLy6jmOvnwvCA==,
+        integrity: sha512-dpKJdNv170+jyw8HDgPKGIW/MnXUxa3v8RqJrER47jx4fbxvLsITIw0/Y76xzTTrDv8LhQ7t/ExFutUDQqm3FQ==,
       }
     engines: { node: '>=22.12.0' }
     peerDependencies:
@@ -6063,7 +6063,7 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  starlight-links-validator@0.21.0(@astrojs/starlight@0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)):
+  starlight-links-validator@0.23.0(@astrojs/starlight@0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)):
     dependencies:
       '@astrojs/starlight': 0.38.3(astro@6.1.7(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
       '@types/picomatch': 4.0.3
