@@ -102,16 +102,43 @@ fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
     assert.code(0).stdout(predicates::str::is_empty());
 }
 
-// --- Invalid JSON: exit 2 ---
+// --- Invalid stdin in hook mode: exit 1 (non-blocking) ---
+//
+// Stdin parse failures and HookInput schema mismatches are also downgraded to
+// exit 1 in hook mode. Otherwise, schema drift on Claude Code's side (e.g. a
+// new required field added to PreToolUse input) would block every Bash tool
+// call until runok catches up.
 
 #[rstest]
-fn hook_invalid_json_exits_2(hook_env: TestEnv) {
+fn hook_invalid_json_exits_1(hook_env: TestEnv) {
     let assert = hook_env
         .command()
         .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("invalid json")
         .assert();
-    assert.code(2);
+    assert.code(1);
+}
+
+#[rstest]
+fn hook_input_schema_mismatch_exits_1(hook_env: TestEnv) {
+    // Valid JSON object but missing the required `tool_name` field —
+    // simulates a future Claude Code schema change.
+    let stdin = serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_input": {"command": "echo hi"},
+        "tool_use_id": "u"
+    })
+    .to_string();
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(stdin)
+        .assert();
+    assert.code(1);
 }
 
 // --- Sandbox allow: updatedInput rewrite ---

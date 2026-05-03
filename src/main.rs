@@ -199,8 +199,12 @@ fn is_claude_code_hook(args: &cli::CheckArgs) -> bool {
 /// Detect `--input-format claude-code-hook` from raw argv before clap parses it.
 /// Used by the unknown-flag validator that runs pre-clap, where `CheckArgs` is
 /// not yet available.
+///
+/// Stops at `--` so trailing args meant for the user's command are not
+/// interpreted as runok flags. Mirrors `validate_no_unknown_flags`'s handling
+/// of the `--` boundary.
 fn raw_args_indicate_claude_code_hook(raw_args: &[String]) -> bool {
-    let mut iter = raw_args.iter();
+    let mut iter = raw_args.iter().take_while(|a| a.as_str() != "--");
     while let Some(arg) = iter.next() {
         if arg == "--input-format"
             && let Some(value) = iter.next()
@@ -279,6 +283,7 @@ fn run_command(
             adapter::run_with_options(&endpoint, &config, &options)
         }
         Commands::Check(args) => {
+            let is_hook = is_claude_code_hook(&args);
             let options = RunOptions {
                 verbose: args.verbose,
             };
@@ -297,8 +302,12 @@ fn run_command(
                     worst_exit
                 }
                 Err(e) => {
+                    // In hook mode, downgrade input parse errors (malformed JSON,
+                    // HookInput schema mismatch from a future Claude Code version)
+                    // to exit 1. Otherwise schema drift on Claude Code's side would
+                    // block every Bash tool call until runok catches up.
                     eprintln!("runok: {e}");
-                    2
+                    if is_hook { 1 } else { 2 }
                 }
             }
         }
@@ -494,6 +503,8 @@ mod tests {
     #[case::other_format(&["runok", "check", "--input-format", "other"], false)]
     #[case::no_format(&["runok", "check"], false)]
     #[case::value_only_match(&["runok", "check", "claude-code-hook"], false)]
+    #[case::after_double_dash(&["runok", "check", "--", "--input-format", "claude-code-hook"], false)]
+    #[case::after_double_dash_eq(&["runok", "check", "--", "--input-format=claude-code-hook"], false)]
     fn raw_args_indicate_claude_code_hook_detects_flag(
         #[case] argv: &[&str],
         #[case] expected: bool,

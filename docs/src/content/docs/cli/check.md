@@ -98,6 +98,6 @@ When checking multiple commands (multi-line stdin), the exit code is the highest
 
 ### Hook mode (`--input-format claude-code-hook`)
 
-When `--input-format claude-code-hook` is set, runok-side failures (config load errors, rule pattern parse errors, malformed `tool_input`) exit with code `1` instead of `2`. Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so a typo in a single rule pattern would otherwise block every Bash tool call until the config is fixed. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
+In hook mode, all runok-side failures exit with code `1` instead of `2`. This includes config load errors, rule pattern parse errors, stdin JSON parse errors, and `HookInput` schema mismatches (e.g. when Claude Code adds a new required field). Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
 
-Stdin parse errors (invalid JSON, unknown `--input-format`) still exit `2`: those indicate the caller is passing malformed input, not a runok config problem.
+Direct CLI usage (without `--input-format claude-code-hook`) is unchanged and still exits `2` on errors.
