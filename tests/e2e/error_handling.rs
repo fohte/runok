@@ -109,14 +109,18 @@ fn unknown_format_flag_exits_2() {
 }
 
 // --- Check with --format but non-JSON stdin ---
+//
+// In claude-code-hook mode, stdin parse failures are non-blocking (exit 1).
+// See `hook_invalid_json_exits_1` in `check_claude_code_hook.rs` for the
+// rationale.
 
 #[rstest]
-fn format_with_non_json_stdin_exits_2() {
+fn format_with_non_json_stdin_exits_1() {
     let env = TestEnv::new("{}");
     let assert = env
         .command()
         .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("not valid json")
         .assert();
-    assert.code(2);
+    assert.code(1);
 }

@@ -229,8 +229,11 @@ impl Endpoint for ClaudeCodeHookAdapter {
     }
 
     fn handle_error(&self, error: anyhow::Error) -> i32 {
+        // Exit 1 (non-blocking) so Claude Code falls back to its normal
+        // permission flow instead of blocking the tool call. Exit 2 would be
+        // interpreted as a blocking hook error.
         eprintln!("{error:#}");
-        2
+        1
     }
 }
 
@@ -439,11 +442,11 @@ mod tests {
     // --- handle_error ---
 
     #[rstest]
-    fn handle_error_returns_exit_2() {
+    fn handle_error_returns_exit_1() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
         let exit_code = adapter.handle_error(anyhow::anyhow!("test error"));
-        assert_eq!(exit_code, 2);
+        assert_eq!(exit_code, 1);
     }
 
     // --- handle_action / handle_no_match exit codes ---

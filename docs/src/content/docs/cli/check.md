@@ -95,3 +95,17 @@ cat hook-input.json | runok check --input-format claude-code-hook
 The exit code reflects whether the check itself succeeded, not the permission decision. A `deny` result still returns exit code `0`. Use `--output-format json` to programmatically inspect the decision.
 
 When checking multiple commands (multi-line stdin), the exit code is the highest value across all evaluations.
+
+### Hook mode (`--input-format claude-code-hook`)
+
+In hook mode, the following runok-side failures exit with code `1` instead of `2`:
+
+- Config load errors (YAML syntax errors, etc.)
+- Rule pattern parse errors caught during evaluation
+- Unknown-flag errors for `runok check`
+- Stdin JSON parse errors
+- `HookInput` schema mismatches (e.g. when Claude Code adds a new required field)
+
+Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
+
+Direct CLI usage (without `--input-format claude-code-hook`) is unchanged and still exits `2` on errors.

@@ -102,16 +102,43 @@ fn hook_non_bash_tool_no_output(hook_env: TestEnv, #[case] tool_name: &str) {
     assert.code(0).stdout(predicates::str::is_empty());
 }
 
-// --- Invalid JSON: exit 2 ---
+// --- Invalid stdin in hook mode: exit 1 (non-blocking) ---
+//
+// Stdin parse failures and HookInput schema mismatches are also downgraded to
+// exit 1 in hook mode. Otherwise, schema drift on Claude Code's side (e.g. a
+// new required field added to PreToolUse input) would block every Bash tool
+// call until runok catches up.
 
 #[rstest]
-fn hook_invalid_json_exits_2(hook_env: TestEnv) {
+fn hook_invalid_json_exits_1(hook_env: TestEnv) {
     let assert = hook_env
         .command()
         .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin("invalid json")
         .assert();
-    assert.code(2);
+    assert.code(1);
+}
+
+#[rstest]
+fn hook_input_schema_mismatch_exits_1(hook_env: TestEnv) {
+    // Valid JSON object but missing the required `tool_name` field —
+    // simulates a future Claude Code schema change.
+    let stdin = serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_input": {"command": "echo hi"},
+        "tool_use_id": "u"
+    })
+    .to_string();
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(stdin)
+        .assert();
+    assert.code(1);
 }
 
 // --- Sandbox allow: updatedInput rewrite ---
@@ -154,6 +181,64 @@ fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
     let json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
     assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
+}
+
+// --- Config errors fall back to exit 1 (non-blocking) ---
+//
+// `--input-format claude-code-hook` must not exit 2 for runok-side config
+// problems: Claude Code interprets exit 2 as a blocking PreToolUse error,
+// which would freeze every Bash tool call until the config is fixed. Exit 1
+// is the documented non-blocking failure mode that lets Claude Code fall
+// back to its normal permission flow.
+
+#[rstest]
+fn hook_yaml_syntax_error_exits_1() {
+    let env = TestEnv::new("rules: [invalid yaml\n  broken:");
+    let assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("echo hi"))
+        .assert();
+    assert
+        .code(1)
+        .stderr(predicates::str::contains("config error"));
+}
+
+#[rstest]
+fn hook_unknown_flag_exits_1() {
+    // A typo in the hook's runok flags would otherwise block every Bash tool
+    // call (the pre-clap unknown-flag validator returns exit 2 by default).
+    let env = TestEnv::new("{}");
+    let assert = env
+        .command()
+        .args([
+            "check",
+            "--input-format",
+            "claude-code-hook",
+            "--unknown-flag",
+        ])
+        .write_stdin(bash_hook_json("echo hi"))
+        .assert();
+    assert.code(1);
+}
+
+#[rstest]
+fn hook_pattern_parse_error_exits_1() {
+    // Nested square brackets in a rule pattern fail to parse during rule
+    // evaluation, not during config load. Verify both lazy parse errors
+    // also fall back to exit 1 in hook mode.
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - allow: 'foo [bar [baz]]'
+    "});
+    let assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("foo bar"))
+        .assert();
+    assert
+        .code(1)
+        .stderr(predicates::str::contains("pattern parse error"));
 }
 
 // --- Hook event name ---
