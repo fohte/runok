@@ -59,8 +59,19 @@ fn main() -> ExitCode {
         && matches!(subcommand_name, "exec" | "check")
         && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name, subcommand_pos)
     {
-        // check uses exit code 2 for errors; exec uses 1
-        let code: u8 = if subcommand_name == "check" { 2 } else { 1 };
+        // check uses exit code 2 for errors; exec uses 1.
+        // For `check --input-format claude-code-hook`, downgrade to 1 so a
+        // typo in the hook's runok flags does not block every Bash tool call
+        // (Claude Code treats exit 2 from PreToolUse as blocking).
+        let code: u8 = if subcommand_name == "check" {
+            if raw_args_indicate_claude_code_hook(&raw_args) {
+                1
+            } else {
+                2
+            }
+        } else {
+            1
+        };
         eprintln!("runok: {e}");
         return ExitCode::from(code);
     }
@@ -178,6 +189,34 @@ fn run_init(args: &cli::InitArgs) -> ExitCode {
     }
 }
 
+/// Whether the `check` invocation is operating as a Claude Code PreToolUse hook.
+/// In this mode runok must avoid exit code 2 for runok-side failures because
+/// Claude Code treats exit 2 as a blocking error.
+fn is_claude_code_hook(args: &cli::CheckArgs) -> bool {
+    args.input_format.as_deref() == Some("claude-code-hook")
+}
+
+/// Detect `--input-format claude-code-hook` from raw argv before clap parses it.
+/// Used by the unknown-flag validator that runs pre-clap, where `CheckArgs` is
+/// not yet available.
+fn raw_args_indicate_claude_code_hook(raw_args: &[String]) -> bool {
+    let mut iter = raw_args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--input-format"
+            && let Some(value) = iter.next()
+            && value == "claude-code-hook"
+        {
+            return true;
+        }
+        if let Some(value) = arg.strip_prefix("--input-format=")
+            && value == "claude-code-hook"
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn run_command(
     command: Commands,
     config_path: Option<&std::path::Path>,
@@ -189,9 +228,15 @@ fn run_command(
     }
 
     // Exit code for config errors depends on the subcommand:
-    // exec → 1 (general error), check → 2 (input/internal error)
+    // exec → 1 (general error), check → 2 (input/internal error).
+    // For `check --input-format claude-code-hook`, return 1 instead of 2 so
+    // that Claude Code treats config errors as a non-blocking hook failure
+    // and falls back to its normal permission flow. Exit 2 from a PreToolUse
+    // hook would otherwise block every Bash tool call until the config is
+    // fixed (https://code.claude.com/docs/en/hooks "Hook Exit Codes").
     let config_error_exit_code = match &command {
         Commands::Exec(_) => 1,
+        Commands::Check(args) if is_claude_code_hook(args) => 1,
         Commands::Check(_) => 2,
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
@@ -441,6 +486,20 @@ mod tests {
         let (tmp, config_path) = empty_config_file;
         let exit_code = run_command(cmd, Some(&config_path), tmp.path(), stdin);
         assert_eq!(exit_code, expected_exit);
+    }
+
+    #[rstest]
+    #[case::space_separated(&["runok", "check", "--input-format", "claude-code-hook"], true)]
+    #[case::equals_separated(&["runok", "check", "--input-format=claude-code-hook"], true)]
+    #[case::other_format(&["runok", "check", "--input-format", "other"], false)]
+    #[case::no_format(&["runok", "check"], false)]
+    #[case::value_only_match(&["runok", "check", "claude-code-hook"], false)]
+    fn raw_args_indicate_claude_code_hook_detects_flag(
+        #[case] argv: &[&str],
+        #[case] expected: bool,
+    ) {
+        let raw: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        assert_eq!(raw_args_indicate_claude_code_hook(&raw), expected);
     }
 
     #[rstest]

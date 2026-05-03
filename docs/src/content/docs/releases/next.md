@@ -6,6 +6,16 @@ sidebar:
 
 This page tracks changes that will be included in the next release. It is updated as pull requests are merged.
 
+## Bug Fixes
+
+### `runok check --input-format claude-code-hook` no longer blocks Claude Code on config errors
+
+When `--input-format claude-code-hook` is set, runok-side failures (config load errors, rule pattern parse errors) now exit with code `1` instead of `2`. Previously, a typo in a single rule pattern would cause every Bash tool call in Claude Code to be blocked, because Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error. Exit `1` is the documented non-blocking failure mode and lets Claude Code fall back to its normal permission flow until the config is fixed.
+
+Stdin parse errors (invalid JSON, unknown `--input-format`) still exit `2`. Direct CLI usage (`runok check` without `--input-format claude-code-hook`) is unchanged.
+
+See [`runok check` exit codes](/cli/check/) for details.
+
 ## New Features
 
 ### Global `--config` / `-c` flag ([#315](https://github.com/fohte/runok/pull/315))

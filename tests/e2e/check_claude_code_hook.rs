@@ -156,6 +156,64 @@ fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
     assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
 }
 
+// --- Config errors fall back to exit 1 (non-blocking) ---
+//
+// `--input-format claude-code-hook` must not exit 2 for runok-side config
+// problems: Claude Code interprets exit 2 as a blocking PreToolUse error,
+// which would freeze every Bash tool call until the config is fixed. Exit 1
+// is the documented non-blocking failure mode that lets Claude Code fall
+// back to its normal permission flow.
+
+#[rstest]
+fn hook_yaml_syntax_error_exits_1() {
+    let env = TestEnv::new("rules: [invalid yaml\n  broken:");
+    let assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("echo hi"))
+        .assert();
+    assert
+        .code(1)
+        .stderr(predicates::str::contains("config error"));
+}
+
+#[rstest]
+fn hook_unknown_flag_exits_1() {
+    // A typo in the hook's runok flags would otherwise block every Bash tool
+    // call (the pre-clap unknown-flag validator returns exit 2 by default).
+    let env = TestEnv::new("{}");
+    let assert = env
+        .command()
+        .args([
+            "check",
+            "--input-format",
+            "claude-code-hook",
+            "--unknown-flag",
+        ])
+        .write_stdin(bash_hook_json("echo hi"))
+        .assert();
+    assert.code(1);
+}
+
+#[rstest]
+fn hook_pattern_parse_error_exits_1() {
+    // Nested square brackets in a rule pattern fail to parse during rule
+    // evaluation, not during config load. Verify both lazy parse errors
+    // also fall back to exit 1 in hook mode.
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - allow: 'foo [bar [baz]]'
+    "});
+    let assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("foo bar"))
+        .assert();
+    assert
+        .code(1)
+        .stderr(predicates::str::contains("pattern parse error"));
+}
+
 // --- Hook event name ---
 
 #[rstest]
