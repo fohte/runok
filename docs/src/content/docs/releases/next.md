@@ -10,7 +10,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ### `runok check --input-format claude-code-hook` no longer blocks Claude Code on runok-side failures
 
-In hook mode, all runok-side failures now exit with code `1` instead of `2`. This covers config load errors, rule pattern parse errors, stdin JSON parse errors, and `HookInput` schema mismatches. Previously, any of these would cause every Bash tool call in Claude Code to be blocked, because Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error. Exit `1` is the documented non-blocking failure mode and lets Claude Code fall back to its normal permission flow until the underlying issue is fixed.
+In hook mode, the following runok-side failures now exit with code `1` instead of `2`: config load errors, rule pattern parse errors, unknown-flag errors, stdin JSON parse errors, and `HookInput` schema mismatches. Previously, any of these would cause every Bash tool call in Claude Code to be blocked, because Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error. Exit `1` is the documented non-blocking failure mode and lets Claude Code fall back to its normal permission flow until the underlying issue is fixed.
 
 Direct CLI usage (`runok check` without `--input-format claude-code-hook`) is unchanged.
 
