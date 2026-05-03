@@ -200,11 +200,11 @@ fn is_claude_code_hook(args: &cli::CheckArgs) -> bool {
 /// Used by the unknown-flag validator that runs pre-clap, where `CheckArgs` is
 /// not yet available.
 ///
-/// Stops at `--` so trailing args meant for the user's command are not
-/// interpreted as runok flags. Mirrors `validate_no_unknown_flags`'s handling
-/// of the `--` boundary.
+/// Skips `argv[0]` (the binary name) and stops at `--` so trailing args meant
+/// for the user's command are not interpreted as runok flags. Mirrors
+/// `validate_no_unknown_flags`'s handling of the `--` boundary.
 fn raw_args_indicate_claude_code_hook(raw_args: &[String]) -> bool {
-    let mut iter = raw_args.iter().take_while(|a| a.as_str() != "--");
+    let mut iter = raw_args.iter().skip(1).take_while(|a| a.as_str() != "--");
     while let Some(arg) = iter.next() {
         if arg == "--input-format"
             && let Some(value) = iter.next()
@@ -505,6 +505,7 @@ mod tests {
     #[case::value_only_match(&["runok", "check", "claude-code-hook"], false)]
     #[case::after_double_dash(&["runok", "check", "--", "--input-format", "claude-code-hook"], false)]
     #[case::after_double_dash_eq(&["runok", "check", "--", "--input-format=claude-code-hook"], false)]
+    #[case::binary_name_collides(&["--input-format", "claude-code-hook", "check"], false)]
     fn raw_args_indicate_claude_code_hook_detects_flag(
         #[case] argv: &[&str],
         #[case] expected: bool,
