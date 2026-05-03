@@ -196,29 +196,23 @@ fn is_claude_code_hook(args: &cli::CheckArgs) -> bool {
     args.input_format.as_deref() == Some("claude-code-hook")
 }
 
-/// Detect `--input-format claude-code-hook` from raw argv before clap parses it.
-/// Used by the unknown-flag validator that runs pre-clap, where `CheckArgs` is
-/// not yet available.
+/// Detect `--input-format claude-code-hook` from raw argv before the main
+/// `Cli::parse()` runs. Used by the unknown-flag validator that runs pre-clap,
+/// where `CheckArgs` is not yet available.
 ///
-/// Skips `argv[0]` (the binary name) and stops at `--` so trailing args meant
-/// for the user's command are not interpreted as runok flags. Mirrors
-/// `validate_no_unknown_flags`'s handling of the `--` boundary.
+/// Uses clap's own parser with `ignore_errors(true)` so unknown flags do not
+/// abort the parse and short/long/`=`-separated forms are all handled by
+/// clap.
 fn raw_args_indicate_claude_code_hook(raw_args: &[String]) -> bool {
-    let mut iter = raw_args.iter().skip(1).take_while(|a| a.as_str() != "--");
-    while let Some(arg) = iter.next() {
-        if arg == "--input-format"
-            && let Some(value) = iter.next()
-            && value == "claude-code-hook"
-        {
-            return true;
-        }
-        if let Some(value) = arg.strip_prefix("--input-format=")
-            && value == "claude-code-hook"
-        {
-            return true;
-        }
-    }
-    false
+    use clap::CommandFactory;
+    Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(raw_args)
+        .ok()
+        .and_then(|m| m.subcommand_matches("check").cloned())
+        .and_then(|s| s.get_one::<String>("input_format").cloned())
+        .as_deref()
+        == Some("claude-code-hook")
 }
 
 fn run_command(
