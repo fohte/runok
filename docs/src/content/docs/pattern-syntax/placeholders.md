@@ -180,10 +180,11 @@ definitions:
 
 ### Variable Types
 
-| Type      | Matching behavior                                                         |
-| --------- | ------------------------------------------------------------------------- |
-| `literal` | Exact string match (default)                                              |
-| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+| Type      | Matching behavior                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| `literal` | Exact string match (default)                                                                                |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization                                   |
+| `pattern` | Parse each value as a rule-pattern fragment and inline-expand it at the `<var:name>` placeholder's position |
 
 Each value inherits the definition-level `type` unless it specifies its own `type` via the `{ type, value }` form.
 
@@ -251,6 +252,44 @@ definitions:
 | `bash ./tests/run`          | Yes                         |
 | `bash ./tests/../tests/run` | Yes                         |
 | `bash ./scripts/deploy`     | No                          |
+
+### Pattern Type Inline Expansion
+
+When `type: pattern` is set, each value is parsed as a rule-pattern fragment and inlined in place of `<var:name>`. This is most useful for naming a reusable command-prefix pattern -- for example a base CLI plus its global flags -- so the same prefix doesn't need to be repeated across every rule.
+
+```yaml
+definitions:
+  vars:
+    kubectl:
+      type: pattern
+      values:
+        - 'kubectl [-n|--namespace *] [--context *] [--cluster *] [--user *] [--kubeconfig *]'
+
+rules:
+  - allow: '<var:kubectl> get|describe|logs *'
+  - allow: '<var:kubectl> top node|pod|nodes|pods *'
+  - allow: '<var:kubectl> auth can-i|whoami *'
+```
+
+With the above, all of the following commands are allowed by the first rule:
+
+| Command                                                        | Matches `<var:kubectl> get                   | describe | logs \*` |
+| -------------------------------------------------------------- | -------------------------------------------- | -------- | -------- |
+| `kubectl get pods`                                             | Yes (no global flags)                        |
+| `kubectl --context foo get pods`                               | Yes                                          |
+| `kubectl --context=foo get pods`                               | Yes (`=` form is supported)                  |
+| `kubectl --kubeconfig ~/.kube/work --context prod get pods -A` | Yes                                          |
+| `kubectl -n default --context foo describe pod bar`            | Yes                                          |
+| `kubectl delete pod foo`                                       | No (`delete` does not match the alternation) |
+
+Each value supports the full rule-pattern syntax (alternation `|`, wildcard `*`, optional groups `[...]`, literals, etc.), but **other placeholders cannot be nested** inside a `pattern` value. The following are rejected at config validation time:
+
+- `<cmd>`, `<opts>`, `<vars>` (wrapper placeholders)
+- `<var:other>` (other variable references)
+- `<path:name>` (path references)
+- `<flag:name>` (flag-group references)
+
+`<var:name>` for a `pattern`-typed variable also cannot appear inside an optional group (`[<var:name>]`), because the pattern var may itself contain optional flags and the outer optional layer would conflict with that expansion. This mirrors the same restriction on `[<flag:name>]`.
 
 ### Undefined Variable Names
 

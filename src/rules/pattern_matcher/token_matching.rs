@@ -232,6 +232,12 @@ pub(crate) fn resolve_var<'a>(
 }
 
 /// Match a single value against a command token, using the given effective type.
+///
+/// `Pattern`-typed values cannot be matched against a single token because
+/// they may consume any number of consecutive tokens; callers route those
+/// values through `match_pattern_prefix` instead. Reaching this branch with
+/// a pattern type therefore means the caller used the wrong matching path,
+/// so we conservatively return `false` to avoid false positives.
 fn match_value_with_type(
     value: &str,
     cmd_token: &str,
@@ -242,6 +248,7 @@ fn match_value_with_type(
         crate::config::VarType::Path => {
             canonicalize_or_normalize(value) == canonicalize_or_normalize(cmd_token)
         }
+        crate::config::VarType::Pattern => false,
     }
 }
 
@@ -264,9 +271,14 @@ pub(crate) fn match_var_ref(name: &str, cmd_token: &str, definitions: &Definitio
 
 /// Match a `<var:name>` reference against multiple consecutive command tokens.
 ///
-/// Tries each value in the variable definition. Multi-word values are split
-/// via `shlex::split` and matched against consecutive tokens.
-/// Returns all possible consumption lengths (one per matching value).
+/// Tries each value in the variable definition.
+/// - For `literal` / `path` values, the value is split via `shlex::split` and
+///   each word is matched against consecutive command tokens.
+/// - For `pattern` values, the pre-parsed sub-pattern is prefix-matched
+///   against the command tokens via [`match_pattern_prefix`]; every possible
+///   consumption length contributes a candidate.
+///
+/// Returns every possible consumption length across all values.
 pub(crate) fn match_var_ref_multi(
     name: &str,
     cmd_tokens: &[&str],
@@ -276,8 +288,29 @@ pub(crate) fn match_var_ref_multi(
         return Vec::new();
     };
     let mut matches = Vec::new();
+
+    // Pattern-typed values: every parsed sub-pattern in `parsed_pattern_vars`
+    // contributes one or more prefix-match consumption lengths.
+    if let Some(sub_patterns) = definitions
+        .parsed_pattern_vars
+        .as_ref()
+        .and_then(|m| m.get(name))
+    {
+        for sub in sub_patterns {
+            for len in match_pattern_prefix(sub, cmd_tokens, definitions) {
+                if !matches.contains(&len) {
+                    matches.push(len);
+                }
+            }
+        }
+    }
+
     for v in &var_def.values {
         let effective_type = v.effective_type(var_def.var_type);
+        // Pattern-typed values are handled by the pre-parsed cache above.
+        if effective_type == crate::config::VarType::Pattern {
+            continue;
+        }
         let value_str = v.value();
         let words: Vec<String> = shlex::split(value_str).unwrap_or_default();
         if words.is_empty() {
@@ -290,11 +323,72 @@ pub(crate) fn match_var_ref_multi(
             .iter()
             .zip(&cmd_tokens[..words.len()])
             .all(|(word, token)| match_value_with_type(word, token, effective_type));
-        if all_match {
+        if all_match && !matches.contains(&words.len()) {
             matches.push(words.len());
         }
     }
     matches
+}
+
+/// Determine how many leading tokens of `cmd_tokens` can be consumed by a
+/// pattern-typed `<var:name>` sub-pattern. Returns every possible consumption
+/// length (zero or more) so that callers can backtrack across alternatives.
+///
+/// Implemented by appending `Wildcard` to the sub-pattern's tokens and
+/// running the regular match engine in capture mode: each successful run
+/// yields a wildcard capture whose remaining-suffix length determines the
+/// prefix consumption count.
+fn match_pattern_prefix(
+    sub: &crate::rules::pattern_parser::Pattern,
+    cmd_tokens: &[&str],
+    definitions: &Definitions,
+) -> Vec<usize> {
+    use crate::rules::pattern_parser::CommandPattern;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    if cmd_tokens.is_empty() {
+        return Vec::new();
+    }
+
+    // The sub-pattern's command name consumes one token.
+    let head_ok = match &sub.command {
+        CommandPattern::Literal(s) => literal_matches(s, cmd_tokens[0]),
+        CommandPattern::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_tokens[0])),
+        CommandPattern::Wildcard => true,
+        // Disallowed by config validation, but we conservatively reject here.
+        CommandPattern::VarRef(_) => false,
+    };
+    if !head_ok {
+        return Vec::new();
+    }
+
+    let rest = &cmd_tokens[1..];
+
+    // We want every prefix consumption length. Try each candidate `k` and
+    // check whether the sub-pattern's tokens fully consume `rest[..k]`.
+    let mut lengths = Vec::new();
+    for k in 0..=rest.len() {
+        let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
+        let var_captures = RefCell::new(HashMap::new());
+        let flag_group_captures = RefCell::new(HashMap::new());
+        let ok = super::match_engine_for_prefix_test(
+            &sub.tokens,
+            &rest[..k],
+            definitions,
+            &steps,
+            &after_dd,
+            &var_captures,
+            &flag_group_captures,
+        )
+        .unwrap_or(false);
+        if ok {
+            // Total consumed tokens: 1 (command name) + k.
+            lengths.push(1 + k);
+        }
+    }
+    lengths
 }
 
 /// Try to canonicalize a path via the filesystem; fall back to logical
