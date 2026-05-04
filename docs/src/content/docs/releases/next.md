@@ -43,7 +43,7 @@ rules:
     when: "os == 'linux'"
 ```
 
-See [When Clauses](/rule-evaluation/when-clause/#os----host-operating-system) for details.
+See [When Clauses](/rule-evaluation/when-clause/#os--host-operating-system) for details.
 
 ### `definitions.vars` gains a new `pattern` type for reusable command-prefix patterns ([#334](https://github.com/fohte/runok/pull/334))
 
