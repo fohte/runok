@@ -111,5 +111,3 @@ Both now return `CommandParseError::SyntaxError`. tree-sitter-bash flags them as
 **What should I do?**
 
 If you have integrations that fed `parse_command` raw assignment-only strings, wrap them in a real command (`true VAR=value`) or switch to evaluating via `evaluate_command` / `extract_commands_with_metadata`, which already handle assignments.
-</content>
-</invoke>
