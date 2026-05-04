@@ -230,6 +230,35 @@ rules:
 Use bracket notation (`flag_groups["name"]`) when the group name contains hyphens. CEL's dot notation (`flag_groups.name`) only supports identifiers without hyphens.
 :::
 
+### `os` -- Host operating system
+
+A string identifying the operating system runok is running on. Values match Rust's [`std::env::consts::OS`](https://doc.rust-lang.org/std/env/consts/constant.OS.html), so common values are `"macos"`, `"linux"`, `"windows"`, and `"freebsd"`.
+
+```yaml
+rules:
+  # macOS ships BSD sed; steer to gsed (GNU sed) instead
+  - deny: 'sed *'
+    when: "os == 'macos'"
+    message: 'Use gsed (GNU sed) on macOS'
+  - allow: 'gsed *'
+
+  # On Linux, sed is GNU sed already
+  - allow: 'sed *'
+    when: "os == 'linux'"
+```
+
+`os` is also useful with `in` to whitelist a set of platforms:
+
+```yaml
+rules:
+  - allow: 'pbcopy'
+    when: "os in ['macos']"
+```
+
+:::note
+Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported to child processes, so they don't appear in `env`. Use `os` instead of trying to read those through `env.OSTYPE`.
+:::
+
 ## Operators
 
 CEL supports standard operators for building conditions:
@@ -345,6 +374,19 @@ rules:
     when: 'pipe.stdin'
   - deny: 'bash'
     when: 'pipe.stdin'
+```
+
+### OS-specific rules
+
+```yaml
+rules:
+  # Steer macOS users from BSD sed to GNU sed
+  - deny: 'sed *'
+    when: "os == 'macos'"
+    message: 'Use gsed (GNU sed) on macOS'
+  - allow: 'gsed *'
+  - allow: 'sed *'
+    when: "os == 'linux'"
 ```
 
 ## Related

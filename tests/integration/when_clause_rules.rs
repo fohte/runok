@@ -3,7 +3,7 @@ use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_contex
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::parse_config;
 use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
@@ -616,4 +616,41 @@ fn redirect_count_check(
 
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
+}
+
+// ========================================
+// OS-conditional rules
+// ========================================
+
+#[rstest]
+fn os_variable_matches_host_os(empty_context: EvalContext) {
+    let config_yaml = formatdoc! {r#"
+        rules:
+          - deny: 'sed *'
+            when: "os == '{os}'"
+    "#, os = std::env::consts::OS};
+    let config = parse_config(&config_yaml).unwrap();
+
+    let result = evaluate_command(&config, "sed -i s/a/b/ file", &empty_context).unwrap();
+    assert_deny(&result.action);
+}
+
+#[rstest]
+fn os_variable_does_not_match_other_os(empty_context: EvalContext) {
+    // Pick an OS string that is guaranteed not to equal the host's OS.
+    let other_os = if std::env::consts::OS == "macos" {
+        "linux"
+    } else {
+        "macos"
+    };
+    let config_yaml = formatdoc! {r#"
+        rules:
+          - deny: 'sed *'
+            when: "os == '{os}'"
+          - allow: 'sed *'
+    "#, os = other_os};
+    let config = parse_config(&config_yaml).unwrap();
+
+    let result = evaluate_command(&config, "sed -i s/a/b/ file", &empty_context).unwrap();
+    assert_allow(&result.action);
 }

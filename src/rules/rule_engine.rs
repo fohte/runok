@@ -795,6 +795,7 @@ fn build_expr_context(
         pipe: pipe.clone(),
         vars: match_captures.vars.clone(),
         flag_groups,
+        os: std::env::consts::OS.to_string(),
     }
 }
 
