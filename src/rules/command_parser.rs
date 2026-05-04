@@ -455,12 +455,7 @@ fn dequote_node(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
         // command name like `"echo" hello` or `'rm' -rf /` would come
         // back with the surrounding quotes still attached, breaking
         // pattern matching against `echo *` / `rm *`.
-        "command_name" => {
-            let inner = (0..node.child_count())
-                .filter_map(|i| node.child(i as u32))
-                .find(|c| c.is_named())?;
-            dequote_node(inner, source)
-        }
+        "command_name" => dequote_node(node.named_child(0)?, source),
         // Other leaf-like nodes (`number`, `simple_expansion`,
         // `expansion`, ...): take the raw source text. runok matches
         // tokens literally, so no further processing is needed.
