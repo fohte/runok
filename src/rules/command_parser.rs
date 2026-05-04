@@ -811,35 +811,38 @@ fn collect_commands(
                     collect_commands(body, source, commands, pipe_info, &all_redirects);
                 }
                 // Swallowed continuation: synthesize the outer
-                // pipeline `[body, *pipe_stages]` (each stage
-                // potentially carrying its own pipe metadata) plus
-                // any independent list arms. Mirror the per-stage
-                // accounting from the regular `pipeline` arm so
-                // middle stages keep both stdin AND stdout connected,
-                // and hand list arms back to `collect_commands` with
-                // pipe context cleared so trailing `&& a | b` shapes
-                // recompute their own pipe semantics.
+                // pipeline `[body, *pipe_stages]` and emit each stage
+                // with the same per-stage pipe accounting as the
+                // regular `pipeline` arm. Heredoc-attached redirects
+                // belong to body alone; remaining stages keep the
+                // outer redirect set.
+                //
+                // List arms (`&&` / `||` trailing the pipeline) are
+                // pipe boundaries: `b` in `cat <<EOF | a && b` does
+                // not read stdin from the pipe even when the whole
+                // group is, so `arm_pipe.stdin` is forced to `false`.
+                // The outer `pipe_info.stdout` still propagates so
+                // an enclosing `(...) | succ` keeps stdout=true on
+                // every arm.
                 (Some(continuation), Some(body)) => {
-                    let pipe_len = continuation.pipe_stages.len() + 1;
-                    let has_pipe = pipe_len > 1;
-                    let body_pipe = if has_pipe {
-                        PipeInfo {
-                            stdin: pipe_info.stdin,
-                            stdout: true,
-                        }
-                    } else {
-                        pipe_info.clone()
-                    };
-                    collect_commands(body, source, commands, &body_pipe, &all_redirects);
-                    for (i, stage) in continuation.pipe_stages.iter().enumerate() {
-                        let stage_idx = i + 1;
+                    let mut stages: Vec<tree_sitter::Node> =
+                        Vec::with_capacity(continuation.pipe_stages.len() + 1);
+                    stages.push(body);
+                    stages.extend(continuation.pipe_stages.iter().copied());
+                    let len = stages.len();
+                    for (i, stage) in stages.iter().enumerate() {
                         let stage_pipe = PipeInfo {
-                            stdin: true,
-                            stdout: pipe_info.stdout || stage_idx < pipe_len - 1,
+                            stdin: pipe_info.stdin || i > 0,
+                            stdout: pipe_info.stdout || i < len - 1,
                         };
-                        collect_commands(*stage, source, commands, &stage_pipe, redirects);
+                        let stage_redirects: &[RedirectInfo] =
+                            if i == 0 { &all_redirects } else { redirects };
+                        collect_commands(*stage, source, commands, &stage_pipe, stage_redirects);
                     }
-                    let arm_pipe = pipe_info.clone();
+                    let arm_pipe = PipeInfo {
+                        stdin: false,
+                        stdout: pipe_info.stdout,
+                    };
                     for arm in &continuation.list_arms {
                         collect_commands(*arm, source, commands, &arm_pipe, redirects);
                     }
@@ -1186,35 +1189,18 @@ fn extract_heredoc_continuation<'tree>(
     let mut pipe_stages: Vec<tree_sitter::Node<'tree>> = Vec::new();
     let mut list_arms: Vec<tree_sitter::Node<'tree>> = Vec::new();
 
-    // `right`-fielded children come first — `&&` / `||` directly on
-    // the heredoc with no preceding pipe.
-    for i in 0..heredoc.child_count() {
-        if heredoc.field_name_for_child(i as u32) != Some("right") {
-            continue;
-        }
-        let Some(right) = heredoc.child(i as u32) else {
-            continue;
-        };
-        list_arms.push(right);
-    }
-
-    // An un-fielded `pipeline` child carries the synthesized pipeline
-    // tail. Walk its named children, splitting any nested `list` (the
-    // tail of a `cmd | x && y` AST) so list operands surface as
-    // independent arms instead of being treated as more pipe stages.
     for i in 0..heredoc.child_count() {
         let Some(child) = heredoc.child(i as u32) else {
             continue;
         };
-        if child.kind() != "pipeline" {
-            continue;
-        }
-        if heredoc.field_name_for_child(i as u32).is_some() {
-            continue;
-        }
-        let mut cursor = child.walk();
-        for stage in child.named_children(&mut cursor) {
-            split_pipe_stage(stage, &mut pipe_stages, &mut list_arms);
+        let field = heredoc.field_name_for_child(i as u32);
+        if field == Some("right") {
+            list_arms.push(child);
+        } else if field.is_none() && child.kind() == "pipeline" {
+            let mut cursor = child.walk();
+            for stage in child.named_children(&mut cursor) {
+                split_pipe_stage(stage, &mut pipe_stages, &mut list_arms);
+            }
         }
     }
 
@@ -1853,6 +1839,22 @@ mod tests {
             ("b",   PipeInfo { stdin: true,  stdout: false }),
             ("c",   PipeInfo { stdin: false, stdout: false }),
             ("d",   PipeInfo { stdin: false, stdout: false }),
+        ],
+    )]
+    // `a | cat <<EOF && b`: the heredoc body is the pipeline
+    // `a | cat`, and `b` is the `&&` arm. `&&` is a pipe boundary,
+    // so `b.stdin` must be `false` even though it sits next to a
+    // pipe segment in the source.
+    #[case::heredoc_pipe_in_body_with_and_arm(
+        indoc! {"
+            a | cat <<EOF && b
+            body
+            EOF
+        "},
+        vec![
+            ("a",   PipeInfo { stdin: false, stdout: true  }),
+            ("cat", PipeInfo { stdin: true,  stdout: false }),
+            ("b",   PipeInfo { stdin: false, stdout: false }),
         ],
     )]
     fn extract_heredoc_pipe_metadata(#[case] input: &str, #[case] expected: Vec<(&str, PipeInfo)>) {
