@@ -81,21 +81,6 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
-### Heredoc on the left side of `|` / `&&` / `||` no longer hides the trailing arm ([#340](https://github.com/fohte/runok/pull/340))
-
-`cat <<EOF | kubectl apply -f -` (and the same shape with `&&` / `||`) silently dropped the trailing arm during sub-command extraction, so the whole input was evaluated as a bare `cat` and slipped past `cat *` allow rules. A `deny: 'kubectl apply *'` rule never had a chance to fire. tree-sitter-bash represents this AST shape unusually — the trailing pipeline / list arm becomes a child of the `heredoc_redirect` instead of an outer pipeline — and the AST walk did not handle it. The walk now reconstructs the proper compound shape, so every sub-command is extracted and evaluated:
-
-```sh
-# Before: extracted as ["cat"], allowed by `cat *`.
-# After: extracted as ["cat", "kubectl apply -f -"], the kubectl arm
-#        falls through to defaults.action (or matches a deny rule).
-cat <<'EOF' | kubectl apply -f -
-apiVersion: v1
-EOF
-```
-
-The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||`, multi-stage pipelines, combined `|` + `&&` / `||` shapes, and heredocs nested inside an `if` / `while` / `for` body.
-
 ### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([#339](https://github.com/fohte/runok/pull/339))
 
 The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.
