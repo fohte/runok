@@ -157,19 +157,15 @@ The command parser operates on the input command (not the pattern). It provides:
 
 ### Tokenization
 
-Command tokenization prefers a tree-sitter-bash walk: when the input parses as a single `command` node (optionally inside a `program` / `list` / `redirected_statement` container), each named child becomes one token with source text preserved verbatim for shell groupings. This lets wrapper patterns such as `time <cmd>` capture a whole subshell (`time (ls | tail -40)`) as one `<cmd>` placeholder before recursing into it.
+Command tokenization walks the tree-sitter-bash AST. When the input resolves to a single top-level `command` or `test_command` node (optionally wrapped in a `program` / `list` / `redirected_statement`), each named child becomes one token, with shell quoting resolved per node — `string`/`raw_string`/`concatenation` arguments come back without their surrounding quotes, and double-quote escapes (`\\`, `\"`, `\$`, `` \` ``, line continuation) are processed — but groupings preserved verbatim with their delimiters intact. This lets wrapper patterns such as `time <cmd>` capture a whole subshell (`time (ls | tail -40)`) as one `<cmd>` placeholder before recursing into it.
 
-Groupings kept as single tokens via the AST walk:
+Groupings kept as single tokens:
 
 - Subshells `(...)`
 - Command substitutions `$(...)` and `` `...` ``
 - Process substitutions `<(...)` / `>(...)`
 
-Anything that is not a single top-level command (pipelines, `&&` / `||` / `;`, control structures, parse errors) falls back to a whitespace-based tokenizer that respects:
-
-- Single and double quotes
-- Backslash escapes
-- Empty quoted strings (preserved as empty tokens)
+When tree-sitter-bash cannot parse the input at all (typically a flag value containing shell metacharacters that aren't quoted in a way bash itself accepts, such as `gh api graphql -f query=mutation{createIssue(input:{}){issue{id}}}`), runok falls back to `shlex::split` for a POSIX-style word split. Pipelines, `&&` / `||` / `;`, and control structures are not handled here — callers are expected to split compound input first via `extract_commands_with_metadata`.
 
 ### Structural parsing
 
