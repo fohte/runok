@@ -77,6 +77,21 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
+### Heredoc on the left side of `|` / `&&` / `||` no longer hides the trailing arm ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+
+`cat <<EOF | kubectl apply -f -` (and the same shape with `&&` / `||`) silently dropped the trailing arm during sub-command extraction, so the whole input was evaluated as a bare `cat` and slipped past `cat *` allow rules. A `deny: 'kubectl apply *'` rule never had a chance to fire. tree-sitter-bash represents this AST shape unusually — the trailing pipeline / list arm becomes a child of the `heredoc_redirect` instead of an outer pipeline — and the AST walk did not handle it. The walk now reconstructs the proper compound shape, so every sub-command is extracted and evaluated:
+
+```sh
+# Before: extracted as ["cat"], allowed by `cat *`.
+# After: extracted as ["cat", "kubectl apply -f -"], the kubectl arm
+#        falls through to defaults.action (or matches a deny rule).
+cat <<'EOF' | kubectl apply -f -
+apiVersion: v1
+EOF
+```
+
+The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||`, multi-stage pipelines, and heredocs nested inside an `if` / `while` / `for` body.
+
 ### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote` ([#330](https://github.com/fohte/runok/pull/330))
 
 Commit-message workflows that pipe a HEREDOC through `cat` inside a double-quoted command substitution — for example, the Claude Code `/commit` skill — were rejected with `command parse error: unclosed quote`. The character-level tokenizer used to fall back behind the AST walk treated the HEREDOC body as live shell, hit a stray quote inside the prose, and bailed out. The tokenizer is now AST-only: quotes are resolved per AST node, so a HEREDOC body is handled as the literal redirect target it is and never re-scanned as shell syntax.

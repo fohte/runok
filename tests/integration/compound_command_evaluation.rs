@@ -1194,3 +1194,93 @@ fn flag_negation_empty_tokens_in_compound(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// HEREDOC + compound: a heredoc on the left side of a pipe / `&&` / `||`
+// must NOT shadow the trailing arm. Without the fix, `cat <<EOF | rm -rf /`
+// reduced to `cat` and slipped past `cat *` allow rules, defeating runok's
+// allow/ask/deny gate.
+// ========================================
+
+#[rstest]
+#[case::pipe_unquoted_heredoc(
+    indoc! {"
+        cat <<EOF | rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::pipe_quoted_heredoc(
+    indoc! {"
+        cat <<'EOF' | rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::pipe_double_quoted_heredoc(
+    indoc! {r#"
+        cat <<"EOF" | rm -rf /
+        body
+        EOF
+    "#},
+    assert_deny as ActionAssertion,
+)]
+#[case::pipe_tab_strip_heredoc(
+    indoc! {"
+        cat <<-EOF | rm -rf /
+        \tbody
+        \tEOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::and_chain_after_heredoc(
+    indoc! {"
+        cat <<EOF && rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::or_chain_after_heredoc(
+    indoc! {"
+        cat <<EOF || rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::heredoc_into_unmatched_command_asks(
+    indoc! {"
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        EOF
+    "},
+    assert_ask as ActionAssertion,
+)]
+#[case::heredoc_pipe_chain_with_deny_at_end(
+    indoc! {"
+        cat <<EOF | tee out && rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
+fn heredoc_in_compound_does_not_shadow_trailing_arm(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'cat *'
+          - allow: 'echo *'
+          - allow: 'tee *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

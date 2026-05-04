@@ -794,9 +794,39 @@ fn collect_commands(
                     all_redirects.push(info);
                 }
             }
+            // tree-sitter-bash represents `cat <<EOF | other ...\nbody\nEOF`
+            // by attaching the trailing `pipeline` / `&&` / `||` arm as a
+            // CHILD of the `heredoc_redirect` instead of wrapping the
+            // whole thing in an outer pipeline / list. Detect that here
+            // so the body and the swallowed continuation are emitted with
+            // the right pipe_info — otherwise the trailing arm silently
+            // disappears and `cat <<EOF | rm -rf /` would slip past
+            // `cat *` allow rules.
+            let continuation = find_heredoc_continuation(node, source);
             // Process body first (preserves original command ordering)
             if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands, pipe_info, &all_redirects);
+                let body_pipe = match &continuation {
+                    Some(HeredocContinuation::Pipeline { .. }) => PipeInfo {
+                        stdin: pipe_info.stdin,
+                        stdout: true,
+                    },
+                    _ => pipe_info.clone(),
+                };
+                collect_commands(body, source, commands, &body_pipe, &all_redirects);
+            }
+            // Emit the swallowed continuation, if any, as if it were a
+            // proper sibling of the body inside an outer pipeline / list.
+            if let Some(continuation) = &continuation {
+                let trail_pipe = match continuation {
+                    HeredocContinuation::Pipeline { .. } => PipeInfo {
+                        stdin: true,
+                        stdout: pipe_info.stdout,
+                    },
+                    HeredocContinuation::List { .. } => pipe_info.clone(),
+                };
+                for child in continuation.children() {
+                    collect_commands(*child, source, commands, &trail_pipe, redirects);
+                }
             }
             // Second pass: recurse into redirect children for nested
             // substitutions (e.g. `cmd > >(nested)`). HEREDOCs with a
@@ -804,6 +834,11 @@ fn collect_commands(
             // literal — bash does not expand `$VAR`/`$(...)` inside the
             // body — so skip them to avoid false positives where the
             // body text accidentally looks like shell syntax.
+            //
+            // Also skip the swallowed pipeline / `right`-field children
+            // already emitted via `find_heredoc_continuation` above —
+            // re-walking them would double-count `command_substitution`
+            // nodes inside the trailing arm.
             for i in 0..node.child_count() {
                 if node.field_name_for_child(i as u32) == Some("redirect")
                     && let Some(child) = node.child(i as u32)
@@ -811,7 +846,11 @@ fn collect_commands(
                     if child.kind() == "heredoc_redirect" && is_quoted_heredoc(child, source) {
                         continue;
                     }
-                    collect_substitutions_recursive(child, source, commands);
+                    if child.kind() == "heredoc_redirect" {
+                        collect_heredoc_redirect_substitutions(child, source, commands);
+                    } else {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
                 }
             }
         }
@@ -1049,6 +1088,142 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
             })
         }
         _ => None,
+    }
+}
+
+/// What follows the `<<DELIM` / `<<-DELIM` part of a `heredoc_redirect`,
+/// when tree-sitter-bash has folded a trailing pipeline / `&&` / `||`
+/// arm into the redirect's children.
+///
+/// For `cat <<EOF | x | y\n...EOF`, the heredoc_redirect contains a
+/// nested `pipeline` with stages `[x, y]` (the body `cat` is the
+/// implicit first stage). For `cat <<EOF && x\n...EOF`, the
+/// heredoc_redirect contains an `&&` operator anonymous child plus a
+/// `command` (or `redirected_statement`) under the `right` field.
+///
+/// `Pipeline` carries the stages that should each see `pipe.stdin` set;
+/// `List` carries the trailing arm with no pipe relationship to the body.
+enum HeredocContinuation<'tree> {
+    Pipeline {
+        stages: Vec<tree_sitter::Node<'tree>>,
+    },
+    List {
+        arms: Vec<tree_sitter::Node<'tree>>,
+    },
+}
+
+impl<'tree> HeredocContinuation<'tree> {
+    fn children(&self) -> &[tree_sitter::Node<'tree>] {
+        match self {
+            HeredocContinuation::Pipeline { stages } => stages,
+            HeredocContinuation::List { arms } => arms,
+        }
+    }
+}
+
+/// Inspect a `redirected_statement` for a "swallowed" trailing arm of
+/// a pipeline / `&&` / `||` that tree-sitter-bash mis-attaches as a
+/// child of the inner `heredoc_redirect`.
+///
+/// Returns `None` when the redirected statement has no heredoc
+/// continuation — i.e. for the well-formed cases that already worked
+/// (no heredoc, heredoc with no trailing operator, heredoc on the
+/// right of a pipe).
+fn find_heredoc_continuation<'tree>(
+    redirected_statement: tree_sitter::Node<'tree>,
+    source: &[u8],
+) -> Option<HeredocContinuation<'tree>> {
+    for i in 0..redirected_statement.child_count() {
+        if redirected_statement.field_name_for_child(i as u32) != Some("redirect") {
+            continue;
+        }
+        let child = redirected_statement.child(i as u32)?;
+        if child.kind() != "heredoc_redirect" {
+            continue;
+        }
+        return extract_heredoc_continuation(child, source);
+    }
+    None
+}
+
+/// Walk a `heredoc_redirect` node looking for command-bearing children
+/// that represent a pipeline stage (`pipeline`, plus any nested
+/// `redirected_statement` / `command` siblings inside it) or a
+/// `&&`/`||`/`;` arm (an operator child plus a `right` field).
+fn extract_heredoc_continuation<'tree>(
+    heredoc: tree_sitter::Node<'tree>,
+    _source: &[u8],
+) -> Option<HeredocContinuation<'tree>> {
+    let mut pipeline_stages: Vec<tree_sitter::Node<'tree>> = Vec::new();
+    let mut list_arms: Vec<tree_sitter::Node<'tree>> = Vec::new();
+
+    for i in 0..heredoc.child_count() {
+        let Some(child) = heredoc.child(i as u32) else {
+            continue;
+        };
+        // Anonymous `||`, `&&`, `&`, `;` tokens are surfaced as
+        // unnamed siblings; the actual right-hand side comes through
+        // the named `right` / argument fields below.
+        if !child.is_named() {
+            continue;
+        }
+        let field = heredoc.field_name_for_child(i as u32);
+        match (child.kind(), field) {
+            // `cat <<EOF | x ...`: tree-sitter wraps the trailing
+            // stages in a `pipeline` node. Each named child is a
+            // pipe stage that must see `pipe.stdin = true`.
+            ("pipeline", _) => {
+                let mut cursor = child.walk();
+                for stage in child.named_children(&mut cursor) {
+                    pipeline_stages.push(stage);
+                }
+            }
+            // `cat <<EOF && x` / `cat <<EOF || x`: the trailing arm
+            // is exposed as a `command` / `redirected_statement` /
+            // `pipeline` under the `right` field.
+            (_, Some("right")) => {
+                list_arms.push(child);
+            }
+            _ => {}
+        }
+    }
+
+    if !pipeline_stages.is_empty() {
+        Some(HeredocContinuation::Pipeline {
+            stages: pipeline_stages,
+        })
+    } else if !list_arms.is_empty() {
+        Some(HeredocContinuation::List { arms: list_arms })
+    } else {
+        None
+    }
+}
+
+/// Like `collect_substitutions_recursive`, but tailored for an
+/// unquoted `heredoc_redirect`: skip swallowed pipeline / `right`-field
+/// children (those have already been emitted as proper sub-commands by
+/// the caller) and only scan the actual `heredoc_body` for `$(...)` /
+/// `` `...` `` substitutions.
+fn collect_heredoc_redirect_substitutions(
+    heredoc: tree_sitter::Node,
+    source: &[u8],
+    commands: &mut Vec<ExtractedCommand>,
+) {
+    for i in 0..heredoc.child_count() {
+        let Some(child) = heredoc.child(i as u32) else {
+            continue;
+        };
+        if !child.is_named() {
+            continue;
+        }
+        // Already emitted via the continuation handling.
+        if child.kind() == "pipeline" {
+            continue;
+        }
+        if heredoc.field_name_for_child(i as u32) == Some("right") {
+            continue;
+        }
+        collect_substitutions_recursive(child, source, commands);
     }
 }
 
@@ -1451,6 +1626,172 @@ mod tests {
             )\""}
         .trim_end();
         assert_eq!(result, vec!["git add path", "cat", third]);
+    }
+
+    // ========================================
+    // extract_commands: HEREDOC inside compound expressions
+    //
+    // tree-sitter-bash represents `cat <<EOF | other ...\nbody\nEOF` by
+    // attaching the trailing `pipeline` / `&&` / `||` arm as a CHILD of
+    // the `heredoc_redirect` node, instead of wrapping the whole thing
+    // in an outer pipeline. A naive walk that only descends into the
+    // `body` field and looks for `command_substitution` inside redirect
+    // children silently drops the trailing arm — which previously made
+    // `cat <<EOF | kubectl apply -f -` pass as a bare `cat` and slip
+    // past `cat *` allow rules.
+    // ========================================
+
+    #[test]
+    fn extract_heredoc_pipe_unquoted() {
+        let input = indoc! {"
+            cat <<EOF | kubectl apply -f -
+            apiVersion: v1
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
+    }
+
+    #[test]
+    fn extract_heredoc_pipe_quoted_delimiter() {
+        let input = indoc! {"
+            cat <<'EOF' | kubectl apply -f -
+            apiVersion: v1
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
+    }
+
+    #[test]
+    fn extract_heredoc_pipe_double_quoted_delimiter() {
+        let input = indoc! {r#"
+            cat <<"EOF" | kubectl apply -f -
+            apiVersion: v1
+            EOF
+        "#}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
+    }
+
+    #[test]
+    fn extract_heredoc_pipe_tab_strip() {
+        let input = indoc! {"
+            cat <<-EOF | tee out
+            \tbody
+            \tEOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "tee out"]);
+    }
+
+    #[test]
+    fn extract_heredoc_pipe_multiple_stages() {
+        let input = indoc! {"
+            cat <<EOF | kubectl apply -f - | tee out
+            body
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "kubectl apply -f -", "tee out"]);
+    }
+
+    #[test]
+    fn extract_heredoc_and_chain() {
+        let input = indoc! {"
+            cat <<EOF && echo done
+            body
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "echo done"]);
+    }
+
+    #[test]
+    fn extract_heredoc_or_chain() {
+        let input = indoc! {"
+            cat <<EOF || echo nope
+            body
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "echo nope"]);
+    }
+
+    // Two heredocs on one pipeline (`cat <<A | cat <<B | tee`) is
+    // legal bash, but tree-sitter-bash 0.25.1 cannot parse it — the
+    // second `<<` produces an ERROR node — so runok surfaces a
+    // SyntaxError to the caller rather than silently dropping arms.
+    // This is a known parser limitation, pinned here so a future
+    // tree-sitter-bash bump that fixes it doesn't go unnoticed.
+    #[test]
+    fn extract_two_heredocs_in_pipeline_is_syntax_error() {
+        let input = indoc! {"
+            cat <<EOF | cat <<EOF2 | tee out
+            body1
+            EOF
+            body2
+            EOF2
+        "}
+        .trim_end();
+        let err = extract_commands(input).unwrap_err();
+        assert!(
+            matches!(err, CommandParseError::SyntaxError),
+            "expected SyntaxError, got {:?}",
+            err
+        );
+    }
+
+    // The trailing arm may itself be a compound expression. All of
+    // its sub-commands need to surface so deny rules can match them.
+    #[test]
+    fn extract_heredoc_pipe_then_and_chain() {
+        let input = indoc! {"
+            cat <<EOF | tee out && echo done
+            body
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "tee out", "echo done"]);
+    }
+
+    // Heredoc on the right-hand side of a pipeline is the "easy"
+    // case (tree-sitter wraps the pipeline naturally). Pin it down
+    // so the fix for the left-hand case does not regress it.
+    #[test]
+    fn extract_pipeline_into_heredoc() {
+        let input = indoc! {"
+            echo foo | cat <<EOF
+            body
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["echo foo", "cat"]);
+    }
+
+    // Heredoc inside an `if` body must still surface every pipeline
+    // stage to the outer command list.
+    #[test]
+    fn extract_heredoc_pipe_inside_if() {
+        let input = indoc! {"
+            if true; then
+              cat <<EOF | tee out
+            body
+            EOF
+            fi
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["true", "cat", "tee out"]);
     }
 
     // ========================================
