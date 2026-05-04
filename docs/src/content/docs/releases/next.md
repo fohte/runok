@@ -48,30 +48,6 @@ EOF
 
 `"echo" hello` (or `'echo' hello`) used to tokenise with the surrounding quotes still attached to the command name (`["\"echo\"", "hello"]`), so a rule like `allow: 'echo *'` would not fire. Quotes are now stripped from the command name as well as from arguments, matching how bash itself treats them.
 
-### `runok check --input-format claude-code-hook` no longer blocks Claude Code on runok-side failures
-
-In hook mode, the following runok-side failures now exit with code `1` instead of `2`: config load errors, rule pattern parse errors, unknown-flag errors, stdin JSON parse errors, and `HookInput` schema mismatches. Previously, any of these would cause every Bash tool call in Claude Code to be blocked, because Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error. Exit `1` is the documented non-blocking failure mode and lets Claude Code fall back to its normal permission flow until the underlying issue is fixed.
-
-Direct CLI usage (`runok check` without `--input-format claude-code-hook`) is unchanged.
-
-See [`runok check` exit codes](/cli/check/) for details.
-
-## New Features
-
-### Global `--config` / `-c` flag ([#315](https://github.com/fohte/runok/pull/315))
-
-All subcommands now accept a `-c` / `--config` flag to load a specific config file instead of the default config discovery (global + project). The flag can appear before or after the subcommand name.
-
-```sh
-runok check -c readonly-gh.yml -- gh api graphql
-runok -c custom.yml exec -- npm test
-runok test -c my-rules.yml
-```
-
-This replaces the previous per-subcommand `--config` flags on `runok test` and `runok migrate`. The flag now works identically on all subcommands including `check` and `exec`.
-
-See [Global Flags](/cli/overview/#global-flags) for details.
-
 ## Library API changes
 
 These changes only affect code that imports `runok` as a Rust library. The CLI and `runok.yml` authoring are unaffected.
