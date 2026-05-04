@@ -1124,40 +1124,53 @@ mod tests {
             .as_secs()
     }
 
-    #[rstest]
-    fn remote_preset_inline_tests_stripped(tmp: TempDir) {
-        let reference_str = "github:org/preset@v1";
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
-        let cache_dir = cache.cache_dir(reference_str);
+    /// Build a `PresetCache` rooted at `root` with a one-hour TTL.
+    fn make_cache(root: &Path) -> PresetCache {
+        PresetCache::with_config(root.to_path_buf(), std::time::Duration::from_secs(3600))
+    }
 
-        // Write a preset with inline tests into the cache
+    /// Seed `cache` with a remote preset at `reference`: write each
+    /// `(file_name, yaml)` entry into the cache dir and persist its metadata.
+    /// Returns the cache dir for callers that need it directly.
+    fn seed_remote_preset(cache: &PresetCache, reference: &str, files: &[(&str, &str)]) -> PathBuf {
+        let cache_dir = cache.cache_dir(reference);
         fs::create_dir_all(&cache_dir).unwrap();
-        fs::write(
-            cache_dir.join("runok.yml"),
-            indoc! {"
-                rules:
-                  - ask: 'gh api *'
-                    tests:
-                      - ask: 'gh api /repos'
-                  - allow: 'git status'
-                    tests:
-                      - allow: 'git status --short'
-                tests:
-                  cases:
-                    - ask: 'gh api /users'
-            "},
-        )
-        .unwrap();
+        for (name, body) in files {
+            fs::write(cache_dir.join(name), body).unwrap();
+        }
         let metadata = CacheMetadata {
             fetched_at: current_timestamp(),
             is_immutable: false,
-            reference: reference_str.to_string(),
+            reference: reference.to_string(),
             resolved_sha: None,
         };
         PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+        cache_dir
+    }
+
+    #[rstest]
+    fn remote_preset_inline_tests_stripped(tmp: TempDir) {
+        let reference_str = "github:org/preset@v1";
+        let cache = make_cache(tmp.path());
+        seed_remote_preset(
+            &cache,
+            reference_str,
+            &[(
+                "runok.yml",
+                indoc! {"
+                    rules:
+                      - ask: 'gh api *'
+                        tests:
+                          - ask: 'gh api /repos'
+                      - allow: 'git status'
+                        tests:
+                          - allow: 'git status --short'
+                    tests:
+                      cases:
+                        - ask: 'gh api /users'
+                "},
+            )],
+        );
 
         let mock = MockGitClient::new();
         let config = load_preset_with(reference_str, tmp.path(), &mock, &cache).unwrap();
@@ -1208,54 +1221,44 @@ mod tests {
     #[rstest]
     fn remote_preset_with_local_extends_strips_nested_tests(tmp: TempDir) {
         let reference_str = "github:org/preset/base@v1";
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
-        );
-        let cache_dir = cache.cache_dir(reference_str);
-        fs::create_dir_all(&cache_dir).unwrap();
-
+        let cache = make_cache(tmp.path());
         // Top-level remote preset extends a sibling via a local path, mirroring
         // the structure used by published preset bundles such as runok-presets/base.
-        fs::write(
-            cache_dir.join("base.yml"),
-            indoc! {"
-                extends:
-                  - ./readonly.yml
-                rules:
-                  - ask: 'gh api *'
-                    tests:
-                      - ask: 'gh api /repos'
-                tests:
-                  cases:
-                    - ask: 'gh api /users'
-            "},
-        )
-        .unwrap();
-        fs::write(
-            cache_dir.join("readonly.yml"),
-            indoc! {"
-                rules:
-                  - allow: 'find *'
-                    tests:
-                      - allow: 'find . -name *.txt'
-                  - allow: 'sed -n *'
-                    tests:
-                      - allow: 'sed -n 1,10p file'
-                tests:
-                  cases:
-                    - allow: 'find . -type f'
-            "},
-        )
-        .unwrap();
-
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference_str.to_string(),
-            resolved_sha: None,
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+        seed_remote_preset(
+            &cache,
+            reference_str,
+            &[
+                (
+                    "base.yml",
+                    indoc! {"
+                        extends:
+                          - ./readonly.yml
+                        rules:
+                          - ask: 'gh api *'
+                            tests:
+                              - ask: 'gh api /repos'
+                        tests:
+                          cases:
+                            - ask: 'gh api /users'
+                    "},
+                ),
+                (
+                    "readonly.yml",
+                    indoc! {"
+                        rules:
+                          - allow: 'find *'
+                            tests:
+                              - allow: 'find . -name *.txt'
+                          - allow: 'sed -n *'
+                            tests:
+                              - allow: 'sed -n 1,10p file'
+                        tests:
+                          cases:
+                            - allow: 'find . -type f'
+                    "},
+                ),
+            ],
+        );
 
         let mock = MockGitClient::new();
         let resolved =
@@ -1278,43 +1281,33 @@ mod tests {
     #[rstest]
     fn user_config_keeps_tests_when_remote_extends_chain_is_stripped(tmp: TempDir) {
         let reference_str = "github:org/preset@v1";
-        let cache = PresetCache::with_config(
-            tmp.path().to_path_buf(),
-            std::time::Duration::from_secs(3600),
+        let cache = make_cache(tmp.path());
+        seed_remote_preset(
+            &cache,
+            reference_str,
+            &[
+                (
+                    "runok.yml",
+                    indoc! {"
+                        extends:
+                          - ./child.yml
+                        rules:
+                          - ask: 'gh api *'
+                            tests:
+                              - ask: 'gh api /repos'
+                    "},
+                ),
+                (
+                    "child.yml",
+                    indoc! {"
+                        rules:
+                          - allow: 'find *'
+                            tests:
+                              - allow: 'find . -name *.txt'
+                    "},
+                ),
+            ],
         );
-        let cache_dir = cache.cache_dir(reference_str);
-        fs::create_dir_all(&cache_dir).unwrap();
-
-        fs::write(
-            cache_dir.join("runok.yml"),
-            indoc! {"
-                extends:
-                  - ./child.yml
-                rules:
-                  - ask: 'gh api *'
-                    tests:
-                      - ask: 'gh api /repos'
-            "},
-        )
-        .unwrap();
-        fs::write(
-            cache_dir.join("child.yml"),
-            indoc! {"
-                rules:
-                  - allow: 'find *'
-                    tests:
-                      - allow: 'find . -name *.txt'
-            "},
-        )
-        .unwrap();
-
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference_str.to_string(),
-            resolved_sha: None,
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let user_dir = tmp.path().join("user");
         fs::create_dir_all(&user_dir).unwrap();
@@ -1386,10 +1379,7 @@ mod tests {
         "})
         .unwrap();
 
-        let cache = PresetCache::with_config(
-            tmp.path().join("cache"),
-            std::time::Duration::from_secs(3600),
-        );
+        let cache = make_cache(&tmp.path().join("cache"));
         let mock = MockGitClient::new();
         let resolved =
             resolve_extends_with(parent_config, base_dir, "parent.yml", &mock, &cache).unwrap();
@@ -1411,42 +1401,33 @@ mod tests {
     #[rstest]
     fn local_intermediate_then_remote_strips_only_remote_descendants(tmp: TempDir) {
         let reference_str = "github:org/preset@v1";
-        let cache = PresetCache::with_config(
-            tmp.path().join("cache"),
-            std::time::Duration::from_secs(3600),
+        let cache = make_cache(&tmp.path().join("cache"));
+        seed_remote_preset(
+            &cache,
+            reference_str,
+            &[
+                (
+                    "runok.yml",
+                    indoc! {"
+                        extends:
+                          - ./remote-child.yml
+                        rules:
+                          - allow: 'remote-rule'
+                            tests:
+                              - allow: 'remote-rule arg'
+                    "},
+                ),
+                (
+                    "remote-child.yml",
+                    indoc! {"
+                        rules:
+                          - allow: 'remote-grandchild'
+                            tests:
+                              - allow: 'remote-grandchild arg'
+                    "},
+                ),
+            ],
         );
-        let cache_dir = cache.cache_dir(reference_str);
-        fs::create_dir_all(&cache_dir).unwrap();
-
-        fs::write(
-            cache_dir.join("runok.yml"),
-            indoc! {"
-                extends:
-                  - ./remote-child.yml
-                rules:
-                  - allow: 'remote-rule'
-                    tests:
-                      - allow: 'remote-rule arg'
-            "},
-        )
-        .unwrap();
-        fs::write(
-            cache_dir.join("remote-child.yml"),
-            indoc! {"
-                rules:
-                  - allow: 'remote-grandchild'
-                    tests:
-                      - allow: 'remote-grandchild arg'
-            "},
-        )
-        .unwrap();
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference_str.to_string(),
-            resolved_sha: None,
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
 
         let user_dir = tmp.path().join("user");
         fs::create_dir_all(&user_dir).unwrap();
