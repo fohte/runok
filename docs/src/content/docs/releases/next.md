@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
-### Breaking: parent command text now uses placeholders for command substitutions
+### Breaking: parent command text now uses placeholders for command substitutions ([#329](https://github.com/fohte/runok/pull/329))
 
 Compound commands that pass a heredoc through a command substitution — most commonly `git commit -m "$(cat <<'EOF' ... EOF)"` produced by Claude Code's `/commit` flow — used to fall back to `defaults.action` because the heredoc body's bytes were folded into the parent command's text and re-tokenized, raising `unclosed quote` whenever the body contained a `'` or `"`.
 
