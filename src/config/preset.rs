@@ -187,16 +187,32 @@ pub fn load_preset_with<G: GitClient>(
             // Strip test definitions from remote presets.  Tests are authored
             // for the preset itself and should not be evaluated by downstream
             // consumers — local overrides would cause them to fail.
-            if let Some(rules) = &mut config.rules {
-                for rule in rules.iter_mut() {
-                    rule.tests = None;
-                }
-            }
-            config.tests = None;
+            strip_preset_tests(&mut config);
 
             Ok(config)
         }
     }
+}
+
+/// Strip inline `tests` on each rule and the top-level `tests` from `config`.
+///
+/// Used for any preset reached via a remote ancestor in the extends chain so
+/// that preset-authored tests are not evaluated under downstream overrides.
+fn strip_preset_tests(config: &mut Config) {
+    if let Some(rules) = &mut config.rules {
+        for rule in rules.iter_mut() {
+            rule.tests = None;
+        }
+    }
+    config.tests = None;
+}
+
+/// Returns `true` when `reference` is a remote preset (GitHub shorthand or git URL).
+fn is_remote_reference(reference: &str) -> bool {
+    !matches!(
+        parse_preset_reference(reference),
+        Ok(PresetReference::Local(_))
+    )
 }
 
 /// Fully load a preset by reference and recursively resolve its `extends`.
@@ -250,6 +266,11 @@ pub fn resolve_extends_with<G: GitClient>(
     let mut visited = HashSet::new();
     visited.insert(canonical_source);
 
+    // Once an extends chain crosses into a remote preset, every preset reached
+    // from it (including locally-referenced children inside the cloned repo)
+    // is preset-authored and must have its tests stripped.
+    let under_remote = is_remote_reference(source_name);
+
     resolve_extends_recursive(
         config,
         base_dir,
@@ -257,6 +278,7 @@ pub fn resolve_extends_with<G: GitClient>(
         cache,
         &mut chain,
         &mut visited,
+        under_remote,
     )
 }
 
@@ -264,6 +286,9 @@ pub fn resolve_extends_with<G: GitClient>(
 ///
 /// `chain` tracks the current DFS path (ordered) for cycle reporting.
 /// `visited` is the set of all references in the current chain for O(1) lookup.
+/// `under_remote` is true when the current config was reached via a remote
+/// preset; child presets loaded from this point must have their preset-authored
+/// tests stripped, even when referenced via local paths inside the cloned repo.
 fn resolve_extends_recursive<G: GitClient>(
     config: Config,
     base_dir: &Path,
@@ -271,6 +296,7 @@ fn resolve_extends_recursive<G: GitClient>(
     cache: &PresetCache,
     chain: &mut Vec<String>,
     visited: &mut HashSet<String>,
+    under_remote: bool,
 ) -> Result<Config, ConfigError> {
     let extends = match &config.extends {
         Some(refs) if !refs.is_empty() => refs.clone(),
@@ -309,7 +335,16 @@ fn resolve_extends_recursive<G: GitClient>(
         visited.insert(canonical_key.clone());
 
         // Load the preset config (without resolving its extends yet)
-        let preset_config = load_preset_with(reference, base_dir, git_client, cache)?;
+        let mut preset_config = load_preset_with(reference, base_dir, git_client, cache)?;
+
+        // Once anything in the chain is remote, every transitively-loaded
+        // preset must have its tests stripped. `load_preset_with` already
+        // strips for direct-remote references, but local references reached
+        // via a remote ancestor also need stripping here.
+        let child_under_remote = under_remote || is_remote_reference(reference);
+        if child_under_remote {
+            strip_preset_tests(&mut preset_config);
+        }
 
         // Determine the base_dir for the loaded preset's own extends
         let preset_base_dir = determine_preset_base_dir(reference, base_dir, cache);
@@ -322,6 +357,7 @@ fn resolve_extends_recursive<G: GitClient>(
             cache,
             chain,
             visited,
+            child_under_remote,
         )?;
 
         merged = merged.merge(resolved);
@@ -1157,6 +1193,210 @@ mod tests {
         assert!(
             rules[0].tests.is_some(),
             "inline tests should be preserved in local preset"
+        );
+    }
+
+    /// A remote preset that internally extends another preset via a local
+    /// path (the layout used by `runok-presets/base`) must have inline tests
+    /// and top-level tests stripped from every nested file, not just the
+    /// outermost remote entry point.
+    #[rstest]
+    fn remote_preset_with_local_extends_strips_nested_tests(tmp: TempDir) {
+        let reference_str = "github:org/preset/base@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let cache_dir = cache.cache_dir(reference_str);
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        // Top-level remote preset extends a sibling via a local path, mirroring
+        // the structure used by published preset bundles such as runok-presets/base.
+        fs::write(
+            cache_dir.join("base.yml"),
+            indoc! {"
+                extends:
+                  - ./readonly.yml
+                rules:
+                  - ask: 'gh api *'
+                    tests:
+                      - ask: 'gh api /repos'
+                tests:
+                  cases:
+                    - ask: 'gh api /users'
+            "},
+        )
+        .unwrap();
+        fs::write(
+            cache_dir.join("readonly.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'find *'
+                    tests:
+                      - allow: 'find . -name *.txt'
+                  - allow: 'sed -n *'
+                    tests:
+                      - allow: 'sed -n 1,10p file'
+                tests:
+                  cases:
+                    - allow: 'find . -type f'
+            "},
+        )
+        .unwrap();
+
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let mock = MockGitClient::new();
+        let resolved =
+            load_and_resolve_preset_with(reference_str, tmp.path(), &mock, &cache).unwrap();
+
+        let rules = resolved.rules.expect("merged rules should be present");
+        assert!(
+            rules.iter().all(|r| r.tests.is_none()),
+            "inline tests must be stripped from every preset reached via the remote ancestor",
+        );
+        assert!(
+            resolved.tests.is_none(),
+            "top-level tests must be stripped from every preset reached via the remote ancestor",
+        );
+    }
+
+    /// User config that locally extends a remote preset must keep its own
+    /// tests, but every preset reached through the remote (including its
+    /// local-path children) must be stripped.
+    #[rstest]
+    fn user_config_keeps_tests_when_remote_extends_chain_is_stripped(tmp: TempDir) {
+        let reference_str = "github:org/preset@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().to_path_buf(),
+            std::time::Duration::from_secs(3600),
+        );
+        let cache_dir = cache.cache_dir(reference_str);
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        fs::write(
+            cache_dir.join("runok.yml"),
+            indoc! {"
+                extends:
+                  - ./child.yml
+                rules:
+                  - ask: 'gh api *'
+                    tests:
+                      - ask: 'gh api /repos'
+            "},
+        )
+        .unwrap();
+        fs::write(
+            cache_dir.join("child.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'find *'
+                    tests:
+                      - allow: 'find . -name *.txt'
+            "},
+        )
+        .unwrap();
+
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let user_dir = tmp.path().join("user");
+        fs::create_dir_all(&user_dir).unwrap();
+        let user_config: Config = parse_config(indoc! {"
+            extends:
+              - github:org/preset@v1
+            rules:
+              - allow: 'echo hello'
+                tests:
+                  - allow: 'echo hello world'
+            tests:
+              cases:
+                - allow: 'echo greetings'
+        "})
+        .unwrap();
+
+        let mock = MockGitClient::new();
+        let resolved =
+            resolve_extends_with(user_config, &user_dir, "user-config", &mock, &cache).unwrap();
+
+        let rules = resolved.rules.expect("merged rules should be present");
+        let user_rule = rules
+            .iter()
+            .find(|r| r.allow.as_deref() == Some("echo hello"))
+            .expect("user rule should be merged in");
+        assert!(
+            user_rule.tests.is_some(),
+            "user-defined inline tests must be preserved",
+        );
+        assert!(
+            resolved.tests.is_some(),
+            "user-defined top-level tests must be preserved",
+        );
+        assert!(
+            rules
+                .iter()
+                .filter(|r| r.allow.as_deref() != Some("echo hello"))
+                .all(|r| r.tests.is_none()),
+            "tests on rules contributed by the remote chain must be stripped",
+        );
+    }
+
+    /// A config that locally extends another local preset (no remote in the
+    /// chain) must retain inline and top-level tests on both files.
+    #[rstest]
+    fn local_only_extends_chain_preserves_tests(tmp: TempDir) {
+        let base_dir = tmp.path();
+        fs::write(
+            base_dir.join("child.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'echo child'
+                    tests:
+                      - allow: 'echo child detail'
+                tests:
+                  cases:
+                    - allow: 'echo child top-level'
+            "},
+        )
+        .unwrap();
+
+        let parent_config: Config = parse_config(indoc! {"
+            extends:
+              - ./child.yml
+            rules:
+              - allow: 'echo parent'
+                tests:
+                  - allow: 'echo parent detail'
+        "})
+        .unwrap();
+
+        let cache = PresetCache::with_config(
+            tmp.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let mock = MockGitClient::new();
+        let resolved =
+            resolve_extends_with(parent_config, base_dir, "parent.yml", &mock, &cache).unwrap();
+
+        let rules = resolved.rules.expect("merged rules should be present");
+        assert!(
+            rules.iter().all(|r| r.tests.is_some()),
+            "inline tests on local-only chains must be preserved",
+        );
+        assert!(
+            resolved.tests.is_some(),
+            "top-level tests on local-only chains must be preserved",
         );
     }
 }
