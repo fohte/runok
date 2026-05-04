@@ -1,0 +1,438 @@
+---
+title: Audit Log JSON Schema
+description: Field reference for runok audit --json output.
+sidebar:
+  order: 6
+---
+
+This page is the field-by-field reference for the JSON object produced by [`runok audit --json`](/cli/audit/#--json) (one object per line, JSONL). Use it to write `jq` queries against audit logs without reading the runok source.
+
+## Top-Level Object
+
+Every line of `runok audit --json` output is one `AuditEntry` object with the fields listed below. There are no top-level fields beyond these — top-level `matched_rules`, `parsed`, and `sub_evaluations` from runok versions before [#333](https://github.com/fohte/runok/pull/333) have been removed and are now folded into [`command_evaluations`](#command_evaluations).
+
+Example entry:
+
+```json
+{
+  "timestamp": "2026-03-13T19:31:00Z",
+  "command": "git push -f origin main",
+  "action": {
+    "type": "deny",
+    "detail": {
+      "message": "force push is forbidden",
+      "fix_suggestion": "git push origin main"
+    }
+  },
+  "sandbox_preset": null,
+  "default_action": "ask",
+  "metadata": {
+    "endpoint_type": "hook",
+    "session_id": "abc-123",
+    "cwd": "/home/user/project",
+    "tool_name": "Bash",
+    "hook_event_name": "PreToolUse"
+  },
+  "command_evaluations": [
+    {
+      "command": "git push -f origin main",
+      "action": {
+        "type": "deny",
+        "detail": {
+          "message": "force push is forbidden",
+          "fix_suggestion": "git push origin main"
+        }
+      },
+      "matched_rules": [
+        {
+          "action_kind": "deny",
+          "pattern": "git push -f|--force *",
+          "matched_tokens": ["origin", "main"]
+        }
+      ],
+      "eval_type": "primary",
+      "argv": ["git", "push", "-f", "origin", "main"]
+    }
+  ]
+}
+```
+
+### `timestamp`
+
+ISO 8601 timestamp in UTC (e.g. `2026-03-13T19:31:00Z`) recording when the evaluation was performed.
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `command`
+
+The input command string exactly as runok received it, before any shell parsing or compound-command splitting. For compound input this is the whole expression (`a && b`); for single input this is the same string as `command_evaluations[0].command`.
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `action`
+
+Final evaluation result for the input as a whole. For compound input, this is the aggregated decision across all branches (the strictest result wins: any `deny` makes the whole input `deny`, etc.). See [Action Object](#action-object) for the shape.
+
+**Type:** [`Action`](#action-object)\
+**Always present:** Yes
+
+### `sandbox_preset`
+
+Name of the sandbox preset that was applied to this evaluation, or `null` when no sandbox was applied. The preset name corresponds to a key under [`definitions.sandbox`](/configuration/schema/#definitionssandbox).
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `default_action`
+
+The configured `defaults.action` value at the time of evaluation. `null` when no default was configured. See [`defaults.action`](/configuration/schema/#defaultsaction) for the possible values.
+
+**Type:** `"allow" | "ask" | "deny" | null`\
+**Always present:** Yes (may be `null`)
+
+### `metadata`
+
+Session and context information about the invocation. See [Metadata Object](#metadata-object).
+
+**Type:** [`Metadata`](#metadata-object)\
+**Always present:** Yes
+
+### `command_evaluations`
+
+Per-branch evaluation records, in source order. One entry per shell command extracted from `command`:
+
+- A non-compound input (e.g. `git status`) produces exactly one entry with `eval_type: "primary"`.
+- A compound or pipelined input (e.g. `a && b`, `a || b`, `a ; b`, `a | b`) produces one entry per branch, all with `eval_type: "compound"`.
+- An input with no runnable command (comment-only, parse error) produces an empty array.
+
+Each entry carries the rule-evaluation result (`action`, `matched_rules`) and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side, so audit consumers can filter on the actual binary in one `jq` line:
+
+```sh
+runok audit --json | jq 'select(.command_evaluations[].argv[0] == "helmfile")'
+```
+
+See [CommandEvaluation Object](#commandevaluation-object) for the shape of each entry.
+
+**Type:** [`list[CommandEvaluation]`](#commandevaluation-object)\
+**Always present:** Yes (may be empty)
+
+## Action Object
+
+Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow` and `default`, and present (with type-specific keys) for `deny` and `ask`.
+
+```json
+// allow
+{ "type": "allow" }
+
+// deny
+{
+  "type": "deny",
+  "detail": {
+    "message": "force push is forbidden",
+    "fix_suggestion": "git push origin main"
+  }
+}
+
+// ask
+{ "type": "ask", "detail": { "message": "are you sure?" } }
+
+// default (no rule matched; the configured `defaults.action` decided)
+{ "type": "default" }
+```
+
+### `type`
+
+The kind of action.
+
+**Type:** `"allow" | "deny" | "ask" | "default"`\
+**Always present:** Yes
+
+| Value     | Meaning                                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `allow`   | An `allow` rule matched. The command is permitted.                                                                                |
+| `deny`    | A `deny` rule matched. The command is rejected.                                                                                   |
+| `ask`     | An `ask` rule matched. The command requires user confirmation.                                                                    |
+| `default` | No rule matched and the configured `defaults.action` was used. (See [`default_action`](#default_action) for which value applied.) |
+
+### `detail.message`
+
+Optional message attached to the rule. For `deny` actions this is the rule's `message` (see [Denial Feedback](/configuration/denial-feedback/)); for `ask` actions this is the prompt shown to the user.
+
+**Type:** `str | null`\
+**Present when:** `type` is `deny` or `ask`. The value may be `null` when the rule did not set `message`.
+
+### `detail.fix_suggestion`
+
+Optional fix-suggestion attached to a `deny` rule. See [Denial Feedback](/configuration/denial-feedback/).
+
+**Type:** `str | null`\
+**Present when:** `type` is `deny`. The value may be `null` when the rule did not set `fix_suggestion`.
+
+## Metadata Object
+
+```json
+{
+  "endpoint_type": "hook",
+  "session_id": "abc-123",
+  "cwd": "/home/user/project",
+  "tool_name": "Bash",
+  "hook_event_name": "PreToolUse"
+}
+```
+
+### `endpoint_type`
+
+Which runok subcommand recorded this entry. Audit consumers can use this to distinguish hook invocations from explicit `runok exec` runs.
+
+**Type:** `"exec" | "hook" | "check"`\
+**Always present:** Yes
+
+| Value   | Source                                                                            |
+| ------- | --------------------------------------------------------------------------------- |
+| `exec`  | The user invoked [`runok exec`](/cli/exec/) directly.                             |
+| `hook`  | An AI coding agent's tool-use hook (e.g. Claude Code `PreToolUse`) invoked runok. |
+| `check` | The user invoked [`runok check`](/cli/check/) (dry-run evaluation).               |
+
+### `session_id`
+
+Session identifier supplied by the calling environment, when available. For hook invocations from Claude Code, this is the Claude Code session ID. `null` when no session ID was provided.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `cwd`
+
+Working directory at the time of evaluation. `null` when the working directory could not be determined.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `tool_name`
+
+Hook-specific: name of the tool the agent was about to run (e.g. `Bash`, `Read`). `null` when `endpoint_type` is not `hook`.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `hook_event_name`
+
+Hook-specific: name of the hook event (e.g. `PreToolUse`). `null` when `endpoint_type` is not `hook`.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+## CommandEvaluation Object
+
+One entry per shell command extracted from the input. Higher-level shaping (resolving `binary` vs `subcommand`, normalising `mise` shims, classifying `-n` as boolean vs value-taking) is intentionally not done here because those rules differ per CLI and belong to the audit consumer.
+
+```json
+{
+  "command": "FOO=x echo hi > /tmp/log",
+  "action": { "type": "allow" },
+  "eval_type": "compound",
+  "env": [{ "name": "FOO", "value": "x" }],
+  "argv": ["echo", "hi"],
+  "redirects": [
+    {
+      "redirect_type": "output",
+      "operator": ">",
+      "target": "/tmp/log",
+      "descriptor": null
+    }
+  ],
+  "pipe": { "stdin": false, "stdout": true }
+}
+```
+
+### `command`
+
+The branch command as runok extracted it, with redirects stripped but the inline env prefix kept. For `eval_type: "primary"` entries this is identical to the top-level [`command`](#command).
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `action`
+
+Rule-evaluation result for this branch. See [Action Object](#action-object).
+
+**Type:** [`Action`](#action-object)\
+**Always present:** Yes
+
+### `matched_rules`
+
+Rules that matched for this branch, in match order. See [RuleMatch Object](#rulematch-object).
+
+**Type:** [`list[RuleMatch]`](#rulematch-object)\
+**Omitted when empty.**
+
+### `eval_type`
+
+How this branch was extracted from the input.
+
+**Type:** `"primary" | "compound"`\
+**Always present:** Yes
+
+| Value      | Meaning                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `primary`  | Non-compound input. The single entry covers the whole input.                                 |
+| `compound` | One branch of a compound or pipelined input (`a && b`, `a \|\| b`, `a ; b`, `a \| b`, etc.). |
+
+### `env`
+
+Inline `KEY=VALUE` env prefix attached to this branch. See [EnvVar Object](#envvar-object).
+
+**Type:** [`list[EnvVar]`](#envvar-object)\
+**Omitted when empty.**
+
+### `argv`
+
+Command name plus arguments, with shell quoting resolved. `argv[0]` is the binary as written. Empty (and therefore omitted) when shell parsing could not produce an argv (AST leaf-text fallback path).
+
+**Type:** `list[str]`\
+**Omitted when empty.**
+
+### `redirects`
+
+Redirect operators attached to this branch. See [Redirect Object](#redirect-object).
+
+**Type:** [`list[Redirect]`](#redirect-object)\
+**Omitted when empty.**
+
+### `pipe`
+
+Pipeline position of this branch. See [Pipe Object](#pipe-object).
+
+**Type:** [`Pipe`](#pipe-object)\
+**Omitted when both `stdin` and `stdout` are `false`** (i.e. the branch is not part of a pipeline).
+
+## RuleMatch Object
+
+```json
+{
+  "action_kind": "deny",
+  "pattern": "git push -f|--force *",
+  "matched_tokens": ["origin", "main"]
+}
+```
+
+### `action_kind`
+
+The kind of rule that matched.
+
+**Type:** `"allow" | "ask" | "deny"`\
+**Always present:** Yes
+
+### `pattern`
+
+The rule pattern string as written in `runok.yml`. See [Pattern Syntax](/pattern-syntax/overview/).
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `matched_tokens`
+
+Tokens the wildcard portion of the pattern captured. For example, the pattern `git push -f|--force *` matched against `git push -f origin main` yields `["origin", "main"]`. Empty for patterns with no wildcards.
+
+**Type:** `list[str]`\
+**Always present:** Yes (may be empty)
+
+## EnvVar Object
+
+```json
+{ "name": "FOO", "value": "x" }
+```
+
+### `name`
+
+Variable name.
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `value`
+
+Variable value with shell quotes resolved. `null` for the bare `KEY= cmd` form (which clears the variable in the child process's environment).
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+## Redirect Object
+
+Captures redirect operators (`> file`, `2>&1`, `<<<` here-strings, `<<` here-docs, etc.). The here-doc delimiter and body are not captured — only the operator itself.
+
+```json
+{
+  "redirect_type": "output",
+  "operator": ">",
+  "target": "/tmp/log",
+  "descriptor": null
+}
+```
+
+### `redirect_type`
+
+Redirect category.
+
+**Type:** `"input" | "output" | "dup"`\
+**Always present:** Yes
+
+| Value    | Examples                                    |
+| -------- | ------------------------------------------- |
+| `input`  | `<file`, `<<EOF`, `<<-EOF`, `<<<"string"`   |
+| `output` | `>file`, `>>file`, `&>file`                 |
+| `dup`    | `2>&1`, `>&2` (file-descriptor duplication) |
+
+### `operator`
+
+The redirect operator text.
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `target`
+
+Redirect target. A filename for file redirects, an fd reference like `&1` for `dup` redirects, or an empty string for `<<` / `<<-` here-docs (the delimiter is not captured).
+
+**Type:** `str`\
+**Always present:** Yes (may be empty)
+
+### `descriptor`
+
+Explicit file descriptor when the redirect specifies one (e.g. `2` in `2>file`). `null` when the redirect uses the default fd (stdin for input, stdout for output).
+
+**Type:** `int | null`\
+**Always present:** Yes (may be `null`)
+
+## Pipe Object
+
+```json
+{ "stdin": true, "stdout": false }
+```
+
+### `stdin`
+
+`true` when this branch's stdin comes from a preceding pipe (i.e. there is a `... | this` upstream).
+
+**Type:** `bool`\
+**Always present:** Yes
+
+### `stdout`
+
+`true` when this branch's stdout feeds a following pipe (i.e. there is a `this | ...` downstream).
+
+**Type:** `bool`\
+**Always present:** Yes
+
+## Backwards Compatibility
+
+Audit log files written by runok versions before [#333](https://github.com/fohte/runok/pull/333) used a different top-level shape (with `matched_rules` and `sub_evaluations` instead of `command_evaluations`). `runok audit` automatically rewrites those legacy entries into the current shape on read, so existing JSONL files keep being queryable. New writes always use the schema documented above.
+
+Legacy entries do not carry the per-branch `env`, `argv`, `redirects`, or `pipe` fields; on legacy data those fields will appear empty (and therefore be omitted from the JSON output).
+
+## Related
+
+- [`runok audit`](/cli/audit/) -- The CLI command that produces this JSON.
+- [Configuration Schema -- `audit`](/configuration/schema/#audit) -- How to configure audit logging.
+- [Pattern Syntax](/pattern-syntax/overview/) -- Syntax of the `pattern` strings inside [`matched_rules`](#rulematch-object).

@@ -91,54 +91,15 @@ TIMESTAMP            ACTION   COMMAND
 
 Timestamps are displayed in local time in both modes.
 
-In JSON mode (`--json`), each entry is a complete JSON object with the input `command`, the overall `action`, sandbox preset, metadata, and `command_evaluations` -- a per-branch list described below.
+In JSON mode (`--json`), each line is a complete JSON object describing one evaluation. The full field-by-field reference -- including every enum value and every "omitted when empty" condition -- lives on a dedicated page: see [Audit Log JSON Schema](/cli/audit-log-schema/).
 
-### `command_evaluations`
-
-`command_evaluations` is the single canonical place runok records per-branch evaluation data. Single inputs produce one entry, compound (`a && b`) and pipelined (`a | b`) inputs produce one per branch in source order, and inputs with no runnable command (comment-only, parse failure) produce an empty array.
-
-Each entry carries the rule-evaluation result (`action`, `matched_rules`) and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side, so audit consumers can filter on the actual binary in one `jq` line:
+The most common shape worth knowing here: each entry exposes a `command_evaluations` array with one entry per shell command extracted from the input. Single inputs produce one entry, compound (`a && b`) and pipelined (`a | b`) inputs produce one per branch in source order, and inputs with no runnable command (comment-only, parse failure) produce an empty array. Each entry carries the rule-evaluation result (`action`, `matched_rules`) and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side, so audit consumers can filter on the actual binary in one `jq` line:
 
 ```sh
 runok audit --json | jq 'select(.command_evaluations[].argv[0] == "helmfile")'
 ```
 
-Compound example:
-
-```json
-{
-  "command": "FOO=x echo hi && BAR=y cat /tmp/f",
-  "command_evaluations": [
-    {
-      "command": "echo hi",
-      "action": { "type": "allow" },
-      "eval_type": "compound",
-      "env": [{ "name": "FOO", "value": "x" }],
-      "argv": ["echo", "hi"]
-    },
-    {
-      "command": "cat /tmp/f",
-      "action": { "type": "allow" },
-      "eval_type": "compound",
-      "env": [{ "name": "BAR", "value": "y" }],
-      "argv": ["cat", "/tmp/f"]
-    }
-  ]
-}
-```
-
-Fields:
-
-- `command` -- The branch command as runok extracted it (redirects stripped, env prefix kept).
-- `action` -- Rule-evaluation result for this branch.
-- `matched_rules` -- Rules that matched. Omitted when empty.
-- `eval_type` -- `"primary"` for non-compound inputs; `"compound"` for branches of `a && b` / `a | b` / etc.
-- `env` -- Inline `KEY=VALUE` prefix. `value` is `null` for the bare `KEY= cmd` form. Omitted when empty.
-- `argv` -- Command name plus arguments, with shell quotes resolved. `argv[0]` is the binary as written. Omitted when shell parsing could not produce an argv.
-- `redirects` -- Redirect operators (`> file`, `2>&1`, `<<<` here-strings, `<<` here-docs, etc.). Each entry has `redirect_type` (`input`/`output`/`dup`), `operator` (the bare operator token; the here-doc delimiter and body are not captured), `target` (file or fd reference; empty for `<<` / `<<-`), and optional `descriptor`. Omitted when empty.
-- `pipe` -- `{stdin, stdout}` flags indicating pipeline position. Omitted when both are `false`.
-
-Per-CLI shaping (resolving `binary` vs `subcommand`, normalising `mise` shims, classifying `-n` as boolean vs value-taking) is intentionally left to the consumer because those rules differ per CLI.
+See [`command_evaluations`](/cli/audit-log-schema/#command_evaluations) for the full per-entry field reference.
 
 ## Configuration
 
@@ -160,5 +121,6 @@ Old log files are automatically removed based on `rotation.retention_days`.
 
 ## Related
 
+- [Audit Log JSON Schema](/cli/audit-log-schema/) -- Field-by-field reference for `runok audit --json` output.
 - [Configuration Schema — `audit`](/configuration/schema/#audit) -- Full audit config reference.
 - [`runok exec`](/cli/exec/) -- Commands evaluated via `exec` are logged.
