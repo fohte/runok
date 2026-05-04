@@ -1,7 +1,8 @@
 use crate::adapter::Endpoint;
 use crate::adapter::check_adapter::{CheckAdapter, CheckInput, OutputFormat};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookInput};
-use runok::rules::command_parser::shell_quote_join;
+use runok::rules::CommandParseError;
+use runok::rules::command_parser::{shell_quote_join, split_top_level_commands};
 
 use super::CheckArgs;
 
@@ -62,17 +63,23 @@ pub fn route_check(
         ));
     }
 
-    // 5. JSON parse failed, no --input-format → treat as plaintext (one command per line, skip empty lines)
-    let commands: Vec<String> = stdin_input
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .map(String::from)
-        .collect();
-
-    if commands.is_empty() {
-        return Err(anyhow::anyhow!("no commands provided on stdin"));
-    }
+    // 5. JSON parse failed, no --input-format → treat as plaintext.
+    //    Split into top-level commands using tree-sitter-bash so HEREDOCs,
+    //    multi-line quoted strings, and `\` line continuations stay together
+    //    while `\n`, `;`, and `&` between top-level statements split them apart.
+    //    `&&`, `||`, and `|` are kept as a single compound command — the rule
+    //    engine splits those further downstream.
+    let commands = match split_top_level_commands(&stdin_input) {
+        Ok(commands) => commands,
+        Err(CommandParseError::EmptyCommand) => {
+            return Err(anyhow::anyhow!("no commands provided on stdin"));
+        }
+        Err(CommandParseError::SyntaxError) => {
+            return Err(anyhow::anyhow!(
+                "stdin parse error: failed to parse stdin as shell input"
+            ));
+        }
+    };
 
     if commands.len() == 1 {
         return Ok(CheckRoute::Single(Box::new(
@@ -352,6 +359,67 @@ mod tests {
         match result {
             Err(e) => assert!(
                 e.to_string().contains("no commands provided"),
+                "error was: {e}"
+            ),
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
+    // === route_check: plaintext stdin keeps multi-line statements together ===
+
+    /// HEREDOC inside a `$(...)` substitution must be routed as a single
+    /// command rather than split across the HEREDOC body lines.
+    #[rstest]
+    fn route_check_plaintext_heredoc_kept_as_single_command() {
+        let args = check_args(vec![], None);
+        let input = indoc! {"
+            git add foo && git commit -m \"$(cat <<'EOF'
+            subject
+            body
+            EOF
+            )\"
+        "};
+        let route = route_check(&args, input.as_bytes());
+        let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
+        let command = endpoint
+            .extract_command()
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"))
+            .expect("command");
+        assert_eq!(
+            command,
+            indoc! {"
+                git add foo && git commit -m \"$(cat <<'EOF'
+                subject
+                body
+                EOF
+                )\""},
+        );
+    }
+
+    #[rstest]
+    fn route_check_plaintext_backslash_line_continuation_is_one_command() {
+        let args = check_args(vec![], None);
+        let input = indoc! {"
+            echo \\
+              hello \\
+              world
+        "};
+        let route = route_check(&args, input.as_bytes());
+        let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
+        let command = endpoint
+            .extract_command()
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"))
+            .expect("command");
+        assert_eq!(command, "echo \\\n  hello \\\n  world");
+    }
+
+    #[rstest]
+    fn route_check_plaintext_unclosed_quote_returns_parse_error() {
+        let args = check_args(vec![], None);
+        let result = route_check(&args, "echo \"unterminated\n".as_bytes());
+        match result {
+            Err(e) => assert!(
+                e.to_string().contains("stdin parse error"),
                 "error was: {e}"
             ),
             Ok(_) => panic!("expected an error"),

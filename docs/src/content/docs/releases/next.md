@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
-### Breaking: quoted-delimiter HEREDOCs are no longer scanned for nested commands
+### Breaking: quoted-delimiter HEREDOCs are no longer scanned for nested commands ([#330](https://github.com/fohte/runok/pull/330))
 
 Previously, runok recursed into the body of every HEREDOC looking for command substitutions (`$(...)`, `` `...` ``) to evaluate as separate sub-commands, regardless of whether the delimiter was quoted. This did not match bash semantics: `<<'EOF'`, `<<"EOF"`, and `<<\EOF` make the body literal, so a `$(secret_cmd)` inside the body is text, not a real command. Scanning it caused false `ask`/`deny` decisions on commit messages and similar prose that happened to look like shell.
 
@@ -25,8 +25,6 @@ Unquoted HEREDOCs (`<<EOF`) keep the existing behaviour — bash does expand the
 **What should I do?**
 
 If you previously relied on runok scanning a quoted-HEREDOC body (for example, a rule that fired because `$(rm -rf /)` inside `<<'EOF'` matched a `deny` rule), update the rule to target the actual command instead. Quoted heredocs are inert in bash, so this can only have hidden real commands behind a literal-looking surface — those should be written as ordinary command substitutions, not buried inside a literal heredoc.
-
-## Highlights
 
 ### Breaking: audit log JSON consolidates rule + parse data into `command_evaluations`
 
@@ -85,7 +83,7 @@ Old log files written before this change keep their previous shape on disk; repl
 
 ## Bug Fixes
 
-### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote`
+### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote` ([#330](https://github.com/fohte/runok/pull/330))
 
 Commit-message workflows that pipe a HEREDOC through `cat` inside a double-quoted command substitution — for example, the Claude Code `/commit` skill — were rejected with `command parse error: unclosed quote`. The character-level tokenizer used to fall back behind the AST walk treated the HEREDOC body as live shell, hit a stray quote inside the prose, and bailed out. The tokenizer is now AST-only: quotes are resolved per AST node, so a HEREDOC body is handled as the literal redirect target it is and never re-scanned as shell syntax.
 
@@ -101,15 +99,41 @@ EOF
 )"
 ```
 
-### Quoted command names match the same rules as their unquoted form
+### Quoted command names match the same rules as their unquoted form ([#330](https://github.com/fohte/runok/pull/330))
 
 `"echo" hello` (or `'echo' hello`) used to tokenise with the surrounding quotes still attached to the command name (`["\"echo\"", "hello"]`), so a rule like `allow: 'echo *'` would not fire. Quotes are now stripped from the command name as well as from arguments, matching how bash itself treats them.
+
+### `runok check` stdin splits on shell statement boundaries, not raw newlines ([#332](https://github.com/fohte/runok/pull/332))
+
+Plaintext stdin into `runok check` was previously split into one command per line, which broke any input that legitimately spans multiple lines: HEREDOCs, multi-line quoted strings, and `\` line continuations all got chopped up and rejected. The splitter now uses tree-sitter-bash to find top-level statement boundaries, so multi-line constructs are kept together while genuinely separate commands (newline, `;`, `&` between top-level statements) are still evaluated independently. `&&`, `||`, and `|` keep their existing behaviour — they are part of one compound command and are split further by the rule engine.
+
+```sh
+# Before: each line evaluated separately; the inner heredoc body and the
+#         closing `)"` were nonsense on their own.
+# After: this is one command, matched against your `git commit` rules.
+cat <<'OUTER' | runok check
+git add path && git commit -m "$(cat <<'EOF'
+subject
+body
+EOF
+)"
+OUTER
+
+# Multi-command scripts still split into independent commands:
+cat <<'OUTER' | runok check
+git status
+ls -la
+echo hello
+OUTER
+```
+
+If stdin cannot be parsed as shell (for example, an unclosed quote), `runok check` now exits with `stdin parse error: failed to parse stdin as shell input` instead of trying to recover by treating each line independently.
 
 ## Library API changes
 
 These changes only affect code that imports `runok` as a Rust library. The CLI and `runok.yml` authoring are unaffected.
 
-### Breaking: `CommandParseError::UnclosedQuote` removed
+### Breaking: `CommandParseError::UnclosedQuote` removed ([#330](https://github.com/fohte/runok/pull/330))
 
 The `UnclosedQuote` variant is gone. Inputs that the previous character-level tokenizer rejected as `UnclosedQuote` are now reported as `CommandParseError::SyntaxError`, alongside everything else tree-sitter-bash refuses.
 
@@ -132,7 +156,7 @@ match err {
 }
 ```
 
-### Breaking: bare `FOO=bar` and trailing-`\` inputs now report `SyntaxError`
+### Breaking: bare `FOO=bar` and trailing-`\` inputs now report `SyntaxError` ([#330](https://github.com/fohte/runok/pull/330))
 
 The previous tokenizer accepted a few inputs that bash itself does not consider a complete command:
 
