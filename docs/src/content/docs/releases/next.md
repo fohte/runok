@@ -77,7 +77,7 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
-### Heredoc on the left side of `|` / `&&` / `||` no longer hides the trailing arm ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### Heredoc on the left side of `|` / `&&` / `||` no longer hides the trailing arm ([#340](https://github.com/fohte/runok/pull/340))
 
 `cat <<EOF | kubectl apply -f -` (and the same shape with `&&` / `||`) silently dropped the trailing arm during sub-command extraction, so the whole input was evaluated as a bare `cat` and slipped past `cat *` allow rules. A `deny: 'kubectl apply *'` rule never had a chance to fire. tree-sitter-bash represents this AST shape unusually — the trailing pipeline / list arm becomes a child of the `heredoc_redirect` instead of an outer pipeline — and the AST walk did not handle it. The walk now reconstructs the proper compound shape, so every sub-command is extracted and evaluated:
 
