@@ -2,7 +2,7 @@
 title: runok migrate
 description: Migrate config files to the latest format.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 `runok migrate` automatically updates deprecated config syntax to the latest format while preserving comments and formatting.

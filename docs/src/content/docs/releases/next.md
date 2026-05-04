@@ -30,9 +30,13 @@ If you previously relied on runok scanning a quoted-HEREDOC body (for example, a
 
 The audit log entry shape changes so single and compound commands share one schema. The top-level `matched_rules` and `sub_evaluations` keys are removed; their contents move into a new `command_evaluations` array — one entry per shell command extracted from the input (`"primary"` for non-compound inputs, one `"compound"` entry per branch for `a && b` / `a | b` / etc.). Each entry now also carries the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) alongside `action` and `matched_rules`.
 
-See [`runok audit` -- `command_evaluations`](/cli/audit/#command_evaluations) for the full schema and field reference.
+See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#command_evaluations) for the full schema and field reference.
 
 ## New Features
+
+### New reference page for the `runok audit --json` schema ([#338](https://github.com/fohte/runok/pull/338))
+
+`runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
 
 ### New `os` CEL variable for OS-conditional `when` clauses ([#336](https://github.com/fohte/runok/pull/336))
 
@@ -91,6 +95,12 @@ EOF
 ```
 
 The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||`, multi-stage pipelines, combined `|` + `&&` / `||` shapes, and heredocs nested inside an `if` / `while` / `for` body.
+
+### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([#339](https://github.com/fohte/runok/pull/339))
+
+The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.
+
+`runok test` now strips inline tests and top-level `tests:` from every preset reached via a remote ancestor in the `extends` chain, regardless of whether each child reference is remote or local. Tests in the user's own config and in presets the user extends directly via a local path are unaffected.
 
 ### `runok audit --json` no longer panics when the downstream pipe closes early ([#337](https://github.com/fohte/runok/pull/337))
 
