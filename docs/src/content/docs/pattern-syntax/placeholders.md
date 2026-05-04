@@ -267,20 +267,9 @@ definitions:
 
 rules:
   - allow: '<var:kubectl> get|describe|logs *'
-  - allow: '<var:kubectl> top node|pod|nodes|pods *'
-  - allow: '<var:kubectl> auth can-i|whoami *'
 ```
 
-With the above definition, the rule `<var:kubectl> get|describe|logs *` matches all of the following commands:
-
-| Command                                                        | Result                                       |
-| -------------------------------------------------------------- | -------------------------------------------- |
-| `kubectl get pods`                                             | Yes (no global flags)                        |
-| `kubectl --context foo get pods`                               | Yes                                          |
-| `kubectl --context=foo get pods`                               | Yes (`=` form is supported)                  |
-| `kubectl --kubeconfig ~/.kube/work --context prod get pods -A` | Yes                                          |
-| `kubectl -n default --context foo describe pod bar`            | Yes                                          |
-| `kubectl delete pod foo`                                       | No (`delete` does not match the alternation) |
+The rule above is equivalent to writing `kubectl [-n|--namespace *] [--context *] [--cluster *] [--user *] [--kubeconfig *] get|describe|logs *` inline, but the prefix is named once and reused across every rule that takes the same set of global flags.
 
 Each value supports the full rule-pattern syntax (alternation `|`, wildcard `*`, optional groups `[...]`, literals, etc.), but **other placeholders cannot be nested** inside a `pattern` value. The following are rejected at config validation time:
 
