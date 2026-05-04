@@ -26,27 +26,62 @@ Unquoted HEREDOCs (`<<EOF`) keep the existing behaviour — bash does expand the
 
 If you previously relied on runok scanning a quoted-HEREDOC body (for example, a rule that fired because `$(rm -rf /)` inside `<<'EOF'` matched a `deny` rule), update the rule to target the actual command instead. Quoted heredocs are inert in bash, so this can only have hidden real commands behind a literal-looking surface — those should be written as ordinary command substitutions, not buried inside a literal heredoc.
 
-## New Features
+## Highlights
 
-### Audit log entries carry a structured `parsed` field
+### Breaking: audit log JSON consolidates rule + parse data into `command_evaluations`
 
-`runok exec` and hook audit entries now include a `parsed` object with the shell-level parse result runok already computes during evaluation: the inline `KEY=VALUE` env prefix, the `argv` (binary plus arguments with quotes resolved), redirects, and pipeline position. Audit consumers can filter on the actual binary in one `jq` line instead of writing custom shell parsers.
+The audit log entry shape changes so single and compound commands share one schema. Audit consumers can now filter on the actual binary (`argv[0]`) in one `jq` line instead of branching between top-level fields and a separate sub-evaluation list.
 
-Single (non-compound) entries carry `parsed` at the top level. Compound entries omit the top-level `parsed` and put per-branch parse data on each `sub_evaluations[]` entry.
+The top-level `matched_rules` and `sub_evaluations` keys are removed. Their contents move into a new `command_evaluations` array — one entry per shell command extracted from the input (`"primary"` for non-compound inputs, one `"compound"` entry per branch for `a && b` / `a | b` / etc.). Each entry carries `action`, `matched_rules`, and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side.
 
 ```sh
-# Before: had to skip env prefixes and re-tokenise by hand.
+# Before: had to skip env prefixes and re-tokenise by hand, plus
+# branch on whether the entry was compound.
 runok audit --json | jq 'select((.command | split(" ") | first) == "helmfile")'
 
-# After: parsed.argv[0] is the real binary, with quoting already resolved.
-runok audit --json |
-  jq 'select(.parsed.argv[0] == "helmfile" or
-             (.sub_evaluations // [])[].parsed.argv[0] == "helmfile")'
+# After: one canonical path covers both single and compound inputs.
+runok audit --json | jq 'select(.command_evaluations[].argv[0] == "helmfile")'
 ```
 
-The `parsed` field is omitted from the JSON when runok could not parse the input (e.g. unbalanced quotes), and individual sub-fields (`env`, `redirects`, `pipe`) are skipped when empty/default — pre-existing `jq` filters that referenced the older fields keep working unchanged.
+```json
+{
+  "command": "FOO=x echo hi && BAR=y cat /tmp/f",
+  "command_evaluations": [
+    {
+      "command": "echo hi",
+      "action": { "type": "allow" },
+      "eval_type": "compound",
+      "env": [{ "name": "FOO", "value": "x" }],
+      "argv": ["echo", "hi"]
+    },
+    {
+      "command": "cat /tmp/f",
+      "action": { "type": "allow" },
+      "eval_type": "compound",
+      "env": [{ "name": "BAR", "value": "y" }],
+      "argv": ["cat", "/tmp/f"]
+    }
+  ]
+}
+```
 
-See [`runok audit` — `parsed` field](/cli/audit/#parsed-field) for the full schema.
+See [`runok audit` -- `command_evaluations`](/cli/audit/#command_evaluations) for the full schema.
+
+**What should I do?**
+
+If you have `jq` queries (or other audit-log consumers) that reference `.matched_rules` or `.sub_evaluations` directly, redirect them through `.command_evaluations[]`:
+
+```jq
+# Before
+.matched_rules[] | select(.action_kind == "deny")
+(.sub_evaluations // [])[] | select(.command | startswith("rm"))
+
+# After
+.command_evaluations[].matched_rules[] | select(.action_kind == "deny")
+.command_evaluations[] | select(.command | startswith("rm"))
+```
+
+Old log files written before this change keep their previous shape on disk; replay or re-ingest tooling needs to handle both shapes during the transition window.
 
 ## Bug Fixes
 

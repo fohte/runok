@@ -292,9 +292,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
         assert_eq!(result, exit_code);
@@ -311,9 +309,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::MergedPolicy(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
         assert_eq!(result, 0);
@@ -329,9 +325,7 @@ mod tests {
         let result = adapter.handle_action(ActionResult {
             action: Action::Allow,
             sandbox: SandboxInfo::Preset(None),
-            matched_rules: vec![],
-            sub_evaluations: None,
-            parsed: None,
+            evaluations: vec![],
         });
         let err = result.unwrap_err();
         assert!(
@@ -358,9 +352,7 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -383,9 +375,7 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -406,9 +396,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Ask(message),
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -525,9 +513,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap();
 

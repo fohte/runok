@@ -242,12 +242,10 @@ mod tests {
             timestamp: timestamp.to_owned(),
             command: command.to_owned(),
             action,
-            matched_rules: vec![],
             sandbox_preset: None,
             default_action: None,
             metadata: AuditMetadata::default(),
-            sub_evaluations: None,
-            parsed: None,
+            command_evaluations: vec![],
         }
     }
 

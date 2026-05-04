@@ -93,12 +93,10 @@ mod tests {
             timestamp: Utc::now().to_rfc3339(),
             command: command.to_string(),
             action,
-            matched_rules: vec![],
             sandbox_preset: None,
             default_action: None,
             metadata: AuditMetadata::default(),
-            sub_evaluations: None,
-            parsed: None,
+            command_evaluations: vec![],
         }
     }
 
@@ -200,11 +198,6 @@ mod tests {
                 message: Some("force push is forbidden".to_string()),
                 fix_suggestion: Some("git push origin main".to_string()),
             },
-            matched_rules: vec![crate::audit::SerializableRuleMatch {
-                action_kind: "deny".to_string(),
-                pattern: "git push -f *".to_string(),
-                matched_tokens: vec!["origin".to_string(), "main".to_string()],
-            }],
             sandbox_preset: None,
             default_action: None,
             metadata: AuditMetadata {
@@ -214,8 +207,23 @@ mod tests {
                 tool_name: Some("Bash".to_string()),
                 hook_event_name: Some("PreToolUse".to_string()),
             },
-            sub_evaluations: None,
-            parsed: None,
+            command_evaluations: vec![crate::audit::CommandEvaluation {
+                command: "git push".to_string(),
+                action: SerializableAction::Deny {
+                    message: Some("force push is forbidden".to_string()),
+                    fix_suggestion: Some("git push origin main".to_string()),
+                },
+                matched_rules: vec![crate::audit::SerializableRuleMatch {
+                    action_kind: "deny".to_string(),
+                    pattern: "git push -f *".to_string(),
+                    matched_tokens: vec!["origin".to_string(), "main".to_string()],
+                }],
+                eval_type: "primary".to_string(),
+                env: vec![],
+                argv: vec!["git".to_string(), "push".to_string()],
+                redirects: vec![],
+                pipe: crate::audit::SerializablePipe::default(),
+            }],
         };
 
         writer.write(&entry).unwrap();
@@ -227,7 +235,10 @@ mod tests {
 
         assert_eq!(parsed["command"], "git push");
         assert_eq!(parsed["action"]["type"], "deny");
-        assert_eq!(parsed["matched_rules"][0]["pattern"], "git push -f *");
+        assert_eq!(
+            parsed["command_evaluations"][0]["matched_rules"][0]["pattern"],
+            "git push -f *"
+        );
         assert_eq!(parsed["metadata"]["session_id"], "sess-123");
         assert_eq!(parsed["metadata"]["tool_name"], "Bash");
     }

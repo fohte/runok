@@ -3,8 +3,9 @@ pub mod exec_adapter;
 pub mod hook_adapter;
 
 use crate::audit::{
-    AuditEntry, AuditMetadata, AuditWriter, SerializableAction, SerializableParsedCommand,
-    SerializableRuleMatch, SubEvaluation,
+    AuditEntry, AuditMetadata, AuditWriter, CommandEvaluation, SerializableAction,
+    SerializableEnvVar, SerializablePipe, SerializableRedirect, SerializableRuleMatch,
+    parse_fields_from_extracted,
 };
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
@@ -21,24 +22,29 @@ use crate::rules::rule_engine::{
 pub struct ActionResult {
     pub action: Action,
     pub sandbox: SandboxInfo,
-    /// Rules that matched during evaluation (for audit logging).
-    pub matched_rules: Vec<RuleMatchInfo>,
-    /// Sub-evaluation results for compound commands (for audit logging).
-    pub sub_evaluations: Option<Vec<SubEvalResult>>,
-    /// Shell-level parse result for the top-level command. Set for
-    /// single-command inputs only; compound inputs surface the parsed
-    /// data per `SubEvalResult`.
-    pub parsed: Option<SerializableParsedCommand>,
+    /// Per-branch evaluation records, ready to be serialised into
+    /// `AuditEntry::command_evaluations`. A non-compound input
+    /// produces one entry; a compound or pipelined input produces
+    /// one per branch; an unparseable / comment-only input produces
+    /// an empty vector.
+    pub evaluations: Vec<CommandEvalResult>,
 }
 
-/// Intermediate sub-evaluation result carrying raw `Action` (not yet serialized).
+/// Intermediate per-branch evaluation result. Mirrors
+/// `audit::CommandEvaluation` but keeps the raw `Action` /
+/// `RuleMatchInfo` so endpoints that need them (`exec`'s sandbox
+/// resolution, `hook`'s structured output) do not have to
+/// round-trip through serialised forms.
 #[derive(Debug)]
-pub struct SubEvalResult {
+pub struct CommandEvalResult {
     pub command: String,
     pub action: Action,
     pub matched_rules: Vec<RuleMatchInfo>,
     pub eval_type: String,
-    pub parsed: Option<SerializableParsedCommand>,
+    pub env: Vec<SerializableEnvVar>,
+    pub argv: Vec<String>,
+    pub redirects: Vec<SerializableRedirect>,
+    pub pipe: SerializablePipe,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -113,21 +119,6 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
     }
 }
 
-/// Build a `SerializableParsedCommand` from an `ExtractedCommand`,
-/// returning `None` when the extractor surfaced no parse data at all
-/// (the leaf-text fallback path inside `collect_commands`, with no
-/// pipe position attached either). Audit consumers treat `parsed:
-/// null` as "parse data unavailable" and fall back to the raw
-/// `command` string, so the missing field is more truthful than
-/// emitting a half-populated record.
-fn parsed_from_extracted(ec: &ExtractedCommand) -> Option<SerializableParsedCommand> {
-    let pipe_default = !ec.pipe.stdin && !ec.pipe.stdout;
-    if ec.argv.is_empty() && ec.env.is_empty() && ec.redirects.is_empty() && pipe_default {
-        return None;
-    }
-    Some(SerializableParsedCommand::from(ec))
-}
-
 /// Apply `defaults.sandbox` as a fallback when the rule evaluation produced
 /// no sandbox information. This ensures that `defaults.sandbox` acts as a
 /// true default: it is used whenever the matched rule does not specify its
@@ -174,36 +165,34 @@ fn write_audit_log(
         crate::config::ActionKind::Deny => "deny".to_owned(),
     });
 
+    let command_evaluations: Vec<CommandEvaluation> = action_result
+        .evaluations
+        .iter()
+        .map(|e| CommandEvaluation {
+            command: e.command.clone(),
+            action: SerializableAction::from(e.action.clone()),
+            matched_rules: e
+                .matched_rules
+                .iter()
+                .cloned()
+                .map(SerializableRuleMatch::from)
+                .collect(),
+            eval_type: e.eval_type.clone(),
+            env: e.env.clone(),
+            argv: e.argv.clone(),
+            redirects: e.redirects.clone(),
+            pipe: e.pipe.clone(),
+        })
+        .collect();
+
     let entry = AuditEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         command: command.to_owned(),
         action: SerializableAction::from(action_result.action.clone()),
-        matched_rules: action_result
-            .matched_rules
-            .iter()
-            .cloned()
-            .map(SerializableRuleMatch::from)
-            .collect(),
         sandbox_preset,
         default_action,
         metadata,
-        sub_evaluations: action_result.sub_evaluations.as_ref().map(|subs| {
-            subs.iter()
-                .map(|s| SubEvaluation {
-                    command: s.command.clone(),
-                    action: SerializableAction::from(s.action.clone()),
-                    matched_rules: s
-                        .matched_rules
-                        .iter()
-                        .cloned()
-                        .map(SerializableRuleMatch::from)
-                        .collect(),
-                    eval_type: s.eval_type.clone(),
-                    parsed: s.parsed.clone(),
-                })
-                .collect()
-        }),
-        parsed: action_result.parsed.clone(),
+        command_evaluations,
     };
 
     if let Err(e) = writer.write(&entry) {
@@ -299,18 +288,21 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     );
                 }
 
-                let sub_evaluations: Vec<SubEvalResult> = compound_result
+                let evaluations: Vec<CommandEvalResult> = compound_result
                     .sub_results
                     .into_iter()
                     .zip(extracted_commands.iter())
                     .map(|(result, ec)| {
-                        let parsed = parsed_from_extracted(ec);
-                        SubEvalResult {
+                        let (env, argv, redirects, pipe) = parse_fields_from_extracted(ec);
+                        CommandEvalResult {
                             command: ec.command.clone(),
                             action: result.action,
                             matched_rules: result.matched_rules,
                             eval_type: "compound".to_owned(),
-                            parsed,
+                            env,
+                            argv,
+                            redirects,
+                            pipe,
                         }
                     })
                     .collect();
@@ -318,9 +310,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 ActionResult {
                     action: compound_result.action,
                     sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
-                    matched_rules: vec![],
-                    sub_evaluations: Some(sub_evaluations),
-                    parsed: None,
+                    evaluations,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -330,9 +320,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         ActionResult {
             action: default_action(config),
             sandbox: SandboxInfo::Preset(None),
-            matched_rules: vec![],
-            sub_evaluations: None,
-            parsed: None,
+            evaluations: Vec::new(),
         }
     } else {
         // Pass redirect/pipe metadata from the first extracted command so that
@@ -353,13 +341,23 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                         eprintln!("[verbose] Sandbox preset: {:?}", preset);
                     }
                 }
-                let parsed = first_extracted.and_then(parsed_from_extracted);
+                let (env, argv, redir_fields, pipe_field) = first_extracted
+                    .map(parse_fields_from_extracted)
+                    .unwrap_or_default();
+                let evaluations = vec![CommandEvalResult {
+                    command: effective_command.to_owned(),
+                    action: result.action.clone(),
+                    matched_rules: result.matched_rules,
+                    eval_type: "primary".to_owned(),
+                    env,
+                    argv,
+                    redirects: redir_fields,
+                    pipe: pipe_field,
+                }];
                 ActionResult {
                     action: result.action,
                     sandbox: SandboxInfo::Preset(result.sandbox_preset),
-                    matched_rules: result.matched_rules,
-                    sub_evaluations: None,
-                    parsed,
+                    evaluations,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -1099,8 +1097,16 @@ mod tests {
         // When no rule matches, action is resolved to defaults.action (ask)
         assert_eq!(entry["action"]["type"], "ask");
         assert_eq!(entry["default_action"], "ask");
-        // No matched rules
-        assert_eq!(entry["matched_rules"].as_array().unwrap().len(), 0);
+        // The single command_evaluations entry has no matched rules
+        let evals = entry["command_evaluations"].as_array().unwrap();
+        assert_eq!(evals.len(), 1);
+        assert_eq!(evals[0]["eval_type"], "primary");
+        assert!(
+            evals[0]
+                .get("matched_rules")
+                .map(|v| v.as_array().is_none_or(|a| a.is_empty()))
+                .unwrap_or(true)
+        );
     }
 
     #[rstest]
@@ -1123,7 +1129,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_log_records_compound_sub_evaluations(audit_dir: TempDir) {
+    fn audit_log_records_compound_command_evaluations(audit_dir: TempDir) {
         let endpoint = AuditableMockEndpoint::new(Ok(Some("git status && rm -rf /".to_string())));
         let config = Config {
             rules: Some(vec![allow_rule("git status"), deny_rule("rm -rf /")]),
@@ -1134,13 +1140,14 @@ mod tests {
 
         let entry = read_single_audit_entry(&audit_dir);
         assert_eq!(entry["action"]["type"], "deny");
-        let subs = entry["sub_evaluations"].as_array().unwrap();
-        assert_eq!(subs.len(), 2);
-        assert_eq!(subs[0]["command"], "git status");
-        assert_eq!(subs[0]["action"]["type"], "allow");
-        assert_eq!(subs[0]["eval_type"], "compound");
-        assert_eq!(subs[1]["command"], "rm -rf /");
-        assert_eq!(subs[1]["action"]["type"], "deny");
+        let evals = entry["command_evaluations"].as_array().unwrap();
+        assert_eq!(evals.len(), 2);
+        assert_eq!(evals[0]["command"], "git status");
+        assert_eq!(evals[0]["action"]["type"], "allow");
+        assert_eq!(evals[0]["eval_type"], "compound");
+        assert_eq!(evals[1]["command"], "rm -rf /");
+        assert_eq!(evals[1]["action"]["type"], "deny");
+        assert_eq!(evals[1]["eval_type"], "compound");
     }
 
     // --- apply_sandbox_fallback unit tests ---
@@ -1170,9 +1177,7 @@ mod tests {
         let action_result = ActionResult {
             action: Action::Allow,
             sandbox,
-            matched_rules: vec![],
-            sub_evaluations: None,
-            parsed: None,
+            evaluations: vec![],
         };
         let defaults = Defaults {
             action: None,

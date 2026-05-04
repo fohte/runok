@@ -370,9 +370,7 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox,
-            matched_rules: vec![],
-            sub_evaluations: None,
-            parsed: None,
+            evaluations: vec![],
         };
         let output = adapter
             .build_action_output(&result)
@@ -460,9 +458,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
-                matched_rules: vec![],
-                sub_evaluations: None,
-                parsed: None,
+                evaluations: vec![],
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
         assert_eq!(exit_code, 0);
