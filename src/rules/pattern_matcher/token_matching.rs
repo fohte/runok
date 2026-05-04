@@ -334,10 +334,13 @@ pub(crate) fn match_var_ref_multi(
 /// pattern-typed `<var:name>` sub-pattern. Returns every possible consumption
 /// length (zero or more) so that callers can backtrack across alternatives.
 ///
-/// Implemented by appending `Wildcard` to the sub-pattern's tokens and
-/// running the regular match engine in capture mode: each successful run
-/// yields a wildcard capture whose remaining-suffix length determines the
-/// prefix consumption count.
+/// Implemented by enumerating every possible prefix length `k` and asking
+/// the match engine whether the sub-pattern's tokens exactly consume
+/// `rest[..k]` (where `rest` is `cmd_tokens` after the command name).
+/// Each successful `k` becomes one candidate consumption length (`1 + k`,
+/// counting the command-name token). This avoids extending the sub-pattern
+/// with a trailing wildcard, which would conflict with the outer pattern's
+/// `optional_flags_absent` accounting when the var sits in command position.
 fn match_pattern_prefix(
     sub: &crate::rules::pattern_parser::Pattern,
     cmd_tokens: &[&str],
@@ -367,9 +370,14 @@ fn match_pattern_prefix(
 
     // We want every prefix consumption length. Try each candidate `k` and
     // check whether the sub-pattern's tokens fully consume `rest[..k]`.
+    //
+    // Share a single `steps` budget across all k attempts so that the
+    // overall MAX_MATCH_STEPS DoS guard cannot be amplified by the number
+    // of candidate prefix lengths. After-double-dash and capture state are
+    // reset per attempt because each k is an independent trial.
     let mut lengths = Vec::new();
+    let steps = Cell::new(0usize);
     for k in 0..=rest.len() {
-        let steps = Cell::new(0usize);
         let after_dd = Cell::new(false);
         let var_captures = RefCell::new(HashMap::new());
         let flag_group_captures = RefCell::new(HashMap::new());

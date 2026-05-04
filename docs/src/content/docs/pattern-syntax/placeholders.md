@@ -271,10 +271,10 @@ rules:
   - allow: '<var:kubectl> auth can-i|whoami *'
 ```
 
-With the above, all of the following commands are allowed by the first rule:
+With the above definition, the rule `<var:kubectl> get|describe|logs *` matches all of the following commands:
 
-| Command                                                        | Matches `<var:kubectl> get                   | describe | logs \*` |
-| -------------------------------------------------------------- | -------------------------------------------- | -------- | -------- |
+| Command                                                        | Result                                       |
+| -------------------------------------------------------------- | -------------------------------------------- |
 | `kubectl get pods`                                             | Yes (no global flags)                        |
 | `kubectl --context foo get pods`                               | Yes                                          |
 | `kubectl --context=foo get pods`                               | Yes (`=` form is supported)                  |
@@ -290,6 +290,8 @@ Each value supports the full rule-pattern syntax (alternation `|`, wildcard `*`,
 - `<flag:name>` (flag-group references)
 
 `<var:name>` for a `pattern`-typed variable also cannot appear inside an optional group (`[<var:name>]`), because the pattern var may itself contain optional flags and the outer optional layer would conflict with that expansion. This mirrors the same restriction on `[<flag:name>]`.
+
+A pattern-typed `<var:name>` exposes only the command-name token (the leading literal/alternation of the value) under `vars.<name>` in `when` clauses; the global flags absorbed by the inlined pattern are not part of the capture. Use `<flag:name>` if you need to inspect those flag values.
 
 ### Undefined Variable Names
 
