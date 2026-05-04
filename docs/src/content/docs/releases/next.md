@@ -26,7 +26,7 @@ Unquoted HEREDOCs (`<<EOF`) keep the existing behaviour — bash does expand the
 
 If you previously relied on runok scanning a quoted-HEREDOC body (for example, a rule that fired because `$(rm -rf /)` inside `<<'EOF'` matched a `deny` rule), update the rule to target the actual command instead. Quoted heredocs are inert in bash, so this can only have hidden real commands behind a literal-looking surface — those should be written as ordinary command substitutions, not buried inside a literal heredoc.
 
-### Breaking: audit log JSON consolidates rule + parse data into `command_evaluations`
+### Breaking: audit log JSON consolidates rule + parse data into `command_evaluations` ([#333](https://github.com/fohte/runok/pull/333))
 
 The audit log entry shape changes so single and compound commands share one schema. Audit consumers can now filter on the actual binary (`argv[0]`) in one `jq` line instead of branching between top-level fields and a separate sub-evaluation list.
 
