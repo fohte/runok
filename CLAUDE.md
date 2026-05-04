@@ -91,6 +91,8 @@ When a PR introduces user-facing changes (new features, bug fixes, breaking chan
 
 **If `next.md` already has entries**, append to the appropriate section. If it still has the placeholder text `No unreleased changes yet.`, replace it with the new entry.
 
+**PR link is required.** Every `###` entry in `next.md` MUST include a PR link in the heading: `### Feature name ([#123](https://github.com/fohte/runok/pull/123))`. Never omit the PR link, even when the PR has not been created yet — add the entry as part of the PR (after `gh pr create` returns the PR number, update `next.md` and amend/append a commit before merging). If you are editing `next.md` and the PR number is not yet known, leave a `TODO(pr-link)` placeholder and replace it before the PR is merged. Entries without PR links must not be merged.
+
 ## Code rules
 
 ### Use the `shlex` crate for shell quoting and splitting
