@@ -5,7 +5,8 @@ use super::command_parser::{PipeInfo, RedirectInfo};
 
 /// Context for CEL expression evaluation, providing access to
 /// environment variables, parsed flags, positional arguments, path lists,
-/// redirect operators, pipeline position, captured variables, and flag groups.
+/// redirect operators, pipeline position, captured variables, flag groups,
+/// and the host operating system.
 pub struct ExprContext {
     pub env: HashMap<String, String>,
     pub flags: HashMap<String, Option<String>>,
@@ -20,6 +21,10 @@ pub struct ExprContext {
     /// `definitions.flag_groups` but not matched by the rule are still
     /// present as empty lists, so `flag_groups["name"]` always succeeds.
     pub flag_groups: HashMap<String, Vec<String>>,
+    /// Host operating system identifier, matching the values exposed by
+    /// Rust's [`std::env::consts::OS`] (e.g. `"macos"`, `"linux"`,
+    /// `"windows"`, `"freebsd"`).
+    pub os: String,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -101,6 +106,8 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         .add_variable("flag_groups", &context.flag_groups)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
+    cel_context.add_variable_from_value("os", context.os.clone());
+
     let result = program
         .execute(&cel_context)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
@@ -126,6 +133,7 @@ mod tests {
             pipe: PipeInfo::default(),
             vars: HashMap::new(),
             flag_groups: HashMap::new(),
+            os: String::new(),
         }
     }
 
@@ -298,6 +306,22 @@ mod tests {
     ) {
         let context = ExprContext {
             flag_groups: HashMap::from([(key.to_string(), values)]),
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    // === OS variable access ===
+
+    #[rstest]
+    #[case::macos_match("os == 'macos'", "macos", true)]
+    #[case::macos_no_match("os == 'macos'", "linux", false)]
+    #[case::linux_match("os == 'linux'", "linux", true)]
+    #[case::in_list("os in ['macos', 'linux']", "linux", true)]
+    #[case::not_in_list("os in ['macos', 'linux']", "windows", false)]
+    fn os_variable_access(#[case] expr: &str, #[case] os: &str, #[case] expected: bool) {
+        let context = ExprContext {
+            os: os.to_string(),
             ..empty_context()
         };
         assert_eq!(evaluate(expr, &context).unwrap(), expected);

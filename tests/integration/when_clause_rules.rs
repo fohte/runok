@@ -617,3 +617,37 @@ fn redirect_count_check(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// OS-conditional rules
+// ========================================
+
+#[rstest]
+fn os_variable_matches_host_os(empty_context: EvalContext) {
+    let config_yaml = format!(
+        "rules:\n  - deny: 'sed *'\n    when: \"os == '{}'\"\n",
+        std::env::consts::OS
+    );
+    let config = parse_config(&config_yaml).unwrap();
+
+    let result = evaluate_command(&config, "sed -i s/a/b/ file", &empty_context).unwrap();
+    assert_deny(&result.action);
+}
+
+#[rstest]
+fn os_variable_does_not_match_other_os(empty_context: EvalContext) {
+    // Pick an OS string that is guaranteed not to equal the host's OS.
+    let other_os = if std::env::consts::OS == "macos" {
+        "linux"
+    } else {
+        "macos"
+    };
+    let config_yaml = format!(
+        "rules:\n  - deny: 'sed *'\n    when: \"os == '{}'\"\n  - allow: 'sed *'\n",
+        other_os
+    );
+    let config = parse_config(&config_yaml).unwrap();
+
+    let result = evaluate_command(&config, "sed -i s/a/b/ file", &empty_context).unwrap();
+    assert_allow(&result.action);
+}

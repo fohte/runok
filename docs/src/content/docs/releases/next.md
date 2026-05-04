@@ -28,6 +28,23 @@ If you previously relied on runok scanning a quoted-HEREDOC body (for example, a
 
 ## New Features
 
+### New `os` CEL variable for OS-conditional `when` clauses
+
+`when` expressions now expose an `os` string equal to Rust's [`std::env::consts::OS`](https://doc.rust-lang.org/std/env/consts/constant.OS.html) — `"macos"`, `"linux"`, `"windows"`, `"freebsd"`, etc. This lets a single config branch on the host operating system, which previously was not possible: shell built-ins like `OSTYPE` are not exported to child processes, so they don't appear in `env`.
+
+```yaml
+rules:
+  # macOS ships BSD sed; steer to GNU sed (gsed)
+  - deny: 'sed *'
+    when: "os == 'macos'"
+    message: 'Use gsed (GNU sed) on macOS'
+  - allow: 'gsed *'
+  - allow: 'sed *'
+    when: "os == 'linux'"
+```
+
+See [When Clauses](/rule-evaluation/when-clause/#os----host-operating-system) for details.
+
 ### `definitions.vars` gains a new `pattern` type for reusable command-prefix patterns ([#334](https://github.com/fohte/runok/pull/334))
 
 `definitions.vars[<name>].type` now accepts `pattern` in addition to `literal` and `path`. A pattern-typed variable's values are parsed as rule-pattern fragments and inlined wherever `<var:name>` appears. This is purpose-built for naming a base CLI plus its global flags once, and reusing it across every rule that should accept that prefix.
