@@ -1267,6 +1267,14 @@ fn flag_negation_empty_tokens_in_compound(
     "},
     assert_deny as ActionAssertion,
 )]
+#[case::heredoc_and_then_pipe_with_deny(
+    indoc! {"
+        cat <<EOF && echo foo | rm -rf /
+        body
+        EOF
+    "},
+    assert_deny as ActionAssertion,
+)]
 fn heredoc_in_compound_does_not_shadow_trailing_arm(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

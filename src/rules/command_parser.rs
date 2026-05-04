@@ -803,41 +803,50 @@ fn collect_commands(
             // disappears and `cat <<EOF | rm -rf /` would slip past
             // `cat *` allow rules.
             let continuation = find_heredoc_continuation(node);
-            // Process body first (preserves original command ordering)
-            if let Some(body) = node.child_by_field_name("body") {
-                let body_pipe = match &continuation {
-                    Some(HeredocContinuation::Pipeline { .. }) => PipeInfo {
-                        stdin: pipe_info.stdin,
-                        stdout: true,
-                    },
-                    _ => pipe_info.clone(),
-                };
-                collect_commands(body, source, commands, &body_pipe, &all_redirects);
-            }
-            // Emit the swallowed continuation, if any, as if it were a
-            // proper sibling of the body inside an outer pipeline / list.
-            // Mirrors the per-stage pipe accounting from the `pipeline`
-            // arm above: every middle stage of a multi-stage trailing
-            // pipeline still has both stdin AND stdout connected.
-            if let Some(continuation) = &continuation {
-                match continuation {
-                    HeredocContinuation::Pipeline { stages } => {
-                        let len = stages.len();
-                        for (i, stage) in stages.iter().enumerate() {
-                            let stage_pipe = PipeInfo {
-                                stdin: true,
-                                stdout: pipe_info.stdout || i < len - 1,
-                            };
-                            collect_commands(*stage, source, commands, &stage_pipe, redirects);
+            let body = node.child_by_field_name("body");
+            match (&continuation, body) {
+                // No swallowed continuation: behave like a plain
+                // redirected statement.
+                (None, Some(body)) => {
+                    collect_commands(body, source, commands, pipe_info, &all_redirects);
+                }
+                // Swallowed continuation: synthesize the outer
+                // pipeline `[body, *pipe_stages]` (each stage
+                // potentially carrying its own pipe metadata) plus
+                // any independent list arms. Mirror the per-stage
+                // accounting from the regular `pipeline` arm so
+                // middle stages keep both stdin AND stdout connected,
+                // and hand list arms back to `collect_commands` with
+                // pipe context cleared so trailing `&& a | b` shapes
+                // recompute their own pipe semantics.
+                (Some(continuation), Some(body)) => {
+                    let pipe_len = continuation.pipe_stages.len() + 1;
+                    let has_pipe = pipe_len > 1;
+                    let body_pipe = if has_pipe {
+                        PipeInfo {
+                            stdin: pipe_info.stdin,
+                            stdout: true,
                         }
+                    } else {
+                        pipe_info.clone()
+                    };
+                    collect_commands(body, source, commands, &body_pipe, &all_redirects);
+                    for (i, stage) in continuation.pipe_stages.iter().enumerate() {
+                        let stage_idx = i + 1;
+                        let stage_pipe = PipeInfo {
+                            stdin: true,
+                            stdout: pipe_info.stdout || stage_idx < pipe_len - 1,
+                        };
+                        collect_commands(*stage, source, commands, &stage_pipe, redirects);
                     }
-                    HeredocContinuation::List { arms } => {
-                        let arm_pipe = pipe_info.clone();
-                        for arm in arms {
-                            collect_commands(*arm, source, commands, &arm_pipe, redirects);
-                        }
+                    let arm_pipe = pipe_info.clone();
+                    for arm in &continuation.list_arms {
+                        collect_commands(*arm, source, commands, &arm_pipe, redirects);
                     }
                 }
+                // body field missing — defensive only; tree-sitter
+                // always emits one for `redirected_statement`.
+                (_, None) => {}
             }
             // Second pass: recurse into redirect children for nested
             // substitutions (e.g. `cmd > >(nested)`). HEREDOCs with a
@@ -1106,21 +1115,30 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
 /// when tree-sitter-bash has folded a trailing pipeline / `&&` / `||`
 /// arm into the redirect's children.
 ///
-/// For `cat <<EOF | x | y\n...EOF`, the heredoc_redirect contains a
-/// nested `pipeline` with stages `[x, y]` (the body `cat` is the
-/// implicit first stage). For `cat <<EOF && x\n...EOF`, the
-/// heredoc_redirect contains an `&&` operator anonymous child plus a
-/// `command` (or `redirected_statement`) under the `right` field.
+/// `pipe_stages` are commands that join the body in the synthesized
+/// outer pipeline (`body | pipe_stages[0] | pipe_stages[1] | ...`).
+/// `list_arms` are statements joined to that pipeline by `&&` / `||`,
+/// with no pipe relationship to the body — `collect_commands` is
+/// responsible for re-deriving their internal pipe metadata.
 ///
-/// `Pipeline` carries the stages that should each see `pipe.stdin` set;
-/// `List` carries the trailing arm with no pipe relationship to the body.
-enum HeredocContinuation<'tree> {
-    Pipeline {
-        stages: Vec<tree_sitter::Node<'tree>>,
-    },
-    List {
-        arms: Vec<tree_sitter::Node<'tree>>,
-    },
+/// `cat <<EOF && x` / `cat <<EOF || x` populates `list_arms` only.
+/// `cat <<EOF | a | b` populates `pipe_stages` only.
+/// `cat <<EOF | a | b && c || d` populates both: pipe_stages = [a, b],
+/// list_arms = [c, d]. Bash's `|` > `&&` precedence means `a | b` is
+/// the pipe target and `c` / `d` are independent.
+///
+/// `;` / `&` after a heredoc and two heredocs in one pipeline are
+/// known tree-sitter-bash 0.25.1 parse errors — they never reach this
+/// helper; the caller surfaces them as `SyntaxError` upstream.
+struct HeredocContinuation<'tree> {
+    pipe_stages: Vec<tree_sitter::Node<'tree>>,
+    list_arms: Vec<tree_sitter::Node<'tree>>,
+}
+
+impl<'tree> HeredocContinuation<'tree> {
+    fn is_empty(&self) -> bool {
+        self.pipe_stages.is_empty() && self.list_arms.is_empty()
+    }
 }
 
 /// Inspect a `redirected_statement` for a "swallowed" trailing arm of
@@ -1144,62 +1162,90 @@ fn find_heredoc_continuation<'tree>(
         if child.kind() != "heredoc_redirect" {
             continue;
         }
-        return extract_heredoc_continuation(child);
+        let cont = extract_heredoc_continuation(child);
+        if cont.is_empty() {
+            return None;
+        }
+        return Some(cont);
     }
     None
 }
 
-/// Walk a `heredoc_redirect` node looking for command-bearing children
-/// that represent a pipeline stage (`pipeline`, plus any nested
-/// `redirected_statement` / `command` siblings inside it) or a
-/// `&&` / `||` arm (an operator child plus a `right` field).
-/// `;` and `&` after a heredoc are not handled here — tree-sitter-bash
-/// 0.25.1 cannot parse them and surfaces a SyntaxError instead.
+/// Walk a `heredoc_redirect` node and split its trailing arm into
+/// pipe stages and list arms.
+///
+/// `&&` / `||` on the heredoc directly (no preceding `|`) populates
+/// `list_arms` via the `right` field. `|` populates an un-fielded
+/// `pipeline` child whose stages may themselves contain a `list`
+/// (from a `&& x` / `|| y` continuation): bash's `|` > `&&` precedence
+/// means the list's leftmost descendant is the actual pipe target,
+/// and subsequent list operands are independent arms.
 fn extract_heredoc_continuation<'tree>(
     heredoc: tree_sitter::Node<'tree>,
-) -> Option<HeredocContinuation<'tree>> {
-    let mut pipeline_stages: Vec<tree_sitter::Node<'tree>> = Vec::new();
+) -> HeredocContinuation<'tree> {
+    let mut pipe_stages: Vec<tree_sitter::Node<'tree>> = Vec::new();
     let mut list_arms: Vec<tree_sitter::Node<'tree>> = Vec::new();
 
+    // `right`-fielded children come first — `&&` / `||` directly on
+    // the heredoc with no preceding pipe.
+    for i in 0..heredoc.child_count() {
+        if heredoc.field_name_for_child(i as u32) != Some("right") {
+            continue;
+        }
+        let Some(right) = heredoc.child(i as u32) else {
+            continue;
+        };
+        list_arms.push(right);
+    }
+
+    // An un-fielded `pipeline` child carries the synthesized pipeline
+    // tail. Walk its named children, splitting any nested `list` (the
+    // tail of a `cmd | x && y` AST) so list operands surface as
+    // independent arms instead of being treated as more pipe stages.
     for i in 0..heredoc.child_count() {
         let Some(child) = heredoc.child(i as u32) else {
             continue;
         };
-        // Anonymous `||`, `&&`, `&`, `;` tokens are surfaced as
-        // unnamed siblings; the actual right-hand side comes through
-        // the named `right` / argument fields below.
-        if !child.is_named() {
+        if child.kind() != "pipeline" {
             continue;
         }
-        let field = heredoc.field_name_for_child(i as u32);
-        match (child.kind(), field) {
-            // `cat <<EOF | x ...`: tree-sitter wraps the trailing
-            // stages in a `pipeline` node. Each named child is a
-            // pipe stage that must see `pipe.stdin = true`.
-            ("pipeline", _) => {
-                let mut cursor = child.walk();
-                for stage in child.named_children(&mut cursor) {
-                    pipeline_stages.push(stage);
-                }
-            }
-            // `cat <<EOF && x` / `cat <<EOF || x`: the trailing arm
-            // is exposed as a `command` / `redirected_statement` /
-            // `pipeline` under the `right` field.
-            (_, Some("right")) => {
-                list_arms.push(child);
-            }
-            _ => {}
+        if heredoc.field_name_for_child(i as u32).is_some() {
+            continue;
+        }
+        let mut cursor = child.walk();
+        for stage in child.named_children(&mut cursor) {
+            split_pipe_stage(stage, &mut pipe_stages, &mut list_arms);
         }
     }
 
-    if !pipeline_stages.is_empty() {
-        Some(HeredocContinuation::Pipeline {
-            stages: pipeline_stages,
-        })
-    } else if !list_arms.is_empty() {
-        Some(HeredocContinuation::List { arms: list_arms })
-    } else {
-        None
+    HeredocContinuation {
+        pipe_stages,
+        list_arms,
+    }
+}
+
+/// Walk a pipeline-stage node, classifying it as either a real pipe
+/// stage or a `list` whose first element extends the pipe and whose
+/// remaining operands are list arms.
+fn split_pipe_stage<'tree>(
+    node: tree_sitter::Node<'tree>,
+    pipe_stages: &mut Vec<tree_sitter::Node<'tree>>,
+    list_arms: &mut Vec<tree_sitter::Node<'tree>>,
+) {
+    if node.kind() != "list" {
+        pipe_stages.push(node);
+        return;
+    }
+    let mut cursor = node.walk();
+    let mut named_iter = node.named_children(&mut cursor);
+    let Some(first) = named_iter.next() else {
+        return;
+    };
+    // `list` is left-recursive in tree-sitter-bash, so the first
+    // named child is itself the deeper continuation of the pipe.
+    split_pipe_stage(first, pipe_stages, list_arms);
+    for arm in named_iter {
+        list_arms.push(arm);
     }
 }
 
@@ -1747,48 +1793,79 @@ mod tests {
         );
     }
 
-    // Per-stage pipe metadata for a 3-stage heredoc pipeline. Pinned
-    // separately because `extract_commands` discards `pipe`; this is
-    // the only signal that intermediate stages keep both stdin AND
-    // stdout connected (so a `when: pipe.stdout == false` clause on
-    // the middle stage doesn't fire incorrectly).
-    #[test]
-    fn extract_heredoc_multi_stage_pipeline_pipe_metadata() {
-        let input = indoc! {"
+    // Per-stage pipe metadata. `extract_commands` discards `pipe`,
+    // so these cases pin `extract_commands_with_metadata` directly.
+    // Important for any future `when: pipe.stdout == false` rule that
+    // would silently misfire if a middle stage lost a flag, or if a
+    // logical-list right-hand side got reinterpreted as a pipe stage.
+    #[rstest]
+    #[case::three_stage_pipeline(
+        indoc! {"
             cat <<EOF | kubectl apply -f - | tee out
             body
             EOF
-        "}
-        .trim_end();
-        let cmds = extract_commands_with_metadata(input).unwrap();
-        assert_eq!(cmds.len(), 3);
-        // body `cat`: first stage — no stdin, has stdout.
-        assert_eq!(cmds[0].command, "cat");
-        assert_eq!(
-            cmds[0].pipe,
-            PipeInfo {
-                stdin: false,
-                stdout: true
-            }
-        );
-        // middle `kubectl apply -f -`: stdin AND stdout both true.
-        assert_eq!(cmds[1].command, "kubectl apply -f -");
-        assert_eq!(
-            cmds[1].pipe,
-            PipeInfo {
-                stdin: true,
-                stdout: true
-            }
-        );
-        // last `tee out`: has stdin, no stdout.
-        assert_eq!(cmds[2].command, "tee out");
-        assert_eq!(
-            cmds[2].pipe,
-            PipeInfo {
-                stdin: true,
-                stdout: false
-            }
-        );
+        "},
+        vec![
+            ("cat",                PipeInfo { stdin: false, stdout: true  }),
+            ("kubectl apply -f -", PipeInfo { stdin: true,  stdout: true  }),
+            ("tee out",            PipeInfo { stdin: true,  stdout: false }),
+        ],
+    )]
+    // `cat <<EOF && a | b`: tree-sitter exposes `a | b` as the
+    // `right`-fielded pipeline. body and right are list siblings (no
+    // pipe), `a` is the head of the right-hand pipeline.
+    #[case::and_with_right_pipeline(
+        indoc! {"
+            cat <<EOF && a | b
+            body
+            EOF
+        "},
+        vec![
+            ("cat", PipeInfo { stdin: false, stdout: false }),
+            ("a",   PipeInfo { stdin: false, stdout: true  }),
+            ("b",   PipeInfo { stdin: true,  stdout: false }),
+        ],
+    )]
+    // `cat <<EOF | tee out && echo done`: heredoc holds an un-fielded
+    // pipeline whose stages are `[tee out, list[..., echo done]]`.
+    // The list stage must be processed as a list, NOT inherit
+    // `stdin = true` from the synthesized outer pipeline.
+    #[case::pipe_then_and_chain(
+        indoc! {"
+            cat <<EOF | tee out && echo done
+            body
+            EOF
+        "},
+        vec![
+            ("cat",       PipeInfo { stdin: false, stdout: true  }),
+            ("tee out",   PipeInfo { stdin: true,  stdout: false }),
+            ("echo done", PipeInfo { stdin: false, stdout: false }),
+        ],
+    )]
+    // `cat <<EOF | a | b && c || d`: the multi-pipe + multi-list
+    // chain stress-tests the recursive `list` split. Bash's
+    // `|` > `&&` precedence means `(cat | a | b) && c || d`.
+    #[case::pipe_chain_then_list_chain(
+        indoc! {"
+            cat <<EOF | a | b && c || d
+            body
+            EOF
+        "},
+        vec![
+            ("cat", PipeInfo { stdin: false, stdout: true  }),
+            ("a",   PipeInfo { stdin: true,  stdout: true  }),
+            ("b",   PipeInfo { stdin: true,  stdout: false }),
+            ("c",   PipeInfo { stdin: false, stdout: false }),
+            ("d",   PipeInfo { stdin: false, stdout: false }),
+        ],
+    )]
+    fn extract_heredoc_pipe_metadata(#[case] input: &str, #[case] expected: Vec<(&str, PipeInfo)>) {
+        let cmds = extract_commands_with_metadata(input.trim_end()).unwrap();
+        let actual: Vec<(&str, PipeInfo)> = cmds
+            .iter()
+            .map(|c| (c.command.as_str(), c.pipe.clone()))
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     // Two heredocs on one pipeline (`cat <<A | cat <<B | tee`) is
@@ -1866,6 +1943,16 @@ mod tests {
             done
         "},
         vec!["true", "cat", "tee out"],
+    )]
+    #[case::for_body(
+        indoc! {"
+            for x in a b; do
+              cat <<EOF | tee out
+            body
+            EOF
+            done
+        "},
+        vec!["cat", "tee out"],
     )]
     fn extract_heredoc_pipe_inside_control_flow(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input.trim_end()).unwrap();
