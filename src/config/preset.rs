@@ -187,6 +187,11 @@ pub fn load_preset_with<G: GitClient>(
             // Strip test definitions from remote presets.  Tests are authored
             // for the preset itself and should not be evaluated by downstream
             // consumers — local overrides would cause them to fail.
+            //
+            // Invariant: any new strip target added here must also be cleared
+            // by `strip_preset_tests`, because `resolve_extends_recursive`
+            // re-applies the same strip to nested children reached via local
+            // paths under a remote ancestor.
             strip_preset_tests(&mut config);
 
             Ok(config)
@@ -1398,5 +1403,98 @@ mod tests {
             resolved.tests.is_some(),
             "top-level tests on local-only chains must be preserved",
         );
+    }
+
+    /// A chain user → local intermediate → remote → local-under-remote child:
+    /// the intermediate keeps its tests (no remote ancestor yet), but every
+    /// preset reached after crossing the remote boundary is stripped.
+    #[rstest]
+    fn local_intermediate_then_remote_strips_only_remote_descendants(tmp: TempDir) {
+        let reference_str = "github:org/preset@v1";
+        let cache = PresetCache::with_config(
+            tmp.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        );
+        let cache_dir = cache.cache_dir(reference_str);
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        fs::write(
+            cache_dir.join("runok.yml"),
+            indoc! {"
+                extends:
+                  - ./remote-child.yml
+                rules:
+                  - allow: 'remote-rule'
+                    tests:
+                      - allow: 'remote-rule arg'
+            "},
+        )
+        .unwrap();
+        fs::write(
+            cache_dir.join("remote-child.yml"),
+            indoc! {"
+                rules:
+                  - allow: 'remote-grandchild'
+                    tests:
+                      - allow: 'remote-grandchild arg'
+            "},
+        )
+        .unwrap();
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference_str.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+
+        let user_dir = tmp.path().join("user");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(
+            user_dir.join("mid.yml"),
+            indoc! {"
+                extends:
+                  - github:org/preset@v1
+                rules:
+                  - allow: 'mid-rule'
+                    tests:
+                      - allow: 'mid-rule arg'
+            "},
+        )
+        .unwrap();
+
+        let user_config: Config = parse_config(indoc! {"
+            extends:
+              - ./mid.yml
+            rules:
+              - allow: 'user-rule'
+                tests:
+                  - allow: 'user-rule arg'
+        "})
+        .unwrap();
+
+        let mock = MockGitClient::new();
+        let resolved =
+            resolve_extends_with(user_config, &user_dir, "user-config", &mock, &cache).unwrap();
+
+        let rules = resolved.rules.expect("merged rules should be present");
+        let assert_tests = |needle: &str, expected_tests: bool| {
+            let rule = rules
+                .iter()
+                .find(|r| r.allow.as_deref() == Some(needle))
+                .unwrap_or_else(|| panic!("missing rule {needle}"));
+            assert_eq!(
+                rule.tests.is_some(),
+                expected_tests,
+                "rule '{needle}' tests presence mismatch",
+            );
+        };
+        // User and local intermediate are above the remote boundary.
+        assert_tests("user-rule", true);
+        assert_tests("mid-rule", true);
+        // Everything from the remote subtree is stripped, including its
+        // local-under-remote child.
+        assert_tests("remote-rule", false);
+        assert_tests("remote-grandchild", false);
     }
 }

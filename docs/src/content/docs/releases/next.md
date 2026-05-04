@@ -77,7 +77,7 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
-### `runok test` no longer evaluates inline tests from local-extends children of remote presets ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
 
 The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.
 
