@@ -2,7 +2,7 @@
 title: runok test
 description: Run tests defined in runok.yml to verify that rules behave as expected.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 `runok test` runs test cases defined in your `runok.yml` and reports whether each command produces the expected decision (allow, ask, or deny). Use it to verify that your rules work as intended before deploying configuration changes.
