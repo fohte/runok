@@ -802,7 +802,7 @@ fn collect_commands(
             // the right pipe_info — otherwise the trailing arm silently
             // disappears and `cat <<EOF | rm -rf /` would slip past
             // `cat *` allow rules.
-            let continuation = find_heredoc_continuation(node, source);
+            let continuation = find_heredoc_continuation(node);
             // Process body first (preserves original command ordering)
             if let Some(body) = node.child_by_field_name("body") {
                 let body_pipe = match &continuation {
@@ -816,16 +816,27 @@ fn collect_commands(
             }
             // Emit the swallowed continuation, if any, as if it were a
             // proper sibling of the body inside an outer pipeline / list.
+            // Mirrors the per-stage pipe accounting from the `pipeline`
+            // arm above: every middle stage of a multi-stage trailing
+            // pipeline still has both stdin AND stdout connected.
             if let Some(continuation) = &continuation {
-                let trail_pipe = match continuation {
-                    HeredocContinuation::Pipeline { .. } => PipeInfo {
-                        stdin: true,
-                        stdout: pipe_info.stdout,
-                    },
-                    HeredocContinuation::List { .. } => pipe_info.clone(),
-                };
-                for child in continuation.children() {
-                    collect_commands(*child, source, commands, &trail_pipe, redirects);
+                match continuation {
+                    HeredocContinuation::Pipeline { stages } => {
+                        let len = stages.len();
+                        for (i, stage) in stages.iter().enumerate() {
+                            let stage_pipe = PipeInfo {
+                                stdin: true,
+                                stdout: pipe_info.stdout || i < len - 1,
+                            };
+                            collect_commands(*stage, source, commands, &stage_pipe, redirects);
+                        }
+                    }
+                    HeredocContinuation::List { arms } => {
+                        let arm_pipe = pipe_info.clone();
+                        for arm in arms {
+                            collect_commands(*arm, source, commands, &arm_pipe, redirects);
+                        }
+                    }
                 }
             }
             // Second pass: recurse into redirect children for nested
@@ -1112,15 +1123,6 @@ enum HeredocContinuation<'tree> {
     },
 }
 
-impl<'tree> HeredocContinuation<'tree> {
-    fn children(&self) -> &[tree_sitter::Node<'tree>] {
-        match self {
-            HeredocContinuation::Pipeline { stages } => stages,
-            HeredocContinuation::List { arms } => arms,
-        }
-    }
-}
-
 /// Inspect a `redirected_statement` for a "swallowed" trailing arm of
 /// a pipeline / `&&` / `||` that tree-sitter-bash mis-attaches as a
 /// child of the inner `heredoc_redirect`.
@@ -1131,17 +1133,18 @@ impl<'tree> HeredocContinuation<'tree> {
 /// right of a pipe).
 fn find_heredoc_continuation<'tree>(
     redirected_statement: tree_sitter::Node<'tree>,
-    source: &[u8],
 ) -> Option<HeredocContinuation<'tree>> {
     for i in 0..redirected_statement.child_count() {
         if redirected_statement.field_name_for_child(i as u32) != Some("redirect") {
             continue;
         }
-        let child = redirected_statement.child(i as u32)?;
+        let Some(child) = redirected_statement.child(i as u32) else {
+            continue;
+        };
         if child.kind() != "heredoc_redirect" {
             continue;
         }
-        return extract_heredoc_continuation(child, source);
+        return extract_heredoc_continuation(child);
     }
     None
 }
@@ -1149,10 +1152,11 @@ fn find_heredoc_continuation<'tree>(
 /// Walk a `heredoc_redirect` node looking for command-bearing children
 /// that represent a pipeline stage (`pipeline`, plus any nested
 /// `redirected_statement` / `command` siblings inside it) or a
-/// `&&`/`||`/`;` arm (an operator child plus a `right` field).
+/// `&&` / `||` arm (an operator child plus a `right` field).
+/// `;` and `&` after a heredoc are not handled here — tree-sitter-bash
+/// 0.25.1 cannot parse them and surfaces a SyntaxError instead.
 fn extract_heredoc_continuation<'tree>(
     heredoc: tree_sitter::Node<'tree>,
-    _source: &[u8],
 ) -> Option<HeredocContinuation<'tree>> {
     let mut pipeline_stages: Vec<tree_sitter::Node<'tree>> = Vec::new();
     let mut list_arms: Vec<tree_sitter::Node<'tree>> = Vec::new();
@@ -1641,88 +1645,150 @@ mod tests {
     // past `cat *` allow rules.
     // ========================================
 
-    #[test]
-    fn extract_heredoc_pipe_unquoted() {
-        let input = indoc! {"
+    // Each delimiter form (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`,
+    // `<<-EOF`) and each compound operator (`|`, `&&`, `||`) goes
+    // through the same `find_heredoc_continuation` codepath, so a
+    // single rstest matrix covers the variants. The `<<\EOF` case
+    // exercises `is_quoted_heredoc`'s backslash detection.
+    #[rstest]
+    #[case::pipe_unquoted(
+        indoc! {"
             cat <<EOF | kubectl apply -f -
             apiVersion: v1
             EOF
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
-    }
-
-    #[test]
-    fn extract_heredoc_pipe_quoted_delimiter() {
-        let input = indoc! {"
+        "},
+        vec!["cat", "kubectl apply -f -"],
+    )]
+    #[case::pipe_single_quoted_delimiter(
+        indoc! {"
             cat <<'EOF' | kubectl apply -f -
             apiVersion: v1
             EOF
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
-    }
-
-    #[test]
-    fn extract_heredoc_pipe_double_quoted_delimiter() {
-        let input = indoc! {r#"
+        "},
+        vec!["cat", "kubectl apply -f -"],
+    )]
+    #[case::pipe_double_quoted_delimiter(
+        indoc! {r#"
             cat <<"EOF" | kubectl apply -f -
             apiVersion: v1
             EOF
-        "#}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "kubectl apply -f -"]);
-    }
-
-    #[test]
-    fn extract_heredoc_pipe_tab_strip() {
-        let input = indoc! {"
+        "#},
+        vec!["cat", "kubectl apply -f -"],
+    )]
+    #[case::pipe_backslash_quoted_delimiter(
+        indoc! {r"
+            cat <<\EOF | kubectl apply -f -
+            apiVersion: v1
+            EOF
+        "},
+        vec!["cat", "kubectl apply -f -"],
+    )]
+    #[case::pipe_tab_strip(
+        indoc! {"
             cat <<-EOF | tee out
             \tbody
             \tEOF
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "tee out"]);
+        "},
+        vec!["cat", "tee out"],
+    )]
+    #[case::pipe_multiple_stages(
+        indoc! {"
+            cat <<EOF | kubectl apply -f - | tee out
+            body
+            EOF
+        "},
+        vec!["cat", "kubectl apply -f -", "tee out"],
+    )]
+    #[case::and_chain(
+        indoc! {"
+            cat <<EOF && echo done
+            body
+            EOF
+        "},
+        vec!["cat", "echo done"],
+    )]
+    #[case::or_chain(
+        indoc! {"
+            cat <<EOF || echo nope
+            body
+            EOF
+        "},
+        vec!["cat", "echo nope"],
+    )]
+    fn extract_heredoc_in_compound(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input.trim_end()).unwrap();
+        let expected: Vec<String> = expected.into_iter().map(String::from).collect();
+        assert_eq!(result, expected);
     }
 
+    // `cat <<EOF ; ...` and `cat <<EOF & ...` are legal bash but
+    // tree-sitter-bash 0.25.1 cannot parse them — the `;` / `&` after
+    // the heredoc start lands inside an ERROR node. runok surfaces a
+    // SyntaxError to the caller, matching the two-heredocs-on-one-
+    // pipeline case above. Pinned so a future parser bump that fixes
+    // them does not silently change runok's behaviour.
+    #[rstest]
+    #[case::semicolon_after_heredoc(indoc! {"
+        cat <<EOF ; echo after
+        body
+        EOF
+    "})]
+    #[case::ampersand_after_heredoc(indoc! {"
+        cat <<EOF & echo after
+        body
+        EOF
+    "})]
+    fn extract_heredoc_with_semicolon_or_ampersand_is_syntax_error(#[case] input: &str) {
+        let err = extract_commands(input.trim_end()).unwrap_err();
+        assert!(
+            matches!(err, CommandParseError::SyntaxError),
+            "expected SyntaxError, got {:?}",
+            err
+        );
+    }
+
+    // Per-stage pipe metadata for a 3-stage heredoc pipeline. Pinned
+    // separately because `extract_commands` discards `pipe`; this is
+    // the only signal that intermediate stages keep both stdin AND
+    // stdout connected (so a `when: pipe.stdout == false` clause on
+    // the middle stage doesn't fire incorrectly).
     #[test]
-    fn extract_heredoc_pipe_multiple_stages() {
+    fn extract_heredoc_multi_stage_pipeline_pipe_metadata() {
         let input = indoc! {"
             cat <<EOF | kubectl apply -f - | tee out
             body
             EOF
         "}
         .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "kubectl apply -f -", "tee out"]);
-    }
-
-    #[test]
-    fn extract_heredoc_and_chain() {
-        let input = indoc! {"
-            cat <<EOF && echo done
-            body
-            EOF
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "echo done"]);
-    }
-
-    #[test]
-    fn extract_heredoc_or_chain() {
-        let input = indoc! {"
-            cat <<EOF || echo nope
-            body
-            EOF
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["cat", "echo nope"]);
+        let cmds = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(cmds.len(), 3);
+        // body `cat`: first stage — no stdin, has stdout.
+        assert_eq!(cmds[0].command, "cat");
+        assert_eq!(
+            cmds[0].pipe,
+            PipeInfo {
+                stdin: false,
+                stdout: true
+            }
+        );
+        // middle `kubectl apply -f -`: stdin AND stdout both true.
+        assert_eq!(cmds[1].command, "kubectl apply -f -");
+        assert_eq!(
+            cmds[1].pipe,
+            PipeInfo {
+                stdin: true,
+                stdout: true
+            }
+        );
+        // last `tee out`: has stdin, no stdout.
+        assert_eq!(cmds[2].command, "tee out");
+        assert_eq!(
+            cmds[2].pipe,
+            PipeInfo {
+                stdin: true,
+                stdout: false
+            }
+        );
     }
 
     // Two heredocs on one pipeline (`cat <<A | cat <<B | tee`) is
@@ -1778,20 +1844,33 @@ mod tests {
         assert_eq!(result, vec!["echo foo", "cat"]);
     }
 
-    // Heredoc inside an `if` body must still surface every pipeline
-    // stage to the outer command list.
-    #[test]
-    fn extract_heredoc_pipe_inside_if() {
-        let input = indoc! {"
+    // Heredoc inside a control-flow body must still surface every
+    // pipeline stage to the outer command list.
+    #[rstest]
+    #[case::if_body(
+        indoc! {"
             if true; then
               cat <<EOF | tee out
             body
             EOF
             fi
-        "}
-        .trim_end();
-        let result = extract_commands(input).unwrap();
-        assert_eq!(result, vec!["true", "cat", "tee out"]);
+        "},
+        vec!["true", "cat", "tee out"],
+    )]
+    #[case::while_body(
+        indoc! {"
+            while true; do
+              cat <<EOF | tee out
+            body
+            EOF
+            done
+        "},
+        vec!["true", "cat", "tee out"],
+    )]
+    fn extract_heredoc_pipe_inside_control_flow(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input.trim_end()).unwrap();
+        let expected: Vec<String> = expected.into_iter().map(String::from).collect();
+        assert_eq!(result, expected);
     }
 
     // ========================================

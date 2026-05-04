@@ -90,7 +90,7 @@ apiVersion: v1
 EOF
 ```
 
-The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||` / `;`, multi-stage pipelines, and heredocs nested inside an `if` / `while` body.
+The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||`, multi-stage pipelines, and heredocs nested inside an `if` / `while` body.
 
 ### `runok audit --json` no longer panics when the downstream pipe closes early ([#337](https://github.com/fohte/runok/pull/337))
 
