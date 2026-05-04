@@ -12,9 +12,11 @@ This page tracks changes that will be included in the next release. It is update
 
 Compound commands that pass a heredoc through a command substitution — most commonly `git commit -m "$(cat <<'EOF' ... EOF)"` produced by Claude Code's `/commit` flow — used to fall back to `defaults.action` because the heredoc body's bytes were folded into the parent command's text and re-tokenized, raising `unclosed quote` whenever the body contained a `'` or `"`.
 
-The parent command text now collapses each command substitution to its opening/closing markers (`$(...)` → `$()`, `` `...` `` → ` ` ``), so the body never reaches the parent tokenizer. The substitution body is still extracted as its own sub-command and evaluated independently.
+The parent command text now collapses each command substitution to its opening/closing markers (`$(...)` → `$()`, backtick form → empty backticks), so the body never reaches the parent tokenizer. The substitution body is still extracted as its own sub-command and evaluated independently.
 
 Quoted-delimiter heredocs (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) are also now treated as literal text, matching bash semantics: any `$(...)` inside a quoted-delimiter body is no longer extracted as a command substitution.
+
+If you write rule patterns that depend on the inside of a command substitution being visible in the parent command text (e.g. `'echo $(secret_*)'`), update them to match either the placeholder form (`'echo $()'`) or the inner sub-command (`'secret_*'`) directly.
 
 ### `runok check --input-format claude-code-hook` no longer blocks Claude Code on runok-side failures
 
