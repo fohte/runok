@@ -81,6 +81,32 @@ If you have `jq` queries (or other audit-log consumers) that reference `.matched
 
 Old log files written before this change keep their previous shape on disk; replay or re-ingest tooling needs to handle both shapes during the transition window.
 
+## New Features
+
+### `definitions.vars` gains a new `pattern` type for reusable command-prefix patterns ([#334](https://github.com/fohte/runok/pull/334))
+
+`definitions.vars[<name>].type` now accepts `pattern` in addition to `literal` and `path`. A pattern-typed variable's values are parsed as rule-pattern fragments and inlined wherever `<var:name>` appears. This is purpose-built for naming a base CLI plus its global flags once, and reusing it across every rule that should accept that prefix.
+
+```yaml
+definitions:
+  vars:
+    kubectl:
+      type: pattern
+      values:
+        - 'kubectl [-n|--namespace *] [--context *] [--cluster *] [--user *] [--kubeconfig *]'
+
+rules:
+  - allow: '<var:kubectl> get|describe|logs *'
+  - allow: '<var:kubectl> top node|pod|nodes|pods *'
+  - allow: '<var:kubectl> auth can-i|whoami *'
+```
+
+Each rule above accepts the kubectl prefix with any combination of the listed global flags (including the `--flag=value` form), so `kubectl --kubeconfig ~/.kube/work --context prod get pods -A` and the bare `kubectl get pods` are both allowed by the first rule.
+
+Pattern-typed values support the full rule-pattern syntax (alternation `|`, wildcard `*`, optional groups `[...]`, literals, etc.), but cannot nest other placeholders (`<cmd>`, `<opts>`, `<vars>`, `<var:...>`, `<path:...>`, `<flag:...>`) and cannot themselves be placed inside an optional group at a rule call site (`[<var:name>]`). Both restrictions are reported at config validation time.
+
+See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-references-varname) and [`definitions.vars`](/configuration/schema/#definitionsvars) for details.
+
 ## Bug Fixes
 
 ### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote` ([#330](https://github.com/fohte/runok/pull/330))

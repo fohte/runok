@@ -180,10 +180,11 @@ definitions:
 
 ### Variable Types
 
-| Type      | Matching behavior                                                         |
-| --------- | ------------------------------------------------------------------------- |
-| `literal` | Exact string match (default)                                              |
-| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+| Type      | Matching behavior                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| `literal` | Exact string match (default)                                                                                |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization                                   |
+| `pattern` | Parse each value as a rule-pattern fragment and inline-expand it at the `<var:name>` placeholder's position |
 
 Each value inherits the definition-level `type` unless it specifies its own `type` via the `{ type, value }` form.
 
@@ -251,6 +252,35 @@ definitions:
 | `bash ./tests/run`          | Yes                         |
 | `bash ./tests/../tests/run` | Yes                         |
 | `bash ./scripts/deploy`     | No                          |
+
+### Pattern Type Inline Expansion
+
+When `type: pattern` is set, each value is parsed as a rule-pattern fragment and inlined in place of `<var:name>`. This is most useful for naming a reusable command-prefix pattern -- for example a base CLI plus its global flags -- so the same prefix doesn't need to be repeated across every rule.
+
+```yaml
+definitions:
+  vars:
+    kubectl:
+      type: pattern
+      values:
+        - 'kubectl [-n|--namespace *] [--context *] [--cluster *] [--user *] [--kubeconfig *]'
+
+rules:
+  - allow: '<var:kubectl> get|describe|logs *'
+```
+
+The rule above is equivalent to writing `kubectl [-n|--namespace *] [--context *] [--cluster *] [--user *] [--kubeconfig *] get|describe|logs *` inline, but the prefix is named once and reused across every rule that takes the same set of global flags.
+
+Each value supports the full rule-pattern syntax (alternation `|`, wildcard `*`, optional groups `[...]`, literals, etc.), but **other placeholders cannot be nested** inside a `pattern` value. The following are rejected at config validation time:
+
+- `<cmd>`, `<opts>`, `<vars>` (wrapper placeholders)
+- `<var:other>` (other variable references)
+- `<path:name>` (path references)
+- `<flag:name>` (flag-group references)
+
+`<var:name>` for a `pattern`-typed variable also cannot appear inside an optional group (`[<var:name>]`), because the pattern var may itself contain optional flags and the outer optional layer would conflict with that expansion. This mirrors the same restriction on `[<flag:name>]`.
+
+A pattern-typed `<var:name>` exposes only the command-name token (the leading literal/alternation of the value) under `vars.<name>` in `when` clauses; the global flags absorbed by the inlined pattern are not part of the capture. Use `<flag:name>` if you need to inspect those flag values.
 
 ### Undefined Variable Names
 

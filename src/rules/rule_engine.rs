@@ -734,6 +734,20 @@ fn collect_value_flags(
                 }
             }
             PatternToken::Optional(inner) => collect_value_flags(inner, definitions, value_flags),
+            PatternToken::VarRef(name) => {
+                // Pattern-typed vars expand inline into rule patterns, so
+                // value-flag aliases nested inside the expansion (e.g.
+                // `[--namespace *]`) must propagate up to the command parser.
+                if let Some(sub_patterns) = definitions
+                    .parsed_pattern_vars
+                    .as_ref()
+                    .and_then(|m| m.get(name))
+                {
+                    for sub in sub_patterns {
+                        collect_value_flags(&sub.tokens, definitions, value_flags);
+                    }
+                }
+            }
             _ => {}
         }
     }

@@ -586,6 +586,11 @@
           "description": "Path match: canonicalize both sides before comparison,\nfalling back to `normalize_path` when the file does not exist.",
           "type": "string",
           "const": "path"
+        },
+        {
+          "description": "Pattern match: each value is parsed as a rule-pattern fragment and\nexpanded inline at the `<var:name>` placeholder's position. Useful\nfor naming a reusable command-prefix pattern such as\n`\"kubectl [-n|--namespace *] [--context *] [--cluster *]\"`.",
+          "type": "string",
+          "const": "pattern"
         }
       ]
     },
