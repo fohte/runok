@@ -1,6 +1,7 @@
 // Test helpers use panic! for setup failures, which is standard practice.
 #![allow(clippy::panic, reason = "test helper")]
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::process::{Command as StdCommand, Stdio};
@@ -471,12 +472,12 @@ fn audit_json_does_not_panic_on_broken_pipe(allow_echo_env: AuditTestEnv) {
         .audit_dir
         .join(format!("audit-{today}.jsonl"));
     let padding: String = "x".repeat(1024);
-    let mut content = String::new();
+    let mut content = String::with_capacity(5000 * 1200);
     for i in 0..5000 {
-        content.push_str(&format!(
+        let _ = writeln!(
+            content,
             r#"{{"timestamp":"2026-01-01T00:00:00Z","command":"echo {i} {padding}","action":{{"type":"allow"}},"matched_rules":[],"sandbox_preset":null,"default_action":null,"metadata":{{"endpoint_type":"exec"}},"sub_evaluations":null}}"#
-        ));
-        content.push('\n');
+        );
     }
     fs::write(&path, content).unwrap_or_else(|e| panic!("failed to write audit file: {e}"));
 
