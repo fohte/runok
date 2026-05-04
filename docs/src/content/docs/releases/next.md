@@ -28,7 +28,7 @@ If you previously relied on runok scanning a quoted-HEREDOC body (for example, a
 
 ## New Features
 
-### `definitions.vars` gains a new `pattern` type for reusable command-prefix patterns
+### `definitions.vars` gains a new `pattern` type for reusable command-prefix patterns ([#334](https://github.com/fohte/runok/pull/334))
 
 `definitions.vars[<name>].type` now accepts `pattern` in addition to `literal` and `path`. A pattern-typed variable's values are parsed as rule-pattern fragments and inlined wherever `<var:name>` appears. This is purpose-built for naming a base CLI plus its global flags once, and reusing it across every rule that should accept that prefix.
 
