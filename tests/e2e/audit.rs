@@ -325,7 +325,7 @@ fn audit_rotation_deletes_old_files(allow_echo_env: AuditTestEnv) {
         .unwrap_or_else(|e| panic!("failed to create audit dir: {e}"));
     let old_date = (Utc::now() - chrono::Duration::days(5)).format("%Y-%m-%d");
     let old_file = env.audit_dir.join(format!("audit-{old_date}.jsonl"));
-    let dummy_entry = r#"{"timestamp":"old","command":"echo old","action":{"type":"allow"},"matched_rules":[],"sandbox_preset":null,"default_action":null,"metadata":{"endpoint_type":"exec"},"sub_evaluations":null}"#;
+    let dummy_entry = r#"{"timestamp":"old","command":"echo old","action":{"type":"allow"},"sandbox_preset":null,"default_action":null,"metadata":{"endpoint_type":"exec"},"command_evaluations":[]}"#;
     fs::write(&old_file, format!("{dummy_entry}\n"))
         .unwrap_or_else(|e| panic!("failed to write old audit file: {e}"));
 
@@ -411,20 +411,20 @@ fn exec_compound_command_audit_log(exec_audit_env: AuditTestEnv) {
     let entries = exec_audit_env.read_audit_entries();
     assert_eq!(entries.len(), 1);
 
-    let sub_evals = entries[0]["sub_evaluations"]
+    let evals = entries[0]["command_evaluations"]
         .as_array()
-        .unwrap_or_else(|| panic!("sub_evaluations should be an array"));
-    assert!(sub_evals.len() >= 2);
+        .unwrap_or_else(|| panic!("command_evaluations should be an array"));
+    assert!(evals.len() >= 2);
 
-    let echo_sub = sub_evals
+    let echo_eval = evals
         .iter()
-        .find(|s| s["command"].as_str().is_some_and(|c| c.starts_with("echo")));
-    assert!(echo_sub.is_some(), "should have echo sub-evaluation");
+        .find(|e| e["command"].as_str().is_some_and(|c| c.starts_with("echo")));
+    assert!(echo_eval.is_some(), "should have echo branch");
 
-    let rm_sub = sub_evals
+    let rm_eval = evals
         .iter()
-        .find(|s| s["command"].as_str().is_some_and(|c| c.starts_with("rm")));
-    assert!(rm_sub.is_some(), "should have rm sub-evaluation");
+        .find(|e| e["command"].as_str().is_some_and(|c| c.starts_with("rm")));
+    assert!(rm_eval.is_some(), "should have rm branch");
 }
 
 // ========================================

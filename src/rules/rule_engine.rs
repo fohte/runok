@@ -154,6 +154,8 @@ pub fn evaluate_compound(
     let extracted = extract_commands_with_metadata(command).unwrap_or_else(|_| {
         vec![ExtractedCommand {
             command: command.to_string(),
+            env: vec![],
+            argv: vec![],
             redirects: vec![],
             pipe: PipeInfo::default(),
         }]

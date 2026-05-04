@@ -1,27 +1,142 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::ActionKind;
+use crate::rules::command_parser::{EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo};
 use crate::rules::rule_engine::{Action, DenyResponse, RuleMatchInfo};
 
 /// A complete record of a single command evaluation.
+///
+/// Deserialisation accepts both the current schema (with
+/// `command_evaluations`) and the pre-#333 schema (with top-level
+/// `matched_rules` / `sub_evaluations`). The old shape is rewritten
+/// into `command_evaluations` on the fly so `runok audit` keeps
+/// surfacing logs written by older runok versions. Serialisation
+/// always emits the current schema.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "RawAuditEntry")]
 pub struct AuditEntry {
     /// ISO 8601 timestamp (UTC).
     pub timestamp: String,
-    /// Input command string.
+    /// Input command string as runok received it.
     pub command: String,
-    /// Final evaluation result.
+    /// Final evaluation result for the input as a whole.
     pub action: SerializableAction,
-    /// List of rules that matched.
-    pub matched_rules: Vec<SerializableRuleMatch>,
     /// Sandbox preset name (if applied).
     pub sandbox_preset: Option<String>,
     /// Default action setting value.
     pub default_action: Option<String>,
     /// Session and context information.
     pub metadata: AuditMetadata,
-    /// Sub-evaluation results for compound/wrapper commands (if applicable).
-    pub sub_evaluations: Option<Vec<SubEvaluation>>,
+    /// Per-command evaluation records, in source order.
+    ///
+    /// One entry per shell command extracted from `command`. A
+    /// non-compound input (e.g. `git status`) produces one entry; a
+    /// compound or pipelined input (e.g. `a && b`, `a | b`) produces
+    /// one per branch. May be empty when the input contained no
+    /// runnable command (comment-only, parse error).
+    ///
+    /// Audit consumers can read `argv[0]` from each entry without
+    /// branching on a separate top-level vs. nested-list shape.
+    pub command_evaluations: Vec<CommandEvaluation>,
+}
+
+/// On-the-wire shape used only for deserialisation.
+///
+/// `command_evaluations` is the current field. `matched_rules` and
+/// `sub_evaluations` were emitted by runok versions before the
+/// command_evaluations consolidation. When a log file mixes both
+/// shapes (e.g. retention spans the upgrade), each entry is upgraded
+/// independently.
+#[derive(Debug, Deserialize)]
+struct RawAuditEntry {
+    timestamp: String,
+    command: String,
+    action: SerializableAction,
+    #[serde(default)]
+    sandbox_preset: Option<String>,
+    #[serde(default)]
+    default_action: Option<String>,
+    #[serde(default)]
+    metadata: AuditMetadata,
+    #[serde(default)]
+    command_evaluations: Option<Vec<CommandEvaluation>>,
+    /// Legacy: top-level matched rules from the pre-consolidation schema.
+    #[serde(default)]
+    matched_rules: Option<Vec<SerializableRuleMatch>>,
+    /// Legacy: per-branch results from the pre-consolidation schema.
+    #[serde(default)]
+    sub_evaluations: Option<Vec<LegacySubEvaluation>>,
+}
+
+/// Legacy sub-evaluation entry as emitted before the
+/// command_evaluations consolidation. Kept here only so legacy logs
+/// keep deserialising; never written.
+#[derive(Debug, Deserialize)]
+struct LegacySubEvaluation {
+    command: String,
+    action: SerializableAction,
+    #[serde(default)]
+    matched_rules: Vec<SerializableRuleMatch>,
+    eval_type: String,
+}
+
+impl TryFrom<RawAuditEntry> for AuditEntry {
+    type Error = String;
+
+    fn try_from(raw: RawAuditEntry) -> Result<Self, Self::Error> {
+        let command_evaluations = if let Some(evals) = raw.command_evaluations {
+            evals
+        } else if let Some(subs) = raw.sub_evaluations {
+            // Legacy compound entry: each sub became one CommandEvaluation.
+            // Old logs predate env / argv / redirects / pipe so those stay empty.
+            subs.into_iter()
+                .map(|s| CommandEvaluation {
+                    command: s.command,
+                    action: s.action,
+                    matched_rules: s.matched_rules,
+                    eval_type: parse_legacy_eval_type(&s.eval_type),
+                    env: Vec::new(),
+                    argv: Vec::new(),
+                    redirects: Vec::new(),
+                    pipe: SerializablePipe::default(),
+                })
+                .collect()
+        } else {
+            // Legacy non-compound entry: synthesise a single primary
+            // record from the top-level command + matched_rules.
+            vec![CommandEvaluation {
+                command: raw.command.clone(),
+                action: raw.action.clone(),
+                matched_rules: raw.matched_rules.unwrap_or_default(),
+                eval_type: EvalType::Primary,
+                env: Vec::new(),
+                argv: Vec::new(),
+                redirects: Vec::new(),
+                pipe: SerializablePipe::default(),
+            }]
+        };
+
+        Ok(AuditEntry {
+            timestamp: raw.timestamp,
+            command: raw.command,
+            action: raw.action,
+            sandbox_preset: raw.sandbox_preset,
+            default_action: raw.default_action,
+            metadata: raw.metadata,
+            command_evaluations,
+        })
+    }
+}
+
+fn parse_legacy_eval_type(s: &str) -> EvalType {
+    match s {
+        "primary" => EvalType::Primary,
+        // Anything else (including `"compound"`, `"wrapper"` from the
+        // old wrapper expansion path, or unknown values from a
+        // forward-compat log) maps to Compound. The audit consumer
+        // can still read the per-branch `command` to disambiguate.
+        _ => EvalType::Compound,
+    }
 }
 
 /// Context information about the evaluation.
@@ -40,7 +155,7 @@ pub struct AuditMetadata {
 }
 
 /// Serializable representation of an evaluation action.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "detail", rename_all = "lowercase")]
 pub enum SerializableAction {
     Allow,
@@ -55,7 +170,7 @@ pub enum SerializableAction {
 }
 
 /// Serializable representation of a matched rule.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerializableRuleMatch {
     /// Action kind of the rule (allow, deny, ask).
     pub action_kind: String,
@@ -65,17 +180,92 @@ pub struct SerializableRuleMatch {
     pub matched_tokens: Vec<String>,
 }
 
-/// Sub-evaluation result for compound/wrapper commands.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct SubEvaluation {
-    /// Sub-command string.
+/// How a `CommandEvaluation` was extracted from the input.
+///
+/// `Primary` is used for non-compound inputs (one entry total).
+/// `Compound` is used for each branch of `a && b` / `a || b` /
+/// `a ; b` / `a | b` / etc.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EvalType {
+    Primary,
+    Compound,
+}
+
+/// Per-branch record of a single command extracted from the input.
+///
+/// Carries the rule-evaluation result and the shell-level parse
+/// result side by side, so audit consumers can filter on the actual
+/// binary (`argv[0]`) without re-implementing shell tokenisation.
+/// Higher-level shaping (`binary` vs `subcommand`, `mise` shim
+/// normalisation, treating `-n` as boolean vs value-taking) is
+/// intentionally not done here — those rules differ per CLI and
+/// belong to the consumer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandEvaluation {
+    /// The branch command string (redirects stripped, env prefix kept).
     pub command: String,
-    /// Evaluation result.
+    /// Evaluation result for this branch.
     pub action: SerializableAction,
-    /// Matched rules.
+    /// Rules that matched for this branch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matched_rules: Vec<SerializableRuleMatch>,
-    /// Evaluation type (compound split / wrapper recursive expansion).
-    pub eval_type: String,
+    /// How this branch was extracted from the input.
+    pub eval_type: EvalType,
+    /// Inline `KEY=VALUE` env prefix. Empty when the branch had none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<SerializableEnvVar>,
+    /// Command name + arguments with shell quoting resolved. `argv[0]`
+    /// is the binary as written. Empty when shell parsing could not
+    /// produce an argv (AST leaf-text fallback).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    /// Redirect operators attached to this branch. Empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redirects: Vec<SerializableRedirect>,
+    /// Pipeline position. Both `stdin` / `stdout` are `false` for a
+    /// standalone branch; the field is omitted from JSON in that case.
+    #[serde(default, skip_serializing_if = "SerializablePipe::is_default")]
+    pub pipe: SerializablePipe,
+}
+
+/// A `KEY=VALUE` environment variable assignment that prefixed the
+/// command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableEnvVar {
+    /// Variable name.
+    pub name: String,
+    /// Variable value with shell quotes resolved. `None` for the bare
+    /// `KEY= cmd` form (clear the variable).
+    pub value: Option<String>,
+}
+
+/// A redirect operator attached to a command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerializableRedirect {
+    /// Redirect category: `"input"`, `"output"`, or `"dup"`.
+    pub redirect_type: String,
+    /// The redirect operator text (`>`, `>>`, `<`, `<<<`, `>&`, etc.).
+    pub operator: String,
+    /// Redirect target (filename, fd reference like `&1`, etc.).
+    pub target: String,
+    /// Explicit file descriptor (e.g. `2` in `2>file`).
+    pub descriptor: Option<i64>,
+}
+
+/// Pipeline position of a command.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SerializablePipe {
+    /// Stdin comes from a preceding pipe.
+    pub stdin: bool,
+    /// Stdout feeds a following pipe.
+    pub stdout: bool,
+}
+
+impl SerializablePipe {
+    fn is_default(&self) -> bool {
+        !self.stdin && !self.stdout
+    }
 }
 
 impl From<Action> for SerializableAction {
@@ -107,6 +297,57 @@ impl From<RuleMatchInfo> for SerializableRuleMatch {
             matched_tokens: info.matched_tokens,
         }
     }
+}
+
+impl From<&EnvAssignment> for SerializableEnvVar {
+    fn from(assignment: &EnvAssignment) -> Self {
+        SerializableEnvVar {
+            name: assignment.name.clone(),
+            value: assignment.value.clone(),
+        }
+    }
+}
+
+impl From<&RedirectInfo> for SerializableRedirect {
+    fn from(info: &RedirectInfo) -> Self {
+        SerializableRedirect {
+            redirect_type: info.redirect_type.clone(),
+            operator: info.operator.clone(),
+            target: info.target.clone(),
+            descriptor: info.descriptor,
+        }
+    }
+}
+
+impl From<&PipeInfo> for SerializablePipe {
+    fn from(info: &PipeInfo) -> Self {
+        SerializablePipe {
+            stdin: info.stdin,
+            stdout: info.stdout,
+        }
+    }
+}
+
+/// Build the parse-related fields of a `CommandEvaluation` from an
+/// `ExtractedCommand` produced by the rules layer. Used by the
+/// adapter and by tests that synthesise audit entries.
+pub fn parse_fields_from_extracted(
+    extracted: &ExtractedCommand,
+) -> (
+    Vec<SerializableEnvVar>,
+    Vec<String>,
+    Vec<SerializableRedirect>,
+    SerializablePipe,
+) {
+    let env = extracted.env.iter().map(SerializableEnvVar::from).collect();
+    let argv = extracted.argv.clone();
+    let redirects = extracted
+        .redirects
+        .iter()
+        .map(SerializableRedirect::from)
+        .collect();
+    let pipe = SerializablePipe::from(&extracted.pipe);
+    (env, argv, redirects, pipe)
 }
 
 #[cfg(test)]
@@ -175,38 +416,40 @@ mod tests {
         assert_eq!(deserialized, rules);
     }
 
-    #[rstest]
-    #[case::sub_evaluation_compound(
-        SubEvaluation {
-            command: "echo hello".to_owned(),
-            action: SerializableAction::Allow,
+    fn sample_primary_evaluation() -> CommandEvaluation {
+        CommandEvaluation {
+            command: "git push -f origin main".to_owned(),
+            action: SerializableAction::Deny {
+                message: Some("force push is forbidden".to_owned()),
+                fix_suggestion: Some("git push origin main".to_owned()),
+            },
             matched_rules: vec![SerializableRuleMatch {
-                action_kind: "allow".to_owned(),
-                pattern: "echo *".to_owned(),
-                matched_tokens: vec!["hello".to_owned()],
+                action_kind: "deny".to_owned(),
+                pattern: "git push -f|--force *".to_owned(),
+                matched_tokens: vec!["origin".to_owned(), "main".to_owned()],
             }],
-            eval_type: "compound".to_owned(),
-        },
-    )]
-    fn sub_evaluation_roundtrip(#[case] sub_eval: SubEvaluation) {
-        let serialized = serde_json::to_string(&sub_eval).unwrap();
-        let deserialized: SubEvaluation = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized, sub_eval);
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec![
+                "git".to_owned(),
+                "push".to_owned(),
+                "-f".to_owned(),
+                "origin".to_owned(),
+                "main".to_owned(),
+            ],
+            redirects: vec![],
+            pipe: SerializablePipe::default(),
+        }
     }
 
     #[rstest]
-    #[case::without_sub_evaluations(AuditEntry {
+    #[case::single_command(AuditEntry {
         timestamp: "2026-02-25T10:30:00Z".to_owned(),
         command: "git push -f origin main".to_owned(),
         action: SerializableAction::Deny {
             message: Some("force push is forbidden".to_owned()),
             fix_suggestion: Some("git push origin main".to_owned()),
         },
-        matched_rules: vec![SerializableRuleMatch {
-            action_kind: "deny".to_owned(),
-            pattern: "git push -f|--force *".to_owned(),
-            matched_tokens: vec!["origin".to_owned(), "main".to_owned()],
-        }],
         sandbox_preset: None,
         default_action: Some("ask".to_owned()),
         metadata: AuditMetadata {
@@ -216,30 +459,33 @@ mod tests {
             tool_name: Some("Bash".to_owned()),
             hook_event_name: Some("PreToolUse".to_owned()),
         },
-        sub_evaluations: None,
+        command_evaluations: vec![sample_primary_evaluation()],
     })]
-    #[case::with_sub_evaluations(AuditEntry {
+    #[case::compound(AuditEntry {
         timestamp: "2026-02-25T11:00:00Z".to_owned(),
         command: "echo hello && rm -rf /".to_owned(),
         action: SerializableAction::Deny {
             message: None,
             fix_suggestion: None,
         },
-        matched_rules: vec![],
         sandbox_preset: None,
         default_action: None,
         metadata: AuditMetadata {
             endpoint_type: "exec".to_owned(),
             ..AuditMetadata::default()
         },
-        sub_evaluations: Some(vec![
-            SubEvaluation {
+        command_evaluations: vec![
+            CommandEvaluation {
                 command: "echo hello".to_owned(),
                 action: SerializableAction::Allow,
                 matched_rules: vec![],
-                eval_type: "compound".to_owned(),
+                eval_type: EvalType::Compound,
+                env: vec![],
+                argv: vec!["echo".to_owned(), "hello".to_owned()],
+                redirects: vec![],
+                pipe: SerializablePipe::default(),
             },
-            SubEvaluation {
+            CommandEvaluation {
                 command: "rm -rf /".to_owned(),
                 action: SerializableAction::Deny {
                     message: None,
@@ -250,14 +496,166 @@ mod tests {
                     pattern: "rm -rf *".to_owned(),
                     matched_tokens: vec!["/".to_owned()],
                 }],
-                eval_type: "compound".to_owned(),
+                eval_type: EvalType::Compound,
+                env: vec![],
+                argv: vec!["rm".to_owned(), "-rf".to_owned(), "/".to_owned()],
+                redirects: vec![],
+                pipe: SerializablePipe::default(),
             },
-        ]),
+        ],
     })]
     fn audit_entry_roundtrip(#[case] entry: AuditEntry) {
         let serialized = serde_json::to_string(&entry).unwrap();
         let deserialized: AuditEntry = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, entry);
+    }
+
+    #[rstest]
+    fn legacy_compound_audit_entry_deserialises_into_command_evaluations() {
+        // Real-shape sample of the pre-#333 schema. The reader has to
+        // surface this as a current-shape AuditEntry so existing audit
+        // log files keep working after the upgrade.
+        let legacy_json = indoc! {r#"
+            {
+                "timestamp": "2026-04-27T10:00:00Z",
+                "command": "echo hi && rm -rf /",
+                "action": {"type": "deny", "detail": {"message": null, "fix_suggestion": null}},
+                "matched_rules": [],
+                "sandbox_preset": null,
+                "default_action": "ask",
+                "metadata": {"endpoint_type": "exec"},
+                "sub_evaluations": [
+                    {
+                        "command": "echo hi",
+                        "action": {"type": "allow"},
+                        "matched_rules": [{"action_kind": "allow", "pattern": "echo *", "matched_tokens": ["hi"]}],
+                        "eval_type": "compound"
+                    },
+                    {
+                        "command": "rm -rf /",
+                        "action": {"type": "deny", "detail": {"message": null, "fix_suggestion": null}},
+                        "matched_rules": [{"action_kind": "deny", "pattern": "rm -rf *", "matched_tokens": ["/"]}],
+                        "eval_type": "compound"
+                    }
+                ]
+            }
+        "#};
+
+        let entry: AuditEntry = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(entry.command, "echo hi && rm -rf /");
+        assert_eq!(entry.command_evaluations.len(), 2);
+
+        let first = &entry.command_evaluations[0];
+        assert_eq!(first.command, "echo hi");
+        assert_eq!(first.eval_type, EvalType::Compound);
+        assert_eq!(first.matched_rules[0].pattern, "echo *");
+        // Legacy logs predate env / argv / redirects / pipe.
+        assert!(first.argv.is_empty());
+        assert!(first.env.is_empty());
+
+        let second = &entry.command_evaluations[1];
+        assert_eq!(second.command, "rm -rf /");
+        assert_eq!(second.eval_type, EvalType::Compound);
+        assert!(matches!(second.action, SerializableAction::Deny { .. }));
+    }
+
+    #[rstest]
+    fn legacy_single_audit_entry_deserialises_into_one_primary_evaluation() {
+        let legacy_json = indoc! {r#"
+            {
+                "timestamp": "2026-04-27T10:00:00Z",
+                "command": "git status",
+                "action": {"type": "allow"},
+                "matched_rules": [{"action_kind": "allow", "pattern": "git status", "matched_tokens": []}],
+                "sandbox_preset": null,
+                "default_action": null,
+                "metadata": {"endpoint_type": "hook"},
+                "sub_evaluations": null
+            }
+        "#};
+
+        let entry: AuditEntry = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(entry.command_evaluations.len(), 1);
+        let primary = &entry.command_evaluations[0];
+        assert_eq!(primary.eval_type, EvalType::Primary);
+        assert_eq!(primary.command, "git status");
+        assert_eq!(primary.matched_rules[0].pattern, "git status");
+        assert!(primary.argv.is_empty());
+    }
+
+    #[rstest]
+    fn audit_entry_omits_legacy_top_level_keys() {
+        // Hard-fail if anyone reintroduces the dropped top-level
+        // `matched_rules` / `parsed` / `sub_evaluations` keys, since
+        // consumers now branch on `command_evaluations` and would
+        // silently miss data if those keys came back.
+        let entry = AuditEntry {
+            timestamp: "2026-05-04T00:00:00Z".to_owned(),
+            command: "echo hi".to_owned(),
+            action: SerializableAction::Allow,
+            sandbox_preset: None,
+            default_action: None,
+            metadata: AuditMetadata::default(),
+            command_evaluations: vec![CommandEvaluation {
+                command: "echo hi".to_owned(),
+                action: SerializableAction::Allow,
+                matched_rules: vec![],
+                eval_type: EvalType::Primary,
+                env: vec![],
+                argv: vec!["echo".to_owned(), "hi".to_owned()],
+                redirects: vec![],
+                pipe: SerializablePipe::default(),
+            }],
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        for forbidden in ["\"matched_rules\":[", "\"sub_evaluations\"", "\"parsed\""] {
+            assert!(
+                !json.contains(forbidden),
+                "{forbidden} must not appear at top level: {json}"
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::primary_minimal(
+        CommandEvaluation {
+            command: "echo hi".to_owned(),
+            action: SerializableAction::Allow,
+            matched_rules: vec![],
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec!["echo".to_owned(), "hi".to_owned()],
+            redirects: vec![],
+            pipe: SerializablePipe::default(),
+        },
+        r#"{"command":"echo hi","action":{"type":"allow"},"eval_type":"primary","argv":["echo","hi"]}"#,
+    )]
+    #[case::env_argv_redirects_pipe(
+        CommandEvaluation {
+            command: "FOO=x echo hi > /tmp/log".to_owned(),
+            action: SerializableAction::Allow,
+            matched_rules: vec![],
+            eval_type: EvalType::Compound,
+            env: vec![SerializableEnvVar {
+                name: "FOO".to_owned(),
+                value: Some("x".to_owned()),
+            }],
+            argv: vec!["echo".to_owned(), "hi".to_owned()],
+            redirects: vec![SerializableRedirect {
+                redirect_type: "output".to_owned(),
+                operator: ">".to_owned(),
+                target: "/tmp/log".to_owned(),
+                descriptor: None,
+            }],
+            pipe: SerializablePipe { stdin: false, stdout: true },
+        },
+        r#"{"command":"FOO=x echo hi > /tmp/log","action":{"type":"allow"},"eval_type":"compound","env":[{"name":"FOO","value":"x"}],"argv":["echo","hi"],"redirects":[{"redirect_type":"output","operator":">","target":"/tmp/log","descriptor":null}],"pipe":{"stdin":false,"stdout":true}}"#,
+    )]
+    fn command_evaluation_serialises(#[case] eval: CommandEvaluation, #[case] expected: &str) {
+        let serialized = serde_json::to_string(&eval).unwrap();
+        assert_eq!(serialized, expected);
+        let deserialized: CommandEvaluation = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, eval);
     }
 
     #[rstest]

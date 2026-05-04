@@ -54,11 +54,34 @@ pub struct PipeInfo {
     pub stdout: bool,
 }
 
+/// A `KEY=VALUE` environment variable assignment that prefixes a
+/// command (e.g. `FOO=bar BAZ=qux helmfile template`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvAssignment {
+    /// Variable name.
+    pub name: String,
+    /// Variable value with shell quotes resolved. `None` when bash
+    /// permits the bare form `FOO= cmd` (clear the variable).
+    pub value: Option<String>,
+}
+
 /// A command extracted from a compound shell expression, with metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedCommand {
     /// The command string (redirects stripped, as before).
     pub command: String,
+    /// Inline environment variable assignments that prefixed the
+    /// command (`FOO=bar cmd ...`). Empty when the command had no
+    /// such prefix or when the AST shape made them unattributable
+    /// (e.g. process substitutions emitted as standalone commands).
+    pub env: Vec<EnvAssignment>,
+    /// The command + argument tokens with shell quoting resolved
+    /// (env prefix, redirects, and HEREDOC bodies excluded). Empty
+    /// when the AST surfaced a non-`command` node — currently only
+    /// the leaf-text fallback in `collect_commands` — so callers
+    /// must treat the empty case as "argv unavailable" rather than
+    /// "argv had no tokens".
+    pub argv: Vec<String>,
     /// Redirect operators that were attached to this command.
     pub redirects: Vec<RedirectInfo>,
     /// Pipeline position information.
@@ -814,6 +837,8 @@ fn collect_commands(
         // command_substitution / subshell nodes, and emit the remaining text.
         "command" => {
             let mut cmd_redirects = redirects.to_vec();
+            let mut env: Vec<EnvAssignment> = Vec::new();
+            let mut argv: Vec<String> = Vec::new();
             for i in 0..node.child_count() {
                 let Some(child) = node.child(i as u32) else {
                     continue;
@@ -845,8 +870,14 @@ fn collect_commands(
                         // filter in `evaluate_command_inner`.
                         "command_substitution" | "subshell" => {
                             collect_commands(child, source, commands, &PipeInfo::default(), &[]);
+                            if let Some(token) = dequote_node(child, source) {
+                                argv.push(token);
+                            }
                         }
                         "variable_assignment" => {
+                            if let Some(assignment) = extract_env_assignment(child, source) {
+                                env.push(assignment);
+                            }
                             collect_substitutions_recursive(child, source, commands);
                         }
                         // Recurse into other child nodes (e.g. string,
@@ -854,6 +885,9 @@ fn collect_commands(
                         // nodes (e.g. `curl -u "user:$(secret_cmd)" url`).
                         _ => {
                             collect_substitutions_recursive(child, source, commands);
+                            if let Some(token) = dequote_node(child, source) {
+                                argv.push(token);
+                            }
                         }
                     }
                 }
@@ -882,6 +916,8 @@ fn collect_commands(
             if !text.is_empty() {
                 commands.push(ExtractedCommand {
                     command: text.to_string(),
+                    env,
+                    argv,
                     redirects: cmd_redirects,
                     pipe: pipe_info.clone(),
                 });
@@ -896,12 +932,31 @@ fn collect_commands(
             if !text.is_empty() {
                 commands.push(ExtractedCommand {
                     command: text.to_string(),
+                    env: Vec::new(),
+                    argv: Vec::new(),
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                 });
             }
         }
     }
+}
+
+/// Decode a `variable_assignment` AST node (`KEY=VALUE`,
+/// `KEY="$(cmd)"`, `KEY=`) into a structured assignment.
+///
+/// `dequote_node` is reused for the value half so quoting is resolved
+/// the same way as for argv tokens (raw strings pass through; double
+/// quotes are decoded; command substitutions are kept verbatim with
+/// their delimiters so a downstream consumer can still see `$(...)`).
+fn extract_env_assignment(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<EnvAssignment> {
+    let name_node = node.child_by_field_name("name")?;
+    let name_bytes = source.get(name_node.start_byte()..name_node.end_byte())?;
+    let name = std::str::from_utf8(name_bytes).ok()?.to_string();
+    let value = node
+        .child_by_field_name("value")
+        .and_then(|v| dequote_node(v, source));
+    Some(EnvAssignment { name, value })
 }
 
 /// Classify a redirect operator into "input", "output", or "dup".
@@ -1935,6 +1990,114 @@ mod tests {
                 input
             );
         }
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: env / argv
+    // ========================================
+
+    fn env(name: &str, value: Option<&str>) -> EnvAssignment {
+        EnvAssignment {
+            name: name.to_owned(),
+            value: value.map(|v| v.to_owned()),
+        }
+    }
+
+    #[rstest]
+    #[case::no_prefix(
+        "helmfile template",
+        vec![],
+        vec!["helmfile", "template"],
+    )]
+    #[case::single_env_prefix(
+        "FOO=x helmfile template",
+        vec![env("FOO", Some("x"))],
+        vec!["helmfile", "template"],
+    )]
+    #[case::multiple_env_prefix(
+        "FOO=x BAR=y helmfile -l name=alloy template",
+        vec![env("FOO", Some("x")), env("BAR", Some("y"))],
+        vec!["helmfile", "-l", "name=alloy", "template"],
+    )]
+    #[case::env_with_dquoted_value(
+        r#"FOO="hello world" cmd"#,
+        vec![env("FOO", Some("hello world"))],
+        vec!["cmd"],
+    )]
+    #[case::env_with_squoted_value(
+        "FOO='hello world' cmd",
+        vec![env("FOO", Some("hello world"))],
+        vec!["cmd"],
+    )]
+    fn extract_commands_metadata_env_argv_single(
+        #[case] input: &str,
+        #[case] expected_env: Vec<EnvAssignment>,
+        #[case] expected_argv: Vec<&str>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(commands.len(), 1, "expected single command for: {}", input);
+        assert_eq!(commands[0].env, expected_env, "env mismatch for: {}", input);
+        assert_eq!(
+            commands[0].argv, expected_argv,
+            "argv mismatch for: {}",
+            input
+        );
+    }
+
+    #[rstest]
+    fn extract_commands_metadata_env_with_command_substitution() {
+        // Command substitutions in env values are kept verbatim with
+        // their delimiters so audit consumers can recognise them.
+        let commands = extract_commands_with_metadata(r#"DATE=$(date) cmd run"#).unwrap();
+        // The command substitution is hoisted as its own ExtractedCommand
+        // (see collect_substitutions_recursive), so we expect two entries.
+        let main = commands
+            .iter()
+            .find(|c| c.command.starts_with("cmd"))
+            .expect("main command should be present");
+        assert_eq!(main.env, vec![env("DATE", Some("$(date)"))]);
+        assert_eq!(main.argv, vec!["cmd", "run"]);
+    }
+
+    #[rstest]
+    fn extract_commands_metadata_redirect_does_not_appear_in_argv() {
+        let commands = extract_commands_with_metadata("echo hello > /tmp/out 2>&1").unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].argv, vec!["echo", "hello"]);
+        assert_eq!(commands[0].env, Vec::<EnvAssignment>::new());
+        assert_eq!(commands[0].redirects.len(), 2);
+    }
+
+    #[rstest]
+    fn extract_commands_metadata_compound_per_branch_argv() {
+        let commands = extract_commands_with_metadata("FOO=x echo hi && BAR=y cat /tmp/f").unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].env, vec![env("FOO", Some("x"))]);
+        assert_eq!(commands[0].argv, vec!["echo", "hi"]);
+        assert_eq!(commands[1].env, vec![env("BAR", Some("y"))]);
+        assert_eq!(commands[1].argv, vec!["cat", "/tmp/f"]);
+    }
+
+    #[rstest]
+    fn extract_commands_metadata_pipeline_argv_per_stage() {
+        let commands = extract_commands_with_metadata("echo hello | grep foo").unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].argv, vec!["echo", "hello"]);
+        assert_eq!(
+            commands[0].pipe,
+            PipeInfo {
+                stdin: false,
+                stdout: true
+            }
+        );
+        assert_eq!(commands[1].argv, vec!["grep", "foo"]);
+        assert_eq!(
+            commands[1].pipe,
+            PipeInfo {
+                stdin: true,
+                stdout: false
+            }
+        );
     }
 
     // ========================================

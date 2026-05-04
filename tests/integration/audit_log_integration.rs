@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use runok::adapter::exec_adapter::ExecAdapter;
 use runok::adapter::{self, RunOptions};
-use runok::audit::AuditEntry;
+use runok::audit::{AuditEntry, EvalType};
 use runok::config::parse_config;
 use runok::exec::ExecError;
 use runok::exec::command_executor::{CommandExecutor, CommandInput, ExecMode, SandboxPolicy};
@@ -183,7 +183,7 @@ fn check_does_not_generate_audit_log(allow_echo_audit_config: AuditTestConfig) {
 }
 
 #[rstest]
-fn compound_command_records_sub_evaluations(audit_dir: TempDir) {
+fn compound_command_records_command_evaluations(audit_dir: TempDir) {
     let audit_path = audit_dir.path().to_string_lossy().to_string();
     let config = parse_config(&format!(
         indoc! {"
@@ -212,20 +212,22 @@ fn compound_command_records_sub_evaluations(audit_dir: TempDir) {
     let entries = read_audit_entries(audit_dir.path());
     assert_eq!(entries.len(), 1);
 
-    let sub_evals = entries[0]
-        .sub_evaluations
-        .as_ref()
-        .unwrap_or_else(|| panic!("sub_evaluations should be Some"));
-    assert!(sub_evals.len() >= 2);
+    let evals = &entries[0].command_evaluations;
+    assert!(evals.len() >= 2);
+    assert!(evals.iter().all(|e| e.eval_type == EvalType::Compound));
 
-    let echo_sub = sub_evals.iter().find(|s| s.command.starts_with("echo"));
-    let echo_sub = echo_sub.unwrap_or_else(|| panic!("expected echo sub-evaluation"));
-    assert_eq!(echo_sub.action, runok::audit::SerializableAction::Allow);
+    let echo_eval = evals
+        .iter()
+        .find(|e| e.command.starts_with("echo"))
+        .unwrap_or_else(|| panic!("expected echo branch"));
+    assert_eq!(echo_eval.action, runok::audit::SerializableAction::Allow);
 
-    let rm_sub = sub_evals.iter().find(|s| s.command.starts_with("rm"));
-    let rm_sub = rm_sub.unwrap_or_else(|| panic!("expected rm sub-evaluation"));
+    let rm_eval = evals
+        .iter()
+        .find(|e| e.command.starts_with("rm"))
+        .unwrap_or_else(|| panic!("expected rm branch"));
     assert!(matches!(
-        rm_sub.action,
+        rm_eval.action,
         runok::audit::SerializableAction::Deny { .. }
     ));
 }
@@ -279,9 +281,134 @@ fn audit_log_records_matched_rules(allow_echo_audit_config: AuditTestConfig) {
 
     let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
     assert_eq!(entries.len(), 1);
-    assert!(!entries[0].matched_rules.is_empty());
-    assert_eq!(entries[0].matched_rules[0].action_kind, "allow");
-    assert_eq!(entries[0].matched_rules[0].pattern, "echo *");
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 1);
+    let primary = &evals[0];
+    assert_eq!(primary.eval_type, EvalType::Primary);
+    assert!(!primary.matched_rules.is_empty());
+    assert_eq!(primary.matched_rules[0].action_kind, "allow");
+    assert_eq!(primary.matched_rules[0].pattern, "echo *");
+}
+
+#[rstest]
+fn audit_log_records_argv_for_single_command(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'helmfile *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    // Single-string arg so the runok parser sees the env prefix and
+    // tokens together (mirrors how Bash hooks pass the command).
+    let endpoint = ExecAdapter::new(
+        vec!["FOO=x helmfile -l name=alloy template".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 1, "single command must yield one evaluation");
+    let primary = &evals[0];
+    assert_eq!(primary.eval_type, EvalType::Primary);
+    assert_eq!(
+        primary.argv,
+        vec!["helmfile", "-l", "name=alloy", "template"]
+    );
+    assert_eq!(primary.env.len(), 1);
+    assert_eq!(primary.env[0].name, "FOO");
+    assert_eq!(primary.env[0].value.as_deref(), Some("x"));
+    assert!(primary.redirects.is_empty());
+}
+
+#[rstest]
+fn audit_log_records_argv_per_compound_branch(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'echo *'
+              - allow: 'cat *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["FOO=x echo hi && BAR=y cat /tmp/f".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 2);
+    assert!(evals.iter().all(|e| e.eval_type == EvalType::Compound));
+
+    let echo_eval = evals
+        .iter()
+        .find(|e| e.command.starts_with("echo"))
+        .expect("echo branch");
+    assert_eq!(echo_eval.argv, vec!["echo", "hi"]);
+    assert_eq!(echo_eval.env.len(), 1);
+    assert_eq!(echo_eval.env[0].name, "FOO");
+
+    let cat_eval = evals
+        .iter()
+        .find(|e| e.command.starts_with("cat"))
+        .expect("cat branch");
+    assert_eq!(cat_eval.argv, vec!["cat", "/tmp/f"]);
+    assert_eq!(cat_eval.env.len(), 1);
+    assert_eq!(cat_eval.env[0].name, "BAR");
+}
+
+#[rstest]
+fn comment_only_input_yields_empty_command_evaluations(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'echo *'
+            defaults:
+              action: allow
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["# only a comment".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+    assert!(
+        entries[0].command_evaluations.is_empty(),
+        "comment-only input must produce an empty command_evaluations array, got: {:?}",
+        entries[0].command_evaluations
+    );
 }
 
 #[rstest]
