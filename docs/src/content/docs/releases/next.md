@@ -28,58 +28,9 @@ If you previously relied on runok scanning a quoted-HEREDOC body (for example, a
 
 ### Breaking: audit log JSON consolidates rule + parse data into `command_evaluations` ([#333](https://github.com/fohte/runok/pull/333))
 
-The audit log entry shape changes so single and compound commands share one schema. Audit consumers can now filter on the actual binary (`argv[0]`) in one `jq` line instead of branching between top-level fields and a separate sub-evaluation list.
+The audit log entry shape changes so single and compound commands share one schema. The top-level `matched_rules` and `sub_evaluations` keys are removed; their contents move into a new `command_evaluations` array — one entry per shell command extracted from the input (`"primary"` for non-compound inputs, one `"compound"` entry per branch for `a && b` / `a | b` / etc.). Each entry now also carries the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) alongside `action` and `matched_rules`.
 
-The top-level `matched_rules` and `sub_evaluations` keys are removed. Their contents move into a new `command_evaluations` array — one entry per shell command extracted from the input (`"primary"` for non-compound inputs, one `"compound"` entry per branch for `a && b` / `a | b` / etc.). Each entry carries `action`, `matched_rules`, and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side.
-
-```sh
-# Before: had to skip env prefixes and re-tokenise by hand, plus
-# branch on whether the entry was compound.
-runok audit --json | jq 'select((.command | split(" ") | first) == "helmfile")'
-
-# After: one canonical path covers both single and compound inputs.
-runok audit --json | jq 'select(.command_evaluations[].argv[0] == "helmfile")'
-```
-
-```json
-{
-  "command": "FOO=x echo hi && BAR=y cat /tmp/f",
-  "command_evaluations": [
-    {
-      "command": "echo hi",
-      "action": { "type": "allow" },
-      "eval_type": "compound",
-      "env": [{ "name": "FOO", "value": "x" }],
-      "argv": ["echo", "hi"]
-    },
-    {
-      "command": "cat /tmp/f",
-      "action": { "type": "allow" },
-      "eval_type": "compound",
-      "env": [{ "name": "BAR", "value": "y" }],
-      "argv": ["cat", "/tmp/f"]
-    }
-  ]
-}
-```
-
-See [`runok audit` -- `command_evaluations`](/cli/audit/#command_evaluations) for the full schema.
-
-**What should I do?**
-
-If you have `jq` queries (or other audit-log consumers) that reference `.matched_rules` or `.sub_evaluations` directly, redirect them through `.command_evaluations[]`:
-
-```jq
-# Before
-.matched_rules[] | select(.action_kind == "deny")
-(.sub_evaluations // [])[] | select(.command | startswith("rm"))
-
-# After
-.command_evaluations[].matched_rules[] | select(.action_kind == "deny")
-.command_evaluations[] | select(.command | startswith("rm"))
-```
-
-Old log files written before this change keep their previous shape on disk; replay or re-ingest tooling needs to handle both shapes during the transition window.
+See [`runok audit` -- `command_evaluations`](/cli/audit/#command_evaluations) for the full schema and field reference.
 
 ## New Features
 
