@@ -535,11 +535,18 @@ fn collect_commands(
             if let Some(body) = node.child_by_field_name("body") {
                 collect_commands(body, source, commands, pipe_info, &all_redirects);
             }
-            // Second pass: recurse into redirect children for nested substitutions
+            // Second pass: recurse into redirect children for nested substitutions.
+            // Skip the body of a quoted-delimiter heredoc (e.g. `<<'EOF'`) —
+            // bash treats it as literal text, so any `$(...)` inside is not
+            // a real command substitution.
             for i in 0..node.child_count() {
                 if node.field_name_for_child(i as u32) == Some("redirect")
                     && let Some(child) = node.child(i as u32)
                 {
+                    if child.kind() == "heredoc_redirect" && heredoc_body_is_literal(child, source)
+                    {
+                        continue;
+                    }
                     collect_substitutions_recursive(child, source, commands);
                 }
             }
@@ -579,8 +586,14 @@ fn collect_commands(
                         cmd_redirects.push(info);
                     }
                     // Recurse into redirect children for nested substitutions
-                    // (e.g. `cat <<< $(secret_cmd)`)
-                    collect_substitutions_recursive(child, source, commands);
+                    // (e.g. `cat <<< $(secret_cmd)`). Quoted-delimiter
+                    // heredocs (`<<'EOF'`) hold literal text and must not
+                    // be re-parsed as commands.
+                    if !(child.kind() == "heredoc_redirect"
+                        && heredoc_body_is_literal(child, source))
+                    {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
                 } else {
                     match child.kind() {
                         // A subshell argument (e.g. `time (ls | tail -40)`)
@@ -608,7 +621,14 @@ fn collect_commands(
             // Build command text excluding variable_assignment and redirect children.
             // Redirects (e.g. herestring_redirect) attached directly to a command
             // node use the field name "redirect".
-            let parts: Vec<&str> = (0..node.child_count())
+            //
+            // Command substitutions (`$(...)`, `` `...` ``) and subshells
+            // anywhere inside a child are blanked out before joining: the
+            // sub-commands are already registered separately above, and
+            // their raw bytes can contain arbitrary shell text (including
+            // unbalanced quotes inside heredoc bodies) that would break
+            // downstream tokenization of the parent command.
+            let parts: Vec<String> = (0..node.child_count())
                 .filter_map(|i| {
                     let child = node.child(i as u32)?;
                     if !child.is_named() {
@@ -620,8 +640,7 @@ fn collect_commands(
                     if node.field_name_for_child(i as u32) == Some("redirect") {
                         return None;
                     }
-                    let text = &source[child.start_byte()..child.end_byte()];
-                    std::str::from_utf8(text).ok()
+                    Some(render_command_child_text(child, source))
                 })
                 .collect();
             let text = parts.join(" ");
@@ -741,6 +760,100 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
             })
         }
         _ => None,
+    }
+}
+
+/// True if a `heredoc_redirect` node uses a quoted delimiter
+/// (e.g. `<<'EOF'`, `<<"EOF"`, `<<\EOF`). When the delimiter is quoted,
+/// bash treats the body as literal text — no parameter, command, or
+/// arithmetic expansion occurs — so any `$(...)` inside is not a real
+/// command substitution and must not be scanned.
+fn heredoc_body_is_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "heredoc_start"
+            && let Ok(text) = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
+        {
+            return text.starts_with('\'') || text.starts_with('"') || text.starts_with('\\');
+        }
+    }
+    false
+}
+
+/// Render the source text of a `command` node's child with embedded
+/// `command_substitution` regions replaced by their opening/closing
+/// markers only (`$(...)` → `$()`, `` `...` `` → `` `` ``).
+///
+/// The sub-commands inside those regions are extracted and registered
+/// separately by the caller. Their bodies are dropped from the parent
+/// text because they can contain arbitrary shell text (most importantly,
+/// quoted-delimiter heredoc bodies with embedded `'` or `"`) that would
+/// otherwise be re-tokenized as part of the parent and trip on
+/// unbalanced quotes. Keeping the opening/closing markers preserves
+/// enough structure for downstream `tokenize_command_aware` to recognise
+/// the substitution as a single token.
+///
+/// `subshell` nodes are intentionally left as raw bytes — wrapper
+/// patterns like `time <cmd>` need the inner command text to recurse
+/// through.
+fn render_command_child_text(node: tree_sitter::Node, source: &[u8]) -> String {
+    if node.kind() == "command_substitution" {
+        return command_substitution_placeholder(node, source).to_string();
+    }
+    let mut spans: Vec<(usize, usize, &'static str)> = Vec::new();
+    collect_substitution_spans(node, source, &mut spans);
+    let start = node.start_byte();
+    let end = node.end_byte();
+    if spans.is_empty() {
+        return std::str::from_utf8(&source[start..end])
+            .unwrap_or("")
+            .to_string();
+    }
+    spans.sort_by_key(|(s, _, _)| *s);
+    let mut out = String::new();
+    let mut cursor = start;
+    for (s, e, placeholder) in spans {
+        if s > cursor
+            && let Ok(slice) = std::str::from_utf8(&source[cursor..s])
+        {
+            out.push_str(slice);
+        }
+        out.push_str(placeholder);
+        cursor = e.max(cursor);
+    }
+    if cursor < end
+        && let Ok(slice) = std::str::from_utf8(&source[cursor..end])
+    {
+        out.push_str(slice);
+    }
+    out
+}
+
+fn command_substitution_placeholder(node: tree_sitter::Node, source: &[u8]) -> &'static str {
+    match source.get(node.start_byte()) {
+        Some(b'`') => "``",
+        _ => "$()",
+    }
+}
+
+/// Walk a subtree and record byte ranges of `command_substitution`
+/// nodes along with the placeholder that should replace them in the
+/// parent text. Recursion stops at each match so nested substitutions
+/// are subsumed by the outer span. `subshell` nodes are *not* collapsed
+/// — see `render_command_child_text` for why.
+fn collect_substitution_spans(
+    node: tree_sitter::Node,
+    source: &[u8],
+    spans: &mut Vec<(usize, usize, &'static str)>,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "command_substitution" {
+            let placeholder = command_substitution_placeholder(child, source);
+            spans.push((child.start_byte(), child.end_byte(), placeholder));
+        } else {
+            collect_substitution_spans(child, source, spans);
+        }
     }
 }
 
@@ -1069,6 +1182,70 @@ mod tests {
         assert_eq!(result, vec!["cat"]);
     }
 
+    // Bash expands `$(...)` inside an unquoted heredoc body, so any
+    // command substitutions there should be extracted as their own
+    // sub-commands.
+    #[test]
+    fn extract_heredoc_unquoted_body_extracts_substitutions() {
+        let input = indoc! {"
+            cat <<EOF
+            hello $(secret_cmd)
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, vec!["cat", "secret_cmd"]);
+    }
+
+    // With a quoted delimiter (`<<'EOF'`, `<<\"EOF\"`, `<<\\EOF`), bash
+    // treats the body as literal text — `$(...)` is not expanded — so
+    // the body must NOT be re-scanned for command substitutions.
+    #[rstest]
+    #[case::single_quoted(indoc! {"
+        cat <<'EOF'
+        hello $(secret_cmd)
+        EOF
+    "})]
+    #[case::double_quoted(indoc! {r#"
+        cat <<"EOF"
+        hello $(secret_cmd)
+        EOF
+    "#})]
+    #[case::backslash_quoted(indoc! {"
+        cat <<\\EOF
+        hello $(secret_cmd)
+        EOF
+    "})]
+    fn extract_heredoc_quoted_body_is_literal(#[case] input: &str) {
+        let result = extract_commands(input.trim_end()).unwrap();
+        assert_eq!(result, vec!["cat"]);
+    }
+
+    // Regression for a Claude Code `/commit` hook payload: heredoc
+    // delivered as the value of `git commit -m "$(cat <<'EOF' ... EOF)"`.
+    // The heredoc body contains `'` characters that the parent's
+    // tokenizer used to read as real shell quotes, raising
+    // UnclosedQuote. After the fix, the parent text collapses the
+    // outer command substitution to `$()`, and the inner `cat` is
+    // registered as its own sub-command without re-scanning the body.
+    #[test]
+    fn extract_git_commit_with_quoted_heredoc_message() {
+        let input = indoc! {r#"
+            git add file.txt && git commit -m "$(cat <<'EOF'
+            subject line
+
+            body with 'apostrophes' and "quotes" and $(no expansion here)
+            EOF
+            )"
+        "#}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        assert_eq!(
+            result,
+            vec!["git add file.txt", "cat", r#"git commit -m "$()""#,],
+        );
+    }
+
     // ========================================
     // extract_commands: redirected statements
     // ========================================
@@ -1205,15 +1382,24 @@ mod tests {
     #[rstest]
     #[case::list_with_for("echo start && for i in 1 2; do echo $i; done", vec!["echo start", "echo $i"])]
     #[case::for_piped("for i in 1 2; do echo $i; done | grep 1", vec!["echo $i", "grep 1"])]
-    #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $(dangerous_cmd)"])]
-    #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo `dangerous_cmd`"])]
+    // Direct command_substitution / backtick children of a `command` node
+    // are also collapsed to placeholders (`$()`, `` `` ``) — see the
+    // comment on the nested cases below for why.
+    #[case::cmd_sub_in_command("echo $(dangerous_cmd)", vec!["dangerous_cmd", "echo $()"])]
+    #[case::backtick_in_command("echo `dangerous_cmd`", vec!["dangerous_cmd", "echo ``"])]
+    // Substitutions nested inside string / concatenation children are
+    // collapsed to their opening/closing markers in the parent text —
+    // the sub-command is registered separately, and keeping the raw
+    // body risks injecting unbalanced shell metacharacters (most
+    // importantly: quoted-delimiter heredoc bodies) into the parent's
+    // tokenization.
     #[case::cmd_sub_in_quoted_string(
         r#"curl -u "user:$(secret_cmd)" https://example.com"#,
-        vec!["secret_cmd", r#"curl -u "user:$(secret_cmd)" https://example.com"#],
+        vec!["secret_cmd", r#"curl -u "user:$()" https://example.com"#],
     )]
     #[case::cmd_sub_in_concatenation(
         "curl -H Authorization:$(cat token) url",
-        vec!["cat token", "curl -H Authorization:$(cat token) url"],
+        vec!["cat token", "curl -H Authorization:$() url"],
     )]
     #[case::cmd_sub_in_single_quotes(
         "echo '$(dangerous_cmd)'",
@@ -1221,11 +1407,11 @@ mod tests {
     )]
     #[case::backtick_sub_in_quoted_string(
         r#"curl -u "user:`secret_cmd`" https://example.com"#,
-        vec!["secret_cmd", r#"curl -u "user:`secret_cmd`" https://example.com"#],
+        vec!["secret_cmd", r#"curl -u "user:``" https://example.com"#],
     )]
     #[case::docker_env_with_cmd_sub(
         r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#,
-        vec!["cat /tmp/secret", r#"docker run -e TOKEN="$(cat /tmp/secret)" nginx"#],
+        vec!["cat /tmp/secret", r#"docker run -e TOKEN="$()" nginx"#],
     )]
     fn extract_control_with_operators(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();

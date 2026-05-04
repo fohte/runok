@@ -1112,6 +1112,72 @@ fn command_substitution_in_strings(
 }
 
 // ========================================
+// Heredoc inside command substitution
+// ========================================
+// Regression: a heredoc body delivered through a command substitution
+// (most commonly `git commit -m "$(cat <<'EOF' ... EOF)"` produced by
+// Claude Code's /commit flow) used to fall back to defaults.action,
+// because the body's bytes were folded into the parent command text
+// and re-tokenized — the body's `'` / `"` characters then triggered
+// `unclosed quote`. The parent text now collapses substitutions to
+// `$()`, and quoted-delimiter heredoc bodies are treated as literal.
+
+#[rstest]
+#[case::quoted_heredoc_body_with_apostrophes_and_quotes(
+    indoc! {r#"
+        git add file.txt && git commit -m "$(cat <<'EOF'
+        subject
+
+        body with 'apostrophes' and "quotes" inside
+        EOF
+        )"
+    "#},
+    indoc! {"
+        rules:
+          - allow: 'git add *'
+          - allow: 'git commit -m *'
+          - allow: 'cat *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+#[case::unquoted_heredoc_body_extracts_inner_substitution(
+    indoc! {"
+        cat <<EOF
+        $(rm -rf /)
+        EOF
+    "},
+    indoc! {"
+        rules:
+          - allow: 'cat *'
+          - deny: 'rm -rf *'
+    "},
+    assert_deny as ActionAssertion,
+)]
+#[case::quoted_heredoc_body_does_not_extract_inner_substitution(
+    indoc! {"
+        cat <<'EOF'
+        $(rm -rf /)
+        EOF
+    "},
+    indoc! {"
+        rules:
+          - allow: 'cat *'
+          - deny: 'rm -rf *'
+    "},
+    assert_allow as ActionAssertion,
+)]
+fn heredoc_in_command_substitution(
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(config_yaml).unwrap();
+    let result = evaluate_compound(&config, command.trim_end(), &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Security: command substitution must not bypass rule controls
 // ========================================
 // Regression test for the bug where a command substitution containing an
