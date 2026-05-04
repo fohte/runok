@@ -47,7 +47,31 @@ fn create_executor() -> Box<dyn CommandExecutor> {
     Box::new(ProcessCommandExecutor::new_without_sandbox())
 }
 
+/// Restore the default SIGPIPE handler on Unix.
+///
+/// Rust's standard library installs `SIG_IGN` for SIGPIPE at startup, which
+/// turns `write(2)` failures on a closed pipe into `EPIPE` errors. The
+/// `println!` / `eprintln!` macros then panic with
+/// `failed printing to stdout: Broken pipe`. For a CLI that is routinely
+/// piped into `head`, `jq`, etc. that panic surfaces as a confusing trace.
+/// Restoring `SIG_DFL` makes the process terminate silently on EPIPE, which
+/// matches the conventional Unix behaviour (e.g. `yes | head`).
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: `signal` with `SIG_DFL` is async-signal-safe and the call is
+    // made before any other thread is spawned.
+    unsafe {
+        let prev = libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        debug_assert_ne!(prev, libc::SIG_ERR, "failed to reset SIGPIPE handler");
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() -> ExitCode {
+    reset_sigpipe();
+
     let raw_args: Vec<String> = std::env::args().collect();
 
     // Validate unknown flags before clap parsing absorbs them into `command` Vec.

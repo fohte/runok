@@ -77,6 +77,16 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
+### `runok audit --json` no longer panics when the downstream pipe closes early ([#337](https://github.com/fohte/runok/pull/337))
+
+Piping `runok audit --json` into `head`, `jq -c`, or any consumer that may close stdout before runok has finished writing now exits silently instead of panicking with `failed printing to stdout: Broken pipe (os error 32)`. runok now restores the default SIGPIPE handler at startup on Unix, so the process terminates on EPIPE the same way `yes | head` does. Other commands that print to stdout (for example `runok config-schema`) benefit from the same fix.
+
+```sh
+# Before: prints one JSON line, then a Rust panic + backtrace on stderr.
+# After: prints one JSON line and exits silently.
+runok audit --json | head -1
+```
+
 ### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote` ([#330](https://github.com/fohte/runok/pull/330))
 
 Commit-message workflows that pipe a HEREDOC through `cat` inside a double-quoted command substitution — for example, the Claude Code `/commit` skill — were rejected with `command parse error: unclosed quote`. The character-level tokenizer used to fall back behind the AST walk treated the HEREDOC body as live shell, hit a stray quote inside the prose, and bailed out. The tokenizer is now AST-only: quotes are resolved per AST node, so a HEREDOC body is handled as the literal redirect target it is and never re-scanned as shell syntax.
