@@ -91,7 +91,38 @@ TIMESTAMP            ACTION   COMMAND
 
 Timestamps are displayed in local time in both modes.
 
-In JSON mode (`--json`), each entry is a complete JSON object containing the command, action, matched rules, sandbox preset, metadata, and sub-evaluations (for compound commands).
+In JSON mode (`--json`), each entry is a complete JSON object containing the command, action, matched rules, sandbox preset, metadata, sub-evaluations (for compound commands), and the shell-level parse result (`parsed`).
+
+### `parsed` field
+
+Single (non-compound) entries carry a top-level `parsed` field with runok's tokenisation result, so audit consumers can filter on the real binary without re-implementing shell parsing in `jq`. Compound entries omit the top-level `parsed`; each `sub_evaluations[]` entry carries its own `parsed` instead.
+
+```json
+{
+  "command": "FOO=x helmfile -l name=alloy template",
+  "parsed": {
+    "env": [{ "name": "FOO", "value": "x" }],
+    "argv": ["helmfile", "-l", "name=alloy", "template"]
+  }
+}
+```
+
+Fields:
+
+- `env` -- Inline `KEY=VALUE` prefix. `value` is `null` for the bare `KEY= cmd` form. Omitted when empty.
+- `argv` -- Command name plus arguments, with shell quotes resolved. `argv[0]` is the binary as written. Omitted when shell parsing could not produce an argv.
+- `redirects` -- Redirect operators (`> file`, `2>&1`, `<<<` here-strings, `<<` here-docs, etc.). Each entry has `redirect_type` (`input`/`output`/`dup`), `operator` (the bare operator token; the here-doc delimiter and body are not captured), `target` (file or fd reference; empty for `<<` / `<<-`), and optional `descriptor`. Omitted when empty.
+- `pipe` -- `{stdin, stdout}` flags indicating pipeline position. Omitted when both are `false`.
+
+The whole `parsed` object itself is omitted when runok could not parse the input (e.g. unbalanced quotes); audit consumers can fall back to the raw `command` string.
+
+Identifying the binary across compound or pipelined inputs (the original motivation for this field) becomes a one-liner:
+
+```sh
+runok audit --json | jq 'select(.parsed.argv[0] == "helmfile" or (.sub_evaluations // [])[].parsed.argv[0] == "helmfile")'
+```
+
+Per-CLI shaping (resolving `binary` vs `subcommand`, normalising `mise` shims, classifying `-n` as boolean vs value-taking) is intentionally left to the consumer because those rules differ per CLI.
 
 ## Configuration
 

@@ -247,6 +247,7 @@ mod tests {
             default_action: None,
             metadata: AuditMetadata::default(),
             sub_evaluations: None,
+            parsed: None,
         }
     }
 

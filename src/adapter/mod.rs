@@ -3,8 +3,8 @@ pub mod exec_adapter;
 pub mod hook_adapter;
 
 use crate::audit::{
-    AuditEntry, AuditMetadata, AuditWriter, SerializableAction, SerializableRuleMatch,
-    SubEvaluation,
+    AuditEntry, AuditMetadata, AuditWriter, SerializableAction, SerializableParsedCommand,
+    SerializableRuleMatch, SubEvaluation,
 };
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
@@ -25,6 +25,10 @@ pub struct ActionResult {
     pub matched_rules: Vec<RuleMatchInfo>,
     /// Sub-evaluation results for compound commands (for audit logging).
     pub sub_evaluations: Option<Vec<SubEvalResult>>,
+    /// Shell-level parse result for the top-level command. Set for
+    /// single-command inputs only; compound inputs surface the parsed
+    /// data per `SubEvalResult`.
+    pub parsed: Option<SerializableParsedCommand>,
 }
 
 /// Intermediate sub-evaluation result carrying raw `Action` (not yet serialized).
@@ -34,6 +38,7 @@ pub struct SubEvalResult {
     pub action: Action,
     pub matched_rules: Vec<RuleMatchInfo>,
     pub eval_type: String,
+    pub parsed: Option<SerializableParsedCommand>,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -108,6 +113,21 @@ fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
     }
 }
 
+/// Build a `SerializableParsedCommand` from an `ExtractedCommand`,
+/// returning `None` when the extractor surfaced no parse data at all
+/// (the leaf-text fallback path inside `collect_commands`, with no
+/// pipe position attached either). Audit consumers treat `parsed:
+/// null` as "parse data unavailable" and fall back to the raw
+/// `command` string, so the missing field is more truthful than
+/// emitting a half-populated record.
+fn parsed_from_extracted(ec: &ExtractedCommand) -> Option<SerializableParsedCommand> {
+    let pipe_default = !ec.pipe.stdin && !ec.pipe.stdout;
+    if ec.argv.is_empty() && ec.env.is_empty() && ec.redirects.is_empty() && pipe_default {
+        return None;
+    }
+    Some(SerializableParsedCommand::from(ec))
+}
+
 /// Apply `defaults.sandbox` as a fallback when the rule evaluation produced
 /// no sandbox information. This ensures that `defaults.sandbox` acts as a
 /// true default: it is used whenever the matched rule does not specify its
@@ -179,9 +199,11 @@ fn write_audit_log(
                         .map(SerializableRuleMatch::from)
                         .collect(),
                     eval_type: s.eval_type.clone(),
+                    parsed: s.parsed.clone(),
                 })
                 .collect()
         }),
+        parsed: action_result.parsed.clone(),
     };
 
     if let Err(e) = writer.write(&entry) {
@@ -225,6 +247,8 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
     let extracted_commands = extract_commands_with_metadata(&command).unwrap_or_else(|_| {
         vec![ExtractedCommand {
             command: command.clone(),
+            env: vec![],
+            argv: vec![],
             redirects: vec![],
             pipe: PipeInfo::default(),
         }]
@@ -278,12 +302,16 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 let sub_evaluations: Vec<SubEvalResult> = compound_result
                     .sub_results
                     .into_iter()
-                    .zip(commands.iter())
-                    .map(|(result, cmd)| SubEvalResult {
-                        command: cmd.clone(),
-                        action: result.action,
-                        matched_rules: result.matched_rules,
-                        eval_type: "compound".to_owned(),
+                    .zip(extracted_commands.iter())
+                    .map(|(result, ec)| {
+                        let parsed = parsed_from_extracted(ec);
+                        SubEvalResult {
+                            command: ec.command.clone(),
+                            action: result.action,
+                            matched_rules: result.matched_rules,
+                            eval_type: "compound".to_owned(),
+                            parsed,
+                        }
                     })
                     .collect();
 
@@ -292,6 +320,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
                     matched_rules: vec![],
                     sub_evaluations: Some(sub_evaluations),
+                    parsed: None,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -303,6 +332,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             sandbox: SandboxInfo::Preset(None),
             matched_rules: vec![],
             sub_evaluations: None,
+            parsed: None,
         }
     } else {
         // Pass redirect/pipe metadata from the first extracted command so that
@@ -323,11 +353,13 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                         eprintln!("[verbose] Sandbox preset: {:?}", preset);
                     }
                 }
+                let parsed = first_extracted.and_then(parsed_from_extracted);
                 ActionResult {
                     action: result.action,
                     sandbox: SandboxInfo::Preset(result.sandbox_preset),
                     matched_rules: result.matched_rules,
                     sub_evaluations: None,
+                    parsed,
                 }
             }
             Err(e) => return endpoint.handle_error(e.into()),
@@ -1140,6 +1172,7 @@ mod tests {
             sandbox,
             matched_rules: vec![],
             sub_evaluations: None,
+            parsed: None,
         };
         let defaults = Defaults {
             action: None,

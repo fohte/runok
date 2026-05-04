@@ -26,6 +26,28 @@ Unquoted HEREDOCs (`<<EOF`) keep the existing behaviour — bash does expand the
 
 If you previously relied on runok scanning a quoted-HEREDOC body (for example, a rule that fired because `$(rm -rf /)` inside `<<'EOF'` matched a `deny` rule), update the rule to target the actual command instead. Quoted heredocs are inert in bash, so this can only have hidden real commands behind a literal-looking surface — those should be written as ordinary command substitutions, not buried inside a literal heredoc.
 
+## New Features
+
+### Audit log entries carry a structured `parsed` field
+
+`runok exec` and hook audit entries now include a `parsed` object with the shell-level parse result runok already computes during evaluation: the inline `KEY=VALUE` env prefix, the `argv` (binary plus arguments with quotes resolved), redirects, and pipeline position. Audit consumers can filter on the actual binary in one `jq` line instead of writing custom shell parsers.
+
+Single (non-compound) entries carry `parsed` at the top level. Compound entries omit the top-level `parsed` and put per-branch parse data on each `sub_evaluations[]` entry.
+
+```sh
+# Before: had to skip env prefixes and re-tokenise by hand.
+runok audit --json | jq 'select((.command | split(" ") | first) == "helmfile")'
+
+# After: parsed.argv[0] is the real binary, with quoting already resolved.
+runok audit --json |
+  jq 'select(.parsed.argv[0] == "helmfile" or
+             (.sub_evaluations // [])[].parsed.argv[0] == "helmfile")'
+```
+
+The `parsed` field is omitted from the JSON when runok could not parse the input (e.g. unbalanced quotes), and individual sub-fields (`env`, `redirects`, `pipe`) are skipped when empty/default — pre-existing `jq` filters that referenced the older fields keep working unchanged.
+
+See [`runok audit` — `parsed` field](/cli/audit/#parsed-field) for the full schema.
+
 ## Bug Fixes
 
 ### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote`

@@ -98,6 +98,7 @@ mod tests {
             default_action: None,
             metadata: AuditMetadata::default(),
             sub_evaluations: None,
+            parsed: None,
         }
     }
 
@@ -214,6 +215,7 @@ mod tests {
                 hook_event_name: Some("PreToolUse".to_string()),
             },
             sub_evaluations: None,
+            parsed: None,
         };
 
         writer.write(&entry).unwrap();

@@ -285,6 +285,110 @@ fn audit_log_records_matched_rules(allow_echo_audit_config: AuditTestConfig) {
 }
 
 #[rstest]
+fn audit_log_records_parsed_for_single_command(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'helmfile *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    // Single-string arg so the runok parser sees the env prefix and
+    // tokens together (mirrors how Bash hooks pass the command).
+    let endpoint = ExecAdapter::new(
+        vec!["FOO=x helmfile -l name=alloy template".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+
+    let parsed = entries[0]
+        .parsed
+        .as_ref()
+        .unwrap_or_else(|| panic!("parsed should be Some for single command"));
+    assert_eq!(
+        parsed.argv,
+        vec!["helmfile", "-l", "name=alloy", "template"]
+    );
+    assert_eq!(parsed.env.len(), 1);
+    assert_eq!(parsed.env[0].name, "FOO");
+    assert_eq!(parsed.env[0].value.as_deref(), Some("x"));
+    assert!(parsed.redirects.is_empty());
+}
+
+#[rstest]
+fn audit_log_records_parsed_per_sub_evaluation(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - allow: 'echo *'
+              - allow: 'cat *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["FOO=x echo hi && BAR=y cat /tmp/f".into()],
+        None,
+        Box::new(MockExecutor::new(0)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+
+    // Compound: top-level parsed must be absent; per-sub parsed must be present.
+    assert!(
+        entries[0].parsed.is_none(),
+        "top-level parsed should be None for compound, got: {:?}",
+        entries[0].parsed
+    );
+
+    let sub_evals = entries[0]
+        .sub_evaluations
+        .as_ref()
+        .unwrap_or_else(|| panic!("sub_evaluations should be Some"));
+    let echo_sub = sub_evals
+        .iter()
+        .find(|s| s.command.starts_with("echo"))
+        .expect("echo sub");
+    let cat_sub = sub_evals
+        .iter()
+        .find(|s| s.command.starts_with("cat"))
+        .expect("cat sub");
+
+    let echo_parsed = echo_sub
+        .parsed
+        .as_ref()
+        .expect("echo sub parsed must be Some");
+    assert_eq!(echo_parsed.argv, vec!["echo", "hi"]);
+    assert_eq!(echo_parsed.env.len(), 1);
+    assert_eq!(echo_parsed.env[0].name, "FOO");
+
+    let cat_parsed = cat_sub
+        .parsed
+        .as_ref()
+        .expect("cat sub parsed must be Some");
+    assert_eq!(cat_parsed.argv, vec!["cat", "/tmp/f"]);
+    assert_eq!(cat_parsed.env.len(), 1);
+    assert_eq!(cat_parsed.env[0].name, "BAR");
+}
+
+#[rstest]
 fn audit_log_records_default_action(audit_dir: TempDir) {
     let audit_path = audit_dir.path().to_string_lossy().to_string();
     let config = parse_config(&format!(

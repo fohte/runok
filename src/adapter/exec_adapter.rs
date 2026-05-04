@@ -294,6 +294,7 @@ mod tests {
                 sandbox: SandboxInfo::Preset(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
         assert_eq!(result, exit_code);
@@ -312,6 +313,7 @@ mod tests {
                 sandbox: SandboxInfo::MergedPolicy(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
         assert_eq!(result, 0);
@@ -329,6 +331,7 @@ mod tests {
             sandbox: SandboxInfo::Preset(None),
             matched_rules: vec![],
             sub_evaluations: None,
+            parsed: None,
         });
         let err = result.unwrap_err();
         assert!(
@@ -357,6 +360,7 @@ mod tests {
                 sandbox: SandboxInfo::Preset(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -381,6 +385,7 @@ mod tests {
                 sandbox: SandboxInfo::Preset(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -403,6 +408,7 @@ mod tests {
                 sandbox: SandboxInfo::Preset(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
         assert_eq!(result, 3);
@@ -521,6 +527,7 @@ mod tests {
                 sandbox: SandboxInfo::Preset(None),
                 matched_rules: vec![],
                 sub_evaluations: None,
+                parsed: None,
             })
             .unwrap();
 
