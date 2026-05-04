@@ -3,7 +3,7 @@ pub mod exec_adapter;
 pub mod hook_adapter;
 
 use crate::audit::{
-    AuditEntry, AuditMetadata, AuditWriter, CommandEvaluation, SerializableAction,
+    AuditEntry, AuditMetadata, AuditWriter, CommandEvaluation, EvalType, SerializableAction,
     SerializableEnvVar, SerializablePipe, SerializableRedirect, SerializableRuleMatch,
     parse_fields_from_extracted,
 };
@@ -40,7 +40,7 @@ pub struct CommandEvalResult {
     pub command: String,
     pub action: Action,
     pub matched_rules: Vec<RuleMatchInfo>,
-    pub eval_type: String,
+    pub eval_type: EvalType,
     pub env: Vec<SerializableEnvVar>,
     pub argv: Vec<String>,
     pub redirects: Vec<SerializableRedirect>,
@@ -177,7 +177,7 @@ fn write_audit_log(
                 .cloned()
                 .map(SerializableRuleMatch::from)
                 .collect(),
-            eval_type: e.eval_type.clone(),
+            eval_type: e.eval_type,
             env: e.env.clone(),
             argv: e.argv.clone(),
             redirects: e.redirects.clone(),
@@ -298,7 +298,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                             command: ec.command.clone(),
                             action: result.action,
                             matched_rules: result.matched_rules,
-                            eval_type: "compound".to_owned(),
+                            eval_type: EvalType::Compound,
                             env,
                             argv,
                             redirects,
@@ -348,7 +348,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     command: effective_command.to_owned(),
                     action: result.action.clone(),
                     matched_rules: result.matched_rules,
-                    eval_type: "primary".to_owned(),
+                    eval_type: EvalType::Primary,
                     env,
                     argv,
                     redirects: redir_fields,

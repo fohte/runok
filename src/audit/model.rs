@@ -73,6 +73,18 @@ pub struct SerializableRuleMatch {
     pub matched_tokens: Vec<String>,
 }
 
+/// How a `CommandEvaluation` was extracted from the input.
+///
+/// `Primary` is used for non-compound inputs (one entry total).
+/// `Compound` is used for each branch of `a && b` / `a || b` /
+/// `a ; b` / `a | b` / etc.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EvalType {
+    Primary,
+    Compound,
+}
+
 /// Per-branch record of a single command extracted from the input.
 ///
 /// Carries the rule-evaluation result and the shell-level parse
@@ -91,9 +103,8 @@ pub struct CommandEvaluation {
     /// Rules that matched for this branch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matched_rules: Vec<SerializableRuleMatch>,
-    /// How this branch was extracted: `"primary"` for non-compound
-    /// inputs, `"compound"` for branches of `a && b` / `a | b` / etc.
-    pub eval_type: String,
+    /// How this branch was extracted from the input.
+    pub eval_type: EvalType,
     /// Inline `KEY=VALUE` env prefix. Empty when the branch had none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<SerializableEnvVar>,
@@ -310,7 +321,7 @@ mod tests {
                 pattern: "git push -f|--force *".to_owned(),
                 matched_tokens: vec!["origin".to_owned(), "main".to_owned()],
             }],
-            eval_type: "primary".to_owned(),
+            eval_type: EvalType::Primary,
             env: vec![],
             argv: vec![
                 "git".to_owned(),
@@ -361,7 +372,7 @@ mod tests {
                 command: "echo hello".to_owned(),
                 action: SerializableAction::Allow,
                 matched_rules: vec![],
-                eval_type: "compound".to_owned(),
+                eval_type: EvalType::Compound,
                 env: vec![],
                 argv: vec!["echo".to_owned(), "hello".to_owned()],
                 redirects: vec![],
@@ -378,7 +389,7 @@ mod tests {
                     pattern: "rm -rf *".to_owned(),
                     matched_tokens: vec!["/".to_owned()],
                 }],
-                eval_type: "compound".to_owned(),
+                eval_type: EvalType::Compound,
                 env: vec![],
                 argv: vec!["rm".to_owned(), "-rf".to_owned(), "/".to_owned()],
                 redirects: vec![],
@@ -393,7 +404,7 @@ mod tests {
     }
 
     #[rstest]
-    fn audit_entry_omits_no_top_level_matched_rules_or_parsed() {
+    fn audit_entry_omits_legacy_top_level_keys() {
         // Hard-fail if anyone reintroduces the dropped top-level
         // `matched_rules` / `parsed` / `sub_evaluations` keys, since
         // consumers now branch on `command_evaluations` and would
@@ -409,7 +420,7 @@ mod tests {
                 command: "echo hi".to_owned(),
                 action: SerializableAction::Allow,
                 matched_rules: vec![],
-                eval_type: "primary".to_owned(),
+                eval_type: EvalType::Primary,
                 env: vec![],
                 argv: vec!["echo".to_owned(), "hi".to_owned()],
                 redirects: vec![],
@@ -431,7 +442,7 @@ mod tests {
             command: "echo hi".to_owned(),
             action: SerializableAction::Allow,
             matched_rules: vec![],
-            eval_type: "primary".to_owned(),
+            eval_type: EvalType::Primary,
             env: vec![],
             argv: vec!["echo".to_owned(), "hi".to_owned()],
             redirects: vec![],
@@ -444,7 +455,7 @@ mod tests {
             command: "FOO=x echo hi > /tmp/log".to_owned(),
             action: SerializableAction::Allow,
             matched_rules: vec![],
-            eval_type: "compound".to_owned(),
+            eval_type: EvalType::Compound,
             env: vec![SerializableEnvVar {
                 name: "FOO".to_owned(),
                 value: Some("x".to_owned()),

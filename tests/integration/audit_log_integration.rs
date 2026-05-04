@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use runok::adapter::exec_adapter::ExecAdapter;
 use runok::adapter::{self, RunOptions};
-use runok::audit::AuditEntry;
+use runok::audit::{AuditEntry, EvalType};
 use runok::config::parse_config;
 use runok::exec::ExecError;
 use runok::exec::command_executor::{CommandExecutor, CommandInput, ExecMode, SandboxPolicy};
@@ -214,7 +214,7 @@ fn compound_command_records_command_evaluations(audit_dir: TempDir) {
 
     let evals = &entries[0].command_evaluations;
     assert!(evals.len() >= 2);
-    assert!(evals.iter().all(|e| e.eval_type == "compound"));
+    assert!(evals.iter().all(|e| e.eval_type == EvalType::Compound));
 
     let echo_eval = evals
         .iter()
@@ -284,7 +284,7 @@ fn audit_log_records_matched_rules(allow_echo_audit_config: AuditTestConfig) {
     let evals = &entries[0].command_evaluations;
     assert_eq!(evals.len(), 1);
     let primary = &evals[0];
-    assert_eq!(primary.eval_type, "primary");
+    assert_eq!(primary.eval_type, EvalType::Primary);
     assert!(!primary.matched_rules.is_empty());
     assert_eq!(primary.matched_rules[0].action_kind, "allow");
     assert_eq!(primary.matched_rules[0].pattern, "echo *");
@@ -320,7 +320,7 @@ fn audit_log_records_argv_for_single_command(audit_dir: TempDir) {
     let evals = &entries[0].command_evaluations;
     assert_eq!(evals.len(), 1, "single command must yield one evaluation");
     let primary = &evals[0];
-    assert_eq!(primary.eval_type, "primary");
+    assert_eq!(primary.eval_type, EvalType::Primary);
     assert_eq!(
         primary.argv,
         vec!["helmfile", "-l", "name=alloy", "template"]
@@ -359,7 +359,7 @@ fn audit_log_records_argv_per_compound_branch(audit_dir: TempDir) {
 
     let evals = &entries[0].command_evaluations;
     assert_eq!(evals.len(), 2);
-    assert!(evals.iter().all(|e| e.eval_type == "compound"));
+    assert!(evals.iter().all(|e| e.eval_type == EvalType::Compound));
 
     let echo_eval = evals
         .iter()

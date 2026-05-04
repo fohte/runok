@@ -218,7 +218,7 @@ mod tests {
                     pattern: "git push -f *".to_string(),
                     matched_tokens: vec!["origin".to_string(), "main".to_string()],
                 }],
-                eval_type: "primary".to_string(),
+                eval_type: crate::audit::EvalType::Primary,
                 env: vec![],
                 argv: vec!["git".to_string(), "push".to_string()],
                 redirects: vec![],
