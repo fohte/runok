@@ -28,7 +28,7 @@ If you previously relied on runok scanning a quoted-HEREDOC body (for example, a
 
 ## New Features
 
-### New `os` CEL variable for OS-conditional `when` clauses
+### New `os` CEL variable for OS-conditional `when` clauses ([#336](https://github.com/fohte/runok/pull/336))
 
 `when` expressions now expose an `os` string equal to Rust's [`std::env::consts::OS`](https://doc.rust-lang.org/std/env/consts/constant.OS.html) — `"macos"`, `"linux"`, `"windows"`, `"freebsd"`, etc. This lets a single config branch on the host operating system, which previously was not possible: shell built-ins like `OSTYPE` are not exported to child processes, so they don't appear in `env`.
 
