@@ -764,17 +764,18 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
 }
 
 /// True if a `heredoc_redirect` node uses a quoted delimiter
-/// (e.g. `<<'EOF'`, `<<"EOF"`, `<<\EOF`). When the delimiter is quoted,
-/// bash treats the body as literal text — no parameter, command, or
-/// arithmetic expansion occurs — so any `$(...)` inside is not a real
-/// command substitution and must not be scanned.
+/// (e.g. `<<'EOF'`, `<<"EOF"`, `<<E\OF`, `<<EO"F"`). When ANY part
+/// of the delimiter is quoted or backslash-escaped, bash treats the
+/// body as literal text — no parameter, command, or arithmetic
+/// expansion occurs — so any `$(...)` inside is not a real command
+/// substitution and must not be scanned.
 fn heredoc_body_is_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "heredoc_start"
             && let Ok(text) = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
         {
-            return text.starts_with('\'') || text.starts_with('"') || text.starts_with('\\');
+            return text.contains('\'') || text.contains('"') || text.contains('\\');
         }
     }
     false
@@ -805,26 +806,20 @@ fn render_command_child_text(node: tree_sitter::Node, source: &[u8]) -> String {
     let start = node.start_byte();
     let end = node.end_byte();
     if spans.is_empty() {
-        return std::str::from_utf8(&source[start..end])
-            .unwrap_or("")
-            .to_string();
+        return String::from_utf8_lossy(&source[start..end]).into_owned();
     }
     spans.sort_by_key(|(s, _, _)| *s);
-    let mut out = String::new();
+    let mut out = String::with_capacity(end.saturating_sub(start));
     let mut cursor = start;
     for (s, e, placeholder) in spans {
-        if s > cursor
-            && let Ok(slice) = std::str::from_utf8(&source[cursor..s])
-        {
-            out.push_str(slice);
+        if s > cursor {
+            out.push_str(&String::from_utf8_lossy(&source[cursor..s]));
         }
         out.push_str(placeholder);
         cursor = e.max(cursor);
     }
-    if cursor < end
-        && let Ok(slice) = std::str::from_utf8(&source[cursor..end])
-    {
-        out.push_str(slice);
+    if cursor < end {
+        out.push_str(&String::from_utf8_lossy(&source[cursor..end]));
     }
     out
 }
@@ -1197,22 +1192,31 @@ mod tests {
         assert_eq!(result, vec!["cat", "secret_cmd"]);
     }
 
-    // With a quoted delimiter (`<<'EOF'`, `<<\"EOF\"`, `<<\\EOF`), bash
-    // treats the body as literal text — `$(...)` is not expanded — so
-    // the body must NOT be re-scanned for command substitutions.
+    // Bash treats a heredoc body as literal whenever ANY part of the
+    // delimiter is quoted or backslash-escaped, not just the leading
+    // character. `<<E\OF` is the only mid-delimiter form that
+    // tree-sitter-bash can parse into a non-error tree alongside an
+    // expansion-looking body; the in-quote forms (`<<EO"F"`,
+    // `<<EO'F'`) currently surface as `SyntaxError` from
+    // `extract_commands_with_metadata` and are out of scope here.
     #[rstest]
-    #[case::single_quoted(indoc! {"
+    #[case::single_quoted_full(indoc! {"
         cat <<'EOF'
         hello $(secret_cmd)
         EOF
     "})]
-    #[case::double_quoted(indoc! {r#"
+    #[case::double_quoted_full(indoc! {r#"
         cat <<"EOF"
         hello $(secret_cmd)
         EOF
     "#})]
-    #[case::backslash_quoted(indoc! {"
+    #[case::backslash_leading(indoc! {"
         cat <<\\EOF
+        hello $(secret_cmd)
+        EOF
+    "})]
+    #[case::backslash_middle(indoc! {"
+        cat <<E\\OF
         hello $(secret_cmd)
         EOF
     "})]
