@@ -371,19 +371,20 @@ definitions:
 
 Controls how the variable's values are matched against command arguments. This is the definition-level default; individual values can override it with per-value type.
 
-**Type:** `"literal" | "path"`\
+**Type:** `"literal" | "path" | "pattern"`\
 **Default:** `"literal"`
 
-| Type      | Matching behavior                                                         |
-| --------- | ------------------------------------------------------------------------- |
-| `literal` | Exact string match                                                        |
-| `path`    | Canonicalize both sides before comparison, fallback to path normalization |
+| Type      | Matching behavior                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------ |
+| `literal` | Exact string match                                                                                     |
+| `path`    | Canonicalize both sides before comparison, fallback to path normalization                              |
+| `pattern` | Each value is parsed as a rule-pattern fragment and inlined at the `<var:name>` placeholder's position |
 
 ###### `values`
 
 List of allowed values for this variable. Each element can be either a plain string (inherits the definition-level `type`) or an object with explicit `type` and `value` fields.
 
-**Type:** `list[str | { type: "literal" | "path", value: str }]`\
+**Type:** `list[str | { type: "literal" | "path" | "pattern", value: str }]`\
 **Required:** Yes
 
 ```yaml
@@ -395,7 +396,7 @@ values:
 ```
 
 :::note
-Variable definitions must contain concrete values. `<var:name>` or `<path:name>` references inside `definitions.vars` values are not allowed.
+For `literal` and `path` typed values, the value must be a concrete token sequence; `<var:name>` or `<path:name>` references inside the value are not allowed. For `pattern` typed values, the value is itself parsed as a rule pattern (see [`<var:name>`](/pattern-syntax/placeholders/#variable-references-varname) for details), but it must not nest other placeholders (`<cmd>`, `<opts>`, `<vars>`, `<var:...>`, `<path:...>`, `<flag:...>`).
 :::
 
 #### `definitions.flag_groups`

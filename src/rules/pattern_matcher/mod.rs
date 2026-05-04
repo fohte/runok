@@ -80,6 +80,20 @@ fn collect_value_flag_aliases(
             PatternToken::Optional(inner) => {
                 collect_value_flag_aliases(inner, definitions, aliases);
             }
+            PatternToken::VarRef(name) => {
+                // Pattern-typed vars expand into rule-pattern fragments. Walk
+                // each parsed sub-pattern's tokens so any value-flags inside
+                // the expansion (e.g. `[--namespace *]`) are registered too.
+                if let Some(sub_patterns) = definitions
+                    .parsed_pattern_vars
+                    .as_ref()
+                    .and_then(|m| m.get(name))
+                {
+                    for sub in sub_patterns {
+                        collect_value_flag_aliases(&sub.tokens, definitions, aliases);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -276,6 +290,35 @@ pub fn extract_placeholder(
         .into_iter()
         .map(|c| c.into_iter().map(|s| s.to_string()).collect())
         .collect())
+}
+
+/// Run the match engine in boolean mode for the prefix-consumption test
+/// used by pattern-typed `<var:name>` sub-patterns. Returns `true` when
+/// `pattern_tokens` exactly consumes `cmd_tokens`.
+///
+/// Exposed to the `token_matching` submodule via `pub(super)` so that
+/// `match_pattern_prefix` can probe consumption lengths without exposing
+/// the full `match_engine` signature.
+pub(super) fn match_engine_for_prefix_test(
+    pattern_tokens: &[PatternToken],
+    cmd_tokens: &[&str],
+    definitions: &Definitions,
+    steps: &Cell<usize>,
+    after_double_dash: &Cell<bool>,
+    var_captures: &RefCell<HashMap<String, String>>,
+    flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
+) -> Result<bool, RuleError> {
+    match_engine(
+        pattern_tokens,
+        cmd_tokens,
+        definitions,
+        steps,
+        None,
+        None,
+        after_double_dash,
+        var_captures,
+        flag_group_captures,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -985,6 +1028,75 @@ fn match_engine<'a>(
             if cmd_tokens.is_empty() {
                 return Ok(false);
             }
+            // Pattern-typed var: inline-expand each parsed sub-pattern in
+            // place of `<var:name>`. The sub-pattern's command name consumes
+            // the next command token, and its tokens are spliced before the
+            // outer pattern's remaining tokens before recursing.
+            if let Some(sub_patterns) = definitions
+                .parsed_pattern_vars
+                .as_ref()
+                .and_then(|m| m.get(name))
+                && !sub_patterns.is_empty()
+            {
+                for sub in sub_patterns {
+                    let head_consumed = match &sub.command {
+                        CommandPattern::Literal(s) => {
+                            if token_matching::literal_matches(s, cmd_tokens[0]) {
+                                Some(1usize)
+                            } else {
+                                None
+                            }
+                        }
+                        CommandPattern::Alternation(alts) => alts
+                            .iter()
+                            .any(|a| token_matching::literal_matches(a, cmd_tokens[0]))
+                            .then_some(1),
+                        CommandPattern::Wildcard => Some(1),
+                        // Pattern-typed var values may not nest a `<var:>` at
+                        // the command position; rejected by config validation.
+                        CommandPattern::VarRef(_) => None,
+                    };
+                    let Some(head) = head_consumed else { continue };
+
+                    let combined: Vec<PatternToken> = sub
+                        .tokens
+                        .iter()
+                        .cloned()
+                        .chain(rest.iter().cloned())
+                        .collect();
+
+                    let saved_dd = after_double_dash.get();
+                    let saved_vc = var_captures.borrow().clone();
+                    let saved_fg = flag_group_captures.borrow().clone();
+                    var_captures
+                        .borrow_mut()
+                        .insert(name.clone(), cmd_tokens[0].to_string());
+
+                    // `match_engine` itself truncates `caps` on failure (see
+                    // the Wildcard / Optional arms), so wildcards captured
+                    // during a failed sub-pattern attempt are restored
+                    // automatically. We thread `captures` through unchanged.
+                    let result = match_engine(
+                        &combined,
+                        &cmd_tokens[head..],
+                        definitions,
+                        steps,
+                        captures.as_deref_mut(),
+                        None,
+                        after_double_dash,
+                        var_captures,
+                        flag_group_captures,
+                    );
+                    if matches!(result, Ok(true)) {
+                        return Ok(true);
+                    }
+                    after_double_dash.set(saved_dd);
+                    *var_captures.borrow_mut() = saved_vc;
+                    *flag_group_captures.borrow_mut() = saved_fg;
+                }
+                return Ok(false);
+            }
+
             if token_matching::match_var_ref(name, cmd_tokens[0], definitions) {
                 // Capture the matched command token for this var reference.
                 // For path-type vars, store the actual matched token (as-is).

@@ -152,6 +152,13 @@ pub struct Definitions {
     #[serde(skip)]
     #[cfg_attr(any(feature = "config-schema", test), schemars(skip))]
     pub parsed_flag_groups: Option<HashMap<String, crate::rules::pattern_parser::ParsedFlagGroup>>,
+
+    /// Pre-parsed pattern-typed variable values, populated by `resolve_pattern_vars()`.
+    /// Keyed by variable name; each entry stores the parsed `Pattern` for every
+    /// value of that variable that has effective type `pattern`.
+    #[serde(skip)]
+    #[cfg_attr(any(feature = "config-schema", test), schemars(skip))]
+    pub parsed_pattern_vars: Option<HashMap<String, Vec<crate::rules::pattern_parser::Pattern>>>,
 }
 
 impl Definitions {
@@ -174,6 +181,37 @@ impl Definitions {
         }
         self.parsed_flag_groups = Some(parsed);
     }
+
+    /// Parse every `pattern`-typed variable value into a `Pattern` AST and
+    /// cache the result in `parsed_pattern_vars`. Call this once after
+    /// deserialization / merging so that `<var:name>` lookups for pattern-typed
+    /// variables never re-parse during matching.
+    pub fn resolve_pattern_vars(&mut self) {
+        let Some(vars) = &self.vars else {
+            self.parsed_pattern_vars = None;
+            return;
+        };
+
+        let mut parsed: HashMap<String, Vec<crate::rules::pattern_parser::Pattern>> =
+            HashMap::new();
+        for (name, var_def) in vars {
+            let mut entries = Vec::new();
+            for var_value in &var_def.values {
+                let effective_type = var_value.effective_type(var_def.var_type);
+                if effective_type != VarType::Pattern {
+                    continue;
+                }
+                if let Ok(p) = crate::rules::pattern_parser::parse(var_value.value()) {
+                    entries.push(p);
+                }
+                // Parse errors are reported by `validate()`; skip silently here.
+            }
+            if !entries.is_empty() {
+                parsed.insert(name.clone(), entries);
+            }
+        }
+        self.parsed_pattern_vars = Some(parsed);
+    }
 }
 
 /// Type of a variable definition, controlling how values are matched.
@@ -187,6 +225,11 @@ pub enum VarType {
     /// Path match: canonicalize both sides before comparison,
     /// falling back to `normalize_path` when the file does not exist.
     Path,
+    /// Pattern match: each value is parsed as a rule-pattern fragment and
+    /// expanded inline at the `<var:name>` placeholder's position. Useful
+    /// for naming a reusable command-prefix pattern such as
+    /// `"kubectl [-n|--namespace *] [--context *] [--cluster *]"`.
+    Pattern,
 }
 
 /// A single value in a variable definition, optionally carrying its own type.
@@ -663,18 +706,49 @@ impl Config {
             }
         }
 
-        // Reject <var:name> and <path:name> references inside definitions.vars values.
+        // Validate definitions.vars values:
+        // - For `literal` / `path` typed values, reject `<var:name>` and
+        //   `<path:name>` references because such values must be concrete tokens.
+        // - For `pattern` typed values, parse the value as a rule pattern and
+        //   reject any nested placeholders (`<cmd>`, `<opts>`, `<vars>`,
+        //   `<var:...>`, `<path:...>`, `<flag:...>`).
         if let Some(defs) = &self.definitions
             && let Some(vars) = &defs.vars
         {
             for (key, var_def) in vars {
                 for var_value in &var_def.values {
                     let v = var_value.value();
-                    if (v.starts_with("<var:") || v.starts_with("<path:")) && v.ends_with('>') {
-                        errors.push(format!(
-                            "definitions.vars.{key}: value '{v}' contains a placeholder \
-                             reference. Variable definitions must contain concrete values, not references"
-                        ));
+                    let effective_type = var_value.effective_type(var_def.var_type);
+                    match effective_type {
+                        VarType::Literal | VarType::Path => {
+                            if (v.starts_with("<var:") || v.starts_with("<path:"))
+                                && v.ends_with('>')
+                            {
+                                errors.push(format!(
+                                    "definitions.vars.{key}: value '{v}' contains a placeholder \
+                                     reference. Variable definitions must contain concrete values, not references"
+                                ));
+                            }
+                        }
+                        VarType::Pattern => match crate::rules::pattern_parser::parse(v) {
+                            Ok(parsed) => {
+                                if let Some(disallowed) =
+                                    find_disallowed_placeholder_in_pattern(&parsed)
+                                {
+                                    errors.push(format!(
+                                        "definitions.vars.{key}: pattern value '{v}' contains \
+                                         disallowed placeholder '{disallowed}'. Nested placeholders \
+                                         (<cmd>, <opts>, <vars>, <var:...>, <path:...>, <flag:...>) \
+                                         are not allowed in pattern-typed variable values"
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "definitions.vars.{key}: pattern value '{v}' failed to parse: {e}"
+                                ));
+                            }
+                        },
                     }
                 }
             }
@@ -710,6 +784,24 @@ impl Config {
             .map(|g| g.keys().map(|k| k.as_str()).collect())
             .unwrap_or_default();
 
+        // Set of variable names whose effective definition-level type is
+        // `pattern`. Used to reject `[<var:name>]` (pattern-typed var inside
+        // an optional group) for the same reason `<flag:name>` is rejected
+        // there: pattern-var expansion may itself contain optional groups
+        // and value-flags, so wrapping it in another optional layer would
+        // break the outer matcher's `optional_flags_absent` accounting.
+        let pattern_typed_vars: std::collections::HashSet<&str> = self
+            .definitions
+            .as_ref()
+            .and_then(|d| d.vars.as_ref())
+            .map(|vars| {
+                vars.iter()
+                    .filter(|(_, def)| def.var_type == VarType::Pattern)
+                    .map(|(k, _)| k.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         if let Some(rules) = &self.rules {
             for (i, rule) in rules.iter().enumerate() {
                 let Some((_, pattern_str)) = rule.action_and_pattern() else {
@@ -725,6 +817,15 @@ impl Config {
                             errors.push(format!(
                                 "rules[{i}]: pattern references undefined flag group \
                                  '<flag:{name}>'. Define it in definitions.flag_groups."
+                            ));
+                        }
+                    });
+                    collect_var_refs_inside_optional(&pattern.tokens, &mut |name| {
+                        if pattern_typed_vars.contains(name) {
+                            errors.push(format!(
+                                "rules[{i}]: pattern places <var:{name}> inside an optional \
+                                 group `[...]`. Pattern-typed variables cannot be nested in \
+                                 optional groups."
                             ));
                         }
                     });
@@ -777,10 +878,12 @@ impl Config {
         }
 
         if errors.is_empty() {
-            // Pre-parse flag group definitions so pattern matching never
-            // has to re-parse them on every `<flag:name>` encounter.
+            // Pre-parse flag group definitions and pattern-typed variable
+            // values so pattern matching never has to re-parse them on every
+            // `<flag:name>` / `<var:name>` encounter.
             if let Some(defs) = &mut self.definitions {
                 defs.resolve_flag_groups();
+                defs.resolve_pattern_vars();
             }
             Ok(())
         } else {
@@ -843,8 +946,10 @@ impl Config {
                     vars: Self::merge_vars(b.vars, o.vars),
                     flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
                     parsed_flag_groups: None,
+                    parsed_pattern_vars: None,
                 };
                 merged.resolve_flag_groups();
+                merged.resolve_pattern_vars();
                 Some(merged)
             }
         }
@@ -948,6 +1053,89 @@ fn collect_flag_group_refs(
             _ => {}
         }
     }
+}
+
+/// Walk a pattern token tree and invoke `report` for every `<var:name>`
+/// reference that appears strictly inside an `Optional ([...])` group. Used
+/// by config validation to forbid pattern-typed `<var:name>` references
+/// inside optional groups.
+fn collect_var_refs_inside_optional(
+    tokens: &[crate::rules::pattern_parser::PatternToken],
+    report: &mut impl FnMut(&str),
+) {
+    use crate::rules::pattern_parser::PatternToken;
+    for token in tokens {
+        if let PatternToken::Optional(inner) = token {
+            collect_var_refs_anywhere(inner, report);
+        }
+    }
+}
+
+fn collect_var_refs_anywhere(
+    tokens: &[crate::rules::pattern_parser::PatternToken],
+    report: &mut impl FnMut(&str),
+) {
+    use crate::rules::pattern_parser::PatternToken;
+    for token in tokens {
+        match token {
+            PatternToken::VarRef(name) => report(name),
+            PatternToken::Optional(inner) => collect_var_refs_anywhere(inner, report),
+            _ => {}
+        }
+    }
+}
+
+/// Walk a parsed pattern tree and return a description of the first nested
+/// placeholder found, or `None` if every token is a plain pattern element.
+/// Used by `definitions.vars` validation for `pattern`-typed values: pattern
+/// vars must not embed other placeholders, since their value is inlined into
+/// rule patterns and recursive expansion is not supported.
+fn find_disallowed_placeholder_in_pattern(
+    pattern: &crate::rules::pattern_parser::Pattern,
+) -> Option<String> {
+    use crate::rules::pattern_parser::CommandPattern;
+
+    if let CommandPattern::VarRef(name) = &pattern.command {
+        return Some(format!("<var:{name}>"));
+    }
+    find_disallowed_placeholder_in_tokens(&pattern.tokens)
+}
+
+fn find_disallowed_placeholder_in_tokens(
+    tokens: &[crate::rules::pattern_parser::PatternToken],
+) -> Option<String> {
+    use crate::rules::pattern_parser::PatternToken;
+    for token in tokens {
+        match token {
+            PatternToken::PathRef(name) => return Some(format!("<path:{name}>")),
+            PatternToken::VarRef(name) => return Some(format!("<var:{name}>")),
+            PatternToken::FlagGroupRef { name } => return Some(format!("<flag:{name}>")),
+            PatternToken::Placeholder(name) => return Some(format!("<{name}>")),
+            PatternToken::Opts => return Some("<opts>".to_string()),
+            PatternToken::Vars => return Some("<vars>".to_string()),
+            PatternToken::Optional(inner) => {
+                if let Some(found) = find_disallowed_placeholder_in_tokens(inner) {
+                    return Some(found);
+                }
+            }
+            PatternToken::FlagWithValue { value, .. } => {
+                if let Some(found) =
+                    find_disallowed_placeholder_in_tokens(std::slice::from_ref(value.as_ref()))
+                {
+                    return Some(found);
+                }
+            }
+            PatternToken::Negation(inner) => {
+                if let Some(found) =
+                    find_disallowed_placeholder_in_tokens(std::slice::from_ref(inner.as_ref()))
+                {
+                    return Some(found);
+                }
+            }
+            PatternToken::Literal(_) | PatternToken::Alternation(_) | PatternToken::Wildcard => {}
+        }
+    }
+    None
 }
 
 /// Transform the generated `RuleEntry` schema into a `oneOf` with three variants:
@@ -1210,10 +1398,11 @@ pub fn parse_config(yaml: &str) -> Result<Config, crate::config::ConfigError> {
     take_parse_warnings();
     let mut config: Config = serde_saphyr::from_str(yaml)?;
     take_parse_warnings();
-    // Eagerly populate the parsed flag group cache so callers that
-    // skip `validate()` (e.g. tests) still get cached lookups.
+    // Eagerly populate the parsed flag group / pattern-var cache so callers
+    // that skip `validate()` (e.g. tests) still get cached lookups.
     if let Some(defs) = &mut config.definitions {
         defs.resolve_flag_groups();
+        defs.resolve_pattern_vars();
     }
     Ok(config)
 }
@@ -1223,10 +1412,11 @@ pub fn parse_config_with_warnings(yaml: &str) -> Result<ParsedConfig, crate::con
     take_parse_warnings();
     let mut config: Config = serde_saphyr::from_str(yaml)?;
     let warnings = take_parse_warnings();
-    // Eagerly populate the parsed flag group cache so callers that
-    // skip `validate()` still get cached lookups.
+    // Eagerly populate the parsed flag group / pattern-var cache so callers
+    // that skip `validate()` still get cached lookups.
     if let Some(defs) = &mut config.definitions {
         defs.resolve_flag_groups();
+        defs.resolve_pattern_vars();
     }
     Ok(ParsedConfig { config, warnings })
 }
