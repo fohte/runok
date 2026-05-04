@@ -90,7 +90,17 @@ apiVersion: v1
 EOF
 ```
 
-The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||`, multi-stage pipelines, and heredocs nested inside an `if` / `while` / `for` body.
+The same fix covers `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, and `<<-EOF`, plus heredoc + `&&` / `||` / `;`, multi-stage pipelines, and heredocs nested inside an `if` / `while` body.
+
+### `runok audit --json` no longer panics when the downstream pipe closes early ([#337](https://github.com/fohte/runok/pull/337))
+
+Piping `runok audit --json` into `head`, `jq -c`, or any consumer that may close stdout before runok has finished writing now exits silently instead of panicking with `failed printing to stdout: Broken pipe (os error 32)`. runok now restores the default SIGPIPE handler at startup on Unix, so the process terminates on EPIPE the same way `yes | head` does. Other commands that print to stdout (for example `runok config-schema`) benefit from the same fix.
+
+```sh
+# Before: prints one JSON line, then a Rust panic + backtrace on stderr.
+# After: prints one JSON line and exits silently.
+runok audit --json | head -1
+```
 
 ### `git commit -m "$(cat <<'EOF' ... EOF)"` no longer fails with `unclosed quote` ([#330](https://github.com/fohte/runok/pull/330))
 
