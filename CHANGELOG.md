@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.4](https://github.com/fohte/runok/compare/v0.2.3...v0.2.4) (2026-05-03)
+
+
+### Features
+
+* **cli:** add a global `--config` / `-c` flag available on every subcommand ([#315](https://github.com/fohte/runok/issues/315)) ([89cf423](https://github.com/fohte/runok/commit/89cf423a5a0a6168dd6e1d8899828b233695341d))
+
+
+### Bug Fixes
+
+* **check:** return exit 1 for runok-side failures in hook mode to avoid blocking Bash calls ([#328](https://github.com/fohte/runok/issues/328)) ([68dd57b](https://github.com/fohte/runok/commit/68dd57b8ad0fa860951b824d752779562d9d729a))
+
+
+### Dependencies
+
+* update rust crate clap to v4.6.1 ([#324](https://github.com/fohte/runok/issues/324)) ([a2bdc14](https://github.com/fohte/runok/commit/a2bdc144c3782f98f568ee2eaf7a66dd3d801699))
+* update rust crate libc to v0.2.185 ([#325](https://github.com/fohte/runok/issues/325)) ([be42935](https://github.com/fohte/runok/commit/be42935677f1cd555de889e0b09773d497425288))
+
 ## [0.2.3](https://github.com/fohte/runok/compare/v0.2.2...v0.2.3) (2026-04-12)
 
 
