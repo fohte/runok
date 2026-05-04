@@ -1684,11 +1684,9 @@ mod tests {
     // tree-sitter-bash represents `cat <<EOF | other ...\nbody\nEOF` by
     // attaching the trailing `pipeline` / `&&` / `||` arm as a CHILD of
     // the `heredoc_redirect` node, instead of wrapping the whole thing
-    // in an outer pipeline. A naive walk that only descends into the
-    // `body` field and looks for `command_substitution` inside redirect
-    // children silently drops the trailing arm — which previously made
-    // `cat <<EOF | kubectl apply -f -` pass as a bare `cat` and slip
-    // past `cat *` allow rules.
+    // in an outer pipeline. The body and continuation must be re-stitched
+    // into the synthesized outer pipeline so every sub-command surfaces
+    // to the rule engine with the right pipe metadata.
     // ========================================
 
     // Each delimiter form (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`,
@@ -1767,12 +1765,10 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    // `cat <<EOF ; ...` and `cat <<EOF & ...` are legal bash but
-    // tree-sitter-bash 0.25.1 cannot parse them — the `;` / `&` after
-    // the heredoc start lands inside an ERROR node. runok surfaces a
-    // SyntaxError to the caller, matching the two-heredocs-on-one-
-    // pipeline case above. Pinned so a future parser bump that fixes
-    // them does not silently change runok's behaviour.
+    // tree-sitter-bash 0.25.1 produces an ERROR node for `;` / `&`
+    // after a heredoc start, so runok surfaces these as SyntaxError
+    // rather than dropping the trailing arm. Pinned to detect parser
+    // version drift.
     #[rstest]
     #[case::semicolon_after_heredoc(indoc! {"
         cat <<EOF ; echo after
@@ -1868,12 +1864,10 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    // Two heredocs on one pipeline (`cat <<A | cat <<B | tee`) is
-    // legal bash, but tree-sitter-bash 0.25.1 cannot parse it — the
-    // second `<<` produces an ERROR node — so runok surfaces a
-    // SyntaxError to the caller rather than silently dropping arms.
-    // This is a known parser limitation, pinned here so a future
-    // tree-sitter-bash bump that fixes it doesn't go unnoticed.
+    // tree-sitter-bash 0.25.1 produces an ERROR node when a second
+    // `<<` follows the first heredoc on the same pipeline, so runok
+    // surfaces SyntaxError instead of silently dropping arms. Pinned
+    // to detect parser version drift.
     #[test]
     fn extract_two_heredocs_in_pipeline_is_syntax_error() {
         let input = indoc! {"
