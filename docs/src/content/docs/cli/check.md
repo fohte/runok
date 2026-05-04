@@ -15,7 +15,9 @@ runok check [options] -- <command> [arguments...]
 
 Any unrecognized flag before `--` is rejected with an error to prevent typos from being silently absorbed into the command arguments.
 
-When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for Claude Code hooks, `command` for generic checks), and anything else is treated as plaintext with one command per line.
+When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for Claude Code hooks, `command` for generic checks), and anything else is treated as plaintext shell input.
+
+Plaintext stdin is split into individual commands at top-level shell statement boundaries (newlines, `;`, and `&` between top-level statements). Constructs that legitimately span multiple lines — HEREDOCs, multi-line quoted strings, and `\` line continuations — are kept together as a single command. Compound commands joined by `&&`, `||`, or `|` also stay together (the rule engine splits those further internally). Stdin that cannot be parsed as shell exits with `stdin parse error`.
 
 Use `--input-format claude-code-hook` to force Claude Code hook parsing.
 
@@ -63,12 +65,25 @@ runok check --output-format json -- rm -rf /
 }
 ```
 
-Read commands from stdin (one per line):
+Read commands from stdin (split at shell statement boundaries):
 
 ```sh
 printf "git push\nnpm publish\n" | runok check
 # allow
 # deny: Publishing is not allowed
+```
+
+Multi-line constructs are evaluated as a single command:
+
+```sh
+cat <<'OUTER' | runok check
+git add path && git commit -m "$(cat <<'EOF'
+subject
+body
+EOF
+)"
+OUTER
+# allow
 ```
 
 Read from stdin as JSON:

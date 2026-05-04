@@ -596,6 +596,60 @@ pub fn extract_commands_with_metadata(
     Ok(commands)
 }
 
+/// Split a multi-line shell input into top-level command strings.
+///
+/// Unlike [`extract_commands_with_metadata`], this function only splits at
+/// **top-level command boundaries** — newlines, `;`, and `&` between
+/// statements at the `program` root. Compound commands joined by `&&`,
+/// `||`, or `|` are kept as a single string (the caller — typically the
+/// rule engine — will split those further).
+///
+/// HEREDOC bodies, quoted strings spanning multiple lines, and backslash
+/// line continuations are kept intact because tree-sitter-bash represents
+/// them as a single AST node.
+///
+/// Returns `SyntaxError` if tree-sitter-bash cannot parse the input, and
+/// `EmptyCommand` if the input is empty or whitespace-only.
+pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(CommandParseError::EmptyCommand);
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .map_err(|_| CommandParseError::SyntaxError)?;
+
+    let tree = parser
+        .parse(trimmed, None)
+        .ok_or(CommandParseError::SyntaxError)?;
+
+    let root = tree.root_node();
+
+    if root.has_error() {
+        return Err(CommandParseError::SyntaxError);
+    }
+
+    let source = trimmed.as_bytes();
+    let mut commands = Vec::new();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if let Ok(text) = child.utf8_text(source) {
+            let text = text.trim();
+            if !text.is_empty() {
+                commands.push(text.to_string());
+            }
+        }
+    }
+
+    if commands.is_empty() {
+        return Err(CommandParseError::EmptyCommand);
+    }
+
+    Ok(commands)
+}
+
 /// Recursively walk the tree-sitter AST and collect individual command strings.
 ///
 /// Compound constructs (pipeline, list, subshell, control structures) are split
@@ -1881,5 +1935,97 @@ mod tests {
                 input
             );
         }
+    }
+
+    // ========================================
+    // split_top_level_commands
+    //
+    // Splits at top-level statement boundaries (newline, `;`, `&`) only.
+    // Compound commands joined by `&&`/`||`/`|` and constructs that span
+    // multiple lines (HEREDOC, multi-line strings, `\` continuations) are
+    // kept as a single string.
+    // ========================================
+
+    #[rstest]
+    #[case::single_line("git status", vec!["git status"])]
+    #[case::three_separate_lines(
+        indoc! {"
+            git status
+            ls -la
+            echo hello
+        "},
+        vec!["git status", "ls -la", "echo hello"],
+    )]
+    #[case::semicolon_separator("foo; bar", vec!["foo", "bar"])]
+    #[case::ampersand_background("foo & bar", vec!["foo", "bar"])]
+    #[case::and_or_kept_together(
+        "foo && bar || baz",
+        vec!["foo && bar || baz"],
+    )]
+    #[case::pipeline_kept_together(
+        "echo hello | grep foo",
+        vec!["echo hello | grep foo"],
+    )]
+    #[case::backslash_line_continuation(
+        indoc! {"
+            echo \\
+              hello \\
+              world
+        "},
+        vec!["echo \\\n  hello \\\n  world"],
+    )]
+    #[case::heredoc_inside_command_substitution(
+        indoc! {"
+            git add foo && git commit -m \"$(cat <<'EOF'
+            subject
+            body
+            EOF
+            )\"
+        "},
+        vec![indoc! {"
+            git add foo && git commit -m \"$(cat <<'EOF'
+            subject
+            body
+            EOF
+            )\""}],
+    )]
+    #[case::multiline_double_quoted_string(
+        indoc! {r#"
+            echo "line one
+            line two"
+        "#},
+        vec!["echo \"line one\nline two\""],
+    )]
+    #[case::skips_blank_lines(
+        indoc! {"
+            git status
+
+            ls -la
+        "},
+        vec!["git status", "ls -la"],
+    )]
+    fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = split_top_level_commands(input).unwrap();
+        let expected: Vec<String> = expected.into_iter().map(String::from).collect();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::empty("", CommandParseError::EmptyCommand)]
+    #[case::whitespace_only("   \n\n  ", CommandParseError::EmptyCommand)]
+    #[case::unclosed_quote("echo \"unterminated", CommandParseError::SyntaxError)]
+    #[case::unclosed_heredoc(
+        indoc! {"
+            cat <<EOF
+            no terminator here
+        "},
+        CommandParseError::SyntaxError,
+    )]
+    fn split_top_level_commands_errors(#[case] input: &str, #[case] expected: CommandParseError) {
+        let err = split_top_level_commands(input).unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&err),
+            std::mem::discriminant(&expected),
+        );
     }
 }

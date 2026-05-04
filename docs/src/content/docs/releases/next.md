@@ -48,6 +48,32 @@ EOF
 
 `"echo" hello` (or `'echo' hello`) used to tokenise with the surrounding quotes still attached to the command name (`["\"echo\"", "hello"]`), so a rule like `allow: 'echo *'` would not fire. Quotes are now stripped from the command name as well as from arguments, matching how bash itself treats them.
 
+### `runok check` stdin splits on shell statement boundaries, not raw newlines
+
+Plaintext stdin into `runok check` was previously split into one command per line, which broke any input that legitimately spans multiple lines: HEREDOCs, multi-line quoted strings, and `\` line continuations all got chopped up and rejected. The splitter now uses tree-sitter-bash to find top-level statement boundaries, so multi-line constructs are kept together while genuinely separate commands (newline, `;`, `&` between top-level statements) are still evaluated independently. `&&`, `||`, and `|` keep their existing behaviour — they are part of one compound command and are split further by the rule engine.
+
+```sh
+# Before: each line evaluated separately; the inner heredoc body and the
+#         closing `)"` were nonsense on their own.
+# After: this is one command, matched against your `git commit` rules.
+cat <<'OUTER' | runok check
+git add path && git commit -m "$(cat <<'EOF'
+subject
+body
+EOF
+)"
+OUTER
+
+# Multi-command scripts still split into independent commands:
+cat <<'OUTER' | runok check
+git status
+ls -la
+echo hello
+OUTER
+```
+
+If stdin cannot be parsed as shell (for example, an unclosed quote), `runok check` now exits with `stdin parse error: failed to parse stdin as shell input` instead of trying to recover by treating each line independently.
+
 ## Library API changes
 
 These changes only affect code that imports `runok` as a Rust library. The CLI and `runok.yml` authoring are unaffected.
