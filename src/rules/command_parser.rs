@@ -76,14 +76,19 @@ pub struct ExtractedCommand {
 /// Rules match tokens literally ("What You See Is How It Parses"),
 /// so `-m` in a rule won't match `-am` in the input.
 ///
-/// Tokenization prefers a tree-sitter-bash walk (so shell groupings such
-/// as `(subshell)`, `$(command substitution)`, and `` `...` `` are kept
-/// as single tokens, which is what wrapper patterns like `time <cmd>`
-/// expect). Inputs that are not a single top-level command — pipelines,
-/// lists, unparseable fragments, etc. — fall back to the whitespace-based
-/// [`tokenize`].
+/// Tokenization is performed by walking the tree-sitter-bash AST. Shell
+/// groupings (`(subshell)`, `$(command substitution)`, `` `...` ``) are
+/// kept as single tokens with their delimiters intact, so wrapper
+/// patterns like `time <cmd>` capture the whole grouping. Quoted
+/// arguments come back with the surrounding quotes stripped and shell
+/// double-quote escapes resolved.
+///
+/// Returns `SyntaxError` if tree-sitter-bash cannot parse the input as a
+/// single top-level command (pipelines, `&&`/`||`/`;`, control
+/// structures, parse errors) — those inputs are expected to be split
+/// upstream by [`extract_commands_with_metadata`].
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
-    let raw_tokens = tokenize_command_aware(input)?;
+    let raw_tokens = tokenize_command(input)?;
     let command = raw_tokens[0].clone();
 
     let mut flags = HashMap::new();
@@ -129,220 +134,406 @@ pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, 
     })
 }
 
-/// Tokenize a command string into a list of raw tokens.
+/// Tokenize a command string into a list of raw tokens by walking the
+/// tree-sitter-bash AST.
 ///
-/// Handles:
-/// - Whitespace-delimited splitting
-/// - Single-quoted strings (no escape processing inside)
-/// - Double-quoted strings (backslash escapes for `\`, `"`, `$`, `` ` ``, newline;
-///   unknown escapes preserve the backslash to match shell behavior)
-/// - Backslash escapes outside of quotes
-/// - Empty quoted strings (`""`, `''`) are preserved as empty tokens
-pub fn tokenize(input: &str) -> Result<Vec<String>, CommandParseError> {
+/// Each named child of the top-level `command` (or `test_command`) node
+/// becomes one token, with shell quoting resolved (a
+/// `string`/`raw_string`/`concatenation` argument comes out without its
+/// surrounding quotes; double-quote escapes for `\\`, `\"`, `\$`,
+/// `` \` ``, line continuation `\<newline>` are processed) but
+/// groupings (`(subshell)`, `$(command substitution)`, `` `...` ``,
+/// `<(...)`/`>(...)`) preserved verbatim with their delimiters intact,
+/// so wrapper patterns like `time <cmd>` see them as a single token.
+/// Prefix `variable_assignment`s (`FOO=bar cmd`) and `redirect` fields
+/// are skipped — they are tracked as redirect metadata or stripped
+/// upstream and do not participate in flag/arg matching.
+///
+/// When tree-sitter-bash cannot make sense of the input (e.g. flag
+/// values containing unbalanced shell metacharacters like
+/// `-f query=mutation{...}` for `gh api graphql`), falls back to
+/// `shlex::split` for a POSIX-style word split. This keeps real-world
+/// command inputs working without dragging back the previous
+/// character-level tokenizer that was easily fooled by HEREDOC bodies.
+///
+/// Returns:
+/// - `EmptyCommand` for empty / whitespace-only input.
+/// - `SyntaxError` when neither tree-sitter-bash nor `shlex` can
+///   produce a token stream (e.g. truly unclosed quotes, pipelines /
+///   lists / control flow that callers were expected to split first).
+pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CommandParseError::EmptyCommand);
     }
 
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut has_token = false;
-    let mut chars = trimmed.chars().peekable();
-
-    while let Some(&ch) = chars.peek() {
-        match ch {
-            // Whitespace outside quotes: emit current token
-            c if c.is_ascii_whitespace() => {
-                if has_token {
-                    tokens.push(std::mem::take(&mut current));
-                    has_token = false;
-                }
-                chars.next();
+    match tokenize_via_ast(trimmed) {
+        AstTokenizeOutcome::Tokens(tokens) => Ok(tokens),
+        AstTokenizeOutcome::ParseError => {
+            // Fallback: tree-sitter-bash gave up on this input (most
+            // often because a flag value contains shell metacharacters
+            // that aren't quoted in a way bash itself would accept,
+            // e.g. `gh api graphql -f query=mutation{createIssue(...)}`).
+            // `shlex::split` gives us POSIX word-split semantics without
+            // the original tokenizer's habit of mis-reading literal
+            // HEREDOC bodies as live shell.
+            if let Some(tokens) = shlex::split(trimmed)
+                && !tokens.is_empty()
+            {
+                return Ok(tokens);
             }
-            // Single quote: consume until closing quote, no escape processing
-            '\'' => {
-                has_token = true;
-                chars.next(); // consume opening quote
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(c) => current.push(c),
-                        None => return Err(CommandParseError::UnclosedQuote),
-                    }
-                }
-            }
-            // Double quote: consume with escape processing
-            '"' => {
-                has_token = true;
-                chars.next(); // consume opening quote
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') => match chars.next() {
-                            Some(c @ ('"' | '\\' | '$' | '`')) => current.push(c),
-                            Some('\n') => {} // line continuation
-                            // Unknown escape: preserve backslash (match shell behavior)
-                            Some(c) => {
-                                current.push('\\');
-                                current.push(c);
-                            }
-                            None => return Err(CommandParseError::UnclosedQuote),
-                        },
-                        Some(c) => current.push(c),
-                        None => return Err(CommandParseError::UnclosedQuote),
-                    }
-                }
-            }
-            // Backslash escape outside quotes
-            '\\' => {
-                chars.next(); // consume backslash
-                match chars.next() {
-                    Some('\n') => {} // line continuation
-                    Some(c) => {
-                        has_token = true;
-                        current.push(c);
-                    }
-                    None => {} // trailing backslash is ignored
-                }
-            }
-            // Regular character
-            _ => {
-                has_token = true;
-                current.push(ch);
-                chars.next();
-            }
+            Err(CommandParseError::SyntaxError)
         }
+        AstTokenizeOutcome::NotASingleCommand => Err(CommandParseError::SyntaxError),
     }
-
-    if has_token {
-        tokens.push(current);
-    }
-
-    if tokens.is_empty() {
-        return Err(CommandParseError::EmptyCommand);
-    }
-
-    Ok(tokens)
 }
 
-/// Tokenize a command string, preferring a tree-sitter-bash walk so that
-/// shell groupings (`(...)`, `$(...)`, `` `...` ``) appear as a single
-/// token with their delimiters intact.
-///
-/// When the input parses as exactly one top-level `command` node —
-/// optionally wrapped in a `program` / `list` container or attached to a
-/// `redirected_statement` — each of its named children (command name,
-/// `word` / `string` / `concatenation` args, subshells, command
-/// substitutions, etc.) becomes one token, preserved verbatim from the
-/// source text. Prefix `variable_assignment`s (`FOO=bar cmd`) and
-/// `redirect` fields are skipped here so that downstream flag parsing
-/// sees the same shape as before.
-///
-/// Anything that is not a single command at the top level (pipelines,
-/// `&&`/`||`/`;`, control structures, syntax errors, ...) falls back to
-/// the whitespace-based [`tokenize`]. Those inputs never reach wrapper
-/// placeholder extraction with a grouped `<cmd>` argument anyway, so the
-/// fallback preserves existing behaviour.
-fn tokenize_command_aware(input: &str) -> Result<Vec<String>, CommandParseError> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(CommandParseError::EmptyCommand);
-    }
-
-    if let Some(tokens) = tokenize_via_ast(trimmed) {
-        return Ok(tokens);
-    }
-    tokenize(trimmed)
+/// Outcome of trying to tokenise `input` via tree-sitter-bash. We
+/// distinguish "tree-sitter parsed it but it isn't a single command"
+/// (pipelines, `&&`, control flow — callers should have split it
+/// first) from "tree-sitter couldn't parse it at all" (where a relaxed
+/// shlex fallback is the right move). Without this split the fallback
+/// would silently swallow pipelines and feed `["ls", "|", "tail"]`
+/// into pattern matching as if they were a single command.
+enum AstTokenizeOutcome {
+    Tokens(Vec<String>),
+    ParseError,
+    NotASingleCommand,
 }
 
-/// Walk `input` with tree-sitter-bash and, if it resolves to a single
-/// `command` node, return that node's token shape (name + visible
-/// arguments, with groupings kept as single tokens).
-///
-/// Returns `None` when the input is not a single command — which covers
-/// parse errors, pipelines, lists, and any control-flow construct — so
-/// that callers can fall back to the character-level tokenizer without
-/// having to distinguish syntactic failure from "not applicable here".
-fn tokenize_via_ast(input: &str) -> Option<Vec<String>> {
+/// Walk `input` with tree-sitter-bash and classify the outcome:
+/// - `Tokens(...)` if it resolves to a single top-level `command` or
+///   `test_command` (possibly wrapped in
+///   `program`/`list`/`redirected_statement`).
+/// - `NotASingleCommand` if tree-sitter parsed it cleanly but the
+///   result is something else (pipeline, list, control flow). Those
+///   should have been split upstream.
+/// - `ParseError` if tree-sitter could not parse the input at all
+///   (treated as a candidate for the shlex fallback).
+fn tokenize_via_ast(input: &str) -> AstTokenizeOutcome {
     let mut parser = tree_sitter::Parser::new();
-    parser
+    if parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
-        .ok()?;
-    let tree = parser.parse(input, None)?;
+        .is_err()
+    {
+        return AstTokenizeOutcome::ParseError;
+    }
+    let Some(tree) = parser.parse(input, None) else {
+        return AstTokenizeOutcome::ParseError;
+    };
     let root = tree.root_node();
     if root.has_error() {
-        return None;
+        return AstTokenizeOutcome::ParseError;
     }
 
-    let command_node = find_single_command_node(root)?;
+    let Some(command_node) = find_single_command_node(root) else {
+        return AstTokenizeOutcome::NotASingleCommand;
+    };
     let source = input.as_bytes();
 
+    let tokens_result = match command_node.kind() {
+        "test_command" => tokens_from_test_command(command_node, source),
+        _ => tokens_from_command(command_node, source),
+    };
+
+    match tokens_result {
+        Ok(tokens) if !tokens.is_empty() => AstTokenizeOutcome::Tokens(tokens),
+        _ => AstTokenizeOutcome::NotASingleCommand,
+    }
+}
+
+/// Extract tokens from a regular `command` node: command name, then
+/// each positional argument or grouping child. Skips
+/// `variable_assignment` prefixes and `redirect` field children, both
+/// of which are tracked elsewhere and must not appear in the token
+/// stream used for pattern matching.
+fn tokens_from_command(
+    command_node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> Result<Vec<String>, CommandParseError> {
     let mut tokens: Vec<String> = Vec::new();
     for i in 0..command_node.child_count() {
-        let child = command_node.child(i as u32)?;
+        let Some(child) = command_node.child(i as u32) else {
+            continue;
+        };
         if !child.is_named() {
             continue;
         }
-        // Prefix assignments (`FOO=bar cmd`) are handled upstream by
-        // `collect_commands`, which strips them before the command text
-        // reaches `parse_command`; if we see one here it means the input
-        // came in unstripped, and keeping it out of `raw_tokens` matches
-        // the existing whitespace-tokenizer's post-processing.
         if child.kind() == "variable_assignment" {
             continue;
         }
-        // Redirects are attached to the command with the `redirect`
-        // field name. They participate in redirect metadata, not token
-        // matching, so drop them here.
         if command_node.field_name_for_child(i as u32) == Some("redirect") {
             continue;
         }
-        let text = source.get(child.start_byte()..child.end_byte())?;
-        let text = std::str::from_utf8(text).ok()?;
-        match child.kind() {
-            // Groupings are kept verbatim (delimiters included) so that
-            // downstream wrapper placeholder extraction sees a single
-            // token with whitespace preserved: `time <cmd>` capturing
-            // `(ls | tail -40)` is the whole point of this AST walk.
-            "subshell" | "command_substitution" | "process_substitution" => {
+        let token = dequote_node(child, source).ok_or(CommandParseError::SyntaxError)?;
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+/// Extract tokens from a `test_command` node (`[ ... ]` or `[[ ... ]]`).
+///
+/// The opening (`[`/`[[`) and closing (`]`/`]]`) delimiters are
+/// anonymous in tree-sitter-bash but participate in literal matching
+/// (rules like `[ *` rely on `[` being a separate token). Argument
+/// children — `unary_expression`, `binary_expression`, `word`,
+/// `string`, etc. — are flattened into individual tokens so a pattern
+/// like `[ -f * ]` can match `[ -f file ]`.
+fn tokens_from_test_command(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> Result<Vec<String>, CommandParseError> {
+    let mut tokens: Vec<String> = Vec::new();
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i as u32) else {
+            continue;
+        };
+        if !child.is_named() {
+            // The bracket delimiters are anonymous; pull their text in.
+            let text = source
+                .get(child.start_byte()..child.end_byte())
+                .ok_or(CommandParseError::SyntaxError)?;
+            let text = std::str::from_utf8(text)
+                .map_err(|_| CommandParseError::SyntaxError)?
+                .trim();
+            if !text.is_empty() {
                 tokens.push(text.to_string());
             }
-            // Anything else (command_name, word, string, concatenation,
-            // number, simple_expansion, ...) is passed through the
-            // whitespace tokenizer so that shell quoting is handled the
-            // same way as the non-AST path: a double-quoted `"a b"` or
-            // single-quoted `'a b'` argument becomes one token with the
-            // delimiters stripped. The slice always covers exactly one
-            // token, so we take the first entry.
-            _ => {
-                let mut pieces = tokenize(text).ok()?;
-                if pieces.len() != 1 {
-                    // Shouldn't happen for a single AST node, but guard
-                    // against it by bailing to the fallback tokenizer.
-                    return None;
+            continue;
+        }
+        flatten_test_expression(child, source, &mut tokens)?;
+    }
+    Ok(tokens)
+}
+
+/// Recursively flatten a `test_command` expression subtree into its
+/// individual tokens (operators and operands), so that `[ -f file ]`
+/// emits `["[", "-f", "file", "]"]` regardless of how tree-sitter
+/// groups the operator and operand into a `unary_expression` node.
+fn flatten_test_expression(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    tokens: &mut Vec<String>,
+) -> Result<(), CommandParseError> {
+    match node.kind() {
+        "unary_expression"
+        | "binary_expression"
+        | "parenthesized_expression"
+        | "negated_expression" => {
+            for i in 0..node.child_count() {
+                let Some(child) = node.child(i as u32) else {
+                    continue;
+                };
+                if child.is_named() {
+                    flatten_test_expression(child, source, tokens)?;
+                } else {
+                    let text = source
+                        .get(child.start_byte()..child.end_byte())
+                        .ok_or(CommandParseError::SyntaxError)?;
+                    let text = std::str::from_utf8(text)
+                        .map_err(|_| CommandParseError::SyntaxError)?
+                        .trim();
+                    if !text.is_empty() {
+                        tokens.push(text.to_string());
+                    }
                 }
-                tokens.push(pieces.remove(0));
             }
         }
+        _ => {
+            tokens.push(dequote_node(node, source).ok_or(CommandParseError::SyntaxError)?);
+        }
     }
+    Ok(())
+}
 
-    if tokens.is_empty() {
-        return None;
+/// Decode a tree-sitter-bash argument node into the literal token value
+/// shell semantics would produce, with one exception: shell groupings
+/// (`subshell`, `command_substitution`, `process_substitution`) are
+/// preserved verbatim with their delimiters so wrapper-pattern matching
+/// can capture them as a single placeholder token.
+///
+/// Specifically:
+/// - `string` (double-quoted): surrounding `"` are dropped, double-quote
+///   escape sequences (`\\`, `\"`, `\$`, `` \` ``, line continuation
+///   `\<newline>`) are processed; unknown escapes preserve the backslash
+///   to match shell behaviour. Interpolations (`$X`, `${X}`, `$(...)`,
+///   `` `...` ``) are kept as their source text, since runok matches
+///   tokens literally and the inner commands have already been extracted
+///   for separate evaluation by `collect_commands`.
+/// - `raw_string` (single-quoted): outer `'` are dropped, contents are
+///   passed through verbatim (no escape processing).
+/// - `concatenation`: each child piece is decoded and concatenated into
+///   one token (e.g. `"a"'b'c` → `abc`).
+/// - `ansi_c_string`/`translated_string`: kept verbatim with delimiters.
+///   runok does not need to interpret ANSI-C escapes for matching.
+/// - `subshell`/`command_substitution`/`process_substitution`: kept
+///   verbatim with delimiters.
+/// - Other leaf-like nodes (`command_name`, `word`, `number`,
+///   `simple_expansion`, `expansion`, ...): kept verbatim.
+fn dequote_node(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        // Shell groupings: keep the whole node text including delimiters
+        // so wrapper patterns can capture them as a single token.
+        "subshell" | "command_substitution" | "process_substitution" => {
+            let text = source.get(node.start_byte()..node.end_byte())?;
+            Some(std::str::from_utf8(text).ok()?.to_string())
+        }
+        // Double-quoted: walk children, drop the anonymous `"` boundary
+        // tokens, decode `string_content` (with shell escape rules), and
+        // pass interpolation children through verbatim.
+        "string" => {
+            let mut out = String::new();
+            for i in 0..node.child_count() {
+                let child = node.child(i as u32)?;
+                if !child.is_named() {
+                    // Anonymous children of `string` are the surrounding
+                    // `"` quotes; skip them.
+                    continue;
+                }
+                if child.kind() == "string_content" {
+                    let text = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(text).ok()?;
+                    out.push_str(&decode_double_quote_escapes(text));
+                } else {
+                    // Interpolations stay as source text so wrapper
+                    // patterns like `bash -c <cmd>` see `$(secret)`
+                    // intact; the inner commands are already extracted
+                    // for separate evaluation by `collect_commands`.
+                    let text = source.get(child.start_byte()..child.end_byte())?;
+                    out.push_str(std::str::from_utf8(text).ok()?);
+                }
+            }
+            Some(out)
+        }
+        // Single-quoted: strip the outer `'` and pass contents through.
+        "raw_string" => {
+            let text = source.get(node.start_byte()..node.end_byte())?;
+            let text = std::str::from_utf8(text).ok()?;
+            // `raw_string` is always `'...'`; a 2-byte node is `''`.
+            let inner = text
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+                .unwrap_or(text);
+            Some(inner.to_string())
+        }
+        // Adjacent quoted/unquoted pieces (`"a"'b'c`) glue into one token.
+        "concatenation" => {
+            let mut out = String::new();
+            for i in 0..node.child_count() {
+                let child = node.child(i as u32)?;
+                if !child.is_named() {
+                    continue;
+                }
+                out.push_str(&dequote_node(child, source)?);
+            }
+            Some(out)
+        }
+        // ANSI-C strings (`$'...'`) and translated strings (`$"..."`)
+        // are kept verbatim: runok does not interpret them, and shell
+        // rules treat them as one word.
+        "ansi_c_string" | "translated_string" => {
+            let text = source.get(node.start_byte()..node.end_byte())?;
+            Some(std::str::from_utf8(text).ok()?.to_string())
+        }
+        // `word` covers unquoted argument tokens, including those
+        // that absorbed backslash-escaped whitespace at the parser
+        // level (`hello\ world` becomes one `word`). Apply the shell
+        // outside-quote escape rule — `\<c>` reduces to `<c>`,
+        // `\<newline>` is line continuation — so that adjacent
+        // literal characters look the way bash would tokenise them
+        // (`'it'\''s'` → `it's`).
+        "word" => {
+            let text = source.get(node.start_byte()..node.end_byte())?;
+            let text = std::str::from_utf8(text).ok()?;
+            Some(decode_unquoted_escapes(text))
+        }
+        // `command_name` wraps the first word of a command. It always
+        // has exactly one named child holding the actual content
+        // (`word`, `string`, `raw_string`, `concatenation`, ...), so
+        // recurse into that child to keep the same dequoting rules
+        // that apply to argument tokens. Without this, a quoted
+        // command name like `"echo" hello` or `'rm' -rf /` would come
+        // back with the surrounding quotes still attached, breaking
+        // pattern matching against `echo *` / `rm *`.
+        "command_name" => {
+            let inner = (0..node.child_count())
+                .filter_map(|i| node.child(i as u32))
+                .find(|c| c.is_named())?;
+            dequote_node(inner, source)
+        }
+        // Other leaf-like nodes (`number`, `simple_expansion`,
+        // `expansion`, ...): take the raw source text. runok matches
+        // tokens literally, so no further processing is needed.
+        _ => {
+            let text = source.get(node.start_byte()..node.end_byte())?;
+            Some(std::str::from_utf8(text).ok()?.to_string())
+        }
     }
-    Some(tokens)
+}
+
+/// Apply the shell's outside-quote backslash-escape rules:
+/// - `\<c>` reduces to `<c>` (a literal character).
+/// - `\<newline>` is a line continuation and disappears.
+/// - A trailing `\` with no following character is dropped.
+fn decode_unquoted_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\n') => {} // line continuation
+            Some(other) => out.push(other),
+            None => {} // trailing backslash dropped
+        }
+    }
+    out
+}
+
+/// Apply the shell's double-quote backslash-escape rules to the text
+/// inside a `string_content` node:
+/// - `\\`, `\"`, `\$`, `` \` `` reduce to the second character.
+/// - `\<newline>` is a line continuation and disappears.
+/// - Any other `\<c>` keeps the backslash, matching `bash`.
+fn decode_double_quote_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(next @ ('\\' | '"' | '$' | '`')) => out.push(next),
+            Some('\n') => {} // line continuation
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// Descend through transparent containers (`program`, `list`,
 /// `redirected_statement`) looking for a single `command` node.
 ///
-/// The whole point is to distinguish "a command, possibly wrapped in a
-/// few pass-through nodes" from "anything more structured" (pipelines,
-/// `&&`/`||`/`;`, control flow). Only the former is a candidate for
-/// AST-aware tokenization; the latter always routes through the
-/// whitespace tokenizer.
+/// Distinguishes "a command, possibly wrapped in a few pass-through
+/// nodes" from "anything more structured" (pipelines, `&&`/`||`/`;`,
+/// control flow). Only the former is a valid input for [`tokenize_command`];
+/// for everything else callers must split first via
+/// [`extract_commands_with_metadata`].
 fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     match node.kind() {
+        // A regular shell command (`echo hello`, `git -C foo log`, ...).
         "command" => Some(node),
+        // A bracket test command (`[ -f file ]`, `[[ -f file ]]`).
+        // runok matches these with literal `[`/`]` tokens, so they
+        // need to flow through tokenisation just like a `command`.
+        "test_command" => Some(node),
         "program" | "list" => {
             let mut cursor = node.walk();
             let named: Vec<_> = node.named_children(&mut cursor).collect();
@@ -535,11 +726,19 @@ fn collect_commands(
             if let Some(body) = node.child_by_field_name("body") {
                 collect_commands(body, source, commands, pipe_info, &all_redirects);
             }
-            // Second pass: recurse into redirect children for nested substitutions
+            // Second pass: recurse into redirect children for nested
+            // substitutions (e.g. `cmd > >(nested)`). HEREDOCs with a
+            // quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) are
+            // literal — bash does not expand `$VAR`/`$(...)` inside the
+            // body — so skip them to avoid false positives where the
+            // body text accidentally looks like shell syntax.
             for i in 0..node.child_count() {
                 if node.field_name_for_child(i as u32) == Some("redirect")
                     && let Some(child) = node.child(i as u32)
                 {
+                    if child.kind() == "heredoc_redirect" && is_quoted_heredoc(child, source) {
+                        continue;
+                    }
                     collect_substitutions_recursive(child, source, commands);
                 }
             }
@@ -578,9 +777,14 @@ fn collect_commands(
                     if let Some(info) = extract_redirect_info(child, source) {
                         cmd_redirects.push(info);
                     }
-                    // Recurse into redirect children for nested substitutions
-                    // (e.g. `cat <<< $(secret_cmd)`)
-                    collect_substitutions_recursive(child, source, commands);
+                    // Recurse into redirect children for nested
+                    // substitutions (e.g. `cat <<< $(secret_cmd)`).
+                    // HEREDOCs with a quoted delimiter are literal in
+                    // bash, so skip body recursion to avoid scanning
+                    // user prose as if it were shell syntax.
+                    if !(child.kind() == "heredoc_redirect" && is_quoted_heredoc(child, source)) {
+                        collect_substitutions_recursive(child, source, commands);
+                    }
                 } else {
                     match child.kind() {
                         // A subshell argument (e.g. `time (ls | tail -40)`)
@@ -744,6 +948,30 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
     }
 }
 
+/// Check whether a `heredoc_redirect` node uses a quoted delimiter
+/// (`<<'EOF'`, `<<"EOF"`, or `<<\EOF`).
+///
+/// Bash does not expand `$VAR`/`$(...)`/`` `...` `` inside a quoted
+/// HEREDOC body, so commands that look like substitutions inside the
+/// body are inert text — runok must not extract them as nested
+/// commands. The unquoted form (`<<EOF`) is interpolated and continues
+/// to be scanned.
+fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    for i in 0..heredoc_redirect.child_count() {
+        let Some(child) = heredoc_redirect.child(i as u32) else {
+            continue;
+        };
+        if child.kind() != "heredoc_start" {
+            continue;
+        }
+        let Some(text) = source.get(child.start_byte()..child.end_byte()) else {
+            return false;
+        };
+        return matches!(text.first(), Some(b'\'' | b'"' | b'\\'));
+    }
+    false
+}
+
 /// Recursively walk a subtree to find `command_substitution` and
 /// `process_substitution` nodes, then hand them off to `collect_commands`.
 /// Used by `variable_assignment` to reach substitutions nested inside
@@ -783,182 +1011,114 @@ mod tests {
     use rstest::rstest;
 
     // ========================================
-    // tokenize: simple commands
+    // tokenize_command: simple commands
     // ========================================
 
     #[rstest]
-    #[case("echo hello", vec!["echo", "hello"])]
-    #[case("git status", vec!["git", "status"])]
-    #[case("ls -la /tmp", vec!["ls", "-la", "/tmp"])]
-    fn tokenize_simple_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    #[case::single_arg("echo hello", vec!["echo", "hello"])]
+    #[case::no_args("git status", vec!["git", "status"])]
+    #[case::flags_and_path("ls -la /tmp", vec!["ls", "-la", "/tmp"])]
+    #[case::single_word("ls", vec!["ls"])]
+    // Quoted command names must come back without their quotes — bash
+    // treats `"echo"` and `echo` identically as command names, and
+    // runok rules like `echo *` should match either form.
+    #[case::dquoted_command_name(r#""echo" hello"#, vec!["echo", "hello"])]
+    #[case::squoted_command_name("'echo' hello", vec!["echo", "hello"])]
+    fn tokenize_command_simple(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
     #[rstest]
-    #[case("  echo   hello  ", vec!["echo", "hello"])]
-    #[case("git\t\tstatus", vec!["git", "status"])]
-    fn tokenize_extra_whitespace(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn tokenize_single_command() {
-        let result = tokenize("ls").unwrap();
-        assert_eq!(result, vec!["ls"]);
-    }
-
-    // ========================================
-    // tokenize: single-quoted strings
-    // ========================================
-
-    #[rstest]
-    #[case("echo 'hello world'", vec!["echo", "hello world"])]
-    #[case("echo 'it'\\''s'", vec!["echo", "it's"])]
-    #[case("echo 'no \\escapes'", vec!["echo", "no \\escapes"])]
-    fn tokenize_single_quotes(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    #[case::leading_and_trailing("  echo   hello  ", vec!["echo", "hello"])]
+    #[case::tabs("git\t\tstatus", vec!["git", "status"])]
+    fn tokenize_command_extra_whitespace(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
     // ========================================
-    // tokenize: double-quoted strings
+    // tokenize_command: single-quoted strings
+    // raw_strings pass contents through verbatim, no escape processing.
     // ========================================
 
     #[rstest]
-    #[case(r#"echo "hello world""#, vec!["echo", "hello world"])]
-    #[case(r#"echo "with \"quotes\"""#, vec!["echo", r#"with "quotes""#])]
-    #[case(r#"echo "back\\slash""#, vec!["echo", "back\\slash"])]
-    fn tokenize_double_quotes(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    #[case::with_space("echo 'hello world'", vec!["echo", "hello world"])]
+    // `'it'\''s'` is the bash idiom for embedding a single quote in a
+    // single-quoted string: raw_string + word(`\'`) + raw_string.
+    // The middle word's backslash escape decodes to `'`.
+    #[case::embedded_quote("echo 'it'\\''s'", vec!["echo", "it's"])]
+    #[case::backslash_inside_raw("echo 'no \\escapes'", vec!["echo", "no \\escapes"])]
+    #[case::empty_with_arg("echo '' arg", vec!["echo", "", "arg"])]
+    fn tokenize_command_single_quotes(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
     // ========================================
-    // tokenize: unknown escape sequences in double quotes
-    // ========================================
-
-    #[test]
-    fn tokenize_double_quote_unknown_escape_preserves_backslash() {
-        // Shell behavior: "\j" -> "\j" (backslash preserved for unknown escapes)
-        let result = tokenize(r#"echo "\j""#).unwrap();
-        assert_eq!(result, vec!["echo", "\\j"]);
-    }
-
-    #[test]
-    fn tokenize_double_quote_known_escapes_preserved() {
-        // Known escapes: \\, \", \$, \` are processed
-        let result = tokenize(r#"echo "a\$b""#).unwrap();
-        assert_eq!(result, vec!["echo", "a$b"]);
-    }
-
-    // ========================================
-    // tokenize: escape sequences (outside quotes)
+    // tokenize_command: double-quoted strings
+    // string_content has shell escape rules applied (`\\`, `\"`, `\$`,
+    // `` \` ``, `\<newline>`); unknown escapes keep the backslash.
     // ========================================
 
     #[rstest]
-    #[case("echo hello\\ world", vec!["echo", "hello world"])]
-    #[case("echo test\\\"quote", vec!["echo", "test\"quote"])]
-    fn tokenize_escapes(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    #[case::space_inside(r#"echo "hello world""#, vec!["echo", "hello world"])]
+    #[case::escaped_dquote(r#"echo "with \"quotes\"""#, vec!["echo", r#"with "quotes""#])]
+    #[case::escaped_backslash(r#"echo "back\\slash""#, vec!["echo", "back\\slash"])]
+    // Unknown escape: bash preserves the backslash.
+    #[case::unknown_escape(r#"echo "\j""#, vec!["echo", "\\j"])]
+    // Known escape `\$` becomes `$`.
+    #[case::escaped_dollar(r#"echo "a\$b""#, vec!["echo", "a$b"])]
+    #[case::empty_with_arg(r#"echo "" arg"#, vec!["echo", "", "arg"])]
+    fn tokenize_command_double_quotes(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn tokenize_trailing_backslash_ignored() {
-        // Trailing backslash at end of input should not produce a spurious empty token
-        let result = tokenize("echo \\").unwrap();
-        assert_eq!(result, vec!["echo"]);
-    }
-
     // ========================================
-    // tokenize: mixed quoting
+    // tokenize_command: outside-quote backslash escapes
+    // tree-sitter-bash collapses `a\ b` into a single `word` node;
+    // `decode_unquoted_escapes` then resolves `\<c>` → `<c>`.
     // ========================================
 
     #[rstest]
-    #[case(
+    #[case::space_escape("echo hello\\ world", vec!["echo", "hello world"])]
+    #[case::quote_escape("echo test\\\"quote", vec!["echo", "test\"quote"])]
+    fn tokenize_command_outside_escapes(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // tokenize_command: mixed and concatenated quoting
+    // ========================================
+
+    #[rstest]
+    #[case::dquote_arg(
         r#"curl -X POST -H "Content-Type: application/json" https://example.com"#,
         vec!["curl", "-X", "POST", "-H", "Content-Type: application/json", "https://example.com"]
     )]
-    #[case(
+    #[case::squote_arg(
         "git commit -m 'initial commit'",
         vec!["git", "commit", "-m", "initial commit"]
     )]
-    fn tokenize_mixed_quoting(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
+    // Adjacent quoted/unquoted pieces glue into one token.
+    #[case::concatenated(
+        r#"echo "hello"' world'"#,
+        vec!["echo", "hello world"]
+    )]
+    fn tokenize_command_mixed_quoting(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
     // ========================================
-    // tokenize: concatenated quoting
-    // ========================================
-
-    #[test]
-    fn tokenize_concatenated_quotes() {
-        // e.g., echo "hello"' world' -> "hello world"
-        let result = tokenize(r#"echo "hello"' world'"#).unwrap();
-        assert_eq!(result, vec!["echo", "hello world"]);
-    }
-
-    // ========================================
-    // tokenize: empty quoted strings
-    // ========================================
-
-    #[test]
-    fn tokenize_empty_double_quotes() {
-        let result = tokenize(r#"echo "" arg"#).unwrap();
-        assert_eq!(result, vec!["echo", "", "arg"]);
-    }
-
-    #[test]
-    fn tokenize_empty_single_quotes() {
-        let result = tokenize("echo '' arg").unwrap();
-        assert_eq!(result, vec!["echo", "", "arg"]);
-    }
-
-    // ========================================
-    // tokenize: error cases
-    // ========================================
-
-    #[rstest]
-    #[case("", CommandParseError::EmptyCommand)]
-    #[case("   ", CommandParseError::EmptyCommand)]
-    #[case("\\", CommandParseError::EmptyCommand)]
-    #[case("\\\n", CommandParseError::EmptyCommand)]
-    #[case("echo 'hello", CommandParseError::UnclosedQuote)]
-    #[case::unclosed_double_quote(r#"echo "hello"#, CommandParseError::UnclosedQuote)]
-    fn tokenize_errors(#[case] input: &str, #[case] expected: CommandParseError) {
-        let result = tokenize(input);
-        assert_eq!(
-            std::mem::discriminant(&result.unwrap_err()),
-            std::mem::discriminant(&expected),
-        );
-    }
-
-    // ========================================
-    // tokenize: flags with = syntax
-    // ========================================
-
-    #[rstest]
-    #[case("java -Denv=prod", vec!["java", "-Denv=prod"])]
-    #[case("git diff --word-diff=color", vec!["git", "diff", "--word-diff=color"])]
-    fn tokenize_equals_flags(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize(input).unwrap();
-        assert_eq!(result, expected);
-    }
-
-    // ========================================
-    // tokenize_command_aware: AST-driven tokenization
+    // tokenize_command: shell groupings as a single token
     //
-    // Shell groupings attached as arguments to a single command
-    // (`subshell`, `command_substitution`, `process_substitution`) must
-    // come out as one token each, with their source text preserved
-    // verbatim. This is what lets wrapper patterns like `time <cmd>`
-    // capture a whole subshell body as one placeholder.
-    //
-    // Inputs that are not a single top-level command must fall back to
-    // the whitespace tokenizer.
+    // `subshell`, `command_substitution`, and `process_substitution`
+    // come out as one token each with their delimiters intact, so
+    // wrapper patterns like `time <cmd>` capture the whole grouping as
+    // a single placeholder.
     // ========================================
 
     #[rstest]
@@ -972,7 +1132,7 @@ mod tests {
         vec!["time", "(lefthook run pre-commit 2>&1 | tail -40)"]
     )]
     #[case::nested_subshell("time (a | (b && c))", vec!["time", "(a | (b && c))"])]
-    #[case::dollar_substitution_with_whitespace(
+    #[case::dollar_substitution(
         "echo $(date -u)",
         vec!["echo", "$(date -u)"]
     )]
@@ -984,32 +1144,52 @@ mod tests {
         "diff <(ls a) <(ls b)",
         vec!["diff", "<(ls a)", "<(ls b)"]
     )]
-    // Quoted-string args still come back with quotes stripped, matching
-    // the whitespace tokenizer's shape.
-    #[case::double_quoted_arg(
-        r#"curl -H "Content-Type: application/json" https://example.com"#,
-        vec!["curl", "-H", "Content-Type: application/json", "https://example.com"]
-    )]
-    #[case::single_quoted_arg(
-        "git commit -m 'initial commit'",
-        vec!["git", "commit", "-m", "initial commit"]
-    )]
-    fn tokenize_command_aware_groupings(#[case] input: &str, #[case] expected: Vec<&str>) {
-        let result = tokenize_command_aware(input).unwrap();
+    fn tokenize_command_groupings(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
 
-    // Inputs that are not a single top-level command must still
-    // tokenize without error (via the whitespace fallback).
+    // ========================================
+    // tokenize_command: flags with = syntax
+    // ========================================
+
     #[rstest]
-    #[case::pipeline("ls | tail -40", vec!["ls", "|", "tail", "-40"])]
-    #[case::and_list("ls && rm foo", vec!["ls", "&&", "rm", "foo"])]
-    fn tokenize_command_aware_falls_back_for_compounds(
-        #[case] input: &str,
-        #[case] expected: Vec<&str>,
-    ) {
-        let result = tokenize_command_aware(input).unwrap();
+    #[case::short_dkey("java -Denv=prod", vec!["java", "-Denv=prod"])]
+    #[case::long_eq("git diff --word-diff=color", vec!["git", "diff", "--word-diff=color"])]
+    fn tokenize_command_equals_flags(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // tokenize_command: error cases
+    //
+    // Empty / whitespace-only input is `EmptyCommand`; everything that
+    // tree-sitter-bash refuses (unclosed quotes, lone operators,
+    // pipelines/lists/control flow that aren't a single command,
+    // trailing backslash, ...) is `SyntaxError`. Compound input is
+    // expected to be split upstream by `extract_commands_with_metadata`.
+    // ========================================
+
+    #[rstest]
+    #[case::empty("", CommandParseError::EmptyCommand)]
+    #[case::whitespace("   ", CommandParseError::EmptyCommand)]
+    // `\\\n` / `\\` / `echo \\` / `echo "hello` look incomplete to
+    // tree-sitter. shlex also can't recover them (unclosed quote,
+    // dangling backslash), so they end as `SyntaxError`.
+    #[case::lone_continuation("\\\n", CommandParseError::SyntaxError)]
+    #[case::unclosed_squote("echo 'hello", CommandParseError::SyntaxError)]
+    #[case::unclosed_dquote(r#"echo "hello"#, CommandParseError::SyntaxError)]
+    // Compound input is the caller's responsibility — these are valid
+    // bash but resolve to a `pipeline`/`list`, not a single `command`.
+    #[case::pipeline("ls | tail -40", CommandParseError::SyntaxError)]
+    #[case::and_list("ls && rm foo", CommandParseError::SyntaxError)]
+    fn tokenize_command_errors(#[case] input: &str, #[case] expected: CommandParseError) {
+        let result = tokenize_command(input);
+        assert_eq!(
+            std::mem::discriminant(&result.unwrap_err()),
+            std::mem::discriminant(&expected),
+        );
     }
 
     // ========================================
@@ -1056,8 +1236,20 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    // ========================================
+    // extract_commands: HEREDOC
+    //
+    // For all delimiter forms (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`)
+    // the body command is `cat` and the redirect carries the body
+    // text. Quoted delimiters (`'EOF'`/`"EOF"`/`\EOF`) make the body
+    // literal in bash — `$(cmd)` and friends do NOT expand — so runok
+    // must not extract apparent substitutions from inside them. The
+    // unquoted form (`<<EOF`) does expand, so a `$(secret)` in the
+    // body is a real command and gets extracted.
+    // ========================================
+
     #[test]
-    fn extract_heredoc() {
+    fn extract_heredoc_unquoted_delimiter_keeps_body_command() {
         let input = indoc! {"
             cat <<EOF
             hello
@@ -1067,6 +1259,79 @@ mod tests {
         let result = extract_commands(input).unwrap();
         // heredoc is a redirected_statement; only the body command is extracted
         assert_eq!(result, vec!["cat"]);
+    }
+
+    #[rstest]
+    #[case::single_quoted_delimiter(indoc! {"
+        cat <<'EOF'
+        $(secret_cmd)
+        EOF
+    "})]
+    #[case::double_quoted_delimiter(indoc! {r#"
+        cat <<"EOF"
+        $(secret_cmd)
+        EOF
+    "#})]
+    #[case::backslash_quoted_delimiter(indoc! {r"
+        cat <<\EOF
+        $(secret_cmd)
+        EOF
+    "})]
+    // `<<-` strips leading tabs; the quoting rule is still determined
+    // by the delimiter token itself, so a tab-stripping single-quoted
+    // delimiter must also be treated as literal.
+    #[case::tab_strip_single_quoted_delimiter("cat <<-'EOF'\n\t$(secret_cmd)\n\tEOF")]
+    fn extract_heredoc_quoted_delimiter_skips_body_substitutions(#[case] input: &str) {
+        let trimmed = input.trim_end();
+        let result = extract_commands(trimmed).unwrap();
+        // Quoted delimiter ⇒ literal body ⇒ `$(secret_cmd)` is inert
+        // text, so only `cat` is extracted.
+        assert_eq!(result, vec!["cat"]);
+    }
+
+    #[test]
+    fn extract_heredoc_unquoted_delimiter_extracts_body_substitution() {
+        let input = indoc! {"
+            cat <<EOF
+            $(secret_cmd)
+            EOF
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        // Unquoted delimiter ⇒ bash interpolates the body, so the
+        // `$(secret_cmd)` gets pulled out for separate evaluation.
+        // collect_commands emits the body command before scanning
+        // redirect children, so `cat` comes first.
+        assert_eq!(result, vec!["cat", "secret_cmd"]);
+    }
+
+    // Regression test for `git commit -m "$(cat <<'EOF' ... EOF)"` —
+    // a Claude Code `/commit` skill workflow that previously failed
+    // with `unclosed quote` because the inner self-tokenizer scanned
+    // the literal HEREDOC body as if it were shell syntax.
+    #[test]
+    fn extract_heredoc_inside_command_substitution_inside_double_quotes() {
+        let input = indoc! {"
+            git add path && git commit -m \"$(cat <<'EOF'
+            subject
+
+            body line 1 with 'apostrophes' inside
+            EOF
+            )\"
+        "}
+        .trim_end();
+        let result = extract_commands(input).unwrap();
+        // git add ... && git commit ... extracts to two top-level
+        // commands, plus the inner `cat` from the command substitution.
+        let third = indoc! {"
+            git commit -m \"$(cat <<'EOF'
+            subject
+
+            body line 1 with 'apostrophes' inside
+            EOF
+            )\""}
+        .trim_end();
+        assert_eq!(result, vec!["git add path", "cat", third]);
     }
 
     // ========================================

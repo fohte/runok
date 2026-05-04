@@ -14,8 +14,6 @@ pub enum PatternParseError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CommandParseError {
-    #[error("unclosed quote")]
-    UnclosedQuote,
     #[error("empty command")]
     EmptyCommand,
     #[error("syntax error in command")]
@@ -90,7 +88,7 @@ mod tests {
     // === CommandParseError ===
 
     #[rstest]
-    #[case(CommandParseError::UnclosedQuote, "unclosed quote")]
+    #[case(CommandParseError::SyntaxError, "syntax error in command")]
     #[case(CommandParseError::EmptyCommand, "empty command")]
     fn command_parse_error_display(#[case] error: CommandParseError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
@@ -98,7 +96,7 @@ mod tests {
 
     #[test]
     fn command_parse_error_implements_std_error() {
-        let error: &dyn std::error::Error = &CommandParseError::UnclosedQuote;
+        let error: &dyn std::error::Error = &CommandParseError::SyntaxError;
         assert!(error.source().is_none());
     }
 
@@ -116,9 +114,12 @@ mod tests {
 
     #[test]
     fn rule_error_from_command_parse_error() {
-        let cmd_err = CommandParseError::UnclosedQuote;
+        let cmd_err = CommandParseError::SyntaxError;
         let rule_err: RuleError = cmd_err.into();
-        assert_eq!(rule_err.to_string(), "command parse error: unclosed quote");
+        assert_eq!(
+            rule_err.to_string(),
+            "command parse error: syntax error in command"
+        );
     }
 
     #[test]
@@ -146,7 +147,7 @@ mod tests {
 
     #[test]
     fn rule_error_command_parse_has_source() {
-        let error = RuleError::CommandParse(CommandParseError::UnclosedQuote);
+        let error = RuleError::CommandParse(CommandParseError::SyntaxError);
         let source = std::error::Error::source(&error);
         assert!(source.is_some());
     }
