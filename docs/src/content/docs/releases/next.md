@@ -34,7 +34,7 @@ See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#comm
 
 ## New Features
 
-### New reference page for the `runok audit --json` schema ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### New reference page for the `runok audit --json` schema ([#338](https://github.com/fohte/runok/pull/338))
 
 `runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
 
