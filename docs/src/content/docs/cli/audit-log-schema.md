@@ -9,7 +9,7 @@ This page is the field-by-field reference for the JSON object produced by [`runo
 
 ## Top-Level Object
 
-Every line of `runok audit --json` output is one `AuditEntry` object with the fields listed below. There are no top-level fields beyond these — top-level `matched_rules`, `parsed`, and `sub_evaluations` from runok versions before [#333](https://github.com/fohte/runok/pull/333) have been removed and are now folded into [`command_evaluations`](#command_evaluations).
+Every line of `runok audit --json` output is one `AuditEntry` object with the fields listed below.
 
 Example entry:
 
@@ -423,12 +423,6 @@ Explicit file descriptor when the redirect specifies one (e.g. `2` in `2>file`).
 
 **Type:** `bool`\
 **Always present:** Yes
-
-## Backwards Compatibility
-
-Audit log files written by runok versions before [#333](https://github.com/fohte/runok/pull/333) used a different top-level shape (with `matched_rules` and `sub_evaluations` instead of `command_evaluations`). `runok audit` automatically rewrites those legacy entries into the current shape on read, so existing JSONL files keep being queryable. New writes always use the schema documented above.
-
-Legacy entries do not carry the per-branch `env`, `argv`, `redirects`, or `pipe` fields; on legacy data those fields will appear empty (and therefore be omitted from the JSON output).
 
 ## Related
 
