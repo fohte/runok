@@ -15,7 +15,7 @@ Example entry:
 
 ```json
 {
-  "timestamp": "2026-03-13T19:31:00Z",
+  "timestamp": "2026-03-13T19:31:00.090565+00:00",
   "command": "git push -f origin main",
   "action": {
     "type": "deny",
@@ -59,7 +59,7 @@ Example entry:
 
 ### `timestamp`
 
-ISO 8601 timestamp in UTC (e.g. `2026-03-13T19:31:00Z`) recording when the evaluation was performed.
+RFC 3339 timestamp in UTC, with sub-second precision and a `+00:00` offset (e.g. `2026-03-13T19:31:00.090565+00:00`), recording when the evaluation was performed. Note that the offset is written as `+00:00`, not `Z` -- `jq` literal-string comparisons (`select(.timestamp >= "...")`) need to use the same form.
 
 **Type:** `str`\
 **Always present:** Yes
@@ -80,7 +80,7 @@ Final evaluation result for the input as a whole. For compound input, this is th
 
 ### `sandbox_preset`
 
-Name of the sandbox preset that was applied to this evaluation, or `null` when no sandbox was applied. The preset name corresponds to a key under [`definitions.sandbox`](/configuration/schema/#definitionssandbox).
+Name of the sandbox preset that was applied to this evaluation. `null` when no sandbox was applied **or** when multiple presets were merged (compound input where different branches matched different presets -- the merged policy has no single canonical preset name). The preset name, when present, corresponds to a key under [`definitions.sandbox`](/configuration/schema/#definitionssandbox). See [Sandbox merging for compound commands](/sandbox/overview/#sandbox-merging-for-compound-commands).
 
 **Type:** `str | null`\
 **Always present:** Yes (may be `null`)
@@ -120,7 +120,7 @@ See [CommandEvaluation Object](#commandevaluation-object) for the shape of each 
 
 ## Action Object
 
-Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow` and `default`, and present (with type-specific keys) for `deny` and `ask`.
+Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow`, and present (with type-specific keys) for `deny` and `ask`.
 
 ```json
 // allow
@@ -137,24 +137,22 @@ Represents an evaluation result. The `type` field is a discriminator; `detail` i
 
 // ask
 { "type": "ask", "detail": { "message": "are you sure?" } }
-
-// default (no rule matched; the configured `defaults.action` decided)
-{ "type": "default" }
 ```
+
+When no rule matches, the configured [`default_action`](#default_action) is applied directly: `type` is `"allow"`, `"deny"`, or `"ask"` accordingly. There is no separate `"default"` discriminator in the audit-log JSON.
 
 ### `type`
 
 The kind of action.
 
-**Type:** `"allow" | "deny" | "ask" | "default"`\
+**Type:** `"allow" | "deny" | "ask"`\
 **Always present:** Yes
 
-| Value     | Meaning                                                                                                                           |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `allow`   | An `allow` rule matched. The command is permitted.                                                                                |
-| `deny`    | A `deny` rule matched. The command is rejected.                                                                                   |
-| `ask`     | An `ask` rule matched. The command requires user confirmation.                                                                    |
-| `default` | No rule matched and the configured `defaults.action` was used. (See [`default_action`](#default_action) for which value applied.) |
+| Value   | Meaning                                 |
+| ------- | --------------------------------------- |
+| `allow` | The command is permitted.               |
+| `deny`  | The command is rejected.                |
+| `ask`   | The command requires user confirmation. |
 
 ### `detail.message`
 
@@ -186,14 +184,15 @@ Optional fix-suggestion attached to a `deny` rule. See [Denial Feedback](/config
 
 Which runok subcommand recorded this entry. Audit consumers can use this to distinguish hook invocations from explicit `runok exec` runs.
 
-**Type:** `"exec" | "hook" | "check"`\
+**Type:** `"exec" | "hook"`\
 **Always present:** Yes
 
-| Value   | Source                                                                            |
-| ------- | --------------------------------------------------------------------------------- |
-| `exec`  | The user invoked [`runok exec`](/cli/exec/) directly.                             |
-| `hook`  | An AI coding agent's tool-use hook (e.g. Claude Code `PreToolUse`) invoked runok. |
-| `check` | The user invoked [`runok check`](/cli/check/) (dry-run evaluation).               |
+| Value  | Source                                                                            |
+| ------ | --------------------------------------------------------------------------------- |
+| `exec` | The user invoked [`runok exec`](/cli/exec/) directly.                             |
+| `hook` | An AI coding agent's tool-use hook (e.g. Claude Code `PreToolUse`) invoked runok. |
+
+[`runok check`](/cli/check/) is a dry-run evaluator and does not write audit log entries, so it never appears here.
 
 ### `session_id`
 
