@@ -2,6 +2,8 @@
 #![allow(clippy::panic, reason = "test helper")]
 
 use std::fs;
+use std::io::Read;
+use std::process::{Command as StdCommand, Stdio};
 
 use chrono::Utc;
 use indoc::indoc;
@@ -444,4 +446,77 @@ fn no_audit_config_still_works() {
         .assert()
         .code(0)
         .stdout(predicates::str::contains("hello"));
+}
+
+// ========================================
+// Broken pipe handling (regression)
+// ========================================
+
+/// Regression test: closing the downstream of `runok audit --json` early
+/// (e.g. piping into `head -1`) must not cause runok to panic with
+/// "failed printing to stdout: Broken pipe". The process should exit
+/// quietly instead.
+#[rstest]
+fn audit_json_does_not_panic_on_broken_pipe(allow_echo_env: AuditTestEnv) {
+    // Write many audit entries directly so the JSON output is large enough
+    // that the pipe buffer fills before the program finishes writing,
+    // forcing an EPIPE on the second-or-later `println!`. Each entry carries
+    // a ~1 KiB padded `command` field so 5000 entries produce ~5 MiB of
+    // output — well above the largest default pipe buffer (Linux 64 KiB,
+    // macOS 16 KiB) even after a slow process start.
+    fs::create_dir_all(&allow_echo_env.audit_dir)
+        .unwrap_or_else(|e| panic!("failed to create audit dir: {e}"));
+    let today = Utc::now().format("%Y-%m-%d");
+    let path = allow_echo_env
+        .audit_dir
+        .join(format!("audit-{today}.jsonl"));
+    let padding: String = "x".repeat(1024);
+    let mut content = String::new();
+    for i in 0..5000 {
+        content.push_str(&format!(
+            r#"{{"timestamp":"2026-01-01T00:00:00Z","command":"echo {i} {padding}","action":{{"type":"allow"}},"matched_rules":[],"sandbox_preset":null,"default_action":null,"metadata":{{"endpoint_type":"exec"}},"sub_evaluations":null}}"#
+        ));
+        content.push('\n');
+    }
+    fs::write(&path, content).unwrap_or_else(|e| panic!("failed to write audit file: {e}"));
+
+    // Spawn `runok audit --json` directly (assert_cmd does not expose stdio
+    // piping in a way that lets us close stdout mid-stream).
+    let bin = assert_cmd::cargo::cargo_bin("runok");
+    let mut child = StdCommand::new(bin)
+        .args(["audit", "--json"])
+        .current_dir(&allow_echo_env.env.cwd)
+        .env("HOME", &allow_echo_env.env.home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_CACHE_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to spawn runok: {e}"));
+
+    // Read just one byte and drop stdout so the child sees EPIPE.
+    {
+        let mut stdout = child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("missing stdout pipe"));
+        let mut buf = [0u8; 1];
+        let _ = stdout.read(&mut buf);
+        // dropping stdout closes the read end of the pipe
+    }
+
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|e| panic!("failed to wait on runok: {e}"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !stderr.contains("panicked"),
+        "runok must not panic on broken pipe; stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Broken pipe"),
+        "runok must not surface 'Broken pipe' to the user; stderr was:\n{stderr}"
+    );
 }
