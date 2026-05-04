@@ -948,14 +948,16 @@ fn extract_redirect_info(node: tree_sitter::Node, source: &[u8]) -> Option<Redir
     }
 }
 
-/// Check whether a `heredoc_redirect` node uses a quoted delimiter
-/// (`<<'EOF'`, `<<"EOF"`, or `<<\EOF`).
+/// Check whether a `heredoc_redirect` node uses a quoted delimiter.
 ///
-/// Bash does not expand `$VAR`/`$(...)`/`` `...` `` inside a quoted
-/// HEREDOC body, so commands that look like substitutions inside the
-/// body are inert text — runok must not extract them as nested
-/// commands. The unquoted form (`<<EOF`) is interpolated and continues
-/// to be scanned.
+/// Bash treats the HEREDOC body as literal whenever **any** part of
+/// the delimiter is quoted — `<<'EOF'`, `<<"EOF"`, `<<\EOF`,
+/// `<<EO'F'`, and `<<E\OF` all disable `$VAR` / `$(...)` / `` `...` ``
+/// expansion inside the body. Detect that by scanning the
+/// `heredoc_start` text for any `'`, `"`, or `\`. Identifiers used as
+/// HEREDOC delimiters cannot legally contain those characters, so
+/// finding one is unambiguous evidence that the delimiter is
+/// (partially) quoted.
 fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     for i in 0..heredoc_redirect.child_count() {
         let Some(child) = heredoc_redirect.child(i as u32) else {
@@ -967,7 +969,7 @@ fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source: &[u8]) -> 
         let Some(text) = source.get(child.start_byte()..child.end_byte()) else {
             return false;
         };
-        return matches!(text.first(), Some(b'\'' | b'"' | b'\\'));
+        return text.iter().any(|&b| matches!(b, b'\'' | b'"' | b'\\'));
     }
     false
 }
@@ -1280,7 +1282,20 @@ mod tests {
     // `<<-` strips leading tabs; the quoting rule is still determined
     // by the delimiter token itself, so a tab-stripping single-quoted
     // delimiter must also be treated as literal.
-    #[case::tab_strip_single_quoted_delimiter("cat <<-'EOF'\n\t$(secret_cmd)\n\tEOF")]
+    #[case::tab_strip_single_quoted_delimiter(indoc! {"
+        cat <<-'EOF'
+        \t$(secret_cmd)
+        \tEOF
+    "})]
+    // bash treats the body as literal whenever ANY part of the
+    // delimiter is quoted, not just the leading character. `<<E\OF`
+    // is the same as `<<\EOF` for this purpose: the backslash quotes
+    // the next character and that's enough to disable expansion.
+    #[case::mid_backslash_quoted_delimiter(indoc! {r"
+        cat <<E\OF
+        $(secret_cmd)
+        EOF
+    "})]
     fn extract_heredoc_quoted_delimiter_skips_body_substitutions(#[case] input: &str) {
         let trimmed = input.trim_end();
         let result = extract_commands(trimmed).unwrap();
