@@ -77,6 +77,12 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
+### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([#339](https://github.com/fohte/runok/pull/339))
+
+The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.
+
+`runok test` now strips inline tests and top-level `tests:` from every preset reached via a remote ancestor in the `extends` chain, regardless of whether each child reference is remote or local. Tests in the user's own config and in presets the user extends directly via a local path are unaffected.
+
 ### `runok audit --json` no longer panics when the downstream pipe closes early ([#337](https://github.com/fohte/runok/pull/337))
 
 Piping `runok audit --json` into `head`, `jq -c`, or any consumer that may close stdout before runok has finished writing now exits silently instead of panicking with `failed printing to stdout: Broken pipe (os error 32)`. runok now restores the default SIGPIPE handler at startup on Unix, so the process terminates on EPIPE the same way `yes | head` does. Other commands that print to stdout (for example `runok config-schema`) benefit from the same fix.
