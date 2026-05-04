@@ -5,7 +5,15 @@ use crate::rules::command_parser::{EnvAssignment, ExtractedCommand, PipeInfo, Re
 use crate::rules::rule_engine::{Action, DenyResponse, RuleMatchInfo};
 
 /// A complete record of a single command evaluation.
+///
+/// Deserialisation accepts both the current schema (with
+/// `command_evaluations`) and the pre-#333 schema (with top-level
+/// `matched_rules` / `sub_evaluations`). The old shape is rewritten
+/// into `command_evaluations` on the fly so `runok audit` keeps
+/// surfacing logs written by older runok versions. Serialisation
+/// always emits the current schema.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "RawAuditEntry")]
 pub struct AuditEntry {
     /// ISO 8601 timestamp (UTC).
     pub timestamp: String,
@@ -30,6 +38,105 @@ pub struct AuditEntry {
     /// Audit consumers can read `argv[0]` from each entry without
     /// branching on a separate top-level vs. nested-list shape.
     pub command_evaluations: Vec<CommandEvaluation>,
+}
+
+/// On-the-wire shape used only for deserialisation.
+///
+/// `command_evaluations` is the current field. `matched_rules` and
+/// `sub_evaluations` were emitted by runok versions before the
+/// command_evaluations consolidation. When a log file mixes both
+/// shapes (e.g. retention spans the upgrade), each entry is upgraded
+/// independently.
+#[derive(Debug, Deserialize)]
+struct RawAuditEntry {
+    timestamp: String,
+    command: String,
+    action: SerializableAction,
+    #[serde(default)]
+    sandbox_preset: Option<String>,
+    #[serde(default)]
+    default_action: Option<String>,
+    #[serde(default)]
+    metadata: AuditMetadata,
+    #[serde(default)]
+    command_evaluations: Option<Vec<CommandEvaluation>>,
+    /// Legacy: top-level matched rules from the pre-consolidation schema.
+    #[serde(default)]
+    matched_rules: Option<Vec<SerializableRuleMatch>>,
+    /// Legacy: per-branch results from the pre-consolidation schema.
+    #[serde(default)]
+    sub_evaluations: Option<Vec<LegacySubEvaluation>>,
+}
+
+/// Legacy sub-evaluation entry as emitted before the
+/// command_evaluations consolidation. Kept here only so legacy logs
+/// keep deserialising; never written.
+#[derive(Debug, Deserialize)]
+struct LegacySubEvaluation {
+    command: String,
+    action: SerializableAction,
+    #[serde(default)]
+    matched_rules: Vec<SerializableRuleMatch>,
+    eval_type: String,
+}
+
+impl TryFrom<RawAuditEntry> for AuditEntry {
+    type Error = String;
+
+    fn try_from(raw: RawAuditEntry) -> Result<Self, Self::Error> {
+        let command_evaluations = if let Some(evals) = raw.command_evaluations {
+            evals
+        } else if let Some(subs) = raw.sub_evaluations {
+            // Legacy compound entry: each sub became one CommandEvaluation.
+            // Old logs predate env / argv / redirects / pipe so those stay empty.
+            subs.into_iter()
+                .map(|s| CommandEvaluation {
+                    command: s.command,
+                    action: s.action,
+                    matched_rules: s.matched_rules,
+                    eval_type: parse_legacy_eval_type(&s.eval_type),
+                    env: Vec::new(),
+                    argv: Vec::new(),
+                    redirects: Vec::new(),
+                    pipe: SerializablePipe::default(),
+                })
+                .collect()
+        } else {
+            // Legacy non-compound entry: synthesise a single primary
+            // record from the top-level command + matched_rules.
+            vec![CommandEvaluation {
+                command: raw.command.clone(),
+                action: raw.action.clone(),
+                matched_rules: raw.matched_rules.unwrap_or_default(),
+                eval_type: EvalType::Primary,
+                env: Vec::new(),
+                argv: Vec::new(),
+                redirects: Vec::new(),
+                pipe: SerializablePipe::default(),
+            }]
+        };
+
+        Ok(AuditEntry {
+            timestamp: raw.timestamp,
+            command: raw.command,
+            action: raw.action,
+            sandbox_preset: raw.sandbox_preset,
+            default_action: raw.default_action,
+            metadata: raw.metadata,
+            command_evaluations,
+        })
+    }
+}
+
+fn parse_legacy_eval_type(s: &str) -> EvalType {
+    match s {
+        "primary" => EvalType::Primary,
+        // Anything else (including `"compound"`, `"wrapper"` from the
+        // old wrapper expansion path, or unknown values from a
+        // forward-compat log) maps to Compound. The audit consumer
+        // can still read the per-branch `command` to disambiguate.
+        _ => EvalType::Compound,
+    }
 }
 
 /// Context information about the evaluation.
@@ -401,6 +508,79 @@ mod tests {
         let serialized = serde_json::to_string(&entry).unwrap();
         let deserialized: AuditEntry = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, entry);
+    }
+
+    #[rstest]
+    fn legacy_compound_audit_entry_deserialises_into_command_evaluations() {
+        // Real-shape sample of the pre-#333 schema. The reader has to
+        // surface this as a current-shape AuditEntry so existing audit
+        // log files keep working after the upgrade.
+        let legacy_json = indoc! {r#"
+            {
+                "timestamp": "2026-04-27T10:00:00Z",
+                "command": "echo hi && rm -rf /",
+                "action": {"type": "deny", "detail": {"message": null, "fix_suggestion": null}},
+                "matched_rules": [],
+                "sandbox_preset": null,
+                "default_action": "ask",
+                "metadata": {"endpoint_type": "exec"},
+                "sub_evaluations": [
+                    {
+                        "command": "echo hi",
+                        "action": {"type": "allow"},
+                        "matched_rules": [{"action_kind": "allow", "pattern": "echo *", "matched_tokens": ["hi"]}],
+                        "eval_type": "compound"
+                    },
+                    {
+                        "command": "rm -rf /",
+                        "action": {"type": "deny", "detail": {"message": null, "fix_suggestion": null}},
+                        "matched_rules": [{"action_kind": "deny", "pattern": "rm -rf *", "matched_tokens": ["/"]}],
+                        "eval_type": "compound"
+                    }
+                ]
+            }
+        "#};
+
+        let entry: AuditEntry = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(entry.command, "echo hi && rm -rf /");
+        assert_eq!(entry.command_evaluations.len(), 2);
+
+        let first = &entry.command_evaluations[0];
+        assert_eq!(first.command, "echo hi");
+        assert_eq!(first.eval_type, EvalType::Compound);
+        assert_eq!(first.matched_rules[0].pattern, "echo *");
+        // Legacy logs predate env / argv / redirects / pipe.
+        assert!(first.argv.is_empty());
+        assert!(first.env.is_empty());
+
+        let second = &entry.command_evaluations[1];
+        assert_eq!(second.command, "rm -rf /");
+        assert_eq!(second.eval_type, EvalType::Compound);
+        assert!(matches!(second.action, SerializableAction::Deny { .. }));
+    }
+
+    #[rstest]
+    fn legacy_single_audit_entry_deserialises_into_one_primary_evaluation() {
+        let legacy_json = indoc! {r#"
+            {
+                "timestamp": "2026-04-27T10:00:00Z",
+                "command": "git status",
+                "action": {"type": "allow"},
+                "matched_rules": [{"action_kind": "allow", "pattern": "git status", "matched_tokens": []}],
+                "sandbox_preset": null,
+                "default_action": null,
+                "metadata": {"endpoint_type": "hook"},
+                "sub_evaluations": null
+            }
+        "#};
+
+        let entry: AuditEntry = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(entry.command_evaluations.len(), 1);
+        let primary = &entry.command_evaluations[0];
+        assert_eq!(primary.eval_type, EvalType::Primary);
+        assert_eq!(primary.command, "git status");
+        assert_eq!(primary.matched_rules[0].pattern, "git status");
+        assert!(primary.argv.is_empty());
     }
 
     #[rstest]
