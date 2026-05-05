@@ -1433,3 +1433,84 @@ fn backslash_followed_by_space(
     let result = evaluate_command(&config, command, &empty_context).unwrap();
     expected(&result.action);
 }
+
+// ========================================
+// Shell builtins: declaration_command and unset_command
+//
+// `export FOO=bar`, `declare -x FOO`, `readonly FOO=bar`, `local
+// FOO=bar`, `typeset FOO`, and `unset FOO` are parsed by
+// tree-sitter-bash as their own node kinds (`declaration_command` /
+// `unset_command`) rather than as a regular `command`. Pattern
+// matching must still see them as `[keyword, args...]` so that rules
+// like `allow: 'export *'` work.
+// ========================================
+
+#[rstest]
+#[case::export_assignment("export FOO=bar", assert_allow as ActionAssertion)]
+#[case::export_bare_name("export FOO", assert_allow as ActionAssertion)]
+#[case::export_short_flag("export -p", assert_allow as ActionAssertion)]
+#[case::export_with_arg("export -f myfunc", assert_allow as ActionAssertion)]
+fn allow_export_wildcard_matches_declaration_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'export *'
+    "})
+    .unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::unset_single("unset FOO", assert_allow as ActionAssertion)]
+#[case::unset_multiple("unset FOO BAR", assert_allow as ActionAssertion)]
+fn allow_unset_wildcard_matches_unset_command(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'unset *'
+    "})
+    .unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::declare_x("declare -x FOO=bar", "declare -x *")]
+#[case::readonly_assignment("readonly FOO=bar", "readonly *")]
+#[case::local_assignment("local FOO=bar", "local *")]
+#[case::typeset_assignment("typeset FOO=bar", "typeset *")]
+fn allow_other_declaration_keywords_match(
+    #[case] command: &str,
+    #[case] pattern: &str,
+    empty_context: EvalContext,
+) {
+    let yaml = formatdoc! {"
+        rules:
+          - allow: '{pattern}'
+    "};
+    let config = parse_config(&yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    assert_allow(&result.action);
+}
+
+#[rstest]
+fn export_in_pipeline_is_evaluated_per_stage(empty_context: EvalContext) {
+    // `export FOO=bar | grep FOO` should split into two commands; the
+    // builtin stage must reach pattern matching, not be dropped or
+    // syntax-errored upstream.
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'export *'
+          - allow: 'grep *'
+    "})
+    .unwrap();
+    let result = evaluate_command(&config, "export FOO=bar | grep FOO", &empty_context).unwrap();
+    assert_allow(&result.action);
+}

@@ -256,6 +256,9 @@ fn tokenize_via_ast(input: &str) -> AstTokenizeOutcome {
 
     let tokens_result = match command_node.kind() {
         "test_command" => tokens_from_test_command(command_node, source),
+        "declaration_command" | "unset_command" => {
+            tokens_from_declaration_command(command_node, source)
+        }
         _ => tokens_from_command(command_node, source),
     };
 
@@ -286,6 +289,67 @@ fn tokens_from_command(
             continue;
         }
         if command_node.field_name_for_child(i as u32) == Some("redirect") {
+            continue;
+        }
+        let token = dequote_node(child, source).ok_or(CommandParseError::SyntaxError)?;
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+/// Extract tokens from a `declaration_command` (`export FOO=bar`,
+/// `declare -x FOO`, `readonly FOO=bar`, `local FOO=bar`,
+/// `typeset FOO`) or an `unset_command` (`unset FOO`, `unsetenv FOO`).
+///
+/// The leading keyword (`export`/`declare`/`readonly`/`local`/`typeset`/
+/// `unset`/`unsetenv`) is an anonymous child in tree-sitter-bash but is
+/// the head of the command for runok's pattern matching purposes, so
+/// it's emitted as the first token. Subsequent named children are
+/// emitted one token per child:
+///
+/// - `variable_assignment` (e.g. `FOO=bar`) is preserved as the source
+///   text of the whole assignment, so `allow: 'export *'` can match
+///   `["export", "FOO=bar"]`. Unlike a regular `command`, the
+///   assignment here is the argument, not an environment prefix.
+/// - Any other named child (`word`, `string`, `raw_string`,
+///   `concatenation`, ...) goes through `dequote_node` like a regular
+///   argument.
+fn tokens_from_declaration_command(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> Result<Vec<String>, CommandParseError> {
+    let mut tokens: Vec<String> = Vec::new();
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i as u32) else {
+            continue;
+        };
+        if !child.is_named() {
+            // The leading keyword (`export`, `declare`, ...) is an
+            // anonymous child. There is exactly one anonymous child
+            // per `declaration_command` / `unset_command`, and it's
+            // always the first.
+            if !tokens.is_empty() {
+                continue;
+            }
+            let text = source
+                .get(child.start_byte()..child.end_byte())
+                .ok_or(CommandParseError::SyntaxError)?;
+            let text = std::str::from_utf8(text)
+                .map_err(|_| CommandParseError::SyntaxError)?
+                .trim();
+            if !text.is_empty() {
+                tokens.push(text.to_string());
+            }
+            continue;
+        }
+        if child.kind() == "variable_assignment" {
+            // Keep `KEY=VALUE` as a single token verbatim so rule
+            // patterns can match the assignment shape literally.
+            let text = source
+                .get(child.start_byte()..child.end_byte())
+                .ok_or(CommandParseError::SyntaxError)?;
+            let text = std::str::from_utf8(text).map_err(|_| CommandParseError::SyntaxError)?;
+            tokens.push(text.to_string());
             continue;
         }
         let token = dequote_node(child, source).ok_or(CommandParseError::SyntaxError)?;
@@ -552,6 +616,13 @@ fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::
         // runok matches these with literal `[`/`]` tokens, so they
         // need to flow through tokenisation just like a `command`.
         "test_command" => Some(node),
+        // Shell builtins that tree-sitter-bash parses as their own
+        // node kinds: `declare`/`typeset`/`export`/`readonly`/`local`
+        // are `declaration_command`, and `unset`/`unsetenv` are
+        // `unset_command`. Users want to allowlist these (e.g.
+        // `allow: 'export *'`), so they need to flow through
+        // tokenisation like a regular `command`.
+        "declaration_command" | "unset_command" => Some(node),
         "program" | "list" => {
             let mut cursor = node.walk();
             let named: Vec<_> = node.named_children(&mut cursor).collect();
@@ -981,6 +1052,62 @@ fn collect_commands(
                     env,
                     argv,
                     redirects: cmd_redirects,
+                    pipe: pipe_info.clone(),
+                });
+            }
+        }
+        // declaration_command (`export FOO=bar`, `declare -x FOO`,
+        // `readonly FOO`, `local FOO=bar`, `typeset FOO`) and
+        // unset_command (`unset FOO`, `unsetenv FOO`) are shell
+        // builtins that tree-sitter-bash emits as their own node
+        // kinds. They have no environment prefix and no redirect
+        // field children, so the structure is simpler than `command`:
+        // emit the keyword + each argument (variable_assignment kept
+        // verbatim as `KEY=VALUE`) as argv, and the source text as
+        // the command string.
+        "declaration_command" | "unset_command" => {
+            let mut argv: Vec<String> = Vec::new();
+            for i in 0..node.child_count() {
+                let Some(child) = node.child(i as u32) else {
+                    continue;
+                };
+                if !child.is_named() {
+                    if argv.is_empty()
+                        && let Some(text) = source.get(child.start_byte()..child.end_byte())
+                        && let Ok(text) = std::str::from_utf8(text)
+                    {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            argv.push(trimmed.to_string());
+                        }
+                    }
+                    continue;
+                }
+                match child.kind() {
+                    "variable_assignment" => {
+                        if let Some(text) = source.get(child.start_byte()..child.end_byte())
+                            && let Ok(text) = std::str::from_utf8(text)
+                        {
+                            argv.push(text.to_string());
+                        }
+                        collect_substitutions_recursive(child, source, commands);
+                    }
+                    _ => {
+                        collect_substitutions_recursive(child, source, commands);
+                        if let Some(token) = dequote_node(child, source) {
+                            argv.push(token);
+                        }
+                    }
+                }
+            }
+            let text = &source[node.start_byte()..node.end_byte()];
+            let text = std::str::from_utf8(text).unwrap_or("").trim();
+            if !text.is_empty() {
+                commands.push(ExtractedCommand {
+                    command: text.to_string(),
+                    env: Vec::new(),
+                    argv,
+                    redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                 });
             }
@@ -1474,6 +1601,40 @@ mod tests {
     #[case::short_dkey("java -Denv=prod", vec!["java", "-Denv=prod"])]
     #[case::long_eq("git diff --word-diff=color", vec!["git", "diff", "--word-diff=color"])]
     fn tokenize_command_equals_flags(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = tokenize_command(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // tokenize_command: declaration_command / unset_command builtins
+    //
+    // tree-sitter-bash gives `export`/`declare`/`typeset`/`readonly`/
+    // `local` their own `declaration_command` node (with an anonymous
+    // keyword child) and `unset`/`unsetenv` their own `unset_command`
+    // node. The keyword is emitted as the first token; argument
+    // children are emitted one token each, with `variable_assignment`
+    // (`KEY=VALUE`) preserved verbatim as a single token so rule
+    // patterns like `allow: 'export *'` can match against them.
+    // ========================================
+
+    #[rstest]
+    #[case::export_assignment("export FOO=bar", vec!["export", "FOO=bar"])]
+    #[case::export_bare_name("export FOO", vec!["export", "FOO"])]
+    #[case::export_flag("export -p", vec!["export", "-p"])]
+    #[case::export_flag_with_arg("export -f myfunc", vec!["export", "-f", "myfunc"])]
+    #[case::export_multiple("export FOO=bar BAZ=qux", vec!["export", "FOO=bar", "BAZ=qux"])]
+    #[case::declare_flag_assignment("declare -x FOO=bar", vec!["declare", "-x", "FOO=bar"])]
+    #[case::readonly_assignment("readonly FOO=bar", vec!["readonly", "FOO=bar"])]
+    #[case::local_assignment("local FOO=bar", vec!["local", "FOO=bar"])]
+    #[case::typeset_assignment("typeset FOO=bar", vec!["typeset", "FOO=bar"])]
+    #[case::unset_single("unset FOO", vec!["unset", "FOO"])]
+    #[case::unset_multiple("unset FOO BAR BAZ", vec!["unset", "FOO", "BAR", "BAZ"])]
+    #[case::unsetenv_single("unsetenv FOO", vec!["unsetenv", "FOO"])]
+    #[case::export_quoted_value(
+        r#"export FOO="hello world""#,
+        vec!["export", r#"FOO="hello world""#]
+    )]
+    fn tokenize_command_builtins(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = tokenize_command(input).unwrap();
         assert_eq!(result, expected);
     }
@@ -2173,6 +2334,35 @@ mod tests {
     }
 
     // ========================================
+    // extract_commands: declaration_command / unset_command builtins
+    //
+    // These shell builtins live alongside `command` in tree-sitter-bash
+    // and must flow through extraction (not be dropped or treated as
+    // env-prefix variable_assignments) so callers can evaluate rules
+    // against them inside pipelines / lists / subshells.
+    // ========================================
+
+    #[rstest]
+    #[case::standalone_export("export FOO=bar", vec!["export FOO=bar"])]
+    #[case::standalone_unset("unset FOO", vec!["unset FOO"])]
+    #[case::declare_in_pipeline(
+        "declare -x FOO=bar | grep FOO",
+        vec!["declare -x FOO=bar", "grep FOO"]
+    )]
+    #[case::export_in_and_list(
+        "echo before && export FOO=bar && echo after",
+        vec!["echo before", "export FOO=bar", "echo after"]
+    )]
+    #[case::unset_in_subshell(
+        "(unset FOO && echo done)",
+        vec!["unset FOO", "echo done"]
+    )]
+    fn extract_declaration_and_unset_commands(#[case] input: &str, #[case] expected: Vec<&str>) {
+        let result = extract_commands(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    // ========================================
     // extract_commands: error cases
     // ========================================
 
@@ -2560,6 +2750,37 @@ mod tests {
             .expect("main command should be present");
         assert_eq!(main.env, vec![env("DATE", Some("$(date)"))]);
         assert_eq!(main.argv, vec!["cmd", "run"]);
+    }
+
+    #[rstest]
+    #[case::export_assignment(
+        "export FOO=bar",
+        vec!["export", "FOO=bar"],
+    )]
+    #[case::declare_flag_assignment(
+        "declare -x FOO=bar",
+        vec!["declare", "-x", "FOO=bar"],
+    )]
+    #[case::unset_multiple(
+        "unset FOO BAR",
+        vec!["unset", "FOO", "BAR"],
+    )]
+    fn extract_commands_metadata_declaration_and_unset_argv(
+        #[case] input: &str,
+        #[case] expected_argv: Vec<&str>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(commands.len(), 1, "expected single command for: {}", input);
+        assert!(
+            commands[0].env.is_empty(),
+            "builtins do not carry env-prefix assignments: {}",
+            input
+        );
+        assert_eq!(
+            commands[0].argv, expected_argv,
+            "argv mismatch for: {}",
+            input
+        );
     }
 
     #[rstest]
