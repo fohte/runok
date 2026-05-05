@@ -102,6 +102,20 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
+### `export`, `unset`, `declare`, `readonly`, `local`, and `typeset` are parsed as ordinary commands again (TODO(pr-link))
+
+`runok check` / `runok exec` rejected every shell builtin that tree-sitter-bash represents as a `declaration_command` (`export FOO=bar`, `declare -x FOO`, `readonly FOO=bar`, `local FOO=bar`, `typeset FOO`) or an `unset_command` (`unset FOO`, `unsetenv FOO`) with `command parse error: syntax error in command`. The AST-only tokenizer introduced in [#330](https://github.com/fohte/runok/pull/330) only knew about `command` and `test_command` nodes, so allowlisting these builtins via rules like `allow: 'export *'` had no effect.
+
+These node kinds now flow through tokenisation as `[keyword, args...]`, with each `KEY=VALUE` argument preserved verbatim as a single token. `allow: 'export *'` matches `export FOO=bar`, `export -p`, and `export -f myfunc`; `allow: 'unset *'` matches `unset FOO BAR`; and the same applies to compound usage (`export FOO=bar | grep FOO`, `(unset FOO && echo done)`, etc.).
+
+```sh
+# Before: command parse error: syntax error in command
+# After: matches `allow: 'export *'` and evaluates to allow.
+runok check -- 'export FOO=bar'
+```
+
+The two intentional `SyntaxError` cases from [#330](https://github.com/fohte/runok/pull/330) — a bare `FOO=bar` with no command and a trailing backslash like `echo \` — are unchanged.
+
 ### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([#339](https://github.com/fohte/runok/pull/339))
 
 The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.
