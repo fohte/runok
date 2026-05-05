@@ -1,7 +1,90 @@
 use std::collections::HashMap;
+use std::fs::Metadata;
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+
+use cel_interpreter::extractors::This;
+use cel_interpreter::objects::Key;
+use cel_interpreter::{ExecutionError, ResolveResult, Value};
 
 use super::ExprError;
 use super::command_parser::{PipeInfo, RedirectInfo};
+
+/// Marker key used to identify the `fs` sentinel map. The `fs.*` functions
+/// reject calls whose receiver is not this exact map, so registering them as
+/// CEL functions does not accidentally expose them as methods on arbitrary
+/// values.
+const FS_SENTINEL_KEY: &str = "__runok_fs__";
+
+fn fs_sentinel_key() -> &'static Key {
+    static KEY: OnceLock<Key> = OnceLock::new();
+    KEY.get_or_init(|| Key::String(Arc::new(FS_SENTINEL_KEY.to_string())))
+}
+
+fn fs_sentinel() -> HashMap<String, Value> {
+    HashMap::from([(FS_SENTINEL_KEY.to_string(), Value::Bool(true))])
+}
+
+fn require_fs_target(function: &'static str, this: &Value) -> Result<(), ExecutionError> {
+    if let Value::Map(map) = this
+        && map.map.contains_key(fs_sentinel_key())
+    {
+        return Ok(());
+    }
+    Err(ExecutionError::not_supported_as_method(
+        function,
+        this.clone(),
+    ))
+}
+
+/// Translate filesystem stat errors into either `Ok(false)` (path does not
+/// exist) or a CEL execution error (anything else, e.g. EACCES). Permission
+/// errors must not be folded into "false": a `when: fs.exists(marker)` gate
+/// would otherwise silently misfire when the process lacks stat permission.
+fn classify_io(function: &'static str, err: std::io::Error) -> Result<bool, ExecutionError> {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        Ok(false)
+    } else {
+        Err(ExecutionError::function_error(function, err))
+    }
+}
+
+/// Wrap a stat-style filesystem check: validate the receiver, short-circuit on
+/// empty path, then run `check` against the resolved metadata.
+fn fs_metadata_check(
+    function: &'static str,
+    this: &Value,
+    path: &str,
+    check: fn(&Metadata) -> bool,
+) -> ResolveResult {
+    require_fs_target(function, this)?;
+    if path.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(Value::Bool(check(&meta))),
+        Err(e) => classify_io(function, e).map(Value::Bool),
+    }
+}
+
+fn fs_exists_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
+    require_fs_target("exists", &this)?;
+    if path.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    match Path::new(path.as_str()).try_exists() {
+        Ok(b) => Ok(Value::Bool(b)),
+        Err(e) => classify_io("exists", e).map(Value::Bool),
+    }
+}
+
+fn fs_is_file_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
+    fs_metadata_check("is_file", &this, path.as_str(), Metadata::is_file)
+}
+
+fn fs_is_dir_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
+    fs_metadata_check("is_dir", &this, path.as_str(), Metadata::is_dir)
+}
 
 /// Context for CEL expression evaluation, providing access to
 /// environment variables, parsed flags, positional arguments, path lists,
@@ -107,6 +190,17 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
     cel_context.add_variable_from_value("os", context.os.clone());
+
+    cel_context.add_variable_from_value("fs", fs_sentinel());
+    // `exists` is also the name of CEL's built-in comprehension macro
+    // (`list.exists(v, pred)`), but cel-parser dispatches the 2-arg
+    // comprehension form before function lookup, so a 1-arg `fs.exists(path)`
+    // call lands here without colliding. `require_fs_target` rejects any
+    // other receiver (e.g. `'foo'.exists('bar')`) so this registration is
+    // not an unguarded global identifier.
+    cel_context.add_function("exists", fs_exists_impl);
+    cel_context.add_function("is_file", fs_is_file_impl);
+    cel_context.add_function("is_dir", fs_is_dir_impl);
 
     let result = program
         .execute(&cel_context)
@@ -497,5 +591,112 @@ mod tests {
             ..empty_context()
         };
         assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    // === Filesystem functions (fs.exists / fs.is_file / fs.is_dir) ===
+
+    fn eval_fs(expr: &str) -> bool {
+        evaluate(expr, &empty_context()).unwrap()
+    }
+
+    /// What kind of filesystem entry to materialise for a given test case.
+    #[derive(Clone, Copy)]
+    enum FsKind {
+        File,
+        Dir,
+        Missing,
+    }
+
+    fn make_path(dir: &std::path::Path, kind: FsKind) -> std::path::PathBuf {
+        match kind {
+            FsKind::File => {
+                let p = dir.join("entry");
+                std::fs::write(&p, b"").unwrap();
+                p
+            }
+            FsKind::Dir => {
+                let p = dir.join("entry");
+                std::fs::create_dir(&p).unwrap();
+                p
+            }
+            FsKind::Missing => dir.join("entry"),
+        }
+    }
+
+    #[rstest]
+    #[case::exists_file("fs.exists", FsKind::File, true)]
+    #[case::exists_dir("fs.exists", FsKind::Dir, true)]
+    #[case::exists_missing("fs.exists", FsKind::Missing, false)]
+    #[case::is_file_file("fs.is_file", FsKind::File, true)]
+    #[case::is_file_dir("fs.is_file", FsKind::Dir, false)]
+    #[case::is_file_missing("fs.is_file", FsKind::Missing, false)]
+    #[case::is_dir_file("fs.is_dir", FsKind::File, false)]
+    #[case::is_dir_dir("fs.is_dir", FsKind::Dir, true)]
+    #[case::is_dir_missing("fs.is_dir", FsKind::Missing, false)]
+    fn fs_functions_classify_path(
+        #[case] func: &str,
+        #[case] kind: FsKind,
+        #[case] expected: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_path(dir.path(), kind);
+        let path_str = path.to_str().unwrap();
+        assert_eq!(eval_fs(&format!("{func}('{path_str}')")), expected);
+    }
+
+    #[rstest]
+    #[case::exists("fs.exists('')")]
+    #[case::is_file("fs.is_file('')")]
+    #[case::is_dir("fs.is_dir('')")]
+    fn fs_functions_return_false_for_empty_string(#[case] expr: &str) {
+        assert!(!eval_fs(expr));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::exists_to_file("fs.exists", FsKind::File, true)]
+    #[case::exists_to_dir("fs.exists", FsKind::Dir, true)]
+    #[case::is_file_to_file("fs.is_file", FsKind::File, true)]
+    #[case::is_file_to_dir("fs.is_file", FsKind::Dir, false)]
+    #[case::is_dir_to_file("fs.is_dir", FsKind::File, false)]
+    #[case::is_dir_to_dir("fs.is_dir", FsKind::Dir, true)]
+    fn fs_functions_follow_symlinks(
+        #[case] func: &str,
+        #[case] target_kind: FsKind,
+        #[case] expected: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let target = make_path(dir.path(), target_kind);
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let link_str = link.to_str().unwrap();
+        assert_eq!(eval_fs(&format!("{func}('{link_str}')")), expected);
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::exists("fs.exists")]
+    #[case::is_file("fs.is_file")]
+    #[case::is_dir("fs.is_dir")]
+    fn fs_functions_return_false_for_broken_symlink(#[case] func: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("missing");
+        let link = dir.path().join("broken");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let link_str = link.to_str().unwrap();
+        assert!(!eval_fs(&format!("{func}('{link_str}')")));
+    }
+
+    #[rstest]
+    #[case::exists("'foo'.exists('bar')")]
+    #[case::is_file("'foo'.is_file('bar')")]
+    #[case::is_dir("'foo'.is_dir('bar')")]
+    fn fs_functions_reject_non_fs_receiver(#[case] expr: &str) {
+        let result = evaluate(expr, &empty_context());
+        assert!(result.is_err(), "expected error for {expr}, got {result:?}");
+        match result.unwrap_err() {
+            ExprError::Eval(_) => {}
+            other => panic!("expected ExprError::Eval, got {other:?}"),
+        }
     }
 }

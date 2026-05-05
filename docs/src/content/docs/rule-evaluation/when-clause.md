@@ -259,6 +259,42 @@ rules:
 Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported to child processes, so they don't appear in `env`. Use `os` instead of trying to read those through `env.OSTYPE`.
 :::
 
+## Filesystem functions
+
+A `fs` namespace exposes read-only filesystem checks for use inside `when` clauses. These functions let a rule depend on whether a marker file or directory exists on disk -- for example, to gate a rule on the presence of a `.git` directory or a flag file dropped by another tool.
+
+| Function           | Description                                                               |
+| ------------------ | ------------------------------------------------------------------------- |
+| `fs.exists(path)`  | `true` if `path` exists (after symlink resolution).                       |
+| `fs.is_file(path)` | `true` if `path` exists and is a regular file (after symlink resolution). |
+| `fs.is_dir(path)`  | `true` if `path` exists and is a directory (after symlink resolution).    |
+
+All three functions take a single `string` argument and return a `bool`.
+
+```yaml
+rules:
+  # Allow `git commit` only when a marker file exists (e.g., dropped by a
+  # skill that ran the required pre-commit checks).
+  - allow: 'git commit *'
+    when: "fs.exists('/tmp/runok-precommit-ok')"
+  - ask: 'git commit *'
+
+  # Only enable a rule when the working tree is a git repository.
+  - allow: 'git push *'
+    when: "fs.is_dir('.git')"
+```
+
+### Behaviour
+
+- **Empty path** (`fs.exists('')`) returns `false`. There is no separate "invalid argument" error.
+- **Symlinks are followed.** A symlink that points at a regular file makes `fs.is_file` return `true`; a symlink that points at a directory makes `fs.is_dir` return `true`.
+- **Broken symlinks** (the link exists, but its target does not) make all three functions return `false`. To detect a dangling link itself, use a different mechanism -- runok does not expose `lstat`-style checks.
+- **`NotFound` is the only "false" condition.** Any other I/O error (most commonly `EACCES` when a parent directory is not stat-able) is surfaced as a `when` evaluation error rather than being folded into `false`. This prevents a permission problem from silently misclassifying a `fs.exists(marker)` gate as "no marker".
+
+:::caution
+`fs.*` reads the live filesystem each time the `when` clause is evaluated, so the answer can change between two consecutive `runok check` invocations. Use these functions for state that is genuinely meant to gate the rule (a marker file, a working-tree shape) -- not for state that callers cannot reasonably observe.
+:::
+
 ## Operators
 
 CEL supports standard operators for building conditions:

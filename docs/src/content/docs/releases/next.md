@@ -38,6 +38,27 @@ See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#comm
 
 `runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
 
+### New `fs.*` CEL functions for filesystem checks in `when` clauses ([#341](https://github.com/fohte/runok/pull/341))
+
+`when` expressions can now read the live filesystem through three new functions:
+
+| Function           | Description                                    |
+| ------------------ | ---------------------------------------------- |
+| `fs.exists(path)`  | `true` if the path exists (symlinks followed). |
+| `fs.is_file(path)` | `true` if the path is a regular file.          |
+| `fs.is_dir(path)`  | `true` if the path is a directory.             |
+
+Empty-string paths return `false`; broken symlinks return `false` from all three; permission errors (e.g. `EACCES`) surface as evaluation errors rather than being folded into `false`. Typical use case: gating a rule on a marker file written by a separate tool.
+
+```yaml
+rules:
+  - allow: 'git commit *'
+    when: "fs.exists('/tmp/runok-precommit-ok')"
+  - ask: 'git commit *'
+```
+
+See [Filesystem functions](/rule-evaluation/when-clause/#filesystem-functions) for the full behaviour reference.
+
 ### New `os` CEL variable for OS-conditional `when` clauses ([#336](https://github.com/fohte/runok/pull/336))
 
 `when` expressions now expose an `os` string equal to Rust's [`std::env::consts::OS`](https://doc.rust-lang.org/std/env/consts/constant.OS.html) — `"macos"`, `"linux"`, `"windows"`, `"freebsd"`, etc. This lets a single config branch on the host operating system, which previously was not possible: shell built-ins like `OSTYPE` are not exported to child processes, so they don't appear in `env`.
