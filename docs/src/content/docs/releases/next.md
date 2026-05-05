@@ -34,6 +34,22 @@ See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#comm
 
 ## New Features
 
+### Glob `*` in the command name now expands like it does in argument tokens (TODO(pr-link))
+
+`*` inside the command-name part of a pattern is now treated as a glob and matches zero or more characters, the same way it already worked for argument tokens. Previously only a standalone `*` was a wildcard; partial patterns like `/*` or `pre-*` were compared as literal strings and never matched. Backslash escapes (`\*`) and alternation alternatives (`a|b*`) follow the same rules.
+
+```yaml
+# Match commands invoked by absolute path (e.g. /usr/bin/foo, /opt/local/bin/bar)
+- deny: '/* *'
+
+# Match any command name starting with `pre-`
+- allow: 'pre-* --help'
+```
+
+Quotes around the command name are still grouping-only, so `'*' --help` and `* --help` parse to the same wildcard rule. If a rule literally needs the `*` character as a command name (rare), use the backslash escape: `\*`.
+
+See [Wildcards -- Glob Patterns](/pattern-syntax/wildcards/#glob-patterns) for details.
+
 ### New reference page for the `runok audit --json` schema ([#338](https://github.com/fohte/runok/pull/338))
 
 `runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
