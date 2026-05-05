@@ -38,7 +38,7 @@ See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#comm
 
 `runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
 
-### New `fs.*` CEL functions for filesystem checks in `when` clauses (TODO(pr-link))
+### New `fs.*` CEL functions for filesystem checks in `when` clauses ([#341](https://github.com/fohte/runok/pull/341))
 
 `when` expressions can now read the live filesystem through three new functions:
 
