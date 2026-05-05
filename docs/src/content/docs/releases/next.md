@@ -46,7 +46,7 @@ See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#comm
 - allow: 'pre-* --help'
 ```
 
-Quotes around the command name are still grouping-only, so `'*' --help` and `* --help` parse to the same wildcard rule. If a rule literally needs the `*` character as a command name (rare), use the backslash escape: `\*`.
+Note: a quoted `'*'` in command position (e.g. `'*' --help`) used to be a near-dead rule that only matched a command literally named `*`. It now matches any single-token command name. Bare `* --help` is still the only form that also matches multi-token command names like `docker compose --help`. If a rule literally needs the `*` character as a command name (rare), use the backslash escape: `\*`.
 
 See [Wildcards -- Glob Patterns](/pattern-syntax/wildcards/#glob-patterns) for details.
 
