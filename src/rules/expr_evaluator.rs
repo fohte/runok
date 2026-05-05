@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::fs::Metadata;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cel_interpreter::extractors::This;
+use cel_interpreter::objects::Key;
 use cel_interpreter::{ExecutionError, ResolveResult, Value};
 
 use super::ExprError;
@@ -14,16 +16,20 @@ use super::command_parser::{PipeInfo, RedirectInfo};
 /// values.
 const FS_SENTINEL_KEY: &str = "__runok_fs__";
 
+fn fs_sentinel_key() -> &'static Key {
+    static KEY: OnceLock<Key> = OnceLock::new();
+    KEY.get_or_init(|| Key::String(Arc::new(FS_SENTINEL_KEY.to_string())))
+}
+
 fn fs_sentinel() -> HashMap<String, Value> {
     HashMap::from([(FS_SENTINEL_KEY.to_string(), Value::Bool(true))])
 }
 
 fn require_fs_target(function: &'static str, this: &Value) -> Result<(), ExecutionError> {
-    if let Value::Map(map) = this {
-        let key = cel_interpreter::objects::Key::String(Arc::new(FS_SENTINEL_KEY.to_string()));
-        if map.map.contains_key(&key) {
-            return Ok(());
-        }
+    if let Value::Map(map) = this
+        && map.map.contains_key(fs_sentinel_key())
+    {
+        return Ok(());
     }
     Err(ExecutionError::not_supported_as_method(
         function,
@@ -43,6 +49,24 @@ fn classify_io(function: &'static str, err: std::io::Error) -> Result<bool, Exec
     }
 }
 
+/// Wrap a stat-style filesystem check: validate the receiver, short-circuit on
+/// empty path, then run `check` against the resolved metadata.
+fn fs_metadata_check(
+    function: &'static str,
+    this: &Value,
+    path: &str,
+    check: fn(&Metadata) -> bool,
+) -> ResolveResult {
+    require_fs_target(function, this)?;
+    if path.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(Value::Bool(check(&meta))),
+        Err(e) => classify_io(function, e).map(Value::Bool),
+    }
+}
+
 fn fs_exists_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
     require_fs_target("exists", &this)?;
     if path.is_empty() {
@@ -55,25 +79,11 @@ fn fs_exists_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
 }
 
 fn fs_is_file_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
-    require_fs_target("is_file", &this)?;
-    if path.is_empty() {
-        return Ok(Value::Bool(false));
-    }
-    match std::fs::metadata(path.as_str()) {
-        Ok(meta) => Ok(Value::Bool(meta.is_file())),
-        Err(e) => classify_io("is_file", e).map(Value::Bool),
-    }
+    fs_metadata_check("is_file", &this, path.as_str(), Metadata::is_file)
 }
 
 fn fs_is_dir_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
-    require_fs_target("is_dir", &this)?;
-    if path.is_empty() {
-        return Ok(Value::Bool(false));
-    }
-    match std::fs::metadata(path.as_str()) {
-        Ok(meta) => Ok(Value::Bool(meta.is_dir())),
-        Err(e) => classify_io("is_dir", e).map(Value::Bool),
-    }
+    fs_metadata_check("is_dir", &this, path.as_str(), Metadata::is_dir)
 }
 
 /// Context for CEL expression evaluation, providing access to
