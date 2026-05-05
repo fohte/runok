@@ -102,7 +102,7 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
-### `export`, `unset`, `declare`, `readonly`, `local`, and `typeset` are parsed as ordinary commands again (TODO(pr-link))
+### `export`, `unset`, `declare`, `readonly`, `local`, and `typeset` are parsed as ordinary commands again ([#342](https://github.com/fohte/runok/pull/342))
 
 `runok check` / `runok exec` rejected every shell builtin that tree-sitter-bash represents as a `declaration_command` (`export FOO=bar`, `declare -x FOO`, `readonly FOO=bar`, `local FOO=bar`, `typeset FOO`) or an `unset_command` (`unset FOO`, `unsetenv FOO`) with `command parse error: syntax error in command`. The AST-only tokenizer introduced in [#330](https://github.com/fohte/runok/pull/330) only knew about `command` and `test_command` nodes, so allowlisting these builtins via rules like `allow: 'export *'` had no effect.
 
