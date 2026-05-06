@@ -662,6 +662,88 @@ fn wildcard_command_patterns(
 }
 
 // ========================================
+// Glob in command position (e.g. `/* *`, `prefix-* *`)
+// ========================================
+
+#[rstest]
+#[case::deny_absolute_path_with_args(
+    indoc! {"
+        defaults:
+          action: allow
+        rules:
+          - deny: '/* *'
+    "},
+    "/usr/local/bin/foo --check",
+    assert_deny as ActionAssertion,
+)]
+#[case::deny_absolute_path_no_args(
+    indoc! {"
+        defaults:
+          action: allow
+        rules:
+          - deny: '/* *'
+    "},
+    "/usr/bin/bar",
+    assert_deny as ActionAssertion,
+)]
+#[case::deny_absolute_path_does_not_match_relative(
+    indoc! {"
+        defaults:
+          action: allow
+        rules:
+          - deny: '/* *'
+    "},
+    "bar baz",
+    assert_allow as ActionAssertion,
+)]
+#[case::name_prefix_glob_matches(
+    indoc! {"
+        rules:
+          - allow: 'pre-* --help'
+    "},
+    "pre-build --help",
+    assert_allow as ActionAssertion,
+)]
+#[case::name_prefix_glob_does_not_match_other(
+    indoc! {"
+        rules:
+          - allow: 'pre-* --help'
+    "},
+    "post-build --help",
+    assert_ask as ActionAssertion,
+)]
+#[case::escaped_star_in_command_only_matches_literal_star(
+    indoc! {r"
+        defaults:
+          action: allow
+        rules:
+          - deny: '\* *'
+    "},
+    "* foo",
+    assert_deny as ActionAssertion,
+)]
+#[case::escaped_star_in_command_does_not_match_other(
+    indoc! {r"
+        defaults:
+          action: allow
+        rules:
+          - deny: '\* *'
+    "},
+    "ls foo",
+    assert_allow as ActionAssertion,
+)]
+fn command_position_glob_patterns(
+    #[case] yaml: &str,
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Wildcard deny beats specific allow
 // ========================================
 

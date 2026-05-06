@@ -2,6 +2,7 @@
 //! pattern strings into structured Pattern values.
 
 use super::pattern_lexer::LexToken;
+use super::pattern_matcher::literal_matches;
 
 /// Represents the command name part of a pattern, which can be
 /// either a literal string, an alternation of names, or a wildcard (`*`)
@@ -22,12 +23,16 @@ pub enum CommandPattern {
 impl CommandPattern {
     /// Check if this command pattern matches the given command name.
     ///
+    /// `Literal` and `Alternation` use the same `*`-glob and `\*` escape
+    /// rules as token-position literals, so patterns like `/*` or `g*`
+    /// match any command name with that prefix.
+    ///
     /// For `VarRef`, always returns `true` — actual matching is deferred to
     /// the pattern matcher which handles multi-word values and type-aware comparison.
     pub fn matches(&self, command: &str) -> bool {
         match self {
-            CommandPattern::Literal(s) => s == command,
-            CommandPattern::Alternation(alts) => alts.iter().any(|s| s == command),
+            CommandPattern::Literal(s) => literal_matches(s, command),
+            CommandPattern::Alternation(alts) => alts.iter().any(|s| literal_matches(s, command)),
             CommandPattern::Wildcard => true,
             CommandPattern::VarRef(_) => true,
         }
@@ -849,6 +854,32 @@ mod tests {
     #[case::matches_second("ast-grep|sg", "sg", true)]
     #[case::no_match("ast-grep|sg", "rg", false)]
     fn command_alternation_matches(
+        #[case] pattern: &str,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let parsed = parse(pattern).unwrap();
+        assert_eq!(parsed.command.matches(command), expected);
+    }
+
+    #[rstest]
+    #[case::absolute_path_prefix("/*", "/usr/local/bin/foo", true)]
+    #[case::absolute_path_prefix_short("/*", "/bin/x", true)]
+    #[case::absolute_path_prefix_no_match_relative("/*", "foo", false)]
+    #[case::absolute_path_prefix_no_match_dot_slash("/*", "./bin/x", false)]
+    #[case::name_prefix_glob("pre-*", "pre-build", true)]
+    #[case::name_prefix_glob_short("pre-*", "pre-", true)]
+    #[case::name_prefix_glob_no_match("pre-*", "post-build", false)]
+    #[case::middle_glob("a*c", "abc", true)]
+    #[case::middle_glob_no_match("a*c", "abx", false)]
+    #[case::escaped_star_only_matches_literal_star(r"\*", "*", true)]
+    #[case::escaped_star_does_not_match_other(r"\*", "anything", false)]
+    #[case::alt_second_glob_matches("a|b*", "banana", true)]
+    #[case::alt_second_glob_matches_short("a|b*", "b", true)]
+    #[case::alt_first_literal_matches("a|b*", "a", true)]
+    #[case::alt_neither_matches("a|b*", "c", false)]
+    #[case::alt_first_does_not_glob("a|b*", "ax", false)]
+    fn command_pattern_glob_matches(
         #[case] pattern: &str,
         #[case] command: &str,
         #[case] expected: bool,

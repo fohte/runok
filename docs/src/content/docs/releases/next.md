@@ -32,6 +32,31 @@ The audit log entry shape changes so single and compound commands share one sche
 
 See [Audit Log JSON Schema -- `command_evaluations`](/cli/audit-log-schema/#command_evaluations) for the full schema and field reference.
 
+### Breaking: `*` inside a command-name pattern is now a glob ([#343](https://github.com/fohte/runok/pull/343))
+
+`*` inside the command-name part of a pattern is now treated as a glob and matches zero or more characters, the same way it already worked for argument tokens. Previously only a standalone `*` was a wildcard; partial patterns like `/*` or `pre-*` were compared as literal strings and never matched. Backslash escapes (`\*`) and alternation alternatives (`a|b*`) follow the same rules.
+
+```yaml
+# Match commands invoked by absolute path (e.g. /usr/bin/foo, /opt/local/bin/bar)
+- deny: '/* *'
+
+# Match any command name starting with `pre-`
+- allow: 'pre-* --help'
+```
+
+**What changes for existing rules?**
+
+Any existing rule whose command-name part contains a `*` other than a standalone `*` will now match strictly more commands than before:
+
+- A rule like `deny: 'g* *'` used to be a dead rule (no command is named literally `g*`); it now denies every command whose name starts with `g` (including `git`, `gh`, `grep`, ...).
+- A quoted `'*'` in command position (e.g. `'*' --help`) used to only match a command literally named `*`; it now matches any single-token command name. Bare `* --help` remains the only form that also expands across multi-token command names like `docker compose --help`.
+
+**What should I do?**
+
+If you have a rule that intentionally relied on `*` being literal in command position, escape it: replace `*` with `\*` (this works the same as in token position).
+
+See [Wildcards -- Glob Patterns](/pattern-syntax/wildcards/#glob-patterns) for details.
+
 ## New Features
 
 ### New reference page for the `runok audit --json` schema ([#338](https://github.com/fohte/runok/pull/338))

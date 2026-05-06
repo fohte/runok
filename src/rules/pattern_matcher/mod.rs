@@ -7,6 +7,8 @@
 mod flag_utils;
 mod token_matching;
 
+pub(crate) use token_matching::literal_matches;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
@@ -19,8 +21,8 @@ use flag_utils::{
     is_flag_only_negation, optional_flags_absent, split_flag_equals, split_short_flag_value,
 };
 use token_matching::{
-    literal_matches, match_flag_token_with_equals, match_single_token, match_var_ref_multi,
-    normalize_path, resolve_paths,
+    match_flag_token_with_equals, match_single_token, match_var_ref_multi, normalize_path,
+    resolve_paths,
 };
 
 /// Result of a successful pattern match, containing wildcard captures,

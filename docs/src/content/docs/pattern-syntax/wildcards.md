@@ -68,6 +68,19 @@ When `*` appears **inside a literal token** (not as a standalone token), it acts
 - allow: 'echo pre*suf'
 ```
 
+Glob expansion also applies to the **command name** (the first token) and to alternation alternatives. This lets a single rule cover commands invoked by absolute path or by a shared prefix:
+
+```yaml
+# Matches commands invoked by absolute path: /usr/bin/foo, /opt/local/bin/bar
+- deny: '/* *'
+
+# Matches any command name starting with `pre-`: pre-build, pre-test, ...
+- allow: 'pre-* --help'
+
+# Glob applies to each alternation alternative independently
+- deny: 'rm|/*/rm *'
+```
+
 :::note
 Only `*` is supported for glob matching. Other glob characters like `?` or `[...]` are treated as literal characters.
 :::
