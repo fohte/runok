@@ -874,22 +874,12 @@ mod tests {
     #[case::middle_glob_no_match("a*c", "abx", false)]
     #[case::escaped_star_only_matches_literal_star(r"\*", "*", true)]
     #[case::escaped_star_does_not_match_other(r"\*", "anything", false)]
-    fn command_literal_glob_matches(
-        #[case] pattern: &str,
-        #[case] command: &str,
-        #[case] expected: bool,
-    ) {
-        let parsed = parse(pattern).unwrap();
-        assert_eq!(parsed.command.matches(command), expected);
-    }
-
-    #[rstest]
-    #[case::second_alt_glob_matches("a|b*", "banana", true)]
-    #[case::second_alt_glob_matches_short("a|b*", "b", true)]
-    #[case::first_alt_literal_matches("a|b*", "a", true)]
-    #[case::neither_alt_matches("a|b*", "c", false)]
-    #[case::first_alt_does_not_glob("a|b*", "ax", false)]
-    fn command_alternation_glob_matches(
+    #[case::alt_second_glob_matches("a|b*", "banana", true)]
+    #[case::alt_second_glob_matches_short("a|b*", "b", true)]
+    #[case::alt_first_literal_matches("a|b*", "a", true)]
+    #[case::alt_neither_matches("a|b*", "c", false)]
+    #[case::alt_first_does_not_glob("a|b*", "ax", false)]
+    fn command_pattern_glob_matches(
         #[case] pattern: &str,
         #[case] command: &str,
         #[case] expected: bool,
