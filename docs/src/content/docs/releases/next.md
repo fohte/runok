@@ -63,7 +63,7 @@ See [Wildcards -- Glob Patterns](/pattern-syntax/wildcards/#glob-patterns) for d
 
 `runok audit --json` now has a dedicated field-by-field reference: [Audit Log JSON Schema](/cli/audit-log-schema/). It documents every top-level key (`timestamp`, `command`, `action`, `sandbox_preset`, `default_action`, `metadata`, `command_evaluations`), every nested object (`Action`, `Metadata`, `CommandEvaluation`, `RuleMatch`, `EnvVar`, `Redirect`, `Pipe`), every enum value, and every "omitted when empty" condition — so writing `jq` queries no longer requires reading the runok source. The `runok audit` page now links to it instead of duplicating a partial schema.
 
-### New `shell.loop_kind` CEL variable for detecting shell loops in `when` clauses (TODO(pr-link))
+### New `shell.loop_kind` CEL variable for detecting shell loops in `when` clauses ([#345](https://github.com/fohte/runok/pull/345))
 
 `when` expressions can now check whether the command being evaluated runs inside a shell loop, via a new `shell.loop_kind` string. The value is `"while"`, `"until"`, `"for"`, or `""` when the command is outside any loop. Nested loops surface the nearest enclosing kind, and subshells (`(...)`) do not reset it.
 
