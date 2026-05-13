@@ -240,6 +240,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             argv: vec![],
             redirects: vec![],
             pipe: PipeInfo::default(),
+            loop_kind: String::new(),
         }]
     });
     let commands: Vec<String> = extracted_commands

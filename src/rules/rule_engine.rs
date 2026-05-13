@@ -115,9 +115,10 @@ pub fn evaluate_command(
             0,
             &first.redirects,
             &first.pipe,
+            &first.loop_kind,
         );
     }
-    evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default())
+    evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default(), "")
 }
 
 /// Like `evaluate_command`, but with pre-extracted redirect and pipe metadata.
@@ -132,7 +133,7 @@ pub fn evaluate_command_with_metadata(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
 ) -> Result<EvalResult, RuleError> {
-    evaluate_command_inner(config, command, context, 0, redirects, pipe)
+    evaluate_command_inner(config, command, context, 0, redirects, pipe, "")
 }
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
@@ -158,6 +159,7 @@ pub fn evaluate_compound(
             argv: vec![],
             redirects: vec![],
             pipe: PipeInfo::default(),
+            loop_kind: String::new(),
         }]
     });
 
@@ -178,6 +180,7 @@ pub fn evaluate_compound(
             0,
             &ext_cmd.redirects,
             &ext_cmd.pipe,
+            &ext_cmd.loop_kind,
         )?;
 
         // Collect sandbox preset names
@@ -299,6 +302,7 @@ fn evaluate_command_inner(
     depth: usize,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
+    loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
     if depth > MAX_WRAPPER_DEPTH {
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
@@ -341,6 +345,7 @@ fn evaluate_command_inner(
                     depth + 1,
                     &sub.redirects,
                     &sub.pipe,
+                    &sub.loop_kind,
                 )?;
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
@@ -366,6 +371,7 @@ fn evaluate_command_inner(
                     depth + 1,
                     &sub.redirects,
                     &sub.pipe,
+                    &sub.loop_kind,
                 )?;
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
@@ -379,8 +385,9 @@ fn evaluate_command_inner(
             if let Some(nested_result) = nested_merged {
                 // Evaluate the original command as a simple command (skip the
                 // compound guard by calling the remaining logic directly).
-                let simple_result =
-                    evaluate_simple_command(config, command, context, depth, redirects, pipe)?;
+                let simple_result = evaluate_simple_command(
+                    config, command, context, depth, redirects, pipe, loop_kind,
+                )?;
                 return Ok(merge_results(nested_result, simple_result));
             }
         }
@@ -388,7 +395,7 @@ fn evaluate_command_inner(
         // simple-command evaluation.
     }
 
-    evaluate_simple_command(config, command, context, depth, redirects, pipe)
+    evaluate_simple_command(config, command, context, depth, redirects, pipe, loop_kind)
 }
 
 /// Evaluate a single (non-compound) command against rules and wrappers.
@@ -405,6 +412,7 @@ fn evaluate_simple_command(
     depth: usize,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
+    loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
     let rules = match &config.rules {
         Some(rules) => rules,
@@ -452,6 +460,7 @@ fn evaluate_simple_command(
                     redirects,
                     pipe,
                     &match_captures,
+                    loop_kind,
                 );
                 match evaluate(when_expr, &expr_context) {
                     Ok(true) => {}
@@ -477,7 +486,8 @@ fn evaluate_simple_command(
     }
 
     // Try wrapper pattern matching for recursive evaluation
-    let wrapper_result = try_unwrap_wrapper(config, command, context, definitions, depth)?;
+    let wrapper_result =
+        try_unwrap_wrapper(config, command, context, definitions, depth, loop_kind)?;
 
     if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {
@@ -538,6 +548,7 @@ fn try_unwrap_wrapper(
     context: &EvalContext,
     definitions: &Definitions,
     depth: usize,
+    loop_kind: &str,
 ) -> Result<Option<EvalResult>, RuleError> {
     let wrappers = match definitions.wrappers.as_ref() {
         Some(w) if !w.is_empty() => w,
@@ -594,6 +605,7 @@ fn try_unwrap_wrapper(
                     depth + 1,
                     &[],
                     &PipeInfo::default(),
+                    loop_kind,
                 )?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
@@ -762,6 +774,7 @@ fn build_expr_context(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     match_captures: &MatchCaptures,
+    loop_kind: &str,
 ) -> ExprContext {
     let flags: HashMap<String, Option<String>> = parsed_command
         .flags
@@ -798,6 +811,7 @@ fn build_expr_context(
         vars: match_captures.vars.clone(),
         flag_groups,
         os: std::env::consts::OS.to_string(),
+        loop_kind: loop_kind.to_string(),
     }
 }
 
