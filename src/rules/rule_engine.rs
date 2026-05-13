@@ -132,8 +132,9 @@ pub fn evaluate_command_with_metadata(
     context: &EvalContext,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
+    loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
-    evaluate_command_inner(config, command, context, 0, redirects, pipe, "")
+    evaluate_command_inner(config, command, context, 0, redirects, pipe, loop_kind)
 }
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)

@@ -333,7 +333,17 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         let (redirects, pipe) = first_extracted
             .map(|ec| (ec.redirects.as_slice(), &ec.pipe))
             .unwrap_or((empty_redirects.as_slice(), &default_pipe));
-        match evaluate_command_with_metadata(config, effective_command, &context, redirects, pipe) {
+        let loop_kind = first_extracted
+            .map(|ec| ec.loop_kind.as_str())
+            .unwrap_or("");
+        match evaluate_command_with_metadata(
+            config,
+            effective_command,
+            &context,
+            redirects,
+            pipe,
+            loop_kind,
+        ) {
             Ok(result) => {
                 if options.verbose {
                     log_matched_rules(&result.matched_rules);

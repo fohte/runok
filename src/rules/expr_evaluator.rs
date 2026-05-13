@@ -195,10 +195,7 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
 
     cel_context.add_variable_from_value("os", context.os.clone());
 
-    // Register shell: map of shell-context fields (currently `loop_kind`).
-    // Keeping this as a nested map mirrors the `pipe.*` namespace style and
-    // leaves room for future shell-context flags without polluting the
-    // top-level CEL identifier space.
+    // Register shell.* fields as a nested map (currently only `loop_kind`).
     let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([(
         "loop_kind".to_string(),
         cel_interpreter::Value::String(context.loop_kind.clone().into()),

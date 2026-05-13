@@ -622,6 +622,29 @@ fn shell_loop_kind_blocks_polling_loops(
     expected(&result.action);
 }
 
+// `for i in ...; do <single>; done` produces exactly one extracted sub-command,
+// which routes through the single-command (`evaluate_command`) path instead of
+// the compound branch. Pin that `shell.loop_kind` survives that route.
+#[rstest]
+#[case::for_single_body_matches("for i in 1 2; do sleep 1; done", assert_deny as ActionAssertion)]
+#[case::sleep_outside_loop_allowed("sleep 1", assert_allow as ActionAssertion)]
+fn shell_loop_kind_reaches_single_command_path(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'sleep *'
+            when: 'shell.loop_kind == \"for\"'
+          - allow: 'sleep *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
 // ========================================
 // Redirect descriptor check in when clause
 // ========================================

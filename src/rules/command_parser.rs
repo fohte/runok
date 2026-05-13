@@ -816,20 +816,22 @@ fn collect_commands(
                 collect_commands(*child, source, commands, &child_pipe, redirects, loop_kind);
             }
         }
-        // for_statement: recurse into body (do_group) and any command_substitution
-        // nodes in the value list. Literal values (number, word, etc.) are skipped.
-        // The body and value-list substitutions execute inside the loop, so
-        // `loop_kind` is set to `"for"` for everything below.
+        // for_statement: recurse into body (do_group) for loop-body commands,
+        // and into value-list items to find nested command substitutions.
+        // The body runs inside the loop (`loop_kind = "for"`); value-list
+        // substitutions run once before the loop body, so they keep
+        // `loop_kind = ""` whether the substitution is bare (`$(cmd)`) or
+        // quoted (`"$(cmd)"`).
         "for_statement" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
-                    "do_group" | "command_substitution" => {
+                    "do_group" => {
                         collect_commands(child, source, commands, pipe_info, redirects, "for");
                     }
-                    // Recurse into value list items (e.g. string nodes)
-                    // to find nested command substitutions like
-                    // `for i in "$(cmd)"; do ...`.
+                    "command_substitution" | "process_substitution" => {
+                        collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                    }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
                     }
@@ -1196,10 +1198,9 @@ fn detect_while_or_until(node: tree_sitter::Node, source: &[u8]) -> &'static str
             }
         }
     }
-    // Defensive default: tree-sitter-bash always emits one of the two
-    // keywords for a `while_statement`, but if grammar shape changes
-    // unexpectedly, fall back to `"while"` rather than the loop-outside
-    // sentinel — the body really is inside a loop.
+    // Unreachable in practice: tree-sitter-bash always emits one of the
+    // two keywords. Stay inside the loop sentinel set to keep callers
+    // safe if the grammar shape ever shifts.
     "while"
 }
 
@@ -1500,12 +1501,10 @@ fn collect_substitutions_recursive(
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            // Substitutions discovered through this helper deliberately drop
-            // the surrounding loop context: they appear either in for-value
-            // lists / case-pattern values (which run once outside the loop
-            // body) or inside variable assignments. Treating them as
-            // loop-external keeps the rule semantics straightforward and
-            // matches the existing pipe / redirect reset done here.
+            // Substitutions reached through this helper appear in
+            // for-value lists, case-pattern values, or variable
+            // assignments — all of which run outside any enclosing
+            // loop body, so loop_kind resets to "".
             "command_substitution" | "process_substitution" => {
                 collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
             }
@@ -2361,6 +2360,17 @@ mod tests {
     #[case::loop_followed_by_outside(
         "while alive; do sleep 1; done; echo done",
         vec![("alive", "while"), ("sleep 1", "while"), ("echo done", "")],
+    )]
+    // For-value-list substitutions run once before the loop body in bash, so
+    // they keep `loop_kind == ""` regardless of whether the substitution is
+    // bare or quoted — quoting shouldn't change rule-matching semantics.
+    #[case::for_value_substitution_bare(
+        "for i in $(seed); do echo $i; done",
+        vec![("seed", ""), ("echo $i", "for")],
+    )]
+    #[case::for_value_substitution_quoted(
+        r#"for i in "$(seed)"; do echo $i; done"#,
+        vec![("seed", ""), ("echo $i", "for")],
     )]
     fn extract_loop_kind(#[case] input: &str, #[case] expected: Vec<(&str, &str)>) {
         let result = extract_commands_with_metadata(input).unwrap();
