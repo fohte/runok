@@ -131,7 +131,7 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 Loading a relative `extends:` entry (for example `./work.yml`) failed with `path traversal detected: './work.yml' escapes the base directory` whenever the resolved path was a symlink whose target lived outside the config's own directory. This blocked overlay-style layouts that drop a symlink into `~/.config/runok/` pointing at a file managed by a separate repository, even though the reference text itself (`./work.yml`) stays inside the config directory.
 
-The check that rejects `..`-based escapes (`../../etc/passwd`, `~/../../etc/passwd`, …) is now purely lexical on the reference string: symlink targets are not consulted, so a reference that does not itself contain `..` is always accepted regardless of where the underlying symlink points. This matches how the project already accepts absolute `extends:` paths without restriction — the validation exists to catch obviously-non-local reference text, not to sandbox what the filesystem ultimately resolves to.
+The check that rejects `..`-based escapes (`../../etc/passwd`, `~/../../etc/passwd`, …) is now purely lexical on the reference string: a reference that does not itself contain `..` is always accepted regardless of where the underlying symlink points.
 
 See [Extends -- Local Path](/configuration/extends/#local-path) for the updated path resolution rules.
 

@@ -25,9 +25,7 @@ fn home_dir() -> Option<String> {
 /// `$HOME` happens to make it resolve to a real file. The check is purely
 /// lexical on the reference string — a symlink at the resolved path is
 /// followed normally even when its target lives outside `base_dir` /
-/// `$HOME`. This is intentional: overlay-style configurations rely on
-/// dropping a symlink into the config directory, and the reference text
-/// itself (e.g. `./work.yml`) is the user-facing contract.
+/// `$HOME`.
 fn resolve_local_path(
     reference: &str,
     base_dir: &Path,
@@ -56,15 +54,11 @@ fn resolve_local_path(
 
 /// Verify that `reference` does not lexically escape `root` via `..` segments.
 ///
-/// This is a safety guard against typos and clearly-non-local references like
-/// `../../etc/passwd`, not a filesystem sandbox: extends does not restrict
-/// what paths a config can ultimately read (absolute paths are accepted as-is
-/// elsewhere), and threat-model-wise the agent authoring `extends:` can write
-/// anything anyway. The check operates on the reference text only — both
-/// `resolved` and `root` are normalized lexically (`.` / `..` collapsed
+/// Both `resolved` and `root` are normalized lexically (`.` / `..` collapsed
 /// without touching the filesystem), so a symlink at the resolved path whose
-/// target lives outside `root` is allowed, as long as the reference itself
-/// stays inside `root`.
+/// target lives outside `root` is allowed as long as the reference itself
+/// stays inside `root`. Examples that fail: `../../etc/passwd` (relative),
+/// `~/../../etc/passwd` (home).
 fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), PresetError> {
     let normalized = lexically_normalize(resolved);
     let normalized_root = lexically_normalize(root);
