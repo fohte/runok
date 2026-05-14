@@ -127,6 +127,14 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
+### `extends:` no longer rejects relative references whose target is a symlink outside the config directory ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+
+Loading a relative `extends:` entry (for example `./work.yml`) failed with `path traversal detected: './work.yml' escapes the base directory` whenever the resolved path was a symlink whose target lived outside the config's own directory. This blocked overlay-style layouts that drop a symlink into `~/.config/runok/` pointing at a file managed by a separate repository, even though the reference text itself (`./work.yml`) stays inside the config directory.
+
+The check that rejects `..`-based escapes (`../../etc/passwd`, `~/../../etc/passwd`, …) is now purely lexical on the reference string: symlink targets are not consulted, so a reference that does not itself contain `..` is always accepted regardless of where the underlying symlink points. This matches how the project already accepts absolute `extends:` paths without restriction — the validation exists to catch obviously-non-local reference text, not to sandbox what the filesystem ultimately resolves to.
+
+See [Extends -- Local Path](/configuration/extends/#local-path) for the updated path resolution rules.
+
 ### `runok test` no longer evaluates inline tests from any preset reached via a remote ancestor ([#339](https://github.com/fohte/runok/pull/339))
 
 The strip introduced in [#227](https://github.com/fohte/runok/pull/227) only removed inline `tests` and the top-level `tests:` block from the outermost remote preset. Any preset reached transitively through a local-path `extends` inside that remote (the layout used by `runok-presets/base`, which extends `./readonly-unix.yml`, `./readonly-git.yml`, etc.) kept its preset-authored tests, and they were re-evaluated under the downstream user's overrides — typically failing as `expected allow, got deny` when the user denied something the preset allows.

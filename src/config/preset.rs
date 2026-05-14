@@ -20,8 +20,14 @@ fn home_dir() -> Option<String> {
 /// - Home directory (`~/presets/git.yml`): `~` expanded via `get_home`
 /// - Absolute path (`/etc/runok/global.yml`): used as-is
 ///
-/// Relative and `~/` paths are validated against path traversal:
-/// the resolved canonical path must stay within the expected root directory.
+/// Relative and `~/` references are checked for `..`-based escape: a
+/// reference like `../../etc/passwd` is rejected even when `base_dir` /
+/// `$HOME` happens to make it resolve to a real file. The check is purely
+/// lexical on the reference string — a symlink at the resolved path is
+/// followed normally even when its target lives outside `base_dir` /
+/// `$HOME`. This is intentional: overlay-style configurations rely on
+/// dropping a symlink into the config directory, and the reference text
+/// itself (e.g. `./work.yml`) is the user-facing contract.
 fn resolve_local_path(
     reference: &str,
     base_dir: &Path,
@@ -48,16 +54,22 @@ fn resolve_local_path(
     }
 }
 
-/// Verify that `resolved` stays within `root` after canonicalization.
+/// Verify that `reference` does not lexically escape `root` via `..` segments.
 ///
-/// Both `resolved` and `root` are canonicalized before comparison so that
-/// `../` sequences are collapsed. If `resolved` does not exist yet, only
-/// the existing ancestor portion is canonicalized.
+/// This is a safety guard against typos and clearly-non-local references like
+/// `../../etc/passwd`, not a filesystem sandbox: extends does not restrict
+/// what paths a config can ultimately read (absolute paths are accepted as-is
+/// elsewhere), and threat-model-wise the agent authoring `extends:` can write
+/// anything anyway. The check operates on the reference text only — both
+/// `resolved` and `root` are normalized lexically (`.` / `..` collapsed
+/// without touching the filesystem), so a symlink at the resolved path whose
+/// target lives outside `root` is allowed, as long as the reference itself
+/// stays inside `root`.
 fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), PresetError> {
-    let canonical = canonicalize_best_effort(resolved);
-    let canonical_root = canonicalize_best_effort(root);
+    let normalized = lexically_normalize(resolved);
+    let normalized_root = lexically_normalize(root);
 
-    if !canonical.starts_with(&canonical_root) {
+    if !normalized.starts_with(&normalized_root) {
         return Err(PresetError::InvalidReference(format!(
             "path traversal detected: '{reference}' escapes the base directory"
         )));
@@ -65,12 +77,11 @@ fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), 
     Ok(())
 }
 
-/// Normalize a path by resolving `.` and `..` logically (without touching the filesystem),
-/// then canonicalize the longest existing prefix for symlink resolution.
-fn canonicalize_best_effort(path: &Path) -> PathBuf {
+/// Collapse `.` and `..` in `path` purely lexically, without touching the
+/// filesystem. Symlinks are not followed.
+fn lexically_normalize(path: &Path) -> PathBuf {
     use std::path::Component;
 
-    // First, logically normalize the path to eliminate `.` and `..`.
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -81,6 +92,15 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
             other => normalized.push(other),
         }
     }
+    normalized
+}
+
+/// Lexically normalize a path and then canonicalize the longest existing
+/// prefix so that distinct references to the same file (`./runok.yml` vs.
+/// `runok.yml`, or different symlinks pointing at the same target) hash to
+/// the same key. Used for cycle detection in extends resolution.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    let normalized = lexically_normalize(path);
 
     // Try full canonicalization on the normalized path.
     if let Ok(p) = normalized.canonicalize() {
@@ -676,6 +696,36 @@ mod tests {
             }
             other => panic!("expected PresetError::InvalidReference, got: {other:?}"),
         }
+    }
+
+    /// Overlay-style configurations drop a symlink whose target lives
+    /// outside `base_dir` into the config directory. The reference text
+    /// itself (`./work.yml`) stays inside `base_dir`, so the load must
+    /// succeed even though the symlink target is elsewhere on the
+    /// filesystem.
+    #[cfg(unix)]
+    #[rstest]
+    fn relative_extends_follows_symlink_outside_base_dir(tmp: TempDir) {
+        let base_dir = tmp.path().join("config");
+        fs::create_dir_all(&base_dir).unwrap();
+        let overlay_dir = tmp.path().join("overlay");
+        fs::create_dir_all(&overlay_dir).unwrap();
+
+        let overlay_target = overlay_dir.join("work.yml");
+        fs::write(
+            &overlay_target,
+            indoc! {"
+                rules:
+                  - allow: 'git status'
+            "},
+        )
+        .unwrap();
+
+        std::os::unix::fs::symlink(&overlay_target, base_dir.join("work.yml")).unwrap();
+
+        let config = load_local_preset("./work.yml", &base_dir).unwrap();
+        let rules = config.rules.unwrap();
+        assert_eq!(rules[0].allow.as_deref(), Some("git status"));
     }
 
     // === Circular reference detection ===

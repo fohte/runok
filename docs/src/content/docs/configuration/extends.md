@@ -26,7 +26,7 @@ Path resolution rules:
 - `~/...` expands to `$HOME`
 - `./...` and relative paths resolve from the directory containing the current config file
 - Absolute paths are used as-is
-- Path traversal beyond the filesystem root is rejected
+- References that escape the resolution root via `..` segments (for example `../../etc/passwd` from a relative path, or `~/../../etc/passwd`) are rejected. The check is purely lexical on the reference text — if the resolved path is a symlink, the target is followed normally even when it lives outside the resolution root, so overlay-style layouts (a symlink in `~/.config/runok/` pointing at a file managed by a separate repository) work as expected.
 
 ### GitHub Shorthand
 
