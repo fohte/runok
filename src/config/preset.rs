@@ -60,6 +60,11 @@ fn resolve_local_path(
 /// stays inside `root`. Examples that fail: `../../etc/passwd` (relative),
 /// `~/../../etc/passwd` (home).
 fn validate_within(resolved: &Path, root: &Path, reference: &str) -> Result<(), PresetError> {
+    // `root` is expected to be non-empty: `Path::starts_with` returns true
+    // for an empty prefix, which would let `..` references through. All
+    // callers (`resolve_local_path`) satisfy this — `base_dir` is supplied
+    // by the loader from an existing directory, and `home_dir()` filters
+    // out empty `$HOME`.
     let normalized = lexically_normalize(resolved);
     let normalized_root = lexically_normalize(root);
 
