@@ -127,9 +127,9 @@ See [Variable References (`<var:name>`)](/pattern-syntax/placeholders/#variable-
 
 ## Bug Fixes
 
-### `extends:` no longer rejects relative references whose target is a symlink outside the config directory ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### `extends:` no longer rejects relative references whose target is a symlink outside the config directory ([#346](https://github.com/fohte/runok/pull/346))
 
-Loading a relative `extends:` entry (for example `./work.yml`) failed with `path traversal detected: './work.yml' escapes the base directory` whenever the resolved path was a symlink whose target lived outside the config's own directory. This blocked overlay-style layouts that drop a symlink into `~/.config/runok/` pointing at a file managed by a separate repository, even though the reference text itself (`./work.yml`) stays inside the config directory.
+A relative `extends:` entry (for example `./preset.yml`) used to fail with `path traversal detected: './preset.yml' escapes the base directory` whenever the resolved path was a symlink whose target lived outside the config's own directory, even though the reference text itself (`./preset.yml`) does not contain `..`.
 
 The check that rejects `..`-based escapes (`../../etc/passwd`, `~/../../etc/passwd`, …) is now purely lexical on the reference string: a reference that does not itself contain `..` is always accepted regardless of where the underlying symlink points.
 
