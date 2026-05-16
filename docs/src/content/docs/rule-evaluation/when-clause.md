@@ -259,6 +259,34 @@ rules:
 Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported to child processes, so they don't appear in `env`. Use `os` instead of trying to read those through `env.OSTYPE`.
 :::
 
+### `shell` -- Shell-construct context
+
+An object describing the shell construct that immediately encloses the command being evaluated.
+
+| Field       | Type     | Description                                                                                                |
+| ----------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `loop_kind` | `string` | The kind of loop the command runs inside: `"while"`, `"until"`, `"for"`, or `""` when not inside any loop. |
+
+Nested loops surface the nearest enclosing kind. For example, `for x in a b; do until y; do sleep 1; done; done` reports `loop_kind == "until"` for `sleep 1`. Subshells do not reset the kind, so `(while x; do sleep 1; done)` still reports `"while"` inside the subshell.
+
+```yaml
+# Block polling loops that wrap a slow check in `sleep`. Prefer
+# deterministic alternatives like `gh pr checks --watch` or `kubectl wait`.
+rules:
+  - deny: 'sleep *'
+    when: 'shell.loop_kind in ["while", "until"]'
+    message: 'Polling loops are fragile. Use --watch / wait flags instead.'
+  - allow: 'sleep *'
+```
+
+`shell.loop_kind` is always set to one of the four values above; it is never null. Compare against the empty string to test "not inside any loop":
+
+```yaml
+rules:
+  - allow: 'sleep *'
+    when: 'shell.loop_kind == ""'
+```
+
 ## Filesystem functions
 
 A `fs` namespace exposes read-only filesystem checks for use inside `when` clauses. These functions let a rule depend on whether a marker file or directory exists on disk -- for example, to gate a rule on the presence of a `.git` directory or a flag file dropped by another tool.

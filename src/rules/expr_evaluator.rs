@@ -108,6 +108,10 @@ pub struct ExprContext {
     /// Rust's [`std::env::consts::OS`] (e.g. `"macos"`, `"linux"`,
     /// `"windows"`, `"freebsd"`).
     pub os: String,
+    /// The kind of shell loop that immediately encloses the command being
+    /// evaluated. Exposed to CEL as `shell.loop_kind`. Values: `"while"`,
+    /// `"until"`, `"for"`, or `""` when the command is not inside any loop.
+    pub loop_kind: String,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -191,6 +195,13 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
 
     cel_context.add_variable_from_value("os", context.os.clone());
 
+    // Register shell.* fields as a nested map (currently only `loop_kind`).
+    let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([(
+        "loop_kind".to_string(),
+        cel_interpreter::Value::String(context.loop_kind.clone().into()),
+    )]);
+    cel_context.add_variable_from_value("shell", shell_value);
+
     cel_context.add_variable_from_value("fs", fs_sentinel());
     // `exists` is also the name of CEL's built-in comprehension macro
     // (`list.exists(v, pred)`), but cel-parser dispatches the 2-arg
@@ -228,6 +239,7 @@ mod tests {
             vars: HashMap::new(),
             flag_groups: HashMap::new(),
             os: String::new(),
+            loop_kind: String::new(),
         }
     }
 
@@ -573,6 +585,24 @@ mod tests {
     ) {
         let context = ExprContext {
             redirects,
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    // === shell.loop_kind variable access ===
+
+    #[rstest]
+    #[case::until_matches("shell.loop_kind == 'until'", "until", true)]
+    #[case::while_matches("shell.loop_kind == 'while'", "while", true)]
+    #[case::for_matches("shell.loop_kind == 'for'", "for", true)]
+    #[case::empty_no_loop("shell.loop_kind == ''", "", true)]
+    #[case::polling_loop_set("shell.loop_kind in ['while', 'until']", "until", true)]
+    #[case::polling_loop_unset("shell.loop_kind in ['while', 'until']", "", false)]
+    #[case::for_excluded_from_polling_set("shell.loop_kind in ['while', 'until']", "for", false)]
+    fn shell_loop_kind_access(#[case] expr: &str, #[case] loop_kind: &str, #[case] expected: bool) {
+        let context = ExprContext {
+            loop_kind: loop_kind.to_string(),
             ..empty_context()
         };
         assert_eq!(evaluate(expr, &context).unwrap(), expected);

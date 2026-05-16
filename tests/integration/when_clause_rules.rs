@@ -572,6 +572,80 @@ fn pipe_stdin_prevents_shell_execution(
 }
 
 // ========================================
+// shell.loop_kind detection (polling-loop prevention)
+//
+// Real-world target: agents that wrap a slow check in `until ...; do
+// sleep N; done` instead of using `--watch` / `wait` flags. The `when`
+// clause keys off `shell.loop_kind` so `sleep` outside a loop is still
+// allowed.
+// ========================================
+
+#[rstest]
+#[case::sleep_alone_allowed("sleep 5", assert_allow as ActionAssertion)]
+#[case::sleep_in_until_denied(
+    "until ready; do sleep 30; done",
+    assert_deny as ActionAssertion,
+)]
+#[case::sleep_in_while_denied(
+    "while alive; do sleep 5; done",
+    assert_deny as ActionAssertion,
+)]
+#[case::sleep_in_for_allowed(
+    "for i in 1 2; do sleep 1; done",
+    assert_allow as ActionAssertion,
+)]
+#[case::sleep_in_subshell_loop_denied(
+    "(until ready; do sleep 30; done)",
+    assert_deny as ActionAssertion,
+)]
+#[case::sleep_in_nested_until_inside_for_denied(
+    "for x in a b; do until y; do sleep 1; done; done",
+    assert_deny as ActionAssertion,
+)]
+fn shell_loop_kind_blocks_polling_loops(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'sleep *'
+            when: 'shell.loop_kind in [\"while\", \"until\"]'
+          - allow: 'sleep *'
+          - allow: 'ready'
+          - allow: 'alive'
+          - allow: 'y'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// `for i in ...; do <single>; done` produces exactly one extracted sub-command,
+// which routes through the single-command (`evaluate_command`) path instead of
+// the compound branch. Pin that `shell.loop_kind` survives that route.
+#[rstest]
+#[case::for_single_body_matches("for i in 1 2; do sleep 1; done", assert_deny as ActionAssertion)]
+#[case::sleep_outside_loop_allowed("sleep 1", assert_allow as ActionAssertion)]
+fn shell_loop_kind_reaches_single_command_path(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'sleep *'
+            when: 'shell.loop_kind == \"for\"'
+          - allow: 'sleep *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Redirect descriptor check in when clause
 // ========================================
 

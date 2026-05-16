@@ -86,6 +86,12 @@ pub struct ExtractedCommand {
     pub redirects: Vec<RedirectInfo>,
     /// Pipeline position information.
     pub pipe: PipeInfo,
+    /// The kind of shell loop that immediately encloses this command:
+    /// `"while"`, `"until"`, `"for"`, or `""` when outside any loop.
+    /// Nested loops surface the nearest enclosing kind. Subshells do
+    /// not reset this — a command in `(while x; do sleep 1; done)`
+    /// still sees `"while"`.
+    pub loop_kind: String,
 }
 
 /// Parse a command string into a structured `ParsedCommand`.
@@ -685,6 +691,7 @@ pub fn extract_commands_with_metadata(
         &mut commands,
         &PipeInfo::default(),
         &[],
+        "",
     );
 
     Ok(commands)
@@ -752,12 +759,16 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
 ///
 /// `pipe_info` carries the current pipeline position context.
 /// `redirects` carries redirect info inherited from a parent `redirected_statement`.
+/// `loop_kind` carries the kind of shell loop (`"while"`, `"until"`, `"for"`,
+/// or `""`) that immediately encloses the current node. Nested loops surface
+/// the nearest enclosing kind. Subshells propagate the kind unchanged.
 fn collect_commands(
     node: tree_sitter::Node,
     source: &[u8],
     commands: &mut Vec<ExtractedCommand>,
     pipe_info: &PipeInfo,
     redirects: &[RedirectInfo],
+    loop_kind: &str,
 ) {
     match node.kind() {
         // Transparent containers (except pipeline): recurse into all named children.
@@ -771,13 +782,23 @@ fn collect_commands(
         | "else_clause"
         | "command_substitution"
         | "process_substitution"
-        | "while_statement"
         | "if_statement"
         | "elif_clause"
         | "negated_command" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands, pipe_info, redirects);
+                collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+            }
+        }
+        // while_statement covers both `while` and `until` in tree-sitter-bash.
+        // The leading anonymous token (`while` or `until`) distinguishes them;
+        // it sets `loop_kind` for the condition, body, and any nested commands.
+        // A nested loop further down overrides this (nearest parent wins).
+        "while_statement" => {
+            let kind = detect_while_or_until(node, source);
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_commands(child, source, commands, pipe_info, redirects, kind);
             }
         }
         // pipeline: compute pipe position for each child command.
@@ -792,21 +813,25 @@ fn collect_commands(
                     stdin: pipe_info.stdin || i > 0,
                     stdout: pipe_info.stdout || i < len - 1,
                 };
-                collect_commands(*child, source, commands, &child_pipe, redirects);
+                collect_commands(*child, source, commands, &child_pipe, redirects, loop_kind);
             }
         }
-        // for_statement: recurse into body (do_group) and any command_substitution
-        // nodes in the value list. Literal values (number, word, etc.) are skipped.
+        // for_statement: recurse into body (do_group) for loop-body commands,
+        // and into value-list items to find nested command substitutions.
+        // The body runs inside the loop (`loop_kind = "for"`); value-list
+        // substitutions run once before the loop body, so they keep
+        // `loop_kind = ""` whether the substitution is bare (`$(cmd)`) or
+        // quoted (`"$(cmd)"`).
         "for_statement" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
-                    "do_group" | "command_substitution" => {
-                        collect_commands(child, source, commands, pipe_info, redirects);
+                    "do_group" => {
+                        collect_commands(child, source, commands, pipe_info, redirects, "for");
                     }
-                    // Recurse into value list items (e.g. string nodes)
-                    // to find nested command substitutions like
-                    // `for i in "$(cmd)"; do ...`.
+                    "command_substitution" | "process_substitution" => {
+                        collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                    }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
                     }
@@ -822,10 +847,10 @@ fn collect_commands(
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "case_item" => {
-                        collect_commands(child, source, commands, pipe_info, redirects);
+                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
                     }
                     "command_substitution" => {
-                        collect_commands(child, source, commands, pipe_info, redirects);
+                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
                     }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
@@ -846,7 +871,7 @@ fn collect_commands(
                 if node.field_name_for_child(i as u32) == Some("value") {
                     collect_substitutions_recursive(child, source, commands);
                 } else {
-                    collect_commands(child, source, commands, pipe_info, redirects);
+                    collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
                 }
             }
         }
@@ -879,7 +904,7 @@ fn collect_commands(
                 // No swallowed continuation: behave like a plain
                 // redirected statement.
                 (None, Some(body)) => {
-                    collect_commands(body, source, commands, pipe_info, &all_redirects);
+                    collect_commands(body, source, commands, pipe_info, &all_redirects, loop_kind);
                 }
                 // Swallowed continuation: synthesize the outer
                 // pipeline `[body, *pipe_stages]` and emit each stage
@@ -908,14 +933,21 @@ fn collect_commands(
                         };
                         let stage_redirects: &[RedirectInfo] =
                             if i == 0 { &all_redirects } else { redirects };
-                        collect_commands(*stage, source, commands, &stage_pipe, stage_redirects);
+                        collect_commands(
+                            *stage,
+                            source,
+                            commands,
+                            &stage_pipe,
+                            stage_redirects,
+                            loop_kind,
+                        );
                     }
                     let arm_pipe = PipeInfo {
                         stdin: false,
                         stdout: pipe_info.stdout,
                     };
                     for arm in &continuation.list_arms {
-                        collect_commands(*arm, source, commands, &arm_pipe, redirects);
+                        collect_commands(*arm, source, commands, &arm_pipe, redirects, loop_kind);
                     }
                 }
                 // body field missing — defensive only; tree-sitter
@@ -960,7 +992,7 @@ fn collect_commands(
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands, pipe_info, redirects);
+                collect_commands(body, source, commands, pipe_info, redirects, loop_kind);
             }
         }
         // command node: strip leading variable_assignment children
@@ -998,11 +1030,21 @@ fn collect_commands(
                         // or a command substitution (e.g. `echo $(ls foo)`)
                         // runs in its own process, so sub-commands must be
                         // extracted without inheriting the outer pipe /
-                        // redirect context. The outer command text is still
-                        // emitted below and handled by the self-reference
-                        // filter in `evaluate_command_inner`.
+                        // redirect context. `loop_kind` is preserved because
+                        // a subshell is still lexically inside any enclosing
+                        // loop (`while x; do echo $(sleep 1); done` keeps
+                        // `sleep` in the `"while"` loop). The outer command
+                        // text is still emitted below and handled by the
+                        // self-reference filter in `evaluate_command_inner`.
                         "command_substitution" | "subshell" => {
-                            collect_commands(child, source, commands, &PipeInfo::default(), &[]);
+                            collect_commands(
+                                child,
+                                source,
+                                commands,
+                                &PipeInfo::default(),
+                                &[],
+                                loop_kind,
+                            );
                             if let Some(token) = dequote_node(child, source) {
                                 argv.push(token);
                             }
@@ -1053,6 +1095,7 @@ fn collect_commands(
                     argv,
                     redirects: cmd_redirects,
                     pipe: pipe_info.clone(),
+                    loop_kind: loop_kind.to_string(),
                 });
             }
         }
@@ -1109,6 +1152,7 @@ fn collect_commands(
                     argv,
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
+                    loop_kind: loop_kind.to_string(),
                 });
             }
         }
@@ -1125,10 +1169,39 @@ fn collect_commands(
                     argv: Vec::new(),
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
+                    loop_kind: loop_kind.to_string(),
                 });
             }
         }
     }
+}
+
+/// Inspect a `while_statement` node and return `"until"` if the leading
+/// anonymous token is `until`, otherwise `"while"`. tree-sitter-bash uses a
+/// single `while_statement` kind to represent both constructs, distinguished
+/// only by which keyword leads the node.
+fn detect_while_or_until(node: tree_sitter::Node, source: &[u8]) -> &'static str {
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i as u32) else {
+            continue;
+        };
+        if child.is_named() {
+            continue;
+        }
+        if let Some(bytes) = source.get(child.start_byte()..child.end_byte())
+            && let Ok(text) = std::str::from_utf8(bytes)
+        {
+            match text.trim() {
+                "until" => return "until",
+                "while" => return "while",
+                _ => continue,
+            }
+        }
+    }
+    // Unreachable in practice: tree-sitter-bash always emits one of the
+    // two keywords. Stay inside the loop sentinel set to keep callers
+    // safe if the grammar shape ever shifts.
+    "while"
 }
 
 /// Decode a `variable_assignment` AST node (`KEY=VALUE`,
@@ -1428,8 +1501,12 @@ fn collect_substitutions_recursive(
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
+            // Substitutions reached through this helper appear in
+            // for-value lists, case-pattern values, or variable
+            // assignments — all of which run outside any enclosing
+            // loop body, so loop_kind resets to "".
             "command_substitution" | "process_substitution" => {
-                collect_commands(child, source, commands, &PipeInfo::default(), &[]);
+                collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
             }
             _ => {
                 collect_substitutions_recursive(child, source, commands);
@@ -2244,6 +2321,64 @@ mod tests {
     fn extract_nested_control_structures(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = extract_commands(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: loop_kind
+    //
+    // Surfaces the enclosing-loop kind on every sub-command so CEL
+    // `when` clauses can deny `sleep` polling loops via
+    // `shell.loop_kind in ["while", "until"]`.
+    // ========================================
+
+    #[rstest]
+    #[case::no_loop("sleep 5", vec![("sleep 5", "")])]
+    #[case::until_body(
+        "until ready; do sleep 1; done",
+        vec![("ready", "until"), ("sleep 1", "until")],
+    )]
+    #[case::while_body(
+        "while alive; do sleep 1; done",
+        vec![("alive", "while"), ("sleep 1", "while")],
+    )]
+    #[case::for_body(
+        "for i in 1 2 3; do echo $i; done",
+        vec![("echo $i", "for")],
+    )]
+    #[case::nested_until_in_for(
+        "for x in a b; do until y; do sleep 1; done; done",
+        vec![("y", "until"), ("sleep 1", "until")],
+    )]
+    #[case::subshell_wraps_loop(
+        "(while x; do sleep 1; done)",
+        vec![("x", "while"), ("sleep 1", "while")],
+    )]
+    #[case::pipeline_inside_loop(
+        "while alive; do gh pr checks 1 | grep -q ok; done",
+        vec![("alive", "while"), ("gh pr checks 1", "while"), ("grep -q ok", "while")],
+    )]
+    #[case::loop_followed_by_outside(
+        "while alive; do sleep 1; done; echo done",
+        vec![("alive", "while"), ("sleep 1", "while"), ("echo done", "")],
+    )]
+    // For-value-list substitutions run once before the loop body in bash, so
+    // they keep `loop_kind == ""` regardless of whether the substitution is
+    // bare or quoted — quoting shouldn't change rule-matching semantics.
+    #[case::for_value_substitution_bare(
+        "for i in $(seed); do echo $i; done",
+        vec![("seed", ""), ("echo $i", "for")],
+    )]
+    #[case::for_value_substitution_quoted(
+        r#"for i in "$(seed)"; do echo $i; done"#,
+        vec![("seed", ""), ("echo $i", "for")],
+    )]
+    fn extract_loop_kind(#[case] input: &str, #[case] expected: Vec<(&str, &str)>) {
+        let result = extract_commands_with_metadata(input).unwrap();
+        let actual: Vec<(&str, &str)> = result
+            .iter()
+            .map(|ec| (ec.command.as_str(), ec.loop_kind.as_str()))
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     // ========================================
