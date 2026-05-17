@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.0](https://github.com/fohte/runok/compare/v0.2.4...v0.3.0) (2026-05-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pattern:** expand `*` in command-name patterns as a glob ([#343](https://github.com/fohte/runok/issues/343))
+* **audit:** consolidate audit log JSON entries into command_evaluations ([#333](https://github.com/fohte/runok/issues/333))
+* **command-parser:** drop the char-level tokenizer in favor of an AST-only path ([#330](https://github.com/fohte/runok/issues/330))
+
+### Features
+
+* **audit:** consolidate audit log JSON entries into command_evaluations ([#333](https://github.com/fohte/runok/issues/333)) ([dbea3e7](https://github.com/fohte/runok/commit/dbea3e71586eec78519ab33e6f71d800e931bb44))
+* **pattern:** expand `*` in command-name patterns as a glob ([#343](https://github.com/fohte/runok/issues/343)) ([d6655af](https://github.com/fohte/runok/commit/d6655af264a28ebc64420fa5a84773d2f229beef))
+* **vars:** add `pattern` type to definitions.vars ([#334](https://github.com/fohte/runok/issues/334)) ([49f6212](https://github.com/fohte/runok/commit/49f6212ce93a36763327add0037eba712479c7bc))
+* **when:** allow `when` clauses to branch on the host OS via the `os` variable ([#336](https://github.com/fohte/runok/issues/336)) ([f882338](https://github.com/fohte/runok/commit/f8823389c164b2fac06aa11b949fea13b22c7a9c))
+* **when:** allow `when` clauses to check filesystem state via `fs.*` functions ([#341](https://github.com/fohte/runok/issues/341)) ([1e675fc](https://github.com/fohte/runok/commit/1e675fc19b1894354ed40ff72f7c09bc31c7aa18))
+* **when:** expose `shell.loop_kind` for matching commands inside shell loops ([#345](https://github.com/fohte/runok/issues/345)) ([5b59604](https://github.com/fohte/runok/commit/5b596049c1f3466addcca524d20eb29b43e77cf5))
+
+
+### Bug Fixes
+
+* **audit:** exit silently on broken pipe ([#337](https://github.com/fohte/runok/issues/337)) ([1feddf1](https://github.com/fohte/runok/commit/1feddf1b648f06c12f1ba5ba20d08e74eac262ff))
+* **check:** split plaintext stdin at shell statement boundaries ([#332](https://github.com/fohte/runok/issues/332)) ([1004dcd](https://github.com/fohte/runok/commit/1004dcd74268fce6d14ee649cc8c8b572b32c9f5))
+* **command-parser:** drop the char-level tokenizer in favor of an AST-only path ([#330](https://github.com/fohte/runok/issues/330)) ([5dc8483](https://github.com/fohte/runok/commit/5dc8483ccc8ed48c466f2e3ecf99aea18f7919a7))
+* **command-parser:** extract trailing arms of heredoc-bearing compound commands as sub-commands ([#340](https://github.com/fohte/runok/issues/340)) ([9bb68ce](https://github.com/fohte/runok/commit/9bb68ced24c089d9d8aa15233ed13e1afbd8042d))
+* **command-parser:** parse shell builtins like export/unset again ([#342](https://github.com/fohte/runok/issues/342)) ([0c45b90](https://github.com/fohte/runok/commit/0c45b9008bc88239482f1f6cae0d9a875f9b063c))
+* **preset:** allow symlinked extends targets outside the config directory ([#346](https://github.com/fohte/runok/issues/346)) ([76713c3](https://github.com/fohte/runok/commit/76713c390cc1b382066eab4d67be3ef6eace794f))
+* **test:** strip inline tests from local-extended children of remote presets ([#339](https://github.com/fohte/runok/issues/339)) ([63b6830](https://github.com/fohte/runok/commit/63b6830a6bee310c830dc476140e6678e03a25c8))
+
 ## [0.2.4](https://github.com/fohte/runok/compare/v0.2.3...v0.2.4) (2026-05-03)
 
 
