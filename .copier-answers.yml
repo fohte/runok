@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier
-_commit: v0.6.4
+_commit: v0.6.5
 _src_path: https://github.com/fohte/generic-boilerplate
 auto_merge_release_pr: false
 binary_name: runok
