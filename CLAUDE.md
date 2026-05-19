@@ -98,6 +98,6 @@ When a PR introduces user-facing changes (new features, bug fixes, breaking chan
 
 ### Use the `shlex` crate for shell quoting and splitting
 
-Use `shlex::try_join`, `shlex::try_quote`, and `shlex::split` for shell quoting and command splitting. Do not implement custom shell quoting or whitespace-based command splitting.
-=======
->>>>>>> after updating
+# Use `shlex::try_join`, `shlex::try_quote`, and `shlex::split` for shell quoting and command splitting. Do not implement custom shell quoting or whitespace-based command splitting.
+
+> > > > > > > after updating
