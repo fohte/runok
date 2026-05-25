@@ -20,8 +20,8 @@ importers:
         specifier: 0.24.0
         version: 0.24.0(@astrojs/starlight@0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
       starlight-llms-txt:
-        specifier: 0.8.0
-        version: 0.8.0(@astrojs/starlight@0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
+        specifier: 0.10.0
+        version: 0.10.0(@astrojs/starlight@0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
     devDependencies:
       wrangler:
         specifier: 4.92.0
@@ -3218,10 +3218,10 @@ packages:
       '@astrojs/starlight': '>=0.38.0'
       astro: '>=6.0.0'
 
-  starlight-llms-txt@0.8.0:
+  starlight-llms-txt@0.10.0:
     resolution:
       {
-        integrity: sha512-SyENqKy5SMms0/RsEPLv1wLI3EvqZeVgVKQZ6umBR4PXEiIg9iisxXPD3lXOdoxEr+ro4Z/9z731UVOgz8LGKA==,
+        integrity: sha512-LgkSjkvdACsGHkFq1ES00F0BU4lRepjJoaUmOgxBxNWx4txwpySVPtntKdAvDvlhinyN0ZBRpnAsN/sVQ1UEfA==,
       }
     peerDependencies:
       '@astrojs/starlight': '>=0.38.0'
@@ -6046,7 +6046,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  starlight-llms-txt@0.8.0(@astrojs/starlight@0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)):
+  starlight-llms-txt@0.10.0(@astrojs/starlight@0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)))(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3)):
     dependencies:
       '@astrojs/mdx': 5.0.4(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
       '@astrojs/starlight': 0.38.3(astro@6.1.10(@types/node@24.12.2)(rollup@4.60.2)(yaml@2.8.3))
