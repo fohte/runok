@@ -6,11 +6,11 @@
   ],
   packageRules: [
     // docs/ site dependencies are not part of the runok CLI release.
-    // Override the shared 'deps:' commit type to 'chore:' so that
-    // release-please does not trigger a version bump for docs-only updates.
+    // Use 'docs:' so PR titles distinguish docs-only updates from CLI updates;
+    // release-please keeps 'docs' hidden, so no version bump or CHANGELOG entry.
     {
       matchFileNames: ['docs/**'],
-      commitMessagePrefix: 'chore:',
+      commitMessagePrefix: 'docs:',
       semanticCommitScope: null,
     },
     // docs/ dependencies: automerge patch for all, minor for devDependencies only.
