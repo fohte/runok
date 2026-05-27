@@ -7,7 +7,8 @@ on:
       - release-please--branches--*
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write
 
 jobs:
   test:
@@ -17,11 +18,17 @@ jobs:
       RUSTC_WRAPPER: 'sccache'
 
     steps:
+<<<<<<< before updating
       - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         id: app-token
+=======
+      - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        id: octo-sts
+>>>>>>> after updating
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          scope: fohte
+          identity: ${{ github.event.repository.name }}
+          domain: octo-sts.fohte.net
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -73,11 +80,15 @@ jobs:
 
       - name: Commit formatted files
         if: ${{ !cancelled() && steps.check-auto-format.outputs.skip_commit != 'true' }}
+<<<<<<< before updating
         uses: suzuki-shunsuke/commit-action@44cc32c01e261a029c0161ff908a3a2895bfc46f # v0.1.2
+=======
+        uses: suzuki-shunsuke/commit-action@06e3b49d4706498d325d29bd85adc82ecf2f5d8f # v1.0.0
+>>>>>>> after updating
         with:
           commit_message: 'style: auto-format'
           workflow: deny
-          github_token: ${{ steps.app-token.outputs.token }}
+          github_token: ${{ steps.octo-sts.outputs.token }}
 
       - name: Fail if lefthook failed
         if: steps.lefthook.outcome == 'failure'
@@ -119,7 +130,11 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
       - name: Install cargo-llvm-cov
+<<<<<<< before updating
         uses: taiki-e/install-action@58e862542551f667fa44c8a2a4a1d64ad477c96a # v2.75.17
+=======
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+>>>>>>> after updating
         with:
           tool: cargo-llvm-cov
 
@@ -130,7 +145,7 @@ jobs:
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
