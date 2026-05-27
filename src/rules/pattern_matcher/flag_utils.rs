@@ -80,26 +80,23 @@ pub(crate) fn is_flag_only_negation(inner: &PatternToken) -> bool {
 pub(crate) fn optional_flags_absent(optional_tokens: &[PatternToken], cmd_tokens: &[&str]) -> bool {
     for token in optional_tokens {
         match token {
-            PatternToken::FlagWithValue { aliases, .. } => {
+            PatternToken::FlagWithValue { aliases, .. }
                 if cmd_tokens
                     .iter()
-                    .any(|t| flag_aliases_match_token(aliases, t))
-                {
-                    return false;
-                }
+                    .any(|t| flag_aliases_match_token(aliases, t)) =>
+            {
+                return false;
             }
-            PatternToken::Literal(s) if s.starts_with('-') => {
-                if cmd_tokens.contains(&s.as_str()) {
-                    return false;
-                }
+            PatternToken::Literal(s) if s.starts_with('-') && cmd_tokens.contains(&s.as_str()) => {
+                return false;
             }
-            PatternToken::Alternation(alts) if alts.iter().any(|a| a.starts_with('-')) => {
-                if cmd_tokens
-                    .iter()
-                    .any(|t| alts.iter().any(|a| literal_matches(a, t)))
-                {
-                    return false;
-                }
+            PatternToken::Alternation(alts)
+                if alts.iter().any(|a| a.starts_with('-'))
+                    && cmd_tokens
+                        .iter()
+                        .any(|t| alts.iter().any(|a| literal_matches(a, t))) =>
+            {
+                return false;
             }
             _ => {}
         }
