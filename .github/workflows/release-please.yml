@@ -24,23 +24,14 @@ jobs:
       prs_created: ${{ steps.release.outputs.prs_created }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
-<<<<<<< before updating
-      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-        id: app-token
-=======
       - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
         id: octo-sts
->>>>>>> after updating
         with:
           scope: fohte
           identity: ${{ github.event.repository.name }}-release-please
           domain: octo-sts.fohte.net
 
-<<<<<<< before updating
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
-=======
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
->>>>>>> after updating
         id: release
         with:
           token: ${{ steps.octo-sts.outputs.token }}

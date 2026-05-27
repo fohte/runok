@@ -15,15 +15,9 @@ jobs:
       startsWith(github.head_ref, 'renovate/https-github.com-fohte-generic-boilerplate-')
 
     steps:
-<<<<<<< before updating
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-=======
       - name: Federate GitHub token via octo-sts
         id: octo-sts
         uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
->>>>>>> after updating
         with:
           scope: fohte
           identity: ${{ github.event.repository.name }}-renovate-copier
@@ -42,11 +36,7 @@ jobs:
           fi
 
       - name: Commit and push changes
-<<<<<<< before updating
-        uses: suzuki-shunsuke/commit-action@44cc32c01e261a029c0161ff908a3a2895bfc46f # v0.1.2
-=======
         uses: suzuki-shunsuke/commit-action@06e3b49d4706498d325d29bd85adc82ecf2f5d8f # v1.0.0
->>>>>>> after updating
         with:
           commit_message: 'chore: restore executable bit on scripts/bootstrap'
           workflow: deny
