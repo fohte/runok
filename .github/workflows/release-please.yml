@@ -43,7 +43,7 @@ jobs:
     if: needs.release-please.outputs.prs_created == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      id-token: write
     steps:
       - name: Extract PR info
         id: pr-info
@@ -56,15 +56,16 @@ jobs:
           echo "head_branch=$head_branch" >> "$GITHUB_OUTPUT"
           echo "tag_name=v${version}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-        id: app-token
+      - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        id: octo-sts
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          scope: fohte
+          identity: ${{ github.event.repository.name }}-release-please
+          domain: octo-sts.fohte.net
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.octo-sts.outputs.token }}
           ref: ${{ steps.pr-info.outputs.head_branch }}
           fetch-depth: 0
 
@@ -79,7 +80,7 @@ jobs:
           commit_message: 'docs(releases): add ${{ steps.pr-info.outputs.tag_name }} release notes'
           branch: ${{ steps.pr-info.outputs.head_branch }}
           workflow: deny
-          github_token: ${{ steps.app-token.outputs.token }}
+          github_token: ${{ steps.octo-sts.outputs.token }}
 
   publish-crates-io:
     needs: release-please
@@ -245,17 +246,17 @@ jobs:
     if: always() && needs.build-release.result == 'success' && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-        id: app-token
+      - uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        id: octo-sts
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: fohte
-          repositories: homebrew-tap
+          scope: fohte
+          identity: runok-publish-homebrew
+          domain: octo-sts.fohte.net
 
       - name: Generate Homebrew formula
         env:
@@ -277,7 +278,7 @@ jobs:
 
       - name: Push formula to homebrew-tap
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           TAG_NAME: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
         run: |
           version="${TAG_NAME#v}"
