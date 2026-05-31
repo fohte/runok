@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### Command aliases (TODO(pr-link))
+### Command aliases ([#377](https://github.com/fohte/runok/pull/377))
 
 Add a top-level `aliases` field that rewrites the leading tokens of a command before rule evaluation. Each alias name maps to one or more patterns; when a command matches an alias pattern as a prefix, the matching portion is replaced with the alias name and the rewritten command flows through normal rule evaluation. Rules keyed on the alias name (for example `allow: 'a *'`) then cover commands invoked through development wrappers like `cargo run -- ...`.
 
