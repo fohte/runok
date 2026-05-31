@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::{AliasDefinition, Config, Definitions};
 use crate::rules::RuleError;
-use crate::rules::command_parser::parse_command;
+use crate::rules::command_parser::{FlagSchema, parse_command};
 use crate::rules::pattern_matcher::matches_with_captures;
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
 use crate::rules::rule_engine::build_flag_schema;
@@ -67,7 +67,7 @@ pub fn expand_aliases(command: &str, config: &Config) -> Result<AliasExpansion, 
     // Pre-parse each alias pattern once and append a trailing wildcard so
     // the existing matcher captures the remaining argv. Ordering by alias
     // name keeps matching deterministic across HashMap iteration orders.
-    let parsed = parse_alias_patterns(aliases)?;
+    let parsed = parse_alias_patterns(aliases, definitions)?;
 
     let mut current = command.to_string();
     let mut chain: Vec<String> = Vec::new();
@@ -92,11 +92,17 @@ pub fn expand_aliases(command: &str, config: &Config) -> Result<AliasExpansion, 
 }
 
 struct ParsedAliases {
-    entries: Vec<(String, Vec<Pattern>)>,
+    entries: Vec<(String, Vec<ParsedAliasPattern>)>,
+}
+
+struct ParsedAliasPattern {
+    pattern: Pattern,
+    schema: FlagSchema,
 }
 
 fn parse_alias_patterns(
     aliases: &HashMap<String, AliasDefinition>,
+    definitions: &Definitions,
 ) -> Result<ParsedAliases, RuleError> {
     let mut names: Vec<&String> = aliases.keys().collect();
     names.sort();
@@ -104,14 +110,18 @@ fn parse_alias_patterns(
     let mut entries = Vec::with_capacity(aliases.len());
     for name in names {
         let def = &aliases[name];
-        let mut patterns: Vec<Pattern> = Vec::new();
+        let mut patterns: Vec<ParsedAliasPattern> = Vec::new();
         for pat_str in def.patterns() {
             for mut pat in parse_multi(pat_str)? {
                 // Append a trailing wildcard so the matcher consumes any
                 // remaining argv beyond the alias prefix and surfaces it
                 // through `MatchCaptures.wildcards`.
                 pat.tokens.push(PatternToken::Wildcard);
-                patterns.push(pat);
+                let schema = build_flag_schema(&pat, definitions);
+                patterns.push(ParsedAliasPattern {
+                    pattern: pat,
+                    schema,
+                });
             }
         }
         entries.push((name.clone(), patterns));
@@ -130,13 +140,15 @@ fn try_apply_once(
     definitions: &Definitions,
 ) -> Result<Option<AliasHit>, RuleError> {
     for (alias, patterns) in &parsed.entries {
-        for pattern in patterns {
-            let schema = build_flag_schema(pattern, definitions);
-            let parsed_command = match parse_command(command, &schema) {
-                Ok(p) => p,
-                Err(_) => return Ok(None),
+        for entry in patterns {
+            // A schema-specific parse failure shouldn't abort the whole
+            // expansion — other aliases may still match the command with
+            // a schema that resolves the offending flag differently.
+            let Ok(parsed_command) = parse_command(command, &entry.schema) else {
+                continue;
             };
-            let Some(captures) = matches_with_captures(pattern, &parsed_command, definitions)
+            let Some(captures) =
+                matches_with_captures(&entry.pattern, &parsed_command, definitions)
             else {
                 continue;
             };

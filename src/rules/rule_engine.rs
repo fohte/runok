@@ -549,7 +549,11 @@ fn evaluate_simple_command(
         (None, Some(wrapper)) => wrapper,
         (None, None) => unreachable!("at least one result exists"),
     };
-    merged.alias_chain = alias_chain;
+    // Outer (this evaluation) aliases fired first; preserve any inner-wrapper
+    // aliases that the recursive call collected after them.
+    let mut final_chain = alias_chain;
+    final_chain.extend(merged.alias_chain);
+    merged.alias_chain = final_chain;
     Ok(merged)
 }
 
