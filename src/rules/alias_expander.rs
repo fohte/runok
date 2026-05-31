@@ -424,6 +424,25 @@ mod tests {
         assert_eq!(exp.command, expected);
     }
 
+    /// Alias name == command name (e.g. `kubectl: kubectl [-n *]`) must
+    /// produce a sensible rewrite without infinite expansion. The cycle
+    /// detector stops the loop after one fire even when the rewrite is
+    /// identical to the input.
+    #[rstest]
+    #[case::optional_present("kubectl -n prod get pods", "kubectl get pods")]
+    #[case::optional_absent("kubectl get pods", "kubectl get pods")]
+    #[case::only_flag_value("kubectl -n prod", "kubectl")]
+    fn alias_name_equals_command_name(#[case] input: &str, #[case] expected: &str) {
+        let cfg = config_from(indoc! {"
+            aliases:
+              kubectl:
+                - 'kubectl [-n *]'
+        "});
+        let exp = expand_aliases(input, &cfg).unwrap();
+        assert_eq!(exp.command, expected);
+        assert_eq!(exp.chain, vec!["kubectl"]);
+    }
+
     /// `<var:name>` captures the matched token but the token is still part
     /// of the consumed prefix, so it must not leak into the rewritten tail.
     #[test]
