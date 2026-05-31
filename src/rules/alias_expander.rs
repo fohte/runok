@@ -8,16 +8,26 @@
 //! evaluation, so existing rules keyed on the alias name (e.g. `a *`) apply
 //! unchanged.
 //!
+//! Prefix matching is delegated to the regular rule pattern matcher: each
+//! alias pattern has a trailing `*` token appended so the matcher captures
+//! any remaining argv as wildcards, and the rewritten command is built from
+//! the alias name plus those captured tokens. This means the full pattern
+//! syntax (literals, alternations, optional groups, flag-with-value, var
+//! refs, flag groups, ...) is available to alias authors without reimplementing
+//! any matching logic.
+//!
 //! Expansion is recursive: a rewritten command may itself match another
 //! alias. Cycles are detected by tracking the chain of applied alias names
 //! and a hard depth limit caps runaway expansion.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::AliasDefinition;
+use crate::config::{AliasDefinition, Config, Definitions};
 use crate::rules::RuleError;
-use crate::rules::command_parser::tokenize_command;
+use crate::rules::command_parser::parse_command;
+use crate::rules::pattern_matcher::matches_with_captures;
 use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
+use crate::rules::rule_engine::build_flag_schema;
 
 /// Maximum number of alias rewrites applied to a single command.
 pub const MAX_ALIAS_DEPTH: usize = 5;
@@ -37,11 +47,8 @@ pub struct AliasExpansion {
 /// Returns the (possibly rewritten) command together with the chain of
 /// alias names that fired. When no alias applies, the original command is
 /// returned with an empty chain.
-pub fn expand_aliases(
-    command: &str,
-    aliases: Option<&HashMap<String, AliasDefinition>>,
-) -> Result<AliasExpansion, RuleError> {
-    let Some(aliases) = aliases else {
+pub fn expand_aliases(command: &str, config: &Config) -> Result<AliasExpansion, RuleError> {
+    let Some(aliases) = config.aliases.as_ref() else {
         return Ok(AliasExpansion {
             command: command.to_string(),
             chain: Vec::new(),
@@ -54,6 +61,12 @@ pub fn expand_aliases(
         });
     }
 
+    let default_defs = Definitions::default();
+    let definitions = config.definitions.as_ref().unwrap_or(&default_defs);
+
+    // Pre-parse each alias pattern once and append a trailing wildcard so
+    // the existing matcher captures the remaining argv. Ordering by alias
+    // name keeps matching deterministic across HashMap iteration orders.
     let parsed = parse_alias_patterns(aliases)?;
 
     let mut current = command.to_string();
@@ -61,16 +74,15 @@ pub fn expand_aliases(
     let mut seen: HashSet<String> = HashSet::new();
 
     for _ in 0..MAX_ALIAS_DEPTH {
-        let Some(rewritten) = try_apply_once(&current, &parsed)? else {
+        let Some(hit) = try_apply_once(&current, &parsed, definitions)? else {
             break;
         };
-        if !seen.insert(rewritten.alias.clone()) {
-            // Cycle: this alias is already in the chain. Stop expansion at
-            // the current command to keep behaviour deterministic.
+        if !seen.insert(hit.alias.clone()) {
+            // Cycle: this alias already fired in the chain. Stop deterministically.
             break;
         }
-        chain.push(rewritten.alias);
-        current = rewritten.command;
+        chain.push(hit.alias);
+        current = hit.command;
     }
 
     Ok(AliasExpansion {
@@ -80,7 +92,6 @@ pub fn expand_aliases(
 }
 
 struct ParsedAliases {
-    /// (alias_name, parsed_patterns) ordered for deterministic matching.
     entries: Vec<(String, Vec<Pattern>)>,
 }
 
@@ -95,7 +106,13 @@ fn parse_alias_patterns(
         let def = &aliases[name];
         let mut patterns: Vec<Pattern> = Vec::new();
         for pat_str in def.patterns() {
-            patterns.extend(parse_multi(pat_str)?);
+            for mut pat in parse_multi(pat_str)? {
+                // Append a trailing wildcard so the matcher consumes any
+                // remaining argv beyond the alias prefix and surfaces it
+                // through `MatchCaptures.wildcards`.
+                pat.tokens.push(PatternToken::Wildcard);
+                patterns.push(pat);
+            }
         }
         entries.push((name.clone(), patterns));
     }
@@ -107,99 +124,30 @@ struct AliasHit {
     command: String,
 }
 
-fn try_apply_once(command: &str, parsed: &ParsedAliases) -> Result<Option<AliasHit>, RuleError> {
-    let tokens = match tokenize_command(command) {
-        Ok(t) => t,
-        Err(_) => return Ok(None),
-    };
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-
+fn try_apply_once(
+    command: &str,
+    parsed: &ParsedAliases,
+    definitions: &Definitions,
+) -> Result<Option<AliasHit>, RuleError> {
     for (alias, patterns) in &parsed.entries {
         for pattern in patterns {
-            if let Some(consumed) = match_prefix(pattern, &tokens) {
-                let rewritten = rebuild_command(alias, &tokens[consumed..])?;
-                return Ok(Some(AliasHit {
-                    alias: alias.clone(),
-                    command: rewritten,
-                }));
-            }
+            let schema = build_flag_schema(pattern, definitions);
+            let parsed_command = match parse_command(command, &schema) {
+                Ok(p) => p,
+                Err(_) => return Ok(None),
+            };
+            let Some(captures) = matches_with_captures(pattern, &parsed_command, definitions)
+            else {
+                continue;
+            };
+            let rewritten = rebuild_command(alias, &captures.wildcards)?;
+            return Ok(Some(AliasHit {
+                alias: alias.clone(),
+                command: rewritten,
+            }));
         }
     }
     Ok(None)
-}
-
-/// Try to match `pattern` as a prefix of `tokens`. Returns the number of
-/// tokens consumed by the match, or `None` when the pattern does not apply.
-fn match_prefix(pattern: &Pattern, tokens: &[String]) -> Option<usize> {
-    use crate::rules::pattern_parser::CommandPattern;
-
-    if tokens.is_empty() {
-        return None;
-    }
-    // Command name must match literally (alias patterns do not use globs
-    // for the command name; we only support literal heads here).
-    match &pattern.command {
-        CommandPattern::Literal(name) => {
-            if name != &tokens[0] {
-                return None;
-            }
-        }
-        // Other command-pattern shapes (e.g. wildcard heads) aren't useful
-        // for alias matching — skip them rather than risking weird matches.
-        _ => return None,
-    }
-
-    let mut i = 1usize;
-    for tok in &pattern.tokens {
-        if !match_token(tok, tokens, &mut i) {
-            return None;
-        }
-    }
-    Some(i)
-}
-
-fn match_token(token: &PatternToken, tokens: &[String], i: &mut usize) -> bool {
-    match token {
-        PatternToken::Literal(s) => match tokens.get(*i) {
-            Some(t) if t == s => {
-                *i += 1;
-                true
-            }
-            _ => false,
-        },
-        PatternToken::Alternation(alts) => {
-            let Some(t) = tokens.get(*i) else {
-                return false;
-            };
-            if alts.iter().any(|a| a == t) {
-                *i += 1;
-                true
-            } else {
-                false
-            }
-        }
-        PatternToken::Optional(inner) => {
-            // Try to match the entire inner sequence; on failure, roll
-            // back the cursor and treat the optional as absent.
-            let saved = *i;
-            for sub in inner {
-                if !match_token(sub, tokens, i) {
-                    *i = saved;
-                    return true;
-                }
-            }
-            true
-        }
-        // Alias patterns are intentionally restricted to simple shapes:
-        // command-prefix matching with literals, alternations and optional
-        // groups covers the design example
-        // (`cargo run [--quiet] [--release] --`) without dragging in the
-        // full pattern engine. Unsupported tokens cause the alias to be
-        // skipped rather than silently misbehaving.
-        _ => false,
-    }
 }
 
 fn rebuild_command(alias: &str, rest_tokens: &[String]) -> Result<String, RuleError> {
@@ -221,19 +169,18 @@ mod tests {
 
     use crate::config::{Config, parse_config};
 
-    fn aliases_from(yaml: &str) -> HashMap<String, AliasDefinition> {
-        let cfg: Config = parse_config(yaml).unwrap();
-        cfg.aliases.unwrap_or_default()
+    fn config_from(yaml: &str) -> Config {
+        parse_config(yaml).unwrap()
     }
 
     #[test]
     fn parses_alias_section() {
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run [--quiet] [--release] --'
         "});
-        assert!(aliases.contains_key("a"));
+        assert!(cfg.aliases.unwrap().contains_key("a"));
     }
 
     #[rstest]
@@ -257,17 +204,13 @@ mod tests {
         "a doctor",
         vec!["a"],
     )]
-    fn expands_armyknife_alias(
-        #[case] input: &str,
-        #[case] expected: &str,
-        #[case] chain: Vec<&str>,
-    ) {
-        let aliases = aliases_from(indoc! {"
+    fn expands_runok_alias(#[case] input: &str, #[case] expected: &str, #[case] chain: Vec<&str>) {
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run [--quiet] [--release] --'
         "});
-        let exp = expand_aliases(input, Some(&aliases)).unwrap();
+        let exp = expand_aliases(input, &cfg).unwrap();
         assert_eq!(exp.command, expected);
         let got_chain: Vec<&str> = exp.chain.iter().map(String::as_str).collect();
         assert_eq!(got_chain, chain);
@@ -275,12 +218,12 @@ mod tests {
 
     #[test]
     fn no_match_returns_original() {
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run --'
         "});
-        let exp = expand_aliases("git status", Some(&aliases)).unwrap();
+        let exp = expand_aliases("git status", &cfg).unwrap();
         assert_eq!(exp.command, "git status");
         assert!(exp.chain.is_empty());
     }
@@ -288,89 +231,95 @@ mod tests {
     #[test]
     fn missing_required_token_skips_alias() {
         // No `--` separator in command, so the alias must not match.
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run --'
         "});
-        let exp = expand_aliases("cargo run doctor", Some(&aliases)).unwrap();
+        let exp = expand_aliases("cargo run doctor", &cfg).unwrap();
         assert_eq!(exp.command, "cargo run doctor");
         assert!(exp.chain.is_empty());
     }
 
     #[test]
     fn quotes_tokens_with_whitespace() {
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run --'
         "});
-        let exp = expand_aliases("cargo run -- 'hello world'", Some(&aliases)).unwrap();
+        let exp = expand_aliases("cargo run -- 'hello world'", &cfg).unwrap();
         assert_eq!(exp.command, "a 'hello world'");
     }
 
     #[test]
     fn recursive_expansion_chains_aliases() {
-        // `b` rewrites to `a doctor`, which then matches `a *` -- but `a` has
-        // no further alias, so the chain ends. We verify the chain order.
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               b:
                 - 'cargo special'
               a:
                 - 'b'
         "});
-        let exp = expand_aliases("cargo special foo", Some(&aliases)).unwrap();
+        let exp = expand_aliases("cargo special foo", &cfg).unwrap();
         assert_eq!(exp.command, "a foo");
         assert_eq!(exp.chain, vec!["b", "a"]);
     }
 
     #[test]
     fn cycle_is_detected_and_stops() {
-        // `x` rewrites `y *` -> `x *`, `y` rewrites `x *` -> `y *`. After the
-        // first expansion the matching alias has already fired and would
-        // fire again, so we stop.
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               x:
                 - 'y'
               y:
                 - 'x'
         "});
-        let exp = expand_aliases("x foo", Some(&aliases)).unwrap();
-        // First rewrite: x foo -> y foo (alias `y`). Then y foo would
-        // rewrite back to x foo (alias `x`) - second hop.
-        // Then x foo would re-fire alias `y` which is already in `seen`.
+        let exp = expand_aliases("x foo", &cfg).unwrap();
         assert!(exp.chain.len() <= MAX_ALIAS_DEPTH);
     }
 
     #[test]
     fn empty_aliases_passthrough() {
-        let exp = expand_aliases("git status", None).unwrap();
+        let cfg = parse_config("{}").unwrap();
+        let exp = expand_aliases("git status", &cfg).unwrap();
         assert_eq!(exp.command, "git status");
         assert!(exp.chain.is_empty());
     }
 
     #[test]
     fn single_string_alias_form() {
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a: 'cargo run --'
         "});
-        let exp = expand_aliases("cargo run -- doctor", Some(&aliases)).unwrap();
+        let exp = expand_aliases("cargo run -- doctor", &cfg).unwrap();
         assert_eq!(exp.command, "a doctor");
     }
 
     #[test]
     fn alternation_in_alias_pattern() {
-        let aliases = aliases_from(indoc! {"
+        let cfg = config_from(indoc! {"
             aliases:
               a:
                 - 'cargo run|r --'
         "});
-        let exp_run = expand_aliases("cargo run -- doctor", Some(&aliases)).unwrap();
+        let exp_run = expand_aliases("cargo run -- doctor", &cfg).unwrap();
         assert_eq!(exp_run.command, "a doctor");
-        let exp_r = expand_aliases("cargo r -- doctor", Some(&aliases)).unwrap();
+        let exp_r = expand_aliases("cargo r -- doctor", &cfg).unwrap();
         assert_eq!(exp_r.command, "a doctor");
+    }
+
+    #[test]
+    fn flag_with_value_in_alias_pattern() {
+        // The existing matcher handles `-X|--method GET` (value-taking flag);
+        // alias prefix matching reuses that without any special-casing.
+        let cfg = config_from(indoc! {"
+            aliases:
+              curl-get:
+                - 'curl -X|--request GET'
+        "});
+        let exp = expand_aliases("curl -X GET https://example.com", &cfg).unwrap();
+        assert_eq!(exp.command, "curl-get https://example.com");
     }
 }

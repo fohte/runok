@@ -423,8 +423,7 @@ fn evaluate_simple_command(
     // on the alias name (e.g. `a *`) apply to the rewritten command. The
     // expansion itself is cycle-checked and depth-limited (see
     // `alias_expander`).
-    let alias_expansion =
-        crate::rules::alias_expander::expand_aliases(command, config.aliases.as_ref())?;
+    let alias_expansion = crate::rules::alias_expander::expand_aliases(command, config)?;
     let command: &str = alias_expansion.command.as_str();
     let alias_chain = alias_expansion.chain;
 
@@ -737,7 +736,7 @@ struct MatchedRule<'a> {
 /// FlagGroupRef aliases are resolved through `definitions.flag_groups` so the
 /// command parser knows that the grouped flags consume the next token as
 /// their value.
-fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
+pub(crate) fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
     let mut value_flags = HashSet::new();
     collect_value_flags(&pattern.tokens, definitions, &mut value_flags);
     FlagSchema { value_flags }
