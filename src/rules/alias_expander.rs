@@ -1,12 +1,12 @@
 //! Command alias expansion.
 //!
 //! Aliases rewrite the leading tokens of a command before rule evaluation.
-//! Each alias entry maps a name (e.g. `a`) to one or more patterns
+//! Each alias entry maps a name (e.g. `runok`) to one or more patterns
 //! (e.g. `cargo run [--quiet] [--release] --`). When a command's tokens
 //! match an alias pattern as a prefix, the matched prefix is replaced with
 //! the alias name and the rewritten command flows through normal rule
-//! evaluation, so existing rules keyed on the alias name (e.g. `a *`) apply
-//! unchanged.
+//! evaluation, so existing rules keyed on the alias name (e.g. `runok *`)
+//! apply unchanged.
 //!
 //! Prefix matching is delegated to the regular rule pattern matcher: each
 //! alias pattern has a trailing `*` token appended so the matcher captures
@@ -184,37 +184,37 @@ mod tests {
     fn parses_alias_section() {
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run [--quiet] [--release] --'
         "});
-        assert!(cfg.aliases.unwrap().contains_key("a"));
+        assert!(cfg.aliases.unwrap().contains_key("runok"));
     }
 
     #[rstest]
     #[case::quiet(
-        "cargo run --quiet -- doctor",
-        "a doctor",
-        vec!["a"],
+        "cargo run --quiet -- check",
+        "runok check",
+        vec!["runok"],
     )]
     #[case::release(
-        "cargo run --release -- ai draft foo",
-        "a ai draft foo",
-        vec!["a"],
+        "cargo run --release -- exec git status",
+        "runok exec git status",
+        vec!["runok"],
     )]
     #[case::both_flags(
-        "cargo run --quiet --release -- doctor",
-        "a doctor",
-        vec!["a"],
+        "cargo run --quiet --release -- check",
+        "runok check",
+        vec!["runok"],
     )]
     #[case::no_flags(
-        "cargo run -- doctor",
-        "a doctor",
-        vec!["a"],
+        "cargo run -- check",
+        "runok check",
+        vec!["runok"],
     )]
     fn expands_runok_alias(#[case] input: &str, #[case] expected: &str, #[case] chain: Vec<&str>) {
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run [--quiet] [--release] --'
         "});
         let exp = expand_aliases(input, &cfg).unwrap();
@@ -227,7 +227,7 @@ mod tests {
     fn no_match_returns_original() {
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run --'
         "});
         let exp = expand_aliases("git status", &cfg).unwrap();
@@ -240,11 +240,11 @@ mod tests {
         // No `--` separator in command, so the alias must not match.
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run --'
         "});
-        let exp = expand_aliases("cargo run doctor", &cfg).unwrap();
-        assert_eq!(exp.command, "cargo run doctor");
+        let exp = expand_aliases("cargo run check", &cfg).unwrap();
+        assert_eq!(exp.command, "cargo run check");
         assert!(exp.chain.is_empty());
     }
 
@@ -252,25 +252,25 @@ mod tests {
     fn quotes_tokens_with_whitespace() {
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run --'
         "});
         let exp = expand_aliases("cargo run -- 'hello world'", &cfg).unwrap();
-        assert_eq!(exp.command, "a 'hello world'");
+        assert_eq!(exp.command, "runok 'hello world'");
     }
 
     #[test]
     fn recursive_expansion_chains_aliases() {
         let cfg = config_from(indoc! {"
             aliases:
-              b:
+              inner:
                 - 'cargo special'
-              a:
-                - 'b'
+              outer:
+                - 'inner'
         "});
         let exp = expand_aliases("cargo special foo", &cfg).unwrap();
-        assert_eq!(exp.command, "a foo");
-        assert_eq!(exp.chain, vec!["b", "a"]);
+        assert_eq!(exp.command, "outer foo");
+        assert_eq!(exp.chain, vec!["inner", "outer"]);
     }
 
     #[test]
@@ -298,23 +298,23 @@ mod tests {
     fn single_string_alias_form() {
         let cfg = config_from(indoc! {"
             aliases:
-              a: 'cargo run --'
+              runok: 'cargo run --'
         "});
-        let exp = expand_aliases("cargo run -- doctor", &cfg).unwrap();
-        assert_eq!(exp.command, "a doctor");
+        let exp = expand_aliases("cargo run -- check", &cfg).unwrap();
+        assert_eq!(exp.command, "runok check");
     }
 
     #[test]
     fn alternation_in_alias_pattern() {
         let cfg = config_from(indoc! {"
             aliases:
-              a:
+              runok:
                 - 'cargo run|r --'
         "});
-        let exp_run = expand_aliases("cargo run -- doctor", &cfg).unwrap();
-        assert_eq!(exp_run.command, "a doctor");
-        let exp_r = expand_aliases("cargo r -- doctor", &cfg).unwrap();
-        assert_eq!(exp_r.command, "a doctor");
+        let exp_run = expand_aliases("cargo run -- check", &cfg).unwrap();
+        assert_eq!(exp_run.command, "runok check");
+        let exp_r = expand_aliases("cargo r -- check", &cfg).unwrap();
+        assert_eq!(exp_r.command, "runok check");
     }
 
     #[test]

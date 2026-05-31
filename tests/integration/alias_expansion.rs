@@ -13,14 +13,14 @@ use crate::empty_context;
 
 #[rstest]
 #[case::expand_to_allow(
-    "cargo run --quiet -- doctor",
+    "cargo run --quiet -- check",
     Action::Allow,
-    vec!["a"],
+    vec!["runok"],
 )]
 #[case::expand_release_to_allow(
-    "cargo run --release -- ai draft foo",
+    "cargo run --release -- exec git status",
     Action::Allow,
-    vec!["a"],
+    vec!["runok"],
 )]
 fn alias_expands_then_normal_rules_apply(
     empty_context: EvalContext,
@@ -30,10 +30,10 @@ fn alias_expands_then_normal_rules_apply(
 ) {
     let config = parse_config(indoc! {"
         aliases:
-          a:
+          runok:
             - 'cargo run [--quiet] [--release] --'
         rules:
-          - allow: 'a *'
+          - allow: 'runok *'
     "})
     .unwrap();
 
@@ -47,10 +47,10 @@ fn alias_expands_then_normal_rules_apply(
 fn alias_does_not_swallow_other_commands(empty_context: EvalContext) {
     let config = parse_config(indoc! {"
         aliases:
-          a:
+          runok:
             - 'cargo run --'
         rules:
-          - allow: 'a *'
+          - allow: 'runok *'
     "})
     .unwrap();
 
@@ -66,16 +66,16 @@ fn deny_still_fires_for_injected_branch_after_alias(empty_context: EvalContext) 
     // the second branch (`rm -rf /`) must still hit the deny rule.
     let config = parse_config(indoc! {"
         aliases:
-          a:
+          runok:
             - 'cargo run --'
         rules:
-          - allow: 'a *'
+          - allow: 'runok *'
           - deny: 'rm -rf *'
     "})
     .unwrap();
 
     let result =
-        evaluate_compound(&config, "cargo run -- doctor && rm -rf /", &empty_context).unwrap();
+        evaluate_compound(&config, "cargo run -- check && rm -rf /", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
 }
 
@@ -83,16 +83,19 @@ fn deny_still_fires_for_injected_branch_after_alias(empty_context: EvalContext) 
 fn alias_chain_records_recursive_expansion(empty_context: EvalContext) {
     let config = parse_config(indoc! {"
         aliases:
-          a:
-            - 'b'
-          b:
+          outer:
+            - 'inner'
+          inner:
             - 'cargo special'
         rules:
-          - allow: 'a *'
+          - allow: 'outer *'
     "})
     .unwrap();
 
     let result = evaluate_command(&config, "cargo special foo", &empty_context).unwrap();
     assert_eq!(result.action, Action::Allow);
-    assert_eq!(result.alias_chain, vec!["b".to_string(), "a".to_string()]);
+    assert_eq!(
+        result.alias_chain,
+        vec!["inner".to_string(), "outer".to_string()]
+    );
 }
