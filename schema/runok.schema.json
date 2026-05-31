@@ -4,6 +4,16 @@
   "description": "Top-level runok configuration.",
   "type": "object",
   "properties": {
+    "aliases": {
+      "description": "Command aliases. Each entry maps an alias name to a list of patterns;\nwhen a command matches one of the patterns as a prefix, the matching\nportion is replaced with the alias name and the rewritten command is\nre-evaluated against the normal rule set.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/AliasDefinition"
+      }
+    },
     "audit": {
       "description": "Audit log settings.",
       "anyOf": [
@@ -84,6 +94,22 @@
         "allow",
         "ask",
         "deny"
+      ]
+    },
+    "AliasDefinition": {
+      "description": "Definition of a single alias entry. Accepts either a single pattern\nstring or a list of pattern strings in YAML.",
+      "anyOf": [
+        {
+          "description": "A single pattern string.",
+          "type": "string"
+        },
+        {
+          "description": "A list of pattern strings.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       ]
     },
     "AuditConfig": {

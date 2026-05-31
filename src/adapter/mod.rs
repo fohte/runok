@@ -45,6 +45,9 @@ pub struct CommandEvalResult {
     pub argv: Vec<String>,
     pub redirects: Vec<SerializableRedirect>,
     pub pipe: SerializablePipe,
+    /// Alias names applied to this branch, in firing order. Empty when no
+    /// alias rewrite happened.
+    pub alias_chain: Vec<String>,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -182,6 +185,7 @@ fn write_audit_log(
             argv: e.argv.clone(),
             redirects: e.redirects.clone(),
             pipe: e.pipe.clone(),
+            alias_chain: e.alias_chain.clone(),
         })
         .collect();
 
@@ -304,6 +308,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                             argv,
                             redirects,
                             pipe,
+                            alias_chain: result.alias_chain,
                         }
                     })
                     .collect();
@@ -364,6 +369,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     argv,
                     redirects: redir_fields,
                     pipe: pipe_field,
+                    alias_chain: result.alias_chain,
                 }];
                 ActionResult {
                     action: result.action,

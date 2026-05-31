@@ -49,6 +49,9 @@ pub struct EvalResult {
     pub sandbox_preset: Option<String>,
     /// Details of all rules that matched, for verbose logging.
     pub matched_rules: Vec<RuleMatchInfo>,
+    /// Names of aliases applied while resolving the command, in order.
+    /// Empty when no alias rewrite fired.
+    pub alias_chain: Vec<String>,
 }
 
 /// Per-sub-command evaluation detail, for verbose logging.
@@ -357,6 +360,7 @@ fn evaluate_command_inner(
                 action: default_action(config),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
+                alias_chain: Vec::new(),
             }));
         }
         // Self-reference detected (e.g. command substitution): evaluate only
@@ -415,6 +419,14 @@ fn evaluate_simple_command(
     pipe: &PipeInfo,
     loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
+    // Apply alias expansion before any rule matching so existing rules keyed
+    // on the alias name (e.g. `a *`) apply to the rewritten command. The
+    // expansion itself is cycle-checked and depth-limited (see
+    // `alias_expander`).
+    let alias_expansion = crate::rules::alias_expander::expand_aliases(command, config)?;
+    let command: &str = alias_expansion.command.as_str();
+    let alias_chain = alias_expansion.chain;
+
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -422,6 +434,7 @@ fn evaluate_simple_command(
                 action: default_action(config),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
+                alias_chain,
             });
         }
     };
@@ -495,6 +508,7 @@ fn evaluate_simple_command(
             action: default_action(config),
             sandbox_preset: None,
             matched_rules: match_infos,
+            alias_chain,
         });
     }
 
@@ -524,16 +538,23 @@ fn evaluate_simple_command(
             action,
             sandbox_preset,
             matched_rules: match_infos,
+            alias_chain: Vec::new(),
         })
     };
 
     // Merge direct result with wrapper result using Explicit Deny Wins
-    match (direct_result, wrapper_result) {
-        (Some(direct), Some(wrapper)) => Ok(merge_results(direct, wrapper)),
-        (Some(direct), None) => Ok(direct),
-        (None, Some(wrapper)) => Ok(wrapper),
+    let mut merged = match (direct_result, wrapper_result) {
+        (Some(direct), Some(wrapper)) => merge_results(direct, wrapper),
+        (Some(direct), None) => direct,
+        (None, Some(wrapper)) => wrapper,
         (None, None) => unreachable!("at least one result exists"),
-    }
+    };
+    // Outer (this evaluation) aliases fired first; preserve any inner-wrapper
+    // aliases that the recursive call collected after them.
+    let mut final_chain = alias_chain;
+    final_chain.extend(merged.alias_chain);
+    merged.alias_chain = final_chain;
+    Ok(merged)
 }
 
 /// Try to match the command against wrapper patterns and recursively
@@ -650,17 +671,23 @@ fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
     let mut combined_rules = a.matched_rules;
     combined_rules.extend(b.matched_rules);
 
+    // Merge alias chains preserving order; either side may be empty.
+    let mut alias_chain = a.alias_chain;
+    alias_chain.extend(b.alias_chain);
+
     if action_priority(&b.action) > action_priority(&a.action) {
         EvalResult {
             action: b.action,
             sandbox_preset: b.sandbox_preset,
             matched_rules: combined_rules,
+            alias_chain,
         }
     } else {
         EvalResult {
             action: a.action,
             sandbox_preset: a.sandbox_preset,
             matched_rules: combined_rules,
+            alias_chain,
         }
     }
 }
@@ -713,7 +740,7 @@ struct MatchedRule<'a> {
 /// FlagGroupRef aliases are resolved through `definitions.flag_groups` so the
 /// command parser knows that the grouped flags consume the next token as
 /// their value.
-fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
+pub(crate) fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
     let mut value_flags = HashSet::new();
     collect_value_flags(&pattern.tokens, definitions, &mut value_flags);
     FlagSchema { value_flags }

@@ -41,6 +41,33 @@ pub struct Config {
     pub audit: Option<AuditConfig>,
     /// Test section for rule verification.
     pub tests: Option<TestSection>,
+    /// Command aliases. Each entry maps an alias name to a list of patterns;
+    /// when a command matches one of the patterns as a prefix, the matching
+    /// portion is replaced with the alias name and the rewritten command is
+    /// re-evaluated against the normal rule set.
+    pub aliases: Option<HashMap<String, AliasDefinition>>,
+}
+
+/// Definition of a single alias entry. Accepts either a single pattern
+/// string or a list of pattern strings in YAML.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+#[serde(untagged)]
+pub enum AliasDefinition {
+    /// A single pattern string.
+    Single(String),
+    /// A list of pattern strings.
+    Many(Vec<String>),
+}
+
+impl AliasDefinition {
+    /// Return all patterns for this alias entry as a slice-like iterator.
+    pub fn patterns(&self) -> Vec<&str> {
+        match self {
+            AliasDefinition::Single(s) => vec![s.as_str()],
+            AliasDefinition::Many(v) => v.iter().map(String::as_str).collect(),
+        }
+    }
 }
 
 /// Default settings applied when no rule matches a command.
@@ -915,6 +942,7 @@ impl Config {
             definitions: Self::merge_definitions(self.definitions, other.definitions),
             audit: Self::merge_audit(self.audit, other.audit),
             tests: other.tests.or(self.tests),
+            aliases: Self::merge_hashmaps(self.aliases, other.aliases),
         }
     }
 
@@ -1437,6 +1465,7 @@ mod tests {
         assert_eq!(config.rules, None);
         assert_eq!(config.definitions, None);
         assert_eq!(config.audit, None);
+        assert_eq!(config.aliases, None);
     }
 
     #[test]
@@ -1896,6 +1925,7 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
+            aliases: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1920,6 +1950,7 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
+            aliases: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -2168,6 +2199,7 @@ mod tests {
             ]),
             definitions: None,
             tests: None,
+            aliases: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
