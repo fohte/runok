@@ -9,7 +9,7 @@
 //! apply unchanged.
 //!
 //! Prefix matching is delegated to the regular rule pattern matcher via its
-//! `matches_prefix` entry point: the pattern is matched as a partial prefix
+//! `matches_prefix` entry point: the pattern is matched as a partial match
 //! and the matcher reports whatever command tokens it did not consume. The
 //! rewritten command is the alias name followed by that remainder. This
 //! means the full pattern syntax (literals, alternations, optional groups,
@@ -17,6 +17,11 @@
 //! authors without reimplementing any matching logic, and prefix-consumed
 //! tokens (including the value half of `FlagWithValue` like `--context *`)
 //! do not leak into the rewritten tail.
+//!
+//! `fuse_trailing_flag_wildcard` post-processes each parsed alias pattern so
+//! that a trailing `<flag> *` (which the parser conservatively leaves as
+//! `Alternation(<flag>) Wildcard` to preserve the boolean-flag-plus-trailing
+//! semantics of allow rules) is read as `FlagWithValue(<flag>, *)` here.
 //!
 //! Expansion is recursive: a rewritten command may itself match another
 //! alias. Cycles are detected by tracking the chain of applied alias names
@@ -28,7 +33,7 @@ use crate::config::{AliasDefinition, Config, Definitions};
 use crate::rules::RuleError;
 use crate::rules::command_parser::{FlagSchema, parse_command};
 use crate::rules::pattern_matcher::matches_prefix;
-use crate::rules::pattern_parser::{Pattern, parse_multi_alias_prefix};
+use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
 use crate::rules::rule_engine::build_flag_schema;
 
 /// Maximum number of alias rewrites applied to a single command.
@@ -111,7 +116,8 @@ fn parse_alias_patterns(
         let def = &aliases[name];
         let mut patterns: Vec<ParsedAliasPattern> = Vec::new();
         for pat_str in def.patterns() {
-            for pat in parse_multi_alias_prefix(pat_str)? {
+            for mut pat in parse_multi(pat_str)? {
+                fuse_trailing_flag_wildcard(&mut pat.tokens);
                 let schema = build_flag_schema(&pat, definitions);
                 patterns.push(ParsedAliasPattern {
                     pattern: pat,
@@ -155,6 +161,43 @@ fn try_apply_once(
         }
     }
     Ok(None)
+}
+
+/// Fuse a trailing `[Alternation(<flag>), Wildcard]` into a single
+/// `FlagWithValue { aliases: [<flag>], value: Wildcard }`.
+///
+/// The pattern parser conservatively keeps a trailing `*` after a flag as a
+/// standalone `Wildcard`, because for a regular allow rule `cmd -f *` means
+/// "boolean flag `-f` plus a trailing wildcard for the remaining argv". In
+/// an alias prefix, that reading is meaningless — the trailing argv is
+/// already returned separately by `matches_prefix`, so `cmd --context *` at
+/// the end of an alias pattern is only useful when read as "`--context`
+/// takes a wildcard value". This adjustment lives in `alias_expander` (not
+/// in the parser) so the parser stays unaware of alias semantics.
+fn fuse_trailing_flag_wildcard(tokens: &mut Vec<PatternToken>) {
+    let n = tokens.len();
+    if n < 2 {
+        return;
+    }
+    if !matches!(tokens[n - 1], PatternToken::Wildcard) {
+        return;
+    }
+    let is_flag_alt = matches!(
+        &tokens[n - 2],
+        PatternToken::Alternation(alts)
+            if !alts.is_empty() && alts.iter().all(|a| a.starts_with('-') && a != "--")
+    );
+    if !is_flag_alt {
+        return;
+    }
+    tokens.pop();
+    let Some(PatternToken::Alternation(aliases)) = tokens.pop() else {
+        unreachable!("checked above");
+    };
+    tokens.push(PatternToken::FlagWithValue {
+        aliases,
+        value: Box::new(PatternToken::Wildcard),
+    });
 }
 
 fn rebuild_command(alias: &str, rest_tokens: &[String]) -> Result<String, RuleError> {

@@ -253,14 +253,12 @@ pub fn matches_with_captures(
     None
 }
 
-/// Like `matches_with_captures`, but accepts a partial (prefix) match: the
-/// pattern need not consume every command token. Returns the captures plus
-/// the list of command tokens left unconsumed by the pattern (in their
-/// original order).
-///
-/// Used by alias expansion to consume an "alias prefix" (which may include
-/// `FlagWithValue` tokens that match anywhere in argv) and route everything
-/// the pattern did not consume into the rewritten command's tail.
+/// Like `matches_with_captures`, but accepts a partial match: the pattern
+/// may consume only a subset of the command tokens. Returns the captures
+/// together with the command tokens the pattern did not consume, in their
+/// original argv order. `FlagWithValue` and other tokens that may match at
+/// arbitrary argv positions are still considered "consumed" wherever they
+/// matched, so the remainder is the set difference, not a contiguous tail.
 pub fn matches_prefix(
     pattern: &Pattern,
     command: &ParsedCommand,
@@ -445,12 +443,11 @@ fn match_engine<'a>(
             }
             return Ok(false);
         }
-        // Prefix-match mode (used by alias expansion): accept the match even
-        // when cmd_tokens still have unconsumed tail, and record the tail as
-        // the remainder. This is the only place this matters because Optional
-        // and friends chain inner tokens onto `rest` before recursing, so
-        // every base-case hit corresponds to the entire top-level pattern
-        // being consumed.
+        // Prefix-match mode: accept the match even when cmd_tokens still have
+        // an unconsumed tail, and record that tail as the remainder. This is
+        // the only place this matters because Optional and friends chain
+        // inner tokens onto `rest` before recursing, so every base-case hit
+        // here corresponds to the entire top-level pattern being consumed.
         if let Some(rem) = prefix_remainder {
             let mut r = rem.borrow_mut();
             r.clear();
