@@ -48,18 +48,15 @@ pub struct AliasExpansion {
 /// alias names that fired. When no alias applies, the original command is
 /// returned with an empty chain.
 pub fn expand_aliases(command: &str, config: &Config) -> Result<AliasExpansion, RuleError> {
-    let Some(aliases) = config.aliases.as_ref() else {
-        return Ok(AliasExpansion {
-            command: command.to_string(),
-            chain: Vec::new(),
-        });
+    let aliases = match config.aliases.as_ref() {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            return Ok(AliasExpansion {
+                command: command.to_string(),
+                chain: Vec::new(),
+            });
+        }
     };
-    if aliases.is_empty() {
-        return Ok(AliasExpansion {
-            command: command.to_string(),
-            chain: Vec::new(),
-        });
-    }
 
     let default_defs = Definitions::default();
     let definitions = config.definitions.as_ref().unwrap_or(&default_defs);
@@ -166,10 +163,8 @@ fn rebuild_command(alias: &str, rest_tokens: &[String]) -> Result<String, RuleEr
     if rest_tokens.is_empty() {
         return Ok(alias.to_string());
     }
-    let mut parts: Vec<String> = Vec::with_capacity(rest_tokens.len() + 1);
-    parts.push(alias.to_string());
-    parts.extend(rest_tokens.iter().cloned());
-    let joined = shlex::try_join(parts.iter().map(String::as_str))?;
+    let joined =
+        shlex::try_join(std::iter::once(alias).chain(rest_tokens.iter().map(String::as_str)))?;
     Ok(joined)
 }
 
