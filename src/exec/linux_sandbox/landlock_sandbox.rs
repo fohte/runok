@@ -29,7 +29,7 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
         .map_err(|e| SandboxError::Landlock(format!("handle_access failed: {e}")))?
         .create()
         .map_err(|e| SandboxError::Landlock(format!("create ruleset failed: {e}")))?
-        .set_no_new_privs(true);
+        .no_new_privs(true);
 
     // Root filesystem is read-only by default
     ruleset = add_path_rule(ruleset, std::path::Path::new("/"), access_ro)?;
