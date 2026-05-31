@@ -502,7 +502,7 @@ Test cases to evaluate. Each entry specifies the expected decision (`allow`, `as
 
 ### `aliases`
 
-Command aliases. Each entry maps an alias name to one or more patterns. When a command's leading tokens match an alias pattern as a prefix, the matching portion is replaced with the alias name and the rewritten command flows through normal rule evaluation. This lets rules keyed on the alias name (for example `allow: 'runok *'`) cover commands invoked through development wrappers like `cargo run -- ...`.
+Command aliases. Each entry maps an alias name to one or more patterns. When a command's leading tokens match an alias pattern as a prefix, the matching portion is replaced with the alias name and the rewritten command flows through normal rule evaluation. This lets rules keyed on the alias name (for example `allow: 'runok check *'`) cover commands invoked through development wrappers like `cargo run -- ...`.
 
 **Type:** `object` (map of alias name -> pattern string or list of pattern strings)\
 **Default:** `{}`\
@@ -513,10 +513,10 @@ aliases:
   runok:
     - 'cargo run [--quiet] [--release] --'
 rules:
-  - allow: 'runok *'
+  - allow: 'runok check *'
 ```
 
-With the config above, `cargo run --quiet -- check` is rewritten to `runok check` before evaluation, so the existing `runok *` allow rule applies.
+With the config above, `cargo run --quiet -- check ls` is rewritten to `runok check ls` before evaluation, so the existing `runok check *` allow rule applies — without granting blanket access to every `cargo run` invocation.
 
 Notes:
 

@@ -13,12 +13,12 @@ use crate::empty_context;
 
 #[rstest]
 #[case::expand_to_allow(
-    "cargo run --quiet -- check",
+    "cargo run --quiet -- check ls",
     Action::Allow,
     vec!["runok"],
 )]
 #[case::expand_release_to_allow(
-    "cargo run --release -- exec git status",
+    "cargo run --release -- check ls --strict",
     Action::Allow,
     vec!["runok"],
 )]
@@ -33,7 +33,7 @@ fn alias_expands_then_normal_rules_apply(
           runok:
             - 'cargo run [--quiet] [--release] --'
         rules:
-          - allow: 'runok *'
+          - allow: 'runok check *'
     "})
     .unwrap();
 
@@ -44,13 +44,32 @@ fn alias_expands_then_normal_rules_apply(
 }
 
 #[rstest]
+fn alias_only_grants_listed_subcommands(empty_context: EvalContext) {
+    // The alias rewrites the prefix, but the rule is narrower than `runok *`:
+    // only `runok check ...` is allowed, so `runok exec ...` must NOT be
+    // covered by the same alias path — it falls through to the default.
+    let config = parse_config(indoc! {"
+        aliases:
+          runok:
+            - 'cargo run [--quiet] [--release] --'
+        rules:
+          - allow: 'runok check *'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, "cargo run -- exec git status", &empty_context).unwrap();
+    assert!(matches!(result.action, Action::Ask(_)));
+    assert_eq!(result.alias_chain, vec!["runok".to_string()]);
+}
+
+#[rstest]
 fn alias_does_not_swallow_other_commands(empty_context: EvalContext) {
     let config = parse_config(indoc! {"
         aliases:
           runok:
             - 'cargo run --'
         rules:
-          - allow: 'runok *'
+          - allow: 'runok check *'
     "})
     .unwrap();
 
@@ -69,13 +88,13 @@ fn deny_still_fires_for_injected_branch_after_alias(empty_context: EvalContext) 
           runok:
             - 'cargo run --'
         rules:
-          - allow: 'runok *'
+          - allow: 'runok check *'
           - deny: 'rm -rf *'
     "})
     .unwrap();
 
     let result =
-        evaluate_compound(&config, "cargo run -- check && rm -rf /", &empty_context).unwrap();
+        evaluate_compound(&config, "cargo run -- check ls && rm -rf /", &empty_context).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
 }
 
