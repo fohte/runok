@@ -13,12 +13,12 @@ use crate::empty_context;
 
 #[rstest]
 #[case::expand_to_allow(
-    "cargo run --quiet -- check ls",
+    "cargo run --quiet -- check 'git status'",
     Action::Allow,
     vec!["runok"],
 )]
 #[case::expand_release_to_allow(
-    "cargo run --release -- check ls --strict",
+    "cargo run --release -- check 'git status' --verbose",
     Action::Allow,
     vec!["runok"],
 )]
@@ -93,8 +93,12 @@ fn deny_still_fires_for_injected_branch_after_alias(empty_context: EvalContext) 
     "})
     .unwrap();
 
-    let result =
-        evaluate_compound(&config, "cargo run -- check ls && rm -rf /", &empty_context).unwrap();
+    let result = evaluate_compound(
+        &config,
+        "cargo run -- check 'git status' && rm -rf /",
+        &empty_context,
+    )
+    .unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
 }
 

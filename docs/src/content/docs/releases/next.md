@@ -20,6 +20,6 @@ rules:
   - allow: 'runok check *'
 ```
 
-With this config, `cargo run --quiet -- check ls` is rewritten to `runok check ls` before rule evaluation, so the existing `runok check *` allow rule applies. Aliases are expanded recursively with cycle detection and a depth limit; the audit log records the applied chain on each command branch.
+With this config, `cargo run --quiet -- check 'git status'` is rewritten to `runok check 'git status'` before rule evaluation, so the existing `runok check *` allow rule applies. Aliases are expanded recursively with cycle detection and a depth limit; the audit log records the applied chain on each command branch.
 
 See [Configuration schema -> aliases](/configuration/schema/) for details.

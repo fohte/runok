@@ -516,7 +516,7 @@ rules:
   - allow: 'runok check *'
 ```
 
-With the config above, `cargo run --quiet -- check ls` is rewritten to `runok check ls` before evaluation, so the existing `runok check *` allow rule applies — without granting blanket access to every `cargo run` invocation.
+With the config above, `cargo run --quiet -- check 'git status'` is rewritten to `runok check 'git status'` before evaluation, so the existing `runok check *` allow rule applies — without granting blanket access to every `cargo run` invocation.
 
 Notes:
 
