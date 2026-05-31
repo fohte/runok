@@ -22,14 +22,4 @@ rules:
 
 With this config, `cargo run --quiet -- check 'git status'` is rewritten to `runok check 'git status'` before rule evaluation, so the existing `runok check *` allow rule applies. Aliases are expanded recursively with cycle detection and a depth limit; the audit log records the applied chain on each command branch.
 
-In an alias prefix pattern, a trailing `*` right after a flag is read as that flag's value (not as a trailing wildcard for the remaining argv). This means `kubectl --context *` consumes both the flag and its value, so `kubectl --context prod get pods` rewrites to `kc get pods`:
-
-```yaml title="runok.yml"
-aliases:
-  kc:
-    - 'kubectl --context *'
-rules:
-  - allow: 'kc *'
-```
-
 See [Configuration schema -> aliases](/configuration/schema/) for details.
