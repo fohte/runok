@@ -4,7 +4,7 @@ lefthook = "2.1.8"
 
 # lefthook hooks
 actionlint = "1.7.12"
-node = "24.15.0"
+node = "24.16.0"
 pinact = "3.10.1"
 "github:fohte/basefmt" = "0.1.0"
 "npm:@commitlint/cli" = "21.0.1"
