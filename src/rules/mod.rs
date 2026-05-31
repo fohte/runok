@@ -1,3 +1,4 @@
+pub mod alias_expander;
 pub mod command_parser;
 mod error;
 pub mod expr_evaluator;

@@ -500,6 +500,31 @@ Test cases to evaluate. Each entry specifies the expected decision (`allow`, `as
 **Type:** `list[TestEntry]`\
 **Default:** `[]`
 
+### `aliases`
+
+Command aliases. Each entry maps an alias name to one or more patterns. When a command's leading tokens match an alias pattern as a prefix, the matching portion is replaced with the alias name and the rewritten command flows through normal rule evaluation. This lets rules keyed on the alias name (for example `allow: 'a *'`) cover commands invoked through development wrappers like `cargo run -- ...`.
+
+**Type:** `object` (map of alias name -> pattern string or list of pattern strings)\
+**Default:** `{}`\
+**Required:** No
+
+```yaml title="runok.yml"
+aliases:
+  a:
+    - 'cargo run [--quiet] [--release] --'
+rules:
+  - allow: 'a *'
+```
+
+With the config above, `cargo run --quiet -- doctor` is rewritten to `a doctor` before evaluation, so the existing `a *` allow rule applies.
+
+Notes:
+
+- Alias patterns use the same syntax as rule patterns (literals, alternations like `run|r`, optional groups like `[--quiet]`). The matched prefix is replaced by the alias name; remaining tokens are preserved verbatim.
+- Aliases are expanded recursively. Cycles are detected and a depth limit (currently 5) caps expansion to avoid runaway rewrites.
+- Both global (`~/.config/runok/runok.yml`) and project-local config files can declare aliases. Project-local aliases scope naturally because their config is only discovered inside the repository.
+- The audit log records the chain of aliases applied to each command branch under `command_evaluations[].alias_chain`, so log readers can tell when a rule fired against a rewritten command.
+
 ## Complete Example
 
 ```yaml title="runok.yml"

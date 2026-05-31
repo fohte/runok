@@ -99,6 +99,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
                     argv: Vec::new(),
                     redirects: Vec::new(),
                     pipe: SerializablePipe::default(),
+                    alias_chain: Vec::new(),
                 })
                 .collect()
         } else {
@@ -113,6 +114,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
                 argv: Vec::new(),
                 redirects: Vec::new(),
                 pipe: SerializablePipe::default(),
+                alias_chain: Vec::new(),
             }]
         };
 
@@ -227,6 +229,11 @@ pub struct CommandEvaluation {
     /// standalone branch; the field is omitted from JSON in that case.
     #[serde(default, skip_serializing_if = "SerializablePipe::is_default")]
     pub pipe: SerializablePipe,
+    /// Names of aliases applied to this branch before rule evaluation, in
+    /// the order they fired. Empty when no alias expansion was triggered;
+    /// omitted from JSON in that case to keep legacy audit shape unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alias_chain: Vec<String>,
 }
 
 /// A `KEY=VALUE` environment variable assignment that prefixed the
@@ -439,6 +446,7 @@ mod tests {
             ],
             redirects: vec![],
             pipe: SerializablePipe::default(),
+            alias_chain: vec![],
         }
     }
 
@@ -484,6 +492,7 @@ mod tests {
                 argv: vec!["echo".to_owned(), "hello".to_owned()],
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
+                alias_chain: vec![],
             },
             CommandEvaluation {
                 command: "rm -rf /".to_owned(),
@@ -501,6 +510,7 @@ mod tests {
                 argv: vec!["rm".to_owned(), "-rf".to_owned(), "/".to_owned()],
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
+                alias_chain: vec![],
             },
         ],
     })]
@@ -605,6 +615,7 @@ mod tests {
                 argv: vec!["echo".to_owned(), "hi".to_owned()],
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
+                alias_chain: vec![],
             }],
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -627,6 +638,7 @@ mod tests {
             argv: vec!["echo".to_owned(), "hi".to_owned()],
             redirects: vec![],
             pipe: SerializablePipe::default(),
+            alias_chain: vec![],
         },
         r#"{"command":"echo hi","action":{"type":"allow"},"eval_type":"primary","argv":["echo","hi"]}"#,
     )]
@@ -648,6 +660,7 @@ mod tests {
                 descriptor: None,
             }],
             pipe: SerializablePipe { stdin: false, stdout: true },
+            alias_chain: vec![],
         },
         r#"{"command":"FOO=x echo hi > /tmp/log","action":{"type":"allow"},"eval_type":"compound","env":[{"name":"FOO","value":"x"}],"argv":["echo","hi"],"redirects":[{"redirect_type":"output","operator":">","target":"/tmp/log","descriptor":null}],"pipe":{"stdin":false,"stdout":true}}"#,
     )]

@@ -223,6 +223,7 @@ mod tests {
                 argv: vec!["git".to_string(), "push".to_string()],
                 redirects: vec![],
                 pipe: crate::audit::SerializablePipe::default(),
+                alias_chain: vec![],
             }],
         };
 
