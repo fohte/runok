@@ -101,7 +101,7 @@ pub enum PatternToken {
 /// - everything else -> Literal
 pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
     let lex_tokens = tokenize_pattern(pattern)?;
-    build_pattern_from_tokens(&lex_tokens)
+    build_pattern_from_tokens(&lex_tokens, false)
 }
 
 /// Parse a pattern string that may contain multi-word alternation.
@@ -114,12 +114,30 @@ pub fn parse(pattern: &str) -> Result<Pattern, super::PatternParseError> {
 /// For regular patterns (no multi-word alternation), returns a single `Pattern`
 /// in the vector, equivalent to calling `parse`.
 pub fn parse_multi(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseError> {
+    parse_multi_with(pattern, false)
+}
+
+/// Like `parse_multi`, but parses the pattern as an alias prefix pattern.
+///
+/// In an alias prefix pattern the trailing `*` after a flag (e.g. the `*` in
+/// `kubectl --context *`) is read as that flag's value, not as a trailing
+/// wildcard for "remaining argv". The remaining argv is handled separately by
+/// the alias prefix-match infrastructure, so the trailing-wildcard reading
+/// would always be a user error.
+pub fn parse_multi_alias_prefix(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseError> {
+    parse_multi_with(pattern, true)
+}
+
+fn parse_multi_with(
+    pattern: &str,
+    alias_prefix: bool,
+) -> Result<Vec<Pattern>, super::PatternParseError> {
     let lex_tokens = tokenize_pattern(pattern)?;
 
     match &lex_tokens[0] {
         LexToken::MultiWordAlternation(alternatives) => {
             let rest = &lex_tokens[1..];
-            let rest_tokens = build_pattern_tokens(rest, false)?;
+            let rest_tokens = build_pattern_tokens(rest, false, alias_prefix)?;
             let mut patterns = Vec::with_capacity(alternatives.len());
 
             for alt in alternatives {
@@ -140,7 +158,7 @@ pub fn parse_multi(pattern: &str) -> Result<Vec<Pattern>, super::PatternParseErr
             Ok(patterns)
         }
         _ => {
-            let pattern = build_pattern_from_tokens(&lex_tokens)?;
+            let pattern = build_pattern_from_tokens(&lex_tokens, alias_prefix)?;
             Ok(vec![pattern])
         }
     }
@@ -165,7 +183,10 @@ fn tokenize_pattern(pattern: &str) -> Result<Vec<LexToken>, super::PatternParseE
 
 /// Build a single Pattern from already-tokenized lex tokens.
 /// The first token becomes the command name, the rest become pattern tokens.
-fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::PatternParseError> {
+fn build_pattern_from_tokens(
+    lex_tokens: &[LexToken],
+    alias_prefix: bool,
+) -> Result<Pattern, super::PatternParseError> {
     use super::PatternParseError;
 
     let command = match &lex_tokens[0] {
@@ -183,7 +204,7 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
     };
 
     let rest = &lex_tokens[1..];
-    let tokens = build_pattern_tokens(rest, false)?;
+    let tokens = build_pattern_tokens(rest, false, alias_prefix)?;
 
     Ok(Pattern { command, tokens })
 }
@@ -193,6 +214,7 @@ fn build_pattern_from_tokens(lex_tokens: &[LexToken]) -> Result<Pattern, super::
 fn build_pattern_tokens(
     lex_tokens: &[LexToken],
     inside_group: bool,
+    alias_prefix: bool,
 ) -> Result<Vec<PatternToken>, super::PatternParseError> {
     use super::PatternParseError;
 
@@ -210,7 +232,12 @@ fn build_pattern_tokens(
                 // alternation so that flag-with-value and order-independent
                 // matching work the same as for `-X|--request` style patterns.
                 if let Some(&(j, next)) = iter.peek() {
-                    if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
+                    if should_consume_as_value(
+                        next,
+                        j + 1 < lex_tokens.len(),
+                        inside_group,
+                        alias_prefix,
+                    ) {
                         let (_, next_token) = iter.next().ok_or(
                             PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                         )?;
@@ -235,7 +262,12 @@ fn build_pattern_tokens(
                 if alts.iter().any(|a| is_flag(a)) {
                     // Check if the next token should be consumed as a flag value
                     if let Some(&(j, next)) = iter.peek() {
-                        if should_consume_as_value(next, j + 1 < lex_tokens.len(), inside_group) {
+                        if should_consume_as_value(
+                            next,
+                            j + 1 < lex_tokens.len(),
+                            inside_group,
+                            alias_prefix,
+                        ) {
                             let (_, next_token) = iter.next().ok_or(
                                 PatternParseError::InvalidSyntax("unexpected end of tokens".into()),
                             )?;
@@ -309,7 +341,7 @@ fn build_pattern_tokens(
                         }
                     }
                 }
-                let inner_tokens = build_pattern_tokens(&inner, true)?;
+                let inner_tokens = build_pattern_tokens(&inner, true, alias_prefix)?;
                 result.push(PatternToken::Optional(inner_tokens));
             }
 
@@ -403,7 +435,18 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 ///
 /// This prevents `-f|--force *` (where `*` is the last token) from being parsed as
 /// FlagWithValue, while allowing `-X|--request * *` to parse the first `*` as a value.
-fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: bool) -> bool {
+///
+/// `inside_group` (inside `[...]`) and `alias_prefix` (an alias prefix pattern)
+/// both flip a trailing `*` from "trailing wildcard" to "flag value". In an
+/// alias prefix the trailing wildcard semantics are meaningless because the
+/// remainder is handled by the prefix-match infrastructure, so `--flag *` at
+/// the tail should be read as "flag takes a wildcard value".
+fn should_consume_as_value(
+    next: &LexToken,
+    has_more_after: bool,
+    inside_group: bool,
+    alias_prefix: bool,
+) -> bool {
     match next {
         LexToken::OpenBracket | LexToken::CloseBracket => false,
         // When `[` is used as a literal command name, the lexer emits `]` as
@@ -414,7 +457,7 @@ fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: 
         LexToken::Literal(s) if is_flag(s) || s == "--" => false,
         LexToken::Alternation(alts) if alts.iter().any(|a| is_flag(a)) => false,
         LexToken::Placeholder(_) => false,
-        LexToken::Wildcard => inside_group || has_more_after,
+        LexToken::Wildcard => inside_group || alias_prefix || has_more_after,
         // A negation whose inner value is a flag (e.g., `!--in-place`) should
         // not be consumed as a flag value — it is an independent negation token.
         LexToken::Negation(s) if is_flag(s) => false,
@@ -475,7 +518,7 @@ pub fn parse_flag_group_definition(
     // flag's value pattern rather than treated as a standalone wildcard
     // (the `should_consume_as_value` heuristic only consumes a trailing
     // `*` when `inside_group` is set or more tokens follow).
-    let tokens = build_pattern_tokens(&lex_tokens, true)?;
+    let tokens = build_pattern_tokens(&lex_tokens, true, false)?;
 
     // A valid flag group definition must produce exactly one token:
     // - FlagWithValue { aliases, value } for value-taking flags

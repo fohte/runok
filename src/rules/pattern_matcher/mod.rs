@@ -189,6 +189,7 @@ pub fn matches(pattern: &Pattern, command: &ParsedCommand, definitions: &Definit
             &after_dd,
             &var_captures,
             &flag_group_captures,
+            None,
         )
         .unwrap_or(false)
         {
@@ -238,6 +239,7 @@ pub fn matches_with_captures(
             &after_dd,
             &var_captures,
             &flag_group_captures,
+            None,
         )
         .unwrap_or(false)
         {
@@ -246,6 +248,72 @@ pub fn matches_with_captures(
                 vars: var_captures.into_inner(),
                 flag_groups: flag_group_captures.into_inner(),
             });
+        }
+    }
+    None
+}
+
+/// Like `matches_with_captures`, but accepts a partial (prefix) match: the
+/// pattern need not consume every command token. Returns the captures plus
+/// the list of command tokens left unconsumed by the pattern (in their
+/// original order).
+///
+/// Used by alias expansion to consume an "alias prefix" (which may include
+/// `FlagWithValue` tokens that match anywhere in argv) and route everything
+/// the pattern did not consume into the rewritten command's tail.
+pub fn matches_prefix(
+    pattern: &Pattern,
+    command: &ParsedCommand,
+    definitions: &Definitions,
+) -> Option<(MatchCaptures, Vec<String>)> {
+    if !pattern.command.matches(&command.command) {
+        return None;
+    }
+
+    let (cmd_tokens, skip_values) = prepare_wildcard_iteration(pattern, command, definitions);
+    for skip in skip_values {
+        let steps = Cell::new(0usize);
+        let after_dd = Cell::new(false);
+        let mut captures = Vec::new();
+        let var_captures = RefCell::new(HashMap::new());
+        let flag_group_captures = RefCell::new(HashMap::new());
+        let remainder: RefCell<Vec<&str>> = RefCell::new(Vec::new());
+
+        if let CommandPattern::VarRef(name) = &pattern.command {
+            let matched_tokens = &cmd_tokens[..skip];
+            let matched_value = matched_tokens.join(" ");
+            var_captures
+                .borrow_mut()
+                .insert(name.clone(), matched_value);
+        }
+
+        if match_engine(
+            &pattern.tokens,
+            &cmd_tokens[skip..],
+            definitions,
+            &steps,
+            Some(&mut captures),
+            None,
+            &after_dd,
+            &var_captures,
+            &flag_group_captures,
+            Some(&remainder),
+        )
+        .unwrap_or(false)
+        {
+            let rem: Vec<String> = remainder
+                .into_inner()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            return Some((
+                MatchCaptures {
+                    wildcards: captures.into_iter().map(|s| s.to_string()).collect(),
+                    vars: var_captures.into_inner(),
+                    flag_groups: flag_group_captures.into_inner(),
+                },
+                rem,
+            ));
         }
     }
     None
@@ -286,6 +354,7 @@ pub fn extract_placeholder(
             &after_dd,
             &var_captures,
             &flag_group_captures,
+            None,
         )?;
     }
     Ok(all_candidates
@@ -320,6 +389,7 @@ pub(super) fn match_engine_for_prefix_test(
         after_double_dash,
         var_captures,
         flag_group_captures,
+        None,
     )
 }
 
@@ -357,6 +427,7 @@ fn match_engine<'a>(
     after_double_dash: &Cell<bool>,
     var_captures: &RefCell<HashMap<String, String>>,
     flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
+    prefix_remainder: Option<&RefCell<Vec<&'a str>>>,
 ) -> Result<bool, RuleError> {
     let count = steps.get() + 1;
     steps.set(count);
@@ -373,6 +444,18 @@ fn match_engine<'a>(
                 all_candidates.push(captured.clone());
             }
             return Ok(false);
+        }
+        // Prefix-match mode (used by alias expansion): accept the match even
+        // when cmd_tokens still have unconsumed tail, and record the tail as
+        // the remainder. This is the only place this matters because Optional
+        // and friends chain inner tokens onto `rest` before recursing, so
+        // every base-case hit corresponds to the entire top-level pattern
+        // being consumed.
+        if let Some(rem) = prefix_remainder {
+            let mut r = rem.borrow_mut();
+            r.clear();
+            r.extend_from_slice(cmd_tokens);
+            return Ok(true);
         }
         return Ok(cmd_tokens.is_empty());
     };
@@ -393,6 +476,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )?;
                 } else if let Some(caps) = &mut captures {
                     let saved_len = caps.len();
@@ -407,6 +491,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )? {
                         return Ok(true);
                     }
@@ -421,6 +506,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )? {
                     return Ok(true);
                 }
@@ -450,6 +536,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     );
                 }
                 return Ok(false);
@@ -469,6 +556,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     );
                 }
                 return Ok(false);
@@ -495,6 +583,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )
             } else {
                 Ok(false)
@@ -533,6 +622,7 @@ fn match_engine<'a>(
                                 after_double_dash,
                                 var_captures,
                                 flag_group_captures,
+                                prefix_remainder,
                             )? {
                                 return Ok(true);
                             }
@@ -547,6 +637,7 @@ fn match_engine<'a>(
                             after_double_dash,
                             var_captures,
                             flag_group_captures,
+                            prefix_remainder,
                         )? {
                             return Ok(true);
                         }
@@ -576,6 +667,7 @@ fn match_engine<'a>(
                                 after_double_dash,
                                 var_captures,
                                 flag_group_captures,
+                                prefix_remainder,
                             )? {
                                 return Ok(true);
                             }
@@ -590,6 +682,7 @@ fn match_engine<'a>(
                             after_double_dash,
                             var_captures,
                             flag_group_captures,
+                            prefix_remainder,
                         )? {
                             return Ok(true);
                         }
@@ -614,6 +707,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     );
                 }
                 return Ok(false);
@@ -639,6 +733,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )
             } else {
                 Ok(false)
@@ -756,6 +851,7 @@ fn match_engine<'a>(
                 after_double_dash,
                 var_captures,
                 flag_group_captures,
+                prefix_remainder,
             );
             if !matches!(result, Ok(true)) {
                 // Restore on failure so that backtracking does not retain
@@ -790,6 +886,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )? {
                         return Ok(true);
                     }
@@ -818,6 +915,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )? {
                         return Ok(true);
                     }
@@ -846,6 +944,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )? {
                         return Ok(true);
                     }
@@ -873,6 +972,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )
                 } else {
                     Ok(false)
@@ -894,6 +994,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )
                 } else {
                     Ok(false)
@@ -922,6 +1023,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     )
                 } else {
                     Ok(false)
@@ -956,6 +1058,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )? {
                     return Ok(true);
                 }
@@ -970,6 +1073,7 @@ fn match_engine<'a>(
                 after_double_dash,
                 var_captures,
                 flag_group_captures,
+                prefix_remainder,
             )? {
                 return Ok(true);
             }
@@ -987,6 +1091,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 );
             }
             Ok(false)
@@ -1015,6 +1120,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )
             } else {
                 Ok(false)
@@ -1088,6 +1194,7 @@ fn match_engine<'a>(
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
+                        prefix_remainder,
                     );
                     if matches!(result, Ok(true)) {
                         return Ok(true);
@@ -1115,6 +1222,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )
             } else {
                 Ok(false)
@@ -1160,6 +1268,7 @@ fn match_engine<'a>(
                             after_double_dash,
                             var_captures,
                             flag_group_captures,
+                            prefix_remainder,
                         )?;
                         captured.truncate(saved_len);
                     }
@@ -1180,6 +1289,7 @@ fn match_engine<'a>(
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
+                    prefix_remainder,
                 )
             }
         }
@@ -1196,6 +1306,7 @@ fn match_engine<'a>(
                 after_double_dash,
                 var_captures,
                 flag_group_captures,
+                prefix_remainder,
             )
         }
 
@@ -1211,6 +1322,7 @@ fn match_engine<'a>(
                 after_double_dash,
                 var_captures,
                 flag_group_captures,
+                prefix_remainder,
             )
         }
     }
@@ -1233,6 +1345,7 @@ fn try_recurse_flag_value<'a>(
     after_double_dash: &Cell<bool>,
     var_captures: &RefCell<HashMap<String, String>>,
     flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
+    prefix_remainder: Option<&RefCell<Vec<&'a str>>>,
 ) -> Result<bool, RuleError> {
     if let Some((captured, all_candidates)) = extract {
         match_engine(
@@ -1245,6 +1358,7 @@ fn try_recurse_flag_value<'a>(
             after_double_dash,
             var_captures,
             flag_group_captures,
+            prefix_remainder,
         )?;
         // In extract mode, always continue scanning (don't return true)
         Ok(false)
@@ -1263,6 +1377,7 @@ fn try_recurse_flag_value<'a>(
             after_double_dash,
             var_captures,
             flag_group_captures,
+            prefix_remainder,
         )? {
             return Ok(true);
         }
@@ -1279,6 +1394,7 @@ fn try_recurse_flag_value<'a>(
             after_double_dash,
             var_captures,
             flag_group_captures,
+            prefix_remainder,
         )
     }
 }

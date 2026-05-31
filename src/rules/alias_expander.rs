@@ -8,13 +8,15 @@
 //! evaluation, so existing rules keyed on the alias name (e.g. `runok *`)
 //! apply unchanged.
 //!
-//! Prefix matching is delegated to the regular rule pattern matcher: each
-//! alias pattern has a trailing `*` token appended so the matcher captures
-//! any remaining argv as wildcards, and the rewritten command is built from
-//! the alias name plus those captured tokens. This means the full pattern
-//! syntax (literals, alternations, optional groups, flag-with-value, var
-//! refs, flag groups, ...) is available to alias authors without reimplementing
-//! any matching logic.
+//! Prefix matching is delegated to the regular rule pattern matcher via its
+//! `matches_prefix` entry point: the pattern is matched as a partial prefix
+//! and the matcher reports whatever command tokens it did not consume. The
+//! rewritten command is the alias name followed by that remainder. This
+//! means the full pattern syntax (literals, alternations, optional groups,
+//! flag-with-value, var refs, flag groups, ...) is available to alias
+//! authors without reimplementing any matching logic, and prefix-consumed
+//! tokens (including the value half of `FlagWithValue` like `--context *`)
+//! do not leak into the rewritten tail.
 //!
 //! Expansion is recursive: a rewritten command may itself match another
 //! alias. Cycles are detected by tracking the chain of applied alias names
@@ -25,8 +27,8 @@ use std::collections::{HashMap, HashSet};
 use crate::config::{AliasDefinition, Config, Definitions};
 use crate::rules::RuleError;
 use crate::rules::command_parser::{FlagSchema, parse_command};
-use crate::rules::pattern_matcher::matches_with_captures;
-use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
+use crate::rules::pattern_matcher::matches_prefix;
+use crate::rules::pattern_parser::{Pattern, parse_multi_alias_prefix};
 use crate::rules::rule_engine::build_flag_schema;
 
 /// Maximum number of alias rewrites applied to a single command.
@@ -109,11 +111,7 @@ fn parse_alias_patterns(
         let def = &aliases[name];
         let mut patterns: Vec<ParsedAliasPattern> = Vec::new();
         for pat_str in def.patterns() {
-            for mut pat in parse_multi(pat_str)? {
-                // Append a trailing wildcard so the matcher consumes any
-                // remaining argv beyond the alias prefix and surfaces it
-                // through `MatchCaptures.wildcards`.
-                pat.tokens.push(PatternToken::Wildcard);
+            for pat in parse_multi_alias_prefix(pat_str)? {
                 let schema = build_flag_schema(&pat, definitions);
                 patterns.push(ParsedAliasPattern {
                     pattern: pat,
@@ -144,12 +142,12 @@ fn try_apply_once(
             let Ok(parsed_command) = parse_command(command, &entry.schema) else {
                 continue;
             };
-            let Some(captures) =
-                matches_with_captures(&entry.pattern, &parsed_command, definitions)
+            let Some((_captures, remainder)) =
+                matches_prefix(&entry.pattern, &parsed_command, definitions)
             else {
                 continue;
             };
-            let rewritten = rebuild_command(alias, &captures.wildcards)?;
+            let rewritten = rebuild_command(alias, &remainder)?;
             return Ok(Some(AliasHit {
                 alias: alias.clone(),
                 command: rewritten,
@@ -328,5 +326,123 @@ mod tests {
         "});
         let exp = expand_aliases("curl -X GET https://example.com", &cfg).unwrap();
         assert_eq!(exp.command, "curl-get https://example.com");
+    }
+
+    /// Regression: a flag-with-value whose value is `*` (e.g. `--context *`)
+    /// must consume both the flag and its value as part of the alias prefix.
+    /// The captured value must not leak into the rewritten tail.
+    #[rstest]
+    #[case::space_separated("kubectl --context foo bar baz", "kc bar baz")]
+    #[case::equals_joined("kubectl --context=foo bar baz", "kc bar baz")]
+    #[case::flag_only_no_extra_args("kubectl --context foo", "kc")]
+    #[case::flag_after_other_args("kubectl get pods --context foo", "kc get pods")]
+    fn wildcard_flag_value_in_alias_pattern(#[case] input: &str, #[case] expected: &str) {
+        let cfg = config_from(indoc! {"
+            aliases:
+              kc:
+                - 'kubectl --context *'
+        "});
+        let exp = expand_aliases(input, &cfg).unwrap();
+        assert_eq!(exp.command, expected);
+        assert_eq!(exp.chain, vec!["kc"]);
+    }
+
+    /// Flag-with-value whose value is `*` inside an optional group or as part
+    /// of a flag-alias alternation must not leak captured values either.
+    #[rstest]
+    #[case::optional_flag_present("git [-C *]", "git -C /tmp status", "g status")]
+    #[case::optional_flag_absent("git [-C *]", "git status", "g status")]
+    #[case::alternation_short_form(
+        "kubectl -n|--namespace *",
+        "kubectl -n prod get pods",
+        "g get pods"
+    )]
+    #[case::alternation_long_form(
+        "kubectl -n|--namespace *",
+        "kubectl --namespace prod get pods",
+        "g get pods"
+    )]
+    #[case::multiple_flag_with_values(
+        "kubectl --context * --namespace *",
+        "kubectl --context foo --namespace bar get pods",
+        "g get pods"
+    )]
+    fn flag_with_value_value_wildcard_does_not_leak(
+        #[case] pat: &str,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        let yaml = format!(
+            indoc! {"
+                aliases:
+                  g:
+                    - '{}'
+            "},
+            pat
+        );
+        let cfg = config_from(&yaml);
+        let exp = expand_aliases(input, &cfg).unwrap();
+        assert_eq!(exp.command, expected);
+    }
+
+    /// Other pattern syntax elements used in alias patterns should not cause
+    /// captures from the prefix to leak into the rewritten tail.
+    #[rstest]
+    #[case::command_alternation("cargo run|r --", "cargo r -- build", "a build")]
+    #[case::optional_literal_flag_present("cargo build [--release]", "cargo build --release", "a")]
+    #[case::optional_literal_flag_absent("cargo build [--release]", "cargo build", "a")]
+    #[case::optional_flag_with_literal_value_present(
+        "curl [-X|--request GET]",
+        "curl -X GET https://example.com",
+        "a https://example.com"
+    )]
+    #[case::optional_flag_with_literal_value_absent(
+        "curl [-X|--request GET]",
+        "curl https://example.com",
+        "a https://example.com"
+    )]
+    #[case::multi_word_alternation(
+        "\"npx prettier\"|prettier",
+        "prettier --check .",
+        "a --check ."
+    )]
+    fn alias_pattern_syntax_does_not_leak_prefix(
+        #[case] pat: &str,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        let yaml = format!(
+            indoc! {"
+                aliases:
+                  a:
+                    - '{}'
+            "},
+            pat
+        );
+        let cfg = config_from(&yaml);
+        let exp = expand_aliases(input, &cfg).unwrap();
+        assert_eq!(exp.command, expected);
+    }
+
+    /// `<var:name>` captures the matched token but the token is still part
+    /// of the consumed prefix, so it must not leak into the rewritten tail.
+    #[test]
+    fn var_ref_in_alias_pattern_does_not_leak() {
+        let cfg = config_from(indoc! {"
+            definitions:
+              vars:
+                instance-id:
+                  values:
+                    - i-abc123
+            aliases:
+              ec2-stop:
+                - 'aws ec2 stop-instances --instance-ids <var:instance-id>'
+        "});
+        let exp = expand_aliases(
+            "aws ec2 stop-instances --instance-ids i-abc123 --dry-run",
+            &cfg,
+        )
+        .unwrap();
+        assert_eq!(exp.command, "ec2-stop --dry-run");
     }
 }
