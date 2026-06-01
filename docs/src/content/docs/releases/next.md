@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### Rule-pattern aliases (TODO(pr-link))
+### Rule-pattern aliases ([#389](https://github.com/fohte/runok/pull/389))
 
 Add a top-level `aliases` field that factors out repeated prefixes from rule patterns. Each alias name maps to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded by substituting the alias pattern in for the alias name — so a single rule can cover every variant of a shared flag prefix without rewriting the command itself.
 

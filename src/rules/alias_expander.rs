@@ -45,10 +45,20 @@ pub struct ExpandedRulePattern {
 /// returns the original pattern with an empty chain.
 ///
 /// An alias whose definition has N patterns produces N expanded variants
-/// for the rule. Expansion recurses on each variant until the leading
-/// token of the expanded pattern is no longer an alias name, a cycle is
-/// detected (same alias re-applied in the current chain), or
-/// `MAX_ALIAS_DEPTH` is reached.
+/// for the rule. The matcher tries them in the order they appear in the
+/// alias definition (YAML list order) and uses the first match — alias
+/// authors should put more-specific patterns before more-general ones
+/// when both could match the same command. Expansion recurses on each
+/// variant until the leading token of the expanded pattern is no longer
+/// an alias name, a cycle is detected (same alias re-applied in the
+/// current chain), or `MAX_ALIAS_DEPTH` is reached.
+///
+/// Caveat: when an alias pattern's last token is a trailing positional
+/// `*` (not a `--flag *`) and a rule references the alias with a
+/// non-empty tail, the trailing `*` will greedily consume part of the
+/// tail. Use `[--flag *]` / `<flag:name>` for value-taking flags, and
+/// avoid trailing positional `*` in aliases meant to be combined with
+/// a rule tail.
 pub fn expand_rule_pattern(
     pattern: &str,
     aliases: Option<&HashMap<String, AliasDefinition>>,
@@ -164,8 +174,6 @@ mod tests {
                 - 'kubectl [--namespace|-n *]'
         "});
         let out = expand("kubectl get pods", &cfg);
-        // After one expansion the head is still `kubectl`, which is seen;
-        // cycle detection stops further recursion.
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].pattern, "kubectl [--namespace|-n *] get pods");
         assert_eq!(out[0].chain, vec!["kubectl".to_string()]);
@@ -226,7 +234,6 @@ mod tests {
                 - 'x'
         "});
         let out = expand("x foo", &cfg);
-        // x -> y -> (x is seen, stop)
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].pattern, "x foo");
         assert_eq!(out[0].chain, vec!["x".to_string(), "y".to_string()]);
@@ -241,8 +248,6 @@ mod tests {
               b:
                 - 'a x'
         "});
-        // a -> b -> a (seen) — cycle detection stops first, but verify
-        // depth tracking would also cap if cycles were absent.
         let out = expand("a", &cfg);
         assert!(!out.is_empty());
         for e in &out {
@@ -268,6 +273,14 @@ mod tests {
     #[case::leading_spaces("  k  v", Some("k"), "v")]
     #[case::empty("", None, "")]
     #[case::whitespace_only("   ", None, "")]
+    // Pattern syntax metacharacters as leading bytes — these are returned
+    // verbatim as the "head" so that a rule like `[--quiet] cargo build`
+    // never matches an alias named literally `[--quiet]`. No alias name
+    // can contain `[`, `<`, `|`, etc., so HashMap::get returns None and
+    // the rule passes through unexpanded.
+    #[case::optional_group_prefix("[--quiet] cargo build", Some("[--quiet]"), "cargo build")]
+    #[case::var_ref_prefix("<flag:ns> get pods", Some("<flag:ns>"), "get pods")]
+    #[case::pipe_alternation_prefix("cargo|c build", Some("cargo|c"), "build")]
     fn split_leading_token_cases(
         #[case] input: &str,
         #[case] expected_head: Option<&str>,
@@ -276,5 +289,27 @@ mod tests {
         let (head, tail) = split_leading_token(input);
         assert_eq!(head, expected_head);
         assert_eq!(tail, expected_tail);
+    }
+
+    #[test]
+    fn pattern_syntax_prefix_never_matches_an_alias() {
+        // A leading optional group / var-ref / flag-group ref is returned
+        // verbatim by `split_leading_token`. Since no alias name can ever
+        // be that literal string, expansion is a no-op for such patterns.
+        let cfg = config_from(indoc! {"
+            aliases:
+              kubectl:
+                - 'kubectl'
+        "});
+        for pattern in [
+            "[--quiet] cargo build",
+            "<flag:ns> get pods",
+            "kubectl|k get pods",
+        ] {
+            let out = expand(pattern, &cfg);
+            assert_eq!(out.len(), 1, "pattern: {pattern}");
+            assert_eq!(out[0].pattern, pattern);
+            assert!(out[0].chain.is_empty(), "pattern: {pattern}");
+        }
     }
 }

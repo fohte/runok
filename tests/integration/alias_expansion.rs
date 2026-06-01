@@ -162,3 +162,51 @@ fn cyclic_aliases_are_broken_without_panic(empty_context: EvalContext) {
     assert_eq!(result.action, Action::Allow);
     assert_eq!(result.alias_chain, vec!["x".to_string(), "y".to_string()]);
 }
+
+#[rstest]
+fn alias_pattern_order_decides_first_match(empty_context: EvalContext) {
+    // When multiple expanded variants could match the same command, the
+    // alias's YAML list order picks the winner. Authors should put more
+    // specific variants before more general ones.
+    let config = parse_config(indoc! {"
+        aliases:
+          k:
+            - 'kubectl --kubeconfig *'
+            - 'kubectl'
+        rules:
+          - allow: 'k get pods'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(
+        &config,
+        "kubectl --kubeconfig /tmp/cfg get pods",
+        &empty_context,
+    )
+    .unwrap();
+    assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.alias_chain, vec!["k".to_string()]);
+}
+
+#[rstest]
+fn trailing_positional_wildcard_in_alias_consumes_rule_tail(empty_context: EvalContext) {
+    // Documented caveat (see `expand_rule_pattern` doc): when an alias
+    // ends with a bare `*` and the rule appends a non-empty tail, the
+    // `*` greedily consumes the tail. The alias author should use
+    // `[--flag *]` / `<flag:name>` for value-taking flags instead.
+    let config = parse_config(indoc! {"
+        aliases:
+          k:
+            - 'kubectl *'
+        rules:
+          - allow: 'k get pods'
+    "})
+    .unwrap();
+
+    // The expanded rule is `kubectl * get pods`. The trailing `*`
+    // greedily eats `intermediate` tokens, which is the caveat — any
+    // command of shape `kubectl ... get pods` matches.
+    let result =
+        evaluate_command(&config, "kubectl any tokens here get pods", &empty_context).unwrap();
+    assert_eq!(result.action, Action::Allow);
+}

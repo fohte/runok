@@ -42,11 +42,11 @@ pub struct Config {
     /// Test section for rule verification.
     pub tests: Option<TestSection>,
     /// Rule-pattern aliases. Each entry maps an alias name to one or more
-    /// pattern strings. At rule-evaluation time, any rule whose leading
-    /// command token equals an alias name is expanded once per alias pattern
-    /// by string-substituting the alias pattern in for the alias name. This
+    /// pattern strings. At rule-load time, any rule whose leading command
+    /// token equals an alias name is expanded once per alias pattern by
+    /// string-substituting the alias pattern in for the alias name. This
     /// lets you factor out a repeated prefix (e.g. shared optional flags)
-    /// from many rules. See `src/rules/alias_expander.rs`.
+    /// from many rules.
     pub aliases: Option<HashMap<String, AliasDefinition>>,
 }
 

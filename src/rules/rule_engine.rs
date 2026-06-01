@@ -445,28 +445,19 @@ fn evaluate_simple_command(
             None => continue,
         };
 
-        // Alias expansion is a compile-time string-level macro: each rule
-        // pattern whose leading token is an alias name becomes N rules,
-        // one per alias pattern, with the alias name replaced by the
-        // alias pattern string. See `alias_expander`.
         let expansions = expand_rule_pattern(pattern_str, config.aliases.as_ref())?;
 
-        let mut rule_matched = false;
-        for expansion in &expansions {
-            let patterns = parse_multi(&expansion.pattern)?;
-
-            // Try each parsed pattern (multi-word alternation produces multiple);
-            // use the first matching pattern for this expansion.
-            for pattern in &patterns {
+        'rule: for expansion in &expansions {
+            for pattern in &parse_multi(&expansion.pattern)? {
                 let schema = build_flag_schema(pattern, definitions);
                 let parsed_command = parse_command(command, &schema)?;
 
-                let match_captures = matches_with_captures(pattern, &parsed_command, definitions);
-                let Some(match_captures) = match_captures else {
+                let Some(match_captures) =
+                    matches_with_captures(pattern, &parsed_command, definitions)
+                else {
                     continue;
                 };
 
-                // Evaluate when clause if present
                 if let Some(when_expr) = &rule.when {
                     let expr_context = build_expr_context(
                         &parsed_command,
@@ -497,11 +488,7 @@ fn evaluate_simple_command(
                     alias_chain: expansion.chain.clone(),
                 });
 
-                rule_matched = true;
-                break;
-            }
-            if rule_matched {
-                break;
+                break 'rule;
             }
         }
     }
