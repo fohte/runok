@@ -8,18 +8,22 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### Command aliases ([#377](https://github.com/fohte/runok/pull/377))
+### Rule-pattern aliases (TODO(pr-link))
 
-Add a top-level `aliases` field that rewrites the leading tokens of a command before rule evaluation. Each alias name maps to one or more patterns; when a command matches an alias pattern as a prefix, the matching portion is replaced with the alias name and the rewritten command flows through normal rule evaluation. Rules keyed on the alias name (for example `allow: 'runok check *'`) then cover commands invoked through development wrappers like `cargo run -- ...`.
+Add a top-level `aliases` field that factors out repeated prefixes from rule patterns. Each alias name maps to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded by substituting the alias pattern in for the alias name — so a single rule can cover every variant of a shared flag prefix without rewriting the command itself.
 
 ```yaml title="runok.yml"
 aliases:
-  runok:
-    - 'cargo run [--quiet] [--release] --'
+  kubectl:
+    - 'kubectl [--namespace|-n *]'
 rules:
-  - allow: 'runok check *'
+  - allow: 'kubectl get pods'
 ```
 
-With this config, `cargo run --quiet -- check 'git status'` is rewritten to `runok check 'git status'` before rule evaluation, so the existing `runok check *` allow rule applies. Aliases are expanded recursively with cycle detection and a depth limit; the audit log records the applied chain on each command branch.
+The rule `kubectl get pods` expands to `kubectl [--namespace|-n *] get pods`, so all of `kubectl get pods`, `kubectl -n prod get pods`, and `kubectl --namespace prod get pods` match it. An alias with N patterns produces N expanded rules. Aliases compose recursively with cycle detection and a depth limit (currently 5).
+
+If an alias pattern ends with a value-taking flag like `--context *` and you want a rule to use that alias with no tail, declare the flag explicitly via `definitions.flag_groups` and reference it as `<flag:name>` in the alias pattern. This tells the command parser that the flag consumes the next token as its value.
+
+The audit log records the alias chain referenced by the matched rule under `command_evaluations[].alias_chain` (in expansion order, outermost-rule reference first). The field is omitted from the JSON when no alias contributed to the match.
 
 See [Configuration schema -> aliases](/configuration/schema/) for details.

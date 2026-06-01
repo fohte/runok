@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "aliases": {
-      "description": "Command aliases. Each entry maps an alias name to a list of patterns;\nwhen a command matches one of the patterns as a prefix, the matching\nportion is replaced with the alias name and the rewritten command is\nre-evaluated against the normal rule set.",
+      "description": "Rule-pattern aliases. Each entry maps an alias name to one or more\npattern strings. At rule-evaluation time, any rule whose leading\ncommand token equals an alias name is expanded once per alias pattern\nby string-substituting the alias pattern in for the alias name. This\nlets you factor out a repeated prefix (e.g. shared optional flags)\nfrom many rules. See `src/rules/alias_expander.rs`.",
       "type": [
         "object",
         "null"
