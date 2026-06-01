@@ -88,9 +88,9 @@ fn expand_recursive(
         });
         return Ok(());
     };
-    let head_name = head_name.to_string();
-    seen.insert(head_name.clone());
-    chain.push(head_name.clone());
+    let head_string = head_name.to_string();
+    seen.insert(head_string.clone());
+    chain.push(head_string);
     for alias_pattern in def.patterns() {
         let combined = if tail.is_empty() {
             alias_pattern.to_string()
@@ -100,7 +100,7 @@ fn expand_recursive(
         expand_recursive(&combined, aliases, seen, chain, depth + 1, out)?;
     }
     chain.pop();
-    seen.remove(&head_name);
+    seen.remove(head_name);
     Ok(())
 }
 
@@ -112,9 +112,10 @@ fn split_leading_token(pattern: &str) -> (Option<&str>, &str) {
     if trimmed.is_empty() {
         return (None, "");
     }
-    let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
-    let (head, rest) = trimmed.split_at(end);
-    (Some(head), rest.trim_start())
+    match trimmed.split_once(char::is_whitespace) {
+        Some((head, rest)) => (Some(head), rest.trim_start()),
+        None => (Some(trimmed), ""),
+    }
 }
 
 #[cfg(test)]
