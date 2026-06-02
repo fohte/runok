@@ -1,171 +1,131 @@
-//! Command alias expansion.
+//! Rule-time alias expansion.
 //!
-//! Aliases rewrite the leading tokens of a command before rule evaluation.
-//! Each alias entry maps a name (e.g. `runok`) to one or more patterns
-//! (e.g. `cargo run [--quiet] [--release] --`). When a command's tokens
-//! match an alias pattern as a prefix, the matched prefix is replaced with
-//! the alias name and the rewritten command flows through normal rule
-//! evaluation, so existing rules keyed on the alias name (e.g. `runok *`)
-//! apply unchanged.
+//! Aliases factor out repeated prefixes from rule patterns. At rule
+//! evaluation time, each rule pattern whose leading command token equals
+//! an alias name is rewritten — once per alias pattern — by substituting
+//! the alias pattern string for the alias name in the rule pattern.
+//! Expansion is applied transitively until no leading token matches an
+//! alias, with cycle detection and a hard depth cap.
 //!
-//! Prefix matching is delegated to the regular rule pattern matcher: each
-//! alias pattern has a trailing `*` token appended so the matcher captures
-//! any remaining argv as wildcards, and the rewritten command is built from
-//! the alias name plus those captured tokens. This means the full pattern
-//! syntax (literals, alternations, optional groups, flag-with-value, var
-//! refs, flag groups, ...) is available to alias authors without reimplementing
-//! any matching logic.
+//! Example:
 //!
-//! Expansion is recursive: a rewritten command may itself match another
-//! alias. Cycles are detected by tracking the chain of applied alias names
-//! and a hard depth limit caps runaway expansion.
+//! ```yaml
+//! aliases:
+//!   kubectl:
+//!     - 'kubectl [--namespace|-n *]'
+//! rules:
+//!   - allow: 'kubectl get pods'
+//! ```
+//!
+//! The rule `kubectl get pods` expands to
+//! `kubectl [--namespace|-n *] get pods`, so all of `kubectl get pods`,
+//! `kubectl -n prod get pods`, and `kubectl --namespace prod get pods`
+//! match it.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::{AliasDefinition, Config, Definitions};
+use crate::config::AliasDefinition;
 use crate::rules::RuleError;
-use crate::rules::command_parser::{FlagSchema, parse_command};
-use crate::rules::pattern_matcher::matches_with_captures;
-use crate::rules::pattern_parser::{Pattern, PatternToken, parse_multi};
-use crate::rules::rule_engine::build_flag_schema;
 
-/// Maximum number of alias rewrites applied to a single command.
+/// Maximum depth of recursive alias expansion for a single rule pattern.
 pub const MAX_ALIAS_DEPTH: usize = 5;
 
-/// Result of attempting to expand aliases for a command.
+/// A rule pattern after alias expansion.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AliasExpansion {
-    /// Final command string after all applicable alias rewrites.
-    pub command: String,
-    /// Names of aliases applied, in order. Empty when no alias matched.
+pub struct ExpandedRulePattern {
+    /// The expanded pattern string, ready for `parse_multi`.
+    pub pattern: String,
+    /// Names of aliases referenced during expansion, in expansion order
+    /// (outermost-rule reference first). Empty when no alias was applied.
     pub chain: Vec<String>,
 }
 
-/// Expand aliases on `command` until no further alias matches, a cycle is
-/// detected, or the depth limit is reached.
+/// Expand a rule pattern by replacing leading alias-name tokens with the
+/// alias pattern(s). When the pattern's leading token is not an alias,
+/// returns the original pattern with an empty chain.
 ///
-/// Returns the (possibly rewritten) command together with the chain of
-/// alias names that fired. When no alias applies, the original command is
-/// returned with an empty chain.
-pub fn expand_aliases(command: &str, config: &Config) -> Result<AliasExpansion, RuleError> {
-    let aliases = match config.aliases.as_ref() {
+/// An alias whose definition has N patterns produces N expanded variants
+/// for the rule. The matcher tries them in the order they appear in the
+/// alias definition (YAML list order) and uses the first match — alias
+/// authors should put more-specific patterns before more-general ones
+/// when both could match the same command. Expansion recurses on each
+/// variant until the leading token of the expanded pattern is no longer
+/// an alias name, a cycle is detected (same alias re-applied in the
+/// current chain), or `MAX_ALIAS_DEPTH` is reached.
+///
+/// Caveat: when an alias pattern's last token is a trailing positional
+/// `*` (not a `--flag *`) and a rule references the alias with a
+/// non-empty tail, the trailing `*` will greedily consume part of the
+/// tail. Use `[--flag *]` / `<flag:name>` for value-taking flags, and
+/// avoid trailing positional `*` in aliases meant to be combined with
+/// a rule tail.
+pub fn expand_rule_pattern(
+    pattern: &str,
+    aliases: Option<&HashMap<String, AliasDefinition>>,
+) -> Result<Vec<ExpandedRulePattern>, RuleError> {
+    let aliases = match aliases {
         Some(a) if !a.is_empty() => a,
         _ => {
-            return Ok(AliasExpansion {
-                command: command.to_string(),
+            return Ok(vec![ExpandedRulePattern {
+                pattern: pattern.to_string(),
                 chain: Vec::new(),
-            });
+            }]);
         }
     };
-
-    let default_defs = Definitions::default();
-    let definitions = config.definitions.as_ref().unwrap_or(&default_defs);
-
-    // Pre-parse each alias pattern once and append a trailing wildcard so
-    // the existing matcher captures the remaining argv. Ordering by alias
-    // name keeps matching deterministic across HashMap iteration orders.
-    let parsed = parse_alias_patterns(aliases, definitions)?;
-
-    let mut current = command.to_string();
-    let mut chain: Vec<String> = Vec::new();
+    let mut out = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-
-    for _ in 0..MAX_ALIAS_DEPTH {
-        let Some(hit) = try_apply_once(&current, &parsed, definitions)? else {
-            break;
-        };
-        if !seen.insert(hit.alias.clone()) {
-            // Cycle: this alias already fired in the chain. Stop deterministically.
-            break;
-        }
-        chain.push(hit.alias);
-        current = hit.command;
-    }
-
-    Ok(AliasExpansion {
-        command: current,
-        chain,
-    })
+    let mut chain: Vec<String> = Vec::new();
+    expand_recursive(pattern, aliases, &mut seen, &mut chain, 0, &mut out)?;
+    Ok(out)
 }
 
-struct ParsedAliases {
-    entries: Vec<(String, Vec<ParsedAliasPattern>)>,
-}
-
-struct ParsedAliasPattern {
-    pattern: Pattern,
-    schema: FlagSchema,
-}
-
-fn parse_alias_patterns(
+fn expand_recursive(
+    pattern: &str,
     aliases: &HashMap<String, AliasDefinition>,
-    definitions: &Definitions,
-) -> Result<ParsedAliases, RuleError> {
-    let mut names: Vec<&String> = aliases.keys().collect();
-    names.sort();
-
-    let mut entries = Vec::with_capacity(aliases.len());
-    for name in names {
-        let def = &aliases[name];
-        let mut patterns: Vec<ParsedAliasPattern> = Vec::new();
-        for pat_str in def.patterns() {
-            for mut pat in parse_multi(pat_str)? {
-                // Append a trailing wildcard so the matcher consumes any
-                // remaining argv beyond the alias prefix and surfaces it
-                // through `MatchCaptures.wildcards`.
-                pat.tokens.push(PatternToken::Wildcard);
-                let schema = build_flag_schema(&pat, definitions);
-                patterns.push(ParsedAliasPattern {
-                    pattern: pat,
-                    schema,
-                });
-            }
-        }
-        entries.push((name.clone(), patterns));
+    seen: &mut HashSet<String>,
+    chain: &mut Vec<String>,
+    depth: usize,
+    out: &mut Vec<ExpandedRulePattern>,
+) -> Result<(), RuleError> {
+    let (head, tail) = split_leading_token(pattern);
+    let alias_hit = head.and_then(|h| aliases.get(h).map(|def| (h, def)));
+    let already_seen = head.is_some_and(|h| seen.contains(h));
+    let Some((head_name, def)) = alias_hit.filter(|_| !already_seen && depth < MAX_ALIAS_DEPTH)
+    else {
+        out.push(ExpandedRulePattern {
+            pattern: pattern.to_string(),
+            chain: chain.clone(),
+        });
+        return Ok(());
+    };
+    let head_string = head_name.to_string();
+    seen.insert(head_string.clone());
+    chain.push(head_string);
+    for alias_pattern in def.patterns() {
+        let combined = if tail.is_empty() {
+            alias_pattern.to_string()
+        } else {
+            format!("{alias_pattern} {tail}")
+        };
+        expand_recursive(&combined, aliases, seen, chain, depth + 1, out)?;
     }
-    Ok(ParsedAliases { entries })
+    chain.pop();
+    seen.remove(head_name);
+    Ok(())
 }
 
-struct AliasHit {
-    alias: String,
-    command: String,
-}
-
-fn try_apply_once(
-    command: &str,
-    parsed: &ParsedAliases,
-    definitions: &Definitions,
-) -> Result<Option<AliasHit>, RuleError> {
-    for (alias, patterns) in &parsed.entries {
-        for entry in patterns {
-            // A schema-specific parse failure shouldn't abort the whole
-            // expansion — other aliases may still match the command with
-            // a schema that resolves the offending flag differently.
-            let Ok(parsed_command) = parse_command(command, &entry.schema) else {
-                continue;
-            };
-            let Some(captures) =
-                matches_with_captures(&entry.pattern, &parsed_command, definitions)
-            else {
-                continue;
-            };
-            let rewritten = rebuild_command(alias, &captures.wildcards)?;
-            return Ok(Some(AliasHit {
-                alias: alias.clone(),
-                command: rewritten,
-            }));
-        }
+/// Split off the leading whitespace-delimited token. Returns
+/// `(Some(token), tail)` if a token was found, where `tail` is the
+/// remainder with leading whitespace trimmed; otherwise `(None, "")`.
+fn split_leading_token(pattern: &str) -> (Option<&str>, &str) {
+    let trimmed = pattern.trim_start();
+    if trimmed.is_empty() {
+        return (None, "");
     }
-    Ok(None)
-}
-
-fn rebuild_command(alias: &str, rest_tokens: &[String]) -> Result<String, RuleError> {
-    if rest_tokens.is_empty() {
-        return Ok(alias.to_string());
+    match trimmed.split_once(char::is_whitespace) {
+        Some((head, rest)) => (Some(head), rest.trim_start()),
+        None => (Some(trimmed), ""),
     }
-    let joined =
-        shlex::try_join(std::iter::once(alias).chain(rest_tokens.iter().map(String::as_str)))?;
-    Ok(joined)
 }
 
 #[cfg(test)]
@@ -180,101 +140,92 @@ mod tests {
         parse_config(yaml).unwrap()
     }
 
-    #[test]
-    fn parses_alias_section() {
-        let cfg = config_from(indoc! {"
-            aliases:
-              runok:
-                - 'cargo run [--quiet] [--release] --'
-        "});
-        assert!(cfg.aliases.unwrap().contains_key("runok"));
-    }
-
-    #[rstest]
-    #[case::quiet(
-        "cargo run --quiet -- check",
-        "runok check",
-        vec!["runok"],
-    )]
-    #[case::release(
-        "cargo run --release -- exec git status",
-        "runok exec git status",
-        vec!["runok"],
-    )]
-    #[case::both_flags(
-        "cargo run --quiet --release -- check",
-        "runok check",
-        vec!["runok"],
-    )]
-    #[case::no_flags(
-        "cargo run -- check",
-        "runok check",
-        vec!["runok"],
-    )]
-    fn expands_runok_alias(#[case] input: &str, #[case] expected: &str, #[case] chain: Vec<&str>) {
-        let cfg = config_from(indoc! {"
-            aliases:
-              runok:
-                - 'cargo run [--quiet] [--release] --'
-        "});
-        let exp = expand_aliases(input, &cfg).unwrap();
-        assert_eq!(exp.command, expected);
-        let got_chain: Vec<&str> = exp.chain.iter().map(String::as_str).collect();
-        assert_eq!(got_chain, chain);
+    fn expand(pattern: &str, cfg: &Config) -> Vec<ExpandedRulePattern> {
+        expand_rule_pattern(pattern, cfg.aliases.as_ref()).unwrap()
     }
 
     #[test]
-    fn no_match_returns_original() {
-        let cfg = config_from(indoc! {"
-            aliases:
-              runok:
-                - 'cargo run --'
-        "});
-        let exp = expand_aliases("git status", &cfg).unwrap();
-        assert_eq!(exp.command, "git status");
-        assert!(exp.chain.is_empty());
+    fn no_aliases_passthrough() {
+        let cfg = parse_config("{}").unwrap();
+        let out = expand("git status", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "git status");
+        assert!(out[0].chain.is_empty());
     }
 
     #[test]
-    fn missing_required_token_skips_alias() {
-        // No `--` separator in command, so the alias must not match.
+    fn non_alias_head_passthrough() {
         let cfg = config_from(indoc! {"
             aliases:
-              runok:
-                - 'cargo run --'
+              kubectl:
+                - 'kubectl [--namespace|-n *]'
         "});
-        let exp = expand_aliases("cargo run check", &cfg).unwrap();
-        assert_eq!(exp.command, "cargo run check");
-        assert!(exp.chain.is_empty());
+        let out = expand("git status", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "git status");
+        assert!(out[0].chain.is_empty());
     }
 
     #[test]
-    fn quotes_tokens_with_whitespace() {
+    fn expands_leading_alias_token() {
         let cfg = config_from(indoc! {"
             aliases:
-              runok:
-                - 'cargo run --'
+              kubectl:
+                - 'kubectl [--namespace|-n *]'
         "});
-        let exp = expand_aliases("cargo run -- 'hello world'", &cfg).unwrap();
-        assert_eq!(exp.command, "runok 'hello world'");
+        let out = expand("kubectl get pods", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "kubectl [--namespace|-n *] get pods");
+        assert_eq!(out[0].chain, vec!["kubectl".to_string()]);
     }
 
     #[test]
-    fn recursive_expansion_chains_aliases() {
+    fn expands_no_tail() {
         let cfg = config_from(indoc! {"
             aliases:
-              inner:
-                - 'cargo special'
+              k:
+                - 'kubectl'
+        "});
+        let out = expand("k", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "kubectl");
+        assert_eq!(out[0].chain, vec!["k".to_string()]);
+    }
+
+    #[test]
+    fn multi_pattern_alias_produces_multiple_expansions() {
+        let cfg = config_from(indoc! {"
+            aliases:
+              k:
+                - 'kubectl'
+                - 'kubectl --kubeconfig *'
+        "});
+        let out = expand("k get pods", &cfg);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].pattern, "kubectl get pods");
+        assert_eq!(out[1].pattern, "kubectl --kubeconfig * get pods");
+        for e in &out {
+            assert_eq!(e.chain, vec!["k".to_string()]);
+        }
+    }
+
+    #[test]
+    fn recursive_expansion_chain_order() {
+        let cfg = config_from(indoc! {"
+            aliases:
               outer:
                 - 'inner'
+              inner:
+                - 'cargo special'
         "});
-        let exp = expand_aliases("cargo special foo", &cfg).unwrap();
-        assert_eq!(exp.command, "outer foo");
-        assert_eq!(exp.chain, vec!["inner", "outer"]);
+        let out = expand("outer foo", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "cargo special foo");
+        assert_eq!(out[0].chain, vec!["outer".to_string(), "inner".to_string()]);
     }
 
     #[test]
-    fn cycle_is_detected_and_stops() {
+    fn cycle_through_two_aliases_is_broken() {
         let cfg = config_from(indoc! {"
             aliases:
               x:
@@ -282,51 +233,83 @@ mod tests {
               y:
                 - 'x'
         "});
-        let exp = expand_aliases("x foo", &cfg).unwrap();
-        assert!(exp.chain.len() <= MAX_ALIAS_DEPTH);
+        let out = expand("x foo", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "x foo");
+        assert_eq!(out[0].chain, vec!["x".to_string(), "y".to_string()]);
     }
 
     #[test]
-    fn empty_aliases_passthrough() {
-        let cfg = parse_config("{}").unwrap();
-        let exp = expand_aliases("git status", &cfg).unwrap();
-        assert_eq!(exp.command, "git status");
-        assert!(exp.chain.is_empty());
-    }
-
-    #[test]
-    fn single_string_alias_form() {
+    fn depth_limit_caps_runaway() {
         let cfg = config_from(indoc! {"
             aliases:
-              runok: 'cargo run --'
+              a:
+                - 'b'
+              b:
+                - 'a x'
         "});
-        let exp = expand_aliases("cargo run -- check", &cfg).unwrap();
-        assert_eq!(exp.command, "runok check");
+        let out = expand("a", &cfg);
+        assert!(!out.is_empty());
+        for e in &out {
+            assert!(e.chain.len() <= MAX_ALIAS_DEPTH);
+        }
     }
 
     #[test]
-    fn alternation_in_alias_pattern() {
+    fn single_string_alias_form_works() {
         let cfg = config_from(indoc! {"
             aliases:
-              runok:
-                - 'cargo run|r --'
+              k: 'kubectl'
         "});
-        let exp_run = expand_aliases("cargo run -- check", &cfg).unwrap();
-        assert_eq!(exp_run.command, "runok check");
-        let exp_r = expand_aliases("cargo r -- check", &cfg).unwrap();
-        assert_eq!(exp_r.command, "runok check");
+        let out = expand("k get pods", &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pattern, "kubectl get pods");
+        assert_eq!(out[0].chain, vec!["k".to_string()]);
+    }
+
+    #[rstest]
+    #[case::single_token("kubectl", Some("kubectl"), "")]
+    #[case::with_tail("kubectl get pods", Some("kubectl"), "get pods")]
+    #[case::leading_spaces("  k  v", Some("k"), "v")]
+    #[case::empty("", None, "")]
+    #[case::whitespace_only("   ", None, "")]
+    // Pattern syntax metacharacters as leading bytes — these are returned
+    // verbatim as the "head" so that a rule like `[--quiet] cargo build`
+    // never matches an alias named literally `[--quiet]`. No alias name
+    // can contain `[`, `<`, `|`, etc., so HashMap::get returns None and
+    // the rule passes through unexpanded.
+    #[case::optional_group_prefix("[--quiet] cargo build", Some("[--quiet]"), "cargo build")]
+    #[case::var_ref_prefix("<flag:ns> get pods", Some("<flag:ns>"), "get pods")]
+    #[case::pipe_alternation_prefix("cargo|c build", Some("cargo|c"), "build")]
+    fn split_leading_token_cases(
+        #[case] input: &str,
+        #[case] expected_head: Option<&str>,
+        #[case] expected_tail: &str,
+    ) {
+        let (head, tail) = split_leading_token(input);
+        assert_eq!(head, expected_head);
+        assert_eq!(tail, expected_tail);
     }
 
     #[test]
-    fn flag_with_value_in_alias_pattern() {
-        // The existing matcher handles `-X|--method GET` (value-taking flag);
-        // alias prefix matching reuses that without any special-casing.
+    fn pattern_syntax_prefix_never_matches_an_alias() {
+        // A leading optional group / var-ref / flag-group ref is returned
+        // verbatim by `split_leading_token`. Since no alias name can ever
+        // be that literal string, expansion is a no-op for such patterns.
         let cfg = config_from(indoc! {"
             aliases:
-              curl-get:
-                - 'curl -X|--request GET'
+              kubectl:
+                - 'kubectl'
         "});
-        let exp = expand_aliases("curl -X GET https://example.com", &cfg).unwrap();
-        assert_eq!(exp.command, "curl-get https://example.com");
+        for pattern in [
+            "[--quiet] cargo build",
+            "<flag:ns> get pods",
+            "kubectl|k get pods",
+        ] {
+            let out = expand(pattern, &cfg);
+            assert_eq!(out.len(), 1, "pattern: {pattern}");
+            assert_eq!(out[0].pattern, pattern);
+            assert!(out[0].chain.is_empty(), "pattern: {pattern}");
+        }
     }
 }

@@ -41,10 +41,12 @@ pub struct Config {
     pub audit: Option<AuditConfig>,
     /// Test section for rule verification.
     pub tests: Option<TestSection>,
-    /// Command aliases. Each entry maps an alias name to a list of patterns;
-    /// when a command matches one of the patterns as a prefix, the matching
-    /// portion is replaced with the alias name and the rewritten command is
-    /// re-evaluated against the normal rule set.
+    /// Rule-pattern aliases. Each entry maps an alias name to one or more
+    /// pattern strings. At rule-load time, any rule whose leading command
+    /// token equals an alias name is expanded once per alias pattern by
+    /// string-substituting the alias pattern in for the alias name. This
+    /// lets you factor out a repeated prefix (e.g. shared optional flags)
+    /// from many rules.
     pub aliases: Option<HashMap<String, AliasDefinition>>,
 }
 
