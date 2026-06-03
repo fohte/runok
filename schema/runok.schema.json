@@ -4,16 +4,6 @@
   "description": "Top-level runok configuration.",
   "type": "object",
   "properties": {
-    "aliases": {
-      "description": "Rule-pattern aliases. Each entry maps an alias name to one or more\npattern strings. At rule-load time, any rule whose leading command\ntoken equals an alias name is expanded once per alias pattern by\nstring-substituting the alias pattern in for the alias name. This\nlets you factor out a repeated prefix (e.g. shared optional flags)\nfrom many rules.",
-      "type": [
-        "object",
-        "null"
-      ],
-      "additionalProperties": {
-        "$ref": "#/$defs/AliasDefinition"
-      }
-    },
     "audit": {
       "description": "Audit log settings.",
       "anyOf": [
@@ -171,6 +161,16 @@
       "description": "Reusable definitions for paths, sandbox presets, wrappers, variables, and flag groups.",
       "type": "object",
       "properties": {
+        "aliases": {
+          "description": "Rule-pattern aliases. Each entry maps an alias name to one or more\npattern strings. At rule-load time, any rule whose leading command\ntoken equals an alias name is expanded once per alias pattern by\nstring-substituting the alias pattern in for the alias name. This\nlets you factor out a repeated prefix (e.g. shared optional flags)\nfrom many rules.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/AliasDefinition"
+          }
+        },
         "flag_groups": {
           "description": "Named flag alias groups referenced by `<flag:name>` in rule patterns.\nEach value is a pattern string using the same syntax as rule patterns:\nalternation for aliases, with an optional value pattern suffix.\n\nExamples:\n- `\"-f|-F|--field|--raw-field *\"` — value flag (captures flag + value)\n- `\"-v|--verbose\"` — bool flag (captures flag presence only)\n- `\"-X|--method GET|HEAD|OPTIONS\"` — value flag with restricted values",
           "type": [

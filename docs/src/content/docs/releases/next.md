@@ -10,12 +10,13 @@ This page tracks changes that will be included in the next release. It is update
 
 ### Rule-pattern aliases ([#389](https://github.com/fohte/runok/pull/389))
 
-Add a top-level `aliases` field that factors out repeated prefixes from rule patterns. Each alias name maps to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded by substituting the alias pattern in for the alias name — so a single rule can cover every variant of a shared flag prefix without rewriting the command itself.
+Add a `definitions.aliases` field that factors out repeated prefixes from rule patterns. Each alias name maps to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded by substituting the alias pattern in for the alias name — so a single rule can cover every variant of a shared flag prefix without rewriting the command itself.
 
 ```yaml title="runok.yml"
-aliases:
-  kubectl:
-    - 'kubectl [--namespace|-n *]'
+definitions:
+  aliases:
+    kubectl:
+      - 'kubectl [--namespace|-n *]'
 rules:
   - allow: 'kubectl get pods'
 ```
@@ -26,4 +27,4 @@ If an alias pattern ends with a value-taking flag like `--context *` and you wan
 
 The audit log records the alias chain referenced by the matched rule under `command_evaluations[].alias_chain` (in expansion order, outermost-rule reference first). The field is omitted from the JSON when no alias contributed to the match.
 
-See [Configuration schema -> aliases](/configuration/schema/) for details.
+See [Configuration schema -> definitions.aliases](/configuration/schema/#definitionsaliases) for details.

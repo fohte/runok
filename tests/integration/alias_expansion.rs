@@ -21,9 +21,10 @@ fn kubectl_alias_factors_out_namespace_flag(empty_context: EvalContext, #[case] 
     // The primary use-case: factor out a repeated optional flag prefix so a
     // single rule `kubectl get pods` covers every namespace variant.
     let config = parse_config(indoc! {"
-        aliases:
-          kubectl:
-            - 'kubectl [--namespace|-n *]'
+        definitions:
+          aliases:
+            kubectl:
+              - 'kubectl [--namespace|-n *]'
         rules:
           - allow: 'kubectl get pods'
     "})
@@ -39,9 +40,10 @@ fn alias_does_not_grant_unlisted_subcommands(empty_context: EvalContext) {
     // The rule `kubectl get pods` (alias-expanded) must not cover
     // `kubectl delete pods` — `delete pods` is not the tail of the rule.
     let config = parse_config(indoc! {"
-        aliases:
-          kubectl:
-            - 'kubectl [--namespace|-n *]'
+        definitions:
+          aliases:
+            kubectl:
+              - 'kubectl [--namespace|-n *]'
         rules:
           - allow: 'kubectl get pods'
     "})
@@ -55,9 +57,10 @@ fn alias_does_not_grant_unlisted_subcommands(empty_context: EvalContext) {
 #[rstest]
 fn rule_without_alias_head_is_unaffected(empty_context: EvalContext) {
     let config = parse_config(indoc! {"
-        aliases:
-          kubectl:
-            - 'kubectl [--namespace|-n *]'
+        definitions:
+          aliases:
+            kubectl:
+              - 'kubectl [--namespace|-n *]'
         rules:
           - allow: 'git status'
     "})
@@ -73,10 +76,11 @@ fn alias_with_multiple_patterns_expands_to_multiple_rules(empty_context: EvalCon
     // An alias with N patterns expands one rule into N expanded rules; any
     // of them firing yields an allow.
     let config = parse_config(indoc! {"
-        aliases:
-          k:
-            - 'kubectl'
-            - 'kubectl --kubeconfig *'
+        definitions:
+          aliases:
+            k:
+              - 'kubectl'
+              - 'kubectl --kubeconfig *'
         rules:
           - allow: 'k get pods'
     "})
@@ -101,9 +105,10 @@ fn deny_still_fires_on_compound_branch_after_alias(empty_context: EvalContext) {
     // Even when an alias-expanded rule would allow one branch, an unrelated
     // deny rule must still fire on the other branch of a compound command.
     let config = parse_config(indoc! {"
-        aliases:
-          kubectl:
-            - 'kubectl [--namespace|-n *]'
+        definitions:
+          aliases:
+            kubectl:
+              - 'kubectl [--namespace|-n *]'
         rules:
           - allow: 'kubectl get pods'
           - deny: 'rm -rf *'
@@ -124,11 +129,12 @@ fn recursive_alias_expansion_records_full_chain(empty_context: EvalContext) {
     // outer -> inner -> kubectl: the matched rule's chain lists aliases
     // in expansion order, outermost-rule reference first.
     let config = parse_config(indoc! {"
-        aliases:
-          outer:
-            - 'inner'
-          inner:
-            - 'kubectl'
+        definitions:
+          aliases:
+            outer:
+              - 'inner'
+            inner:
+              - 'kubectl'
         rules:
           - allow: 'outer get pods'
     "})
@@ -148,11 +154,12 @@ fn cyclic_aliases_are_broken_without_panic(empty_context: EvalContext) {
     // rule pattern is preserved (so `x foo` still matches the literal
     // command `x foo`).
     let config = parse_config(indoc! {"
-        aliases:
-          x:
-            - 'y'
-          y:
-            - 'x'
+        definitions:
+          aliases:
+            x:
+              - 'y'
+            y:
+              - 'x'
         rules:
           - allow: 'x foo'
     "})
@@ -169,10 +176,11 @@ fn alias_pattern_order_decides_first_match(empty_context: EvalContext) {
     // alias's YAML list order picks the winner. Authors should put more
     // specific variants before more general ones.
     let config = parse_config(indoc! {"
-        aliases:
-          k:
-            - 'kubectl --kubeconfig *'
-            - 'kubectl'
+        definitions:
+          aliases:
+            k:
+              - 'kubectl --kubeconfig *'
+              - 'kubectl'
         rules:
           - allow: 'k get pods'
     "})
@@ -195,9 +203,10 @@ fn trailing_positional_wildcard_in_alias_consumes_rule_tail(empty_context: EvalC
     // `*` greedily consumes the tail. The alias author should use
     // `[--flag *]` / `<flag:name>` for value-taking flags instead.
     let config = parse_config(indoc! {"
-        aliases:
-          k:
-            - 'kubectl *'
+        definitions:
+          aliases:
+            k:
+              - 'kubectl *'
         rules:
           - allow: 'k get pods'
     "})

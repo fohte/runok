@@ -10,9 +10,10 @@
 //! Example:
 //!
 //! ```yaml
-//! aliases:
-//!   kubectl:
-//!     - 'kubectl [--namespace|-n *]'
+//! definitions:
+//!   aliases:
+//!     kubectl:
+//!       - 'kubectl [--namespace|-n *]'
 //! rules:
 //!   - allow: 'kubectl get pods'
 //! ```
@@ -141,7 +142,11 @@ mod tests {
     }
 
     fn expand(pattern: &str, cfg: &Config) -> Vec<ExpandedRulePattern> {
-        expand_rule_pattern(pattern, cfg.aliases.as_ref()).unwrap()
+        expand_rule_pattern(
+            pattern,
+            cfg.definitions.as_ref().and_then(|d| d.aliases.as_ref()),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -156,9 +161,10 @@ mod tests {
     #[test]
     fn non_alias_head_passthrough() {
         let cfg = config_from(indoc! {"
-            aliases:
-              kubectl:
-                - 'kubectl [--namespace|-n *]'
+            definitions:
+              aliases:
+                kubectl:
+                  - 'kubectl [--namespace|-n *]'
         "});
         let out = expand("git status", &cfg);
         assert_eq!(out.len(), 1);
@@ -169,9 +175,10 @@ mod tests {
     #[test]
     fn expands_leading_alias_token() {
         let cfg = config_from(indoc! {"
-            aliases:
-              kubectl:
-                - 'kubectl [--namespace|-n *]'
+            definitions:
+              aliases:
+                kubectl:
+                  - 'kubectl [--namespace|-n *]'
         "});
         let out = expand("kubectl get pods", &cfg);
         assert_eq!(out.len(), 1);
@@ -182,9 +189,10 @@ mod tests {
     #[test]
     fn expands_no_tail() {
         let cfg = config_from(indoc! {"
-            aliases:
-              k:
-                - 'kubectl'
+            definitions:
+              aliases:
+                k:
+                  - 'kubectl'
         "});
         let out = expand("k", &cfg);
         assert_eq!(out.len(), 1);
@@ -195,10 +203,11 @@ mod tests {
     #[test]
     fn multi_pattern_alias_produces_multiple_expansions() {
         let cfg = config_from(indoc! {"
-            aliases:
-              k:
-                - 'kubectl'
-                - 'kubectl --kubeconfig *'
+            definitions:
+              aliases:
+                k:
+                  - 'kubectl'
+                  - 'kubectl --kubeconfig *'
         "});
         let out = expand("k get pods", &cfg);
         assert_eq!(out.len(), 2);
@@ -212,11 +221,12 @@ mod tests {
     #[test]
     fn recursive_expansion_chain_order() {
         let cfg = config_from(indoc! {"
-            aliases:
-              outer:
-                - 'inner'
-              inner:
-                - 'cargo special'
+            definitions:
+              aliases:
+                outer:
+                  - 'inner'
+                inner:
+                  - 'cargo special'
         "});
         let out = expand("outer foo", &cfg);
         assert_eq!(out.len(), 1);
@@ -227,11 +237,12 @@ mod tests {
     #[test]
     fn cycle_through_two_aliases_is_broken() {
         let cfg = config_from(indoc! {"
-            aliases:
-              x:
-                - 'y'
-              y:
-                - 'x'
+            definitions:
+              aliases:
+                x:
+                  - 'y'
+                y:
+                  - 'x'
         "});
         let out = expand("x foo", &cfg);
         assert_eq!(out.len(), 1);
@@ -242,11 +253,12 @@ mod tests {
     #[test]
     fn depth_limit_caps_runaway() {
         let cfg = config_from(indoc! {"
-            aliases:
-              a:
-                - 'b'
-              b:
-                - 'a x'
+            definitions:
+              aliases:
+                a:
+                  - 'b'
+                b:
+                  - 'a x'
         "});
         let out = expand("a", &cfg);
         assert!(!out.is_empty());
@@ -258,8 +270,9 @@ mod tests {
     #[test]
     fn single_string_alias_form_works() {
         let cfg = config_from(indoc! {"
-            aliases:
-              k: 'kubectl'
+            definitions:
+              aliases:
+                k: 'kubectl'
         "});
         let out = expand("k get pods", &cfg);
         assert_eq!(out.len(), 1);
@@ -297,9 +310,10 @@ mod tests {
         // verbatim by `split_leading_token`. Since no alias name can ever
         // be that literal string, expansion is a no-op for such patterns.
         let cfg = config_from(indoc! {"
-            aliases:
-              kubectl:
-                - 'kubectl'
+            definitions:
+              aliases:
+                kubectl:
+                  - 'kubectl'
         "});
         for pattern in [
             "[--quiet] cargo build",
