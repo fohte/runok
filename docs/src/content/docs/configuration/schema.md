@@ -425,6 +425,37 @@ definitions:
 
 See [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) and [When Clauses -- `flag_groups`](/rule-evaluation/when-clause/#flag_groups--captured-flag-group-values) for details on how the captured values are exposed to `when` expressions.
 
+#### `definitions.aliases`
+
+Rule-pattern aliases. Each entry maps an alias name to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded once per alias pattern: the alias name in the rule pattern is replaced by the alias pattern string. This lets you factor out a repeated prefix — for example a shared optional flag — from many rules.
+
+**Type:** `map[str, str | list[str]]`\
+**Default:** `{}`
+
+```yaml title="runok.yml"
+definitions:
+  aliases:
+    kubectl:
+      - 'kubectl [--namespace|-n *]'
+rules:
+  - allow: 'kubectl get pods'
+```
+
+With the config above, the rule `kubectl get pods` is expanded to `kubectl [--namespace|-n *] get pods`. All of the following commands then match the rule:
+
+- `kubectl get pods`
+- `kubectl -n prod get pods`
+- `kubectl --namespace prod get pods`
+
+Notes:
+
+- Alias patterns use the same syntax as rule patterns (literals, alternations like `run|r`, optional groups like `[--quiet]`, flag-with-value `--flag *`, var refs, flag groups).
+- An alias with N patterns expands one rule into N rules (any of which can match independently).
+- Aliases are applied recursively. Cycles are detected (an alias does not re-expand its own name within the same chain) and a depth limit (currently 5) caps further recursion.
+- If an alias pattern ends with a value-taking flag like `--context *` and you want the rule to use that alias with no tail (e.g. `allow: 'kubectl'`), declare the flag explicitly via `definitions.flag_groups` and reference it as `<flag:name>` in the alias pattern. This tells the command parser that the flag consumes the next token as its value rather than treating the trailing `*` as a positional wildcard.
+- Both global (`~/.config/runok/runok.yml`) and project-local config files can declare aliases. Project-local aliases scope naturally because their config is only discovered inside the repository.
+- The audit log records the chain of aliases referenced by the matched rule under `command_evaluations[].alias_chain` (in expansion order, outermost-rule reference first). The field is omitted from the JSON when no alias contributed to the match.
+
 ### `audit`
 
 Audit log settings. Controls whether command evaluations are recorded and where log files are stored. Audit settings can only be configured in the **global** `runok.yml` — audit sections in project or local override configs are silently ignored.
@@ -499,37 +530,6 @@ Test cases to evaluate. Each entry specifies the expected decision (`allow`, `as
 
 **Type:** `list[TestEntry]`\
 **Default:** `[]`
-
-### `aliases`
-
-Rule-pattern aliases. Each entry maps an alias name to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded once per alias pattern: the alias name in the rule pattern is replaced by the alias pattern string. This lets you factor out a repeated prefix — for example a shared optional flag — from many rules.
-
-**Type:** `object` (map of alias name -> pattern string or list of pattern strings)\
-**Default:** `{}`\
-**Required:** No
-
-```yaml title="runok.yml"
-aliases:
-  kubectl:
-    - 'kubectl [--namespace|-n *]'
-rules:
-  - allow: 'kubectl get pods'
-```
-
-With the config above, the rule `kubectl get pods` is expanded to `kubectl [--namespace|-n *] get pods`. All of the following commands then match the rule:
-
-- `kubectl get pods`
-- `kubectl -n prod get pods`
-- `kubectl --namespace prod get pods`
-
-Notes:
-
-- Alias patterns use the same syntax as rule patterns (literals, alternations like `run|r`, optional groups like `[--quiet]`, flag-with-value `--flag *`, var refs, flag groups).
-- An alias with N patterns expands one rule into N rules (any of which can match independently).
-- Aliases are applied recursively. Cycles are detected (an alias does not re-expand its own name within the same chain) and a depth limit (currently 5) caps further recursion.
-- If an alias pattern ends with a value-taking flag like `--context *` and you want the rule to use that alias with no tail (e.g. `allow: 'kubectl'`), declare the flag explicitly via `definitions.flag_groups` and reference it as `<flag:name>` in the alias pattern. This tells the command parser that the flag consumes the next token as its value rather than treating the trailing `*` as a positional wildcard.
-- Both global (`~/.config/runok/runok.yml`) and project-local config files can declare aliases. Project-local aliases scope naturally because their config is only discovered inside the repository.
-- The audit log records the chain of aliases referenced by the matched rule under `command_evaluations[].alias_chain` (in expansion order, outermost-rule reference first). The field is omitted from the JSON when no alias contributed to the match.
 
 ## Complete Example
 

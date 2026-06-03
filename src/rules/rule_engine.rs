@@ -445,7 +445,10 @@ fn evaluate_simple_command(
             None => continue,
         };
 
-        let expansions = expand_rule_pattern(pattern_str, config.aliases.as_ref())?;
+        let expansions = expand_rule_pattern(
+            pattern_str,
+            config.definitions.as_ref().and_then(|d| d.aliases.as_ref()),
+        )?;
 
         'rule: for expansion in &expansions {
             for pattern in &parse_multi(&expansion.pattern)? {
