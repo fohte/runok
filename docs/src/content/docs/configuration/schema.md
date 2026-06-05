@@ -337,7 +337,12 @@ definitions:
   wrappers:
     - 'sudo <cmd>'
     - 'env * <cmd>'
+    - 'sudo [-E] [-u *] <cmd>'
+    - 'docker exec [-it] [-u *] <container> <cmd>'
+    - 'run-as <var:user> <cmd>'
 ```
+
+Wrapper patterns may contain Wildcard (`*`), Optional groups (`[...]`), `<path:name>`, and `<var:name>` tokens in addition to literals and the inner placeholder. Each interpretation (e.g. optional flag present vs absent) is evaluated against the rules and the most restrictive result wins (Explicit Deny Wins).
 
 #### `definitions.vars`
 

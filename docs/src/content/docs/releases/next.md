@@ -28,3 +28,19 @@ If an alias pattern ends with a value-taking flag like `--context *` and you wan
 The audit log records the alias chain referenced by the matched rule under `command_evaluations[].alias_chain` (in expansion order, outermost-rule reference first). The field is omitted from the JSON when no alias contributed to the match.
 
 See [Configuration schema -> definitions.aliases](/configuration/schema/#definitionsaliases) for details.
+
+### Optional / PathRef / VarRef are now allowed in wrapper patterns ([#TODO](TODO))
+
+Wrapper patterns under `definitions.wrappers` can now contain `[...]` (Optional), `<path:name>` (PathRef), and `<var:name>` (VarRef) tokens. Previously these returned `unsupported token in wrapper pattern`. This unblocks the common case of wrapping commands that take optional flags without listing every combination.
+
+```yaml title="runok.yml"
+definitions:
+  wrappers:
+    - 'sudo [-E] [-u *] <cmd>'
+    - 'docker exec [-it] [-u *] <container> <cmd>'
+rules:
+  - deny: 'rm -rf *'
+  - allow: 'ls *'
+```
+
+With the above, `sudo rm -rf /`, `sudo -E rm -rf /`, and `sudo -u root rm -rf /` all extract the inner command and deny it via the `rm -rf *` rule. The wrapper engine evaluates both the present and absent interpretations of each optional group and picks the most restrictive result (Explicit Deny Wins), the same priority comparison already used for wrapper wildcards.

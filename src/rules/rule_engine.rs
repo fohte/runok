@@ -1445,21 +1445,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::optional("sudo [-u root] <cmd>", "Optional ([...])")]
-    #[case::path_ref("sudo <path:bin> <cmd>", "PathRef (<path:bin>)")]
-    fn wrapper_with_unsupported_token_returns_error(
+    #[case::optional_present("sudo [-E] <cmd>", "sudo -E rm foo")]
+    #[case::optional_absent("sudo [-E] <cmd>", "sudo rm foo")]
+    #[case::optional_with_value_present("sudo [-u root] <cmd>", "sudo -u root rm foo")]
+    #[case::optional_with_value_absent("sudo [-u root] <cmd>", "sudo rm foo")]
+    fn wrapper_with_optional_evaluates_inner(
         #[case] wrapper: &str,
-        #[case] expected_token: &str,
+        #[case] command: &str,
         empty_context: EvalContext,
     ) {
         let config = make_config_with_wrappers(vec![deny_rule("rm *")], vec![wrapper]);
-        let result = evaluate_command(&config, "sudo rm foo", &empty_context);
-        match result {
-            Err(RuleError::UnsupportedWrapperToken(token)) => {
-                assert_eq!(token, expected_token);
-            }
-            other => panic!("expected UnsupportedWrapperToken({expected_token:?}), got {other:?}",),
-        }
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Deny(_)),
+            "expected Deny for {command:?}, got {:?}",
+            result.action,
+        );
     }
 
     #[rstest]
