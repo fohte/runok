@@ -35,43 +35,43 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting Started',
-          autogenerate: { directory: 'getting-started' },
+          items: [{ autogenerate: { directory: 'getting-started' } }],
         },
         {
           label: 'Configuration',
-          autogenerate: { directory: 'configuration' },
+          items: [{ autogenerate: { directory: 'configuration' } }],
         },
         {
           label: 'Pattern Syntax',
-          autogenerate: { directory: 'pattern-syntax' },
+          items: [{ autogenerate: { directory: 'pattern-syntax' } }],
         },
         {
           label: 'Rule Evaluation',
-          autogenerate: { directory: 'rule-evaluation' },
+          items: [{ autogenerate: { directory: 'rule-evaluation' } }],
         },
         {
           label: 'Sandbox',
-          autogenerate: { directory: 'sandbox' },
+          items: [{ autogenerate: { directory: 'sandbox' } }],
         },
         {
           label: 'CLI Reference',
-          autogenerate: { directory: 'cli' },
+          items: [{ autogenerate: { directory: 'cli' } }],
         },
         {
           label: 'Extensions',
-          autogenerate: { directory: 'extensions' },
+          items: [{ autogenerate: { directory: 'extensions' } }],
         },
         {
           label: 'Architecture',
-          autogenerate: { directory: 'architecture' },
+          items: [{ autogenerate: { directory: 'architecture' } }],
         },
         {
           label: 'Troubleshooting',
-          autogenerate: { directory: 'troubleshooting' },
+          items: [{ autogenerate: { directory: 'troubleshooting' } }],
         },
         {
           label: 'Releases',
-          autogenerate: { directory: 'releases' },
+          items: [{ autogenerate: { directory: 'releases' } }],
         },
       ],
     }),
