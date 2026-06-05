@@ -29,7 +29,7 @@ The audit log records the alias chain referenced by the matched rule under `comm
 
 See [Configuration schema -> definitions.aliases](/configuration/schema/#definitionsaliases) for details.
 
-### Optional / PathRef / VarRef are now allowed in wrapper patterns ([#TODO](TODO))
+### Optional / PathRef / VarRef are now allowed in wrapper patterns (TODO(pr-link))
 
 Wrapper patterns under `definitions.wrappers` can now contain `[...]` (Optional), `<path:name>` (PathRef), and `<var:name>` (VarRef) tokens. Previously these returned `unsupported token in wrapper pattern`. This unblocks the common case of wrapping commands that take optional flags without listing every combination.
 
@@ -44,3 +44,5 @@ rules:
 ```
 
 With the above, `sudo rm -rf /`, `sudo -E rm -rf /`, and `sudo -u root rm -rf /` all extract the inner command and deny it via the `rm -rf *` rule. The wrapper engine evaluates both the present and absent interpretations of each optional group and picks the most restrictive result (Explicit Deny Wins), the same priority comparison already used for wrapper wildcards.
+
+The `RuleError::UnsupportedWrapperToken` variant is removed as a side effect. This only affects callers that embed runok as a Rust library and exhaustively match on `RuleError`; the CLI does not surface it.

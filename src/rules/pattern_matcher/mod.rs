@@ -257,8 +257,6 @@ pub fn matches_with_captures(
 /// Returns `Ok(candidates)` where each candidate is a possible set of tokens
 /// for the `<cmd>` placeholder, ordered from shortest to longest capture.
 /// Returns an empty `Vec` if the pattern does not match or has no `<cmd>` placeholder.
-/// Returns `Err` if the wrapper pattern contains unsupported tokens
-/// (`Optional` or `PathRef`).
 pub fn extract_placeholder(
     pattern: &Pattern,
     command: &ParsedCommand,
