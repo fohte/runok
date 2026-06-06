@@ -29,7 +29,7 @@ The audit log records the alias chain referenced by the matched rule under `comm
 
 See [Configuration schema -> definitions.aliases](/configuration/schema/#definitionsaliases) for details.
 
-### Optional / PathRef / VarRef are now allowed in wrapper patterns (TODO(pr-link))
+### Optional / PathRef / VarRef are now allowed in wrapper patterns ([#399](https://github.com/fohte/runok/pull/399))
 
 Wrapper patterns under `definitions.wrappers` can now contain `[...]` (Optional), `<path:name>` (PathRef), and `<var:name>` (VarRef) tokens. Previously these returned `unsupported token in wrapper pattern`. This unblocks the common case of wrapping commands that take optional flags without listing every combination.
 
