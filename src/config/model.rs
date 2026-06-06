@@ -41,11 +41,6 @@ pub struct Config {
     pub audit: Option<AuditConfig>,
     /// Test section for rule verification.
     pub tests: Option<TestSection>,
-    /// Command aliases. Each entry maps an alias name to a list of patterns;
-    /// when a command matches one of the patterns as a prefix, the matching
-    /// portion is replaced with the alias name and the rewritten command is
-    /// re-evaluated against the normal rule set.
-    pub aliases: Option<HashMap<String, AliasDefinition>>,
 }
 
 /// Definition of a single alias entry. Accepts either a single pattern
@@ -173,6 +168,14 @@ pub struct Definitions {
     /// - `"-v|--verbose"` — bool flag (captures flag presence only)
     /// - `"-X|--method GET|HEAD|OPTIONS"` — value flag with restricted values
     pub flag_groups: Option<HashMap<String, String>>,
+
+    /// Rule-pattern aliases. Each entry maps an alias name to one or more
+    /// pattern strings. At rule-load time, any rule whose leading command
+    /// token equals an alias name is expanded once per alias pattern by
+    /// string-substituting the alias pattern in for the alias name. This
+    /// lets you factor out a repeated prefix (e.g. shared optional flags)
+    /// from many rules.
+    pub aliases: Option<HashMap<String, AliasDefinition>>,
 
     /// Pre-parsed flag group definitions, populated by `resolve_flag_groups()`.
     /// Avoids re-parsing the same definition string on every `<flag:name>` match.
@@ -942,7 +945,6 @@ impl Config {
             definitions: Self::merge_definitions(self.definitions, other.definitions),
             audit: Self::merge_audit(self.audit, other.audit),
             tests: other.tests.or(self.tests),
-            aliases: Self::merge_hashmaps(self.aliases, other.aliases),
         }
     }
 
@@ -973,6 +975,7 @@ impl Config {
                     wrappers: Self::merge_vecs(b.wrappers, o.wrappers),
                     vars: Self::merge_vars(b.vars, o.vars),
                     flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
+                    aliases: Self::merge_hashmaps(b.aliases, o.aliases),
                     parsed_flag_groups: None,
                     parsed_pattern_vars: None,
                 };
@@ -1465,7 +1468,6 @@ mod tests {
         assert_eq!(config.rules, None);
         assert_eq!(config.definitions, None);
         assert_eq!(config.audit, None);
-        assert_eq!(config.aliases, None);
     }
 
     #[test]
@@ -1925,7 +1927,6 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
-            aliases: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -1950,7 +1951,6 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
-            aliases: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -2199,7 +2199,6 @@ mod tests {
             ]),
             definitions: None,
             tests: None,
-            aliases: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"

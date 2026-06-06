@@ -5,6 +5,7 @@ use crate::config::{
     ActionKind, Config, Definitions, MergedSandboxPolicy, RuleEntry, SandboxPreset,
 };
 use crate::rules::RuleError;
+use crate::rules::alias_expander::expand_rule_pattern;
 use crate::rules::command_parser::{
     ExtractedCommand, FlagSchema, ParsedCommand, PipeInfo, RedirectInfo, extract_commands,
     extract_commands_with_metadata, parse_command, shell_quote_join,
@@ -419,14 +420,6 @@ fn evaluate_simple_command(
     pipe: &PipeInfo,
     loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
-    // Apply alias expansion before any rule matching so existing rules keyed
-    // on the alias name (e.g. `a *`) apply to the rewritten command. The
-    // expansion itself is cycle-checked and depth-limited (see
-    // `alias_expander`).
-    let alias_expansion = crate::rules::alias_expander::expand_aliases(command, config)?;
-    let command: &str = alias_expansion.command.as_str();
-    let alias_chain = alias_expansion.chain;
-
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -434,7 +427,7 @@ fn evaluate_simple_command(
                 action: default_action(config),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
-                alias_chain,
+                alias_chain: Vec::new(),
             });
         }
     };
@@ -452,50 +445,54 @@ fn evaluate_simple_command(
             None => continue,
         };
 
-        let patterns = parse_multi(pattern_str)?;
+        let expansions = expand_rule_pattern(
+            pattern_str,
+            config.definitions.as_ref().and_then(|d| d.aliases.as_ref()),
+        )?;
 
-        // Try each expanded pattern (multi-word alternation produces multiple patterns);
-        // use the first matching pattern for this rule.
-        for pattern in &patterns {
-            let schema = build_flag_schema(pattern, definitions);
-            let parsed_command = parse_command(command, &schema)?;
+        'rule: for expansion in &expansions {
+            for pattern in &parse_multi(&expansion.pattern)? {
+                let schema = build_flag_schema(pattern, definitions);
+                let parsed_command = parse_command(command, &schema)?;
 
-            let match_captures = matches_with_captures(pattern, &parsed_command, definitions);
-            let Some(match_captures) = match_captures else {
-                continue;
-            };
+                let Some(match_captures) =
+                    matches_with_captures(pattern, &parsed_command, definitions)
+                else {
+                    continue;
+                };
 
-            // Evaluate when clause if present
-            if let Some(when_expr) = &rule.when {
-                let expr_context = build_expr_context(
-                    &parsed_command,
-                    context,
-                    definitions,
-                    redirects,
-                    pipe,
-                    &match_captures,
-                    loop_kind,
-                );
-                match evaluate(when_expr, &expr_context) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => return Err(e.into()),
+                if let Some(when_expr) = &rule.when {
+                    let expr_context = build_expr_context(
+                        &parsed_command,
+                        context,
+                        definitions,
+                        redirects,
+                        pipe,
+                        &match_captures,
+                        loop_kind,
+                    );
+                    match evaluate(when_expr, &expr_context) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(e) => return Err(e.into()),
+                    }
                 }
+
+                match_infos.push(RuleMatchInfo {
+                    action_kind,
+                    pattern: pattern_str.to_string(),
+                    matched_tokens: match_captures.wildcards,
+                });
+
+                matched.push(MatchedRule {
+                    action_kind,
+                    rule,
+                    pattern_str: pattern_str.to_string(),
+                    alias_chain: expansion.chain.clone(),
+                });
+
+                break 'rule;
             }
-
-            match_infos.push(RuleMatchInfo {
-                action_kind,
-                pattern: pattern_str.to_string(),
-                matched_tokens: match_captures.wildcards,
-            });
-
-            matched.push(MatchedRule {
-                action_kind,
-                rule,
-                pattern_str: pattern_str.to_string(),
-            });
-
-            break;
         }
     }
 
@@ -508,7 +505,7 @@ fn evaluate_simple_command(
             action: default_action(config),
             sandbox_preset: None,
             matched_rules: match_infos,
-            alias_chain,
+            alias_chain: Vec::new(),
         });
     }
 
@@ -533,27 +530,23 @@ fn evaluate_simple_command(
         };
 
         let sandbox_preset = most_restrictive.rule.sandbox.clone();
+        let alias_chain = most_restrictive.alias_chain.clone();
 
         Some(EvalResult {
             action,
             sandbox_preset,
             matched_rules: match_infos,
-            alias_chain: Vec::new(),
+            alias_chain,
         })
     };
 
     // Merge direct result with wrapper result using Explicit Deny Wins
-    let mut merged = match (direct_result, wrapper_result) {
+    let merged = match (direct_result, wrapper_result) {
         (Some(direct), Some(wrapper)) => merge_results(direct, wrapper),
         (Some(direct), None) => direct,
         (None, Some(wrapper)) => wrapper,
         (None, None) => unreachable!("at least one result exists"),
     };
-    // Outer (this evaluation) aliases fired first; preserve any inner-wrapper
-    // aliases that the recursive call collected after them.
-    let mut final_chain = alias_chain;
-    final_chain.extend(merged.alias_chain);
-    merged.alias_chain = final_chain;
     Ok(merged)
 }
 
@@ -671,11 +664,16 @@ fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
     let mut combined_rules = a.matched_rules;
     combined_rules.extend(b.matched_rules);
 
-    // Merge alias chains preserving order; either side may be empty.
-    let mut alias_chain = a.alias_chain;
-    alias_chain.extend(b.alias_chain);
-
+    // The alias chain belongs to the winning side's matched rule. When the
+    // losing side's chain is non-empty, append it so audit logs still show
+    // every alias that contributed to a match somewhere in the merged result.
     if action_priority(&b.action) > action_priority(&a.action) {
+        let mut alias_chain = b.alias_chain;
+        for name in a.alias_chain {
+            if !alias_chain.contains(&name) {
+                alias_chain.push(name);
+            }
+        }
         EvalResult {
             action: b.action,
             sandbox_preset: b.sandbox_preset,
@@ -683,6 +681,12 @@ fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
             alias_chain,
         }
     } else {
+        let mut alias_chain = a.alias_chain;
+        for name in b.alias_chain {
+            if !alias_chain.contains(&name) {
+                alias_chain.push(name);
+            }
+        }
         EvalResult {
             action: a.action,
             sandbox_preset: a.sandbox_preset,
@@ -733,6 +737,7 @@ struct MatchedRule<'a> {
     action_kind: ActionKind,
     rule: &'a RuleEntry,
     pattern_str: String,
+    alias_chain: Vec<String>,
 }
 
 /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef tokens.

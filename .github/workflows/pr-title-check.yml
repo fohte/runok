@@ -12,6 +12,17 @@ jobs:
     runs-on: ubuntu-slim
 
     steps:
+      # PRs are squash-merged, so the PR title becomes the commit message that
+      # release-please reads. In a pnpm workspace, release-please (independent
+      # mode) decides which package to bump solely from the scope, so
+      # release-bumping types must name a real workspace package. Projects
+      # without a pnpm workspace fall back to a plain Conventional Commits check.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: pnpm-workspace.yaml
+          sparse-checkout-cone-mode: false
+
       - name: Check PR title follows Conventional Commits
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -22,21 +33,111 @@ jobs:
           # Valid:   feat: ..., feat!: ..., feat(scope): ..., feat(scope)!: ...
           # Invalid: feat!(scope): ... (! must come after scope, before :)
           allowed_types="feat|fix|perf|deps|revert|chore|docs|style|refactor|test|build|ci"
-          pattern="^(${allowed_types})(\([^()]+\))?(!)?: .+"
 
-          if [[ "${PR_TITLE}" =~ ${pattern} ]]; then
-            echo "PR title is valid: ${PR_TITLE}"
-          else
-            echo "::error::PR title does not follow Conventional Commits format."
+          # Types that trigger a release-please bump must name the package to
+          # bump. Other types (e.g. Renovate's `chore(deps):`, `ci:`, `deps:`)
+          # are left unconstrained.
+          scope_required_types="feat|fix|perf"
+
+          # Workspace package names listed under `packages:` in
+          # pnpm-workspace.yaml. Reading them dynamically means a newly added
+          # package is accepted automatically. An absent file or an empty list
+          # (e.g. a single-package project whose pnpm-workspace.yaml only holds
+          # settings) means this is not a workspace, so scope enforcement is off.
+          scopes=()
+          if [[ -f pnpm-workspace.yaml ]]; then
+            mapfile -t scopes < <(
+              awk '
+                /^packages:[[:space:]]*$/ { in_pkgs = 1; next }
+                in_pkgs && /^[^[:space:]]/ { in_pkgs = 0 }
+                in_pkgs && /^[[:space:]]*-[[:space:]]/ {
+                  sub(/^[[:space:]]*-[[:space:]]*/, "")
+                  sub(/[[:space:]]+#.*$/, "")
+                  sub(/[[:space:]]+$/, "")
+                  gsub(/^["'\'']|["'\'']$/, "")
+                  print
+                }
+              ' pnpm-workspace.yaml
+            )
+          fi
+
+          workspace_mode=false
+          if [[ ${#scopes[@]} -gt 0 ]]; then
+            workspace_mode=true
+          fi
+
+          # Only used for display in fail(); scope matching below is exact
+          # string comparison so package names are never treated as regexes.
+          scopes_pattern=$(
+            IFS='|'
+            echo "${scopes[*]}"
+          )
+
+          fail() {
+            echo "::error::$1"
+            echo ""
+            echo "PR title: ${PR_TITLE}"
             echo ""
             echo "Expected: <type>[optional scope][optional !]: <description>"
             echo "  Allowed types: ${allowed_types//|/, }"
+            if [[ "${workspace_mode}" == true ]]; then
+              echo "  Types requiring a workspace scope: ${scope_required_types//|/, }"
+              echo "  Valid scopes: ${scopes_pattern//|/, }"
+            fi
             echo ""
             echo "Examples:"
-            echo "  feat: add new feature"
-            echo "  fix(parser): handle edge case"
-            echo "  feat(api)!: change response format"
-            echo ""
-            echo "Got: ${PR_TITLE}"
+            if [[ "${workspace_mode}" == true ]]; then
+              echo "  feat(${scopes[0]}): add new field"
+              echo "  fix(${scopes[0]}): handle edge case"
+            else
+              echo "  feat: add new feature"
+              echo "  fix(parser): handle edge case"
+            fi
+            echo "  chore(deps): bump dependencies"
+            echo "  ci: tweak workflow"
             exit 1
+          }
+
+          # In workspace mode each scope must be a package name. A glob/path
+          # entry (e.g. `packages/*`) cannot be resolved to package names from a
+          # sparse checkout, so disable scope enforcement instead of failing the
+          # PR — a hard failure would block every PR in downstream repos that use
+          # globs once this workflow propagates to them.
+          if [[ "${workspace_mode}" == true ]]; then
+            for s in "${scopes[@]}"; do
+              if [[ "${s}" == *"*"* || "${s}" == *"/"* ]]; then
+                echo "::warning::Workspace entry \"${s}\" is a glob/path; disabling workspace scope enforcement because globs cannot be resolved from a sparse checkout."
+                workspace_mode=false
+                break
+              fi
+            done
           fi
+
+          if [[ ! "${PR_TITLE}" =~ ^([a-z]+)(\(([^()]+)\))?(!)?:\ .+$ ]]; then
+            fail "PR title does not follow Conventional Commits format."
+          fi
+
+          type="${BASH_REMATCH[1]}"
+          scope="${BASH_REMATCH[3]}"
+
+          if [[ ! "${type}" =~ ^(${allowed_types})$ ]]; then
+            fail "Type \"${type}\" is not allowed."
+          fi
+
+          if [[ "${workspace_mode}" == true && "${type}" =~ ^(${scope_required_types})$ ]]; then
+            if [[ -z "${scope}" ]]; then
+              fail "Type \"${type}\" requires a workspace-package scope."
+            fi
+            scope_valid=false
+            for s in "${scopes[@]}"; do
+              if [[ "${scope}" == "${s}" ]]; then
+                scope_valid=true
+                break
+              fi
+            done
+            if [[ "${scope_valid}" != true ]]; then
+              fail "Scope \"${scope}\" is not a workspace package."
+            fi
+          fi
+
+          echo "PR title is valid: ${PR_TITLE}"
