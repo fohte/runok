@@ -1094,31 +1094,17 @@ fn match_engine<'a>(
                     // during a failed sub-pattern attempt are restored
                     // automatically. We thread `captures` / `extract` through
                     // unchanged.
-                    let result = if let Some((captured, all_candidates)) = &mut extract {
-                        match_engine(
-                            &combined,
-                            &cmd_tokens[head..],
-                            definitions,
-                            steps,
-                            None,
-                            Some((captured, all_candidates)),
-                            after_double_dash,
-                            var_captures,
-                            flag_group_captures,
-                        )
-                    } else {
-                        match_engine(
-                            &combined,
-                            &cmd_tokens[head..],
-                            definitions,
-                            steps,
-                            captures.as_deref_mut(),
-                            None,
-                            after_double_dash,
-                            var_captures,
-                            flag_group_captures,
-                        )
-                    };
+                    let result = match_engine(
+                        &combined,
+                        &cmd_tokens[head..],
+                        definitions,
+                        steps,
+                        captures.as_deref_mut(),
+                        extract.as_mut().map(|(c, a)| (&mut **c, &mut **a)),
+                        after_double_dash,
+                        var_captures,
+                        flag_group_captures,
+                    );
                     if matches!(result, Ok(true)) {
                         return Ok(true);
                     }
