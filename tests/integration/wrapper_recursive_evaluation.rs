@@ -873,6 +873,110 @@ fn time_subshell_wrapper_evaluates_inner(
     expected(&result.action);
 }
 
+// ========================================
+// Optional / PathRef / VarRef in wrapper patterns
+// ========================================
+
+#[rstest]
+#[case::sudo_with_optional_flag_present("sudo -E rm -rf /", assert_deny as ActionAssertion)]
+#[case::sudo_with_optional_flag_absent("sudo rm -rf /", assert_deny as ActionAssertion)]
+#[case::sudo_with_optional_value_flag_present("sudo -u root rm -rf /", assert_deny as ActionAssertion)]
+#[case::sudo_with_optional_value_flag_absent("sudo rm -rf /", assert_deny as ActionAssertion)]
+#[case::sudo_with_optional_present_inner_safe("sudo -E ls -la", assert_allow as ActionAssertion)]
+fn wrapper_with_optional_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        definitions:
+          wrappers:
+            - 'sudo [-E] [-u root] <cmd>'
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'ls *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::docker_exec_no_flags("docker exec my-container rm -rf /tmp", assert_deny as ActionAssertion)]
+#[case::docker_exec_it_flag("docker exec -it my-container rm -rf /tmp", assert_deny as ActionAssertion)]
+#[case::docker_exec_u_value_flag("docker exec -u root my-container rm -rf /tmp", assert_deny as ActionAssertion)]
+#[case::docker_exec_both_flags("docker exec -it -u root my-container ls -la", assert_allow as ActionAssertion)]
+fn docker_exec_wrapper_with_optional_flags(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        definitions:
+          wrappers:
+            - 'docker exec [-it] [-u *] <container> <cmd>'
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'ls *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::path_ref_match_inner_deny("via /usr/bin/sudo rm -rf /", assert_deny as ActionAssertion)]
+#[case::path_ref_match_inner_allow("via /bin/sudo ls -la", assert_allow as ActionAssertion)]
+#[case::path_ref_no_match("via /opt/bin/other rm -rf /", assert_ask as ActionAssertion)]
+fn wrapper_with_path_ref_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        definitions:
+          paths:
+            sudo-bin:
+              - /usr/bin/sudo
+              - /bin/sudo
+          wrappers:
+            - 'via <path:sudo-bin> <cmd>'
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'ls *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+#[case::var_ref_inner_deny("run-as alice rm -rf /", assert_deny as ActionAssertion)]
+#[case::var_ref_inner_allow("run-as bob ls -la", assert_allow as ActionAssertion)]
+#[case::var_ref_unknown_user_no_match("run-as eve rm -rf /", assert_ask as ActionAssertion)]
+fn wrapper_with_var_ref_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let yaml = indoc! {"
+        definitions:
+          vars:
+            user:
+              values:
+                - alice
+                - bob
+          wrappers:
+            - 'run-as <var:user> <cmd>'
+        rules:
+          - deny: 'rm -rf *'
+          - allow: 'ls *'
+    "};
+    let config = parse_config(yaml).unwrap();
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
 // Regression: subshell-wrapped inner commands must also work with other
 // wrappers (e.g. `sudo`), not just `time`. Ensures the fix lives in
 // command tokenization, not in a `time`-specific code path.

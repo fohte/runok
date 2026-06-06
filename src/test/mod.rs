@@ -404,7 +404,7 @@ pub fn load_test_config(file: &Path) -> Result<(Config, PathBuf), TestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::parse_config;
+    use crate::config::{RuleEntry, parse_config};
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
@@ -720,19 +720,24 @@ mod tests {
 
     #[rstest]
     fn run_tests_eval_error_is_failure_not_false_positive() {
-        // A wrapper pattern with an unsupported token causes an eval error.
+        // A rule with a malformed `when` expression causes an eval error.
         // Even though the expected decision is "ask" (matching the default),
         // the test must fail because the rule was never actually evaluated.
         let config = Config {
-            rules: Some(vec![]),
-            definitions: Some(crate::config::Definitions {
-                wrappers: Some(vec!["sudo [-u root] <cmd>".to_string()]),
-                ..Default::default()
-            }),
+            rules: Some(vec![RuleEntry {
+                deny: Some("rm *".to_string()),
+                allow: None,
+                ask: None,
+                when: Some("this is not a valid expression !!!".to_string()),
+                message: None,
+                fix_suggestion: None,
+                sandbox: None,
+                tests: None,
+            }]),
             ..Default::default()
         };
         let test_cases = vec![TestCase {
-            command: "sudo rm foo".to_string(),
+            command: "rm foo".to_string(),
             expected: ExpectedDecision::Ask,
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
