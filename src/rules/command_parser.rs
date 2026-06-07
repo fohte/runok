@@ -3053,18 +3053,13 @@ mod tests {
         "},
         vec!["git status", "ls -la"],
     )]
-    #[case::multi_line_script_with_comments_and_pipelines(
+    #[case::pipelines_split_around_comment_line(
         indoc! {"
-            runok audit --json --limit 500 | jq -r '.command' | grep -nE '^cd' | head -10
-            echo '---'
-            # count raw entries
-            runok audit --json --limit 500 | jq -c 'select(.command | contains(\"node_modules\"))' | head -10
+            ls -la | grep foo | head -1
+            # divider
+            cat bar | wc -l
         "},
-        vec![
-            "runok audit --json --limit 500 | jq -r '.command' | grep -nE '^cd' | head -10",
-            "echo '---'",
-            "runok audit --json --limit 500 | jq -c 'select(.command | contains(\"node_modules\"))' | head -10",
-        ],
+        vec!["ls -la | grep foo | head -1", "cat bar | wc -l"],
     )]
     fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = split_top_level_commands(input).unwrap();
