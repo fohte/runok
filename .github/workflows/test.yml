@@ -63,6 +63,10 @@ jobs:
       - name: Run lefthook
         id: lefthook
         continue-on-error: true
+        env:
+          # pinact's min-age check calls the GitHub API; without a token it hits
+          # the 60 req/h unauthenticated limit shared per IP and fails on CI.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: lefthook run pre-commit --all-files
 
       # Formatters configured with `stage_fixed: true` run `git add` after formatting,
@@ -121,7 +125,7 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
+        uses: taiki-e/install-action@50b4a718b59c718df4ef27a3b445f86cd57b9f00 # v2.80.0
         with:
           tool: cargo-llvm-cov
 
