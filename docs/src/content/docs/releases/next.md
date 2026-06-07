@@ -29,7 +29,7 @@ This unblocks two rule shapes that were not previously expressible:
   when: "command.cwd.startsWith(env.HOME + '/ghq/github.com/fohte/')"
 ```
 
-`command.cwd` simulates static `cd` chains (`cd /abs`, `cd subdir`, `cd ~`, `cd $HOME`). Dynamic targets (`cd $VAR`, `cd $(...)`, `cd -`) make the simulator fall back to the session cwd for the rest of the chain — a deliberate conservative choice so `cd $UNTRUSTED && ...` cannot silently match a path-scoped allow rule. `cd` inside a pipeline or subshell does not leak out.
+`command.cwd` simulates static `cd` chains (`cd /abs`, `cd subdir`, `cd ~`, `cd $HOME`). Dynamic targets (`cd $VAR`, `cd $(...)`, `cd -`) make the simulator fall back to the session cwd for the rest of the chain. `cd` inside a pipeline or subshell does not leak out.
 
 `command.real_path` resolves `argv[0]` with `execvp`-style semantics: tokens containing `/` are joined onto `command.cwd` (when relative) and canonicalized; bare names walk `$PATH` from the evaluation context. For interpreter chains like `bash <script>`, use a wrapper pattern under `definitions.wrappers` so the inner command is re-evaluated and `command.real_path` resolves to the script.
 

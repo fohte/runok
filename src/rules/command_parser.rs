@@ -744,8 +744,6 @@ impl CwdAccumulator {
         let Some(expanded) = expand_static_cd_target(target) else {
             return CwdAccumulator::Dynamic;
         };
-        // PathBuf::join replaces the base when the argument is absolute,
-        // and appends otherwise — matching `cd /abs` vs `cd subdir` semantics.
         CwdAccumulator::Static(current.join(expanded))
     }
 

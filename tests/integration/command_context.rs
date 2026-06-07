@@ -4,13 +4,6 @@
 //! real_path). Exercises identity-bound and location-bound `when`
 //! clauses end-to-end: YAML config -> parse_config -> evaluate_command
 //! / evaluate_compound.
-//!
-//! Pattern note: each rule pair `allow ... when` produces `Allow` when
-//! the `when` predicate is satisfied and falls through to the default
-//! action (`Ask`) otherwise. The tests deliberately avoid an explicit
-//! `ask` fallback rule because `Ask > Allow` in the rule-priority
-//! ordering — both rules matching the pattern would always pick `Ask`,
-//! masking whether the `when` predicate fired at all.
 
 use super::{ActionAssertion, assert_allow, assert_ask, assert_deny};
 
@@ -96,12 +89,6 @@ fn cwd_reflects_session_cwd_when_no_cd() {
     assert_allow(&result.action);
 }
 
-/// Helper for compound-cwd tests: rules allow both `cd ...` and the
-/// trailing command, so the compound merge stays at `Allow` as long as
-/// the `when` predicate on the trailing command's rule is satisfied.
-/// Without an `allow: 'cd *'` rule the `cd` part falls to the default
-/// action (`Ask`), which would dominate the merge and mask the test
-/// signal.
 fn allow_cd_and_when(when_predicate: &str) -> String {
     formatdoc! {"
         rules:
