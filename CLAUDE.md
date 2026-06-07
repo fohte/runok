@@ -2,6 +2,32 @@
 
 ## Test code rules
 
+### Assert on the whole output with a single equality check
+
+Treat each test as a spec: build the expected output as one literal value (object, struct, JSON, array, etc.) and compare it to the actual output with a single equality assertion. Do not split the assertion into per-field checks, and do not use partial matchers (substring contains, `toContain`, `toMatchObject`, prefix/suffix checks, regex-on-substring, etc.). Partial matches silently ignore unexpected fields and extra elements, so the test stops working as a spec the moment the shape of the output changes.
+
+```rust
+// bad
+let ev = run();
+assert_eq!(ev["path"], "/a");
+assert_eq!(ev["event"], "ok");
+assert!(ev["message"].as_str().unwrap().contains("done"));
+
+// good
+assert_eq!(
+    run(),
+    json!({
+        "path": "/a",
+        "event": "ok",
+        "message": "done",
+    }),
+);
+```
+
+For dynamic fields (timestamps, UUIDs, random IDs), normalize them in a helper before the comparison (e.g. replace with a fixed placeholder) so the full output can still be asserted in one equality check. Do not weaken the assertion to dodge the dynamic value.
+
+The `no-assert-contains` ast-grep rule rejects `assert!(x.contains(...))` at the expression level; this guideline is the broader principle that the rule is one instance of.
+
 ### Parameterize similar test cases with rstest
 
 Do not write multiple test functions that differ only in input/expected values. Use `#[rstest]` with `#[case]`.
