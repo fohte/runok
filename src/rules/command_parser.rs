@@ -736,6 +736,11 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
     let mut commands = Vec::new();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
+        // tree-sitter-bash exposes `#...` lines as `comment` siblings of
+        // top-level commands; bash treats them as no-ops, so drop them here.
+        if child.kind() == "comment" {
+            continue;
+        }
         if let Ok(text) = child.utf8_text(source) {
             let text = text.trim();
             if !text.is_empty() {
@@ -3026,6 +3031,41 @@ mod tests {
         "},
         vec!["git status", "ls -la"],
     )]
+    #[case::skips_comment_only_line(
+        indoc! {"
+            # a standalone comment
+            git status
+        "},
+        vec!["git status"],
+    )]
+    #[case::skips_comment_between_commands(
+        indoc! {"
+            git status
+            # comment in the middle
+            ls -la
+        "},
+        vec!["git status", "ls -la"],
+    )]
+    #[case::trailing_inline_comment_terminated_by_newline(
+        indoc! {"
+            git status # trailing comment
+            ls -la
+        "},
+        vec!["git status", "ls -la"],
+    )]
+    #[case::multi_line_script_with_comments_and_pipelines(
+        indoc! {"
+            runok audit --json --limit 500 | jq -r '.command' | grep -nE '^cd' | head -10
+            echo '---'
+            # count raw entries
+            runok audit --json --limit 500 | jq -c 'select(.command | contains(\"node_modules\"))' | head -10
+        "},
+        vec![
+            "runok audit --json --limit 500 | jq -r '.command' | grep -nE '^cd' | head -10",
+            "echo '---'",
+            "runok audit --json --limit 500 | jq -c 'select(.command | contains(\"node_modules\"))' | head -10",
+        ],
+    )]
     fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = split_top_level_commands(input).unwrap();
         let expected: Vec<String> = expected.into_iter().map(String::from).collect();
@@ -3035,6 +3075,13 @@ mod tests {
     #[rstest]
     #[case::empty("", CommandParseError::EmptyCommand)]
     #[case::whitespace_only("   \n\n  ", CommandParseError::EmptyCommand)]
+    #[case::only_comments(
+        indoc! {"
+            # one
+            # two
+        "},
+        CommandParseError::EmptyCommand,
+    )]
     #[case::unclosed_quote("echo \"unterminated", CommandParseError::SyntaxError)]
     #[case::unclosed_heredoc(
         indoc! {"

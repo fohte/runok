@@ -81,9 +81,8 @@ fn check_stdin_comment_before_command(check_env: TestEnv) {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(jsons.len(), 2);
-    assert_eq!(jsons[0]["decision"], "ask");
-    assert_eq!(jsons[1]["decision"], "allow");
+    assert_eq!(jsons.len(), 1);
+    assert_eq!(jsons[0]["decision"], "allow");
 }
 
 // --- stdin JSON mode ---
