@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::rules::CommandParseError;
 
@@ -92,6 +93,17 @@ pub struct ExtractedCommand {
     /// not reset this — a command in `(while x; do sleep 1; done)`
     /// still sees `"while"`.
     pub loop_kind: String,
+    /// Effective cwd accumulator: a path representing the cumulative
+    /// effect of `cd <target>` invocations that precede this command
+    /// in the same `&& / || / ;` chain. Resolution semantics in the
+    /// consumer (`rule_engine::build_expr_context`):
+    /// - `Some(p)` with `p` absolute (`/...`) → use `p` as-is.
+    /// - `Some(p)` with `p` empty or relative → join against the
+    ///   session cwd.
+    /// - `None` → a dynamic `cd` was encountered earlier in the chain
+    ///   (e.g. `cd $VAR`, `cd $(...)`, `cd -`); fall back to the
+    ///   session cwd. Not an error — `when` evaluation continues.
+    pub cwd_offset: Option<PathBuf>,
 }
 
 /// Parse a command string into a structured `ParsedCommand`.
@@ -692,9 +704,179 @@ pub fn extract_commands_with_metadata(
         &PipeInfo::default(),
         &[],
         "",
+        &CwdAccumulator::Static(PathBuf::new()),
     );
 
     Ok(commands)
+}
+
+/// Tracks the cumulative effect of `cd` invocations across a `&& / || / ;`
+/// chain, used to compute `command.cwd` in CEL `when` clauses.
+///
+/// `Static` carries an offset relative to (or replacing) the session cwd:
+/// empty for "no preceding cd", a relative path for accumulated relative
+/// `cd <subdir>`, or an absolute path once a `cd /abs` resets it. Tilde
+/// (`~`, `~/...`) and `$HOME` are expanded at parse time using the process
+/// `HOME` env var so the join logic below can tell rooted from relative.
+///
+/// `Dynamic` signals that a `cd` target was not statically resolvable
+/// (variable, command substitution, glob, `cd -`, etc.). Once `Dynamic`,
+/// it stays `Dynamic` for the rest of the chain — consumers fall back to
+/// the session cwd.
+#[derive(Clone, Debug, PartialEq)]
+enum CwdAccumulator {
+    Static(PathBuf),
+    Dynamic,
+}
+
+impl CwdAccumulator {
+    /// Compute the new accumulator after a `cd` invocation. `target` is
+    /// the raw `cd` argument token (already shell-dequoted by the AST
+    /// walker). Returns `Dynamic` if the target is not statically
+    /// resolvable.
+    fn apply_cd(&self, target: Option<&str>) -> Self {
+        let CwdAccumulator::Static(current) = self else {
+            return CwdAccumulator::Dynamic;
+        };
+        let Some(target) = target else {
+            return CwdAccumulator::Dynamic;
+        };
+        let Some(expanded) = expand_static_cd_target(target) else {
+            return CwdAccumulator::Dynamic;
+        };
+        // PathBuf::join replaces the base when the argument is absolute,
+        // and appends otherwise — matching `cd /abs` vs `cd subdir` semantics.
+        CwdAccumulator::Static(current.join(expanded))
+    }
+
+    fn into_offset(self) -> Option<PathBuf> {
+        match self {
+            CwdAccumulator::Static(p) => Some(p),
+            CwdAccumulator::Dynamic => None,
+        }
+    }
+}
+
+/// Statically resolve a `cd` target token. Returns `None` for any token
+/// whose value depends on runtime state — variable expansion, command
+/// substitution, globs, `cd -`. Tilde and `$HOME` are expanded against
+/// the process `HOME` env var so the result is a plain path.
+fn expand_static_cd_target(token: &str) -> Option<PathBuf> {
+    if token.is_empty() || token == "-" {
+        return None;
+    }
+    if token.contains('`')
+        || token.contains('*')
+        || token.contains('?')
+        || token.contains('[')
+        || token.contains('{')
+    {
+        return None;
+    }
+
+    if token == "~" {
+        return std::env::var("HOME").ok().map(PathBuf::from);
+    }
+    if let Some(rest) = token.strip_prefix("~/") {
+        let home = std::env::var("HOME").ok()?;
+        return Some(PathBuf::from(format!("{home}/{rest}")));
+    }
+    if token == "$HOME" || token == "${HOME}" {
+        return std::env::var("HOME").ok().map(PathBuf::from);
+    }
+    if let Some(rest) = token
+        .strip_prefix("$HOME/")
+        .or_else(|| token.strip_prefix("${HOME}/"))
+    {
+        let home = std::env::var("HOME").ok()?;
+        return Some(PathBuf::from(format!("{home}/{rest}")));
+    }
+    if token.contains('$') {
+        return None;
+    }
+
+    Some(PathBuf::from(token))
+}
+
+/// Apply any `cd` effects produced by walking `node` to the running
+/// accumulator. Used after `collect_commands` recurses into a list
+/// sibling: the sibling may be a direct `command` (whose `cd <target>`
+/// updates the accumulator), or a nested list (whose own cd chain
+/// transitively updates it), or any other shape (which is opaque to
+/// the parent shell's cwd).
+///
+/// Scoping rules:
+/// - `list` / `program` / `compound_statement` / `negated_command`:
+///   transparent — walk children left-to-right, accumulating.
+/// - `command`: terminal — if it is `cd <target>`, apply it.
+/// - Everything else (subshell, pipeline, if/case/loop, command/process
+///   substitutions, function definitions, …): opaque — the cd does not
+///   leak to the parent. Conservative w.r.t. `||` chains: `cd a || ls`
+///   propagates the cd here even though the runtime only runs `ls`
+///   when `cd a` failed; documenting this as a known limitation is
+///   simpler than tracking the operator between list siblings.
+fn apply_cd_effects(
+    node: tree_sitter::Node,
+    source: &[u8],
+    current: &CwdAccumulator,
+) -> CwdAccumulator {
+    match node.kind() {
+        "command" => {
+            if let Some(target) = detect_cd_invocation(node, source) {
+                current.apply_cd(target.as_deref())
+            } else {
+                current.clone()
+            }
+        }
+        "list" | "program" | "compound_statement" | "negated_command" => {
+            let mut acc = current.clone();
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                acc = apply_cd_effects(child, source, &acc);
+            }
+            acc
+        }
+        _ => current.clone(),
+    }
+}
+
+/// If `cmd_node` is a direct invocation of `cd` (no env prefix), return
+/// the argument token if any. Used to detect cd effects on sibling
+/// commands in a `&& / || / ;` chain. Returns `Some(None)` for `cd` with
+/// no arguments (which resolves to `$HOME` in bash but is treated as
+/// dynamic here — common shell sugar, infrequent in rule predicates).
+fn detect_cd_invocation(cmd_node: tree_sitter::Node, source: &[u8]) -> Option<Option<String>> {
+    if cmd_node.kind() != "command" {
+        return None;
+    }
+    let mut argv: Vec<String> = Vec::new();
+    for i in 0..cmd_node.child_count() {
+        let Some(child) = cmd_node.child(i as u32) else {
+            continue;
+        };
+        if !child.is_named() {
+            continue;
+        }
+        // An env-prefixed command (`FOO=bar cd ...`) is unusual and we
+        // conservatively treat it as not-a-cd for accumulation purposes.
+        if child.kind() == "variable_assignment" {
+            return None;
+        }
+        if cmd_node.field_name_for_child(i as u32) == Some("redirect") {
+            continue;
+        }
+        if let Some(tok) = dequote_node(child, source) {
+            argv.push(tok);
+        }
+    }
+    let first = argv.first()?;
+    if first != "cd" {
+        return None;
+    }
+    // `cd` with no argument → home (treated as dynamic for static
+    // analysis since the user normally writes an explicit path when
+    // crafting rule predicates).
+    Some(argv.get(1).cloned())
 }
 
 /// Split a multi-line shell input into top-level command strings.
@@ -774,16 +956,37 @@ fn collect_commands(
     pipe_info: &PipeInfo,
     redirects: &[RedirectInfo],
     loop_kind: &str,
+    cwd: &CwdAccumulator,
 ) {
     match node.kind() {
-        // Transparent containers (except pipeline): recurse into all named children.
+        // `program`, `list`, and `compound_statement` sequence commands
+        // left-to-right and share the same shell process, so `cd` in
+        // one child affects the cwd seen by later children. We thread
+        // `cwd` through siblings here using `apply_cd_effects` to walk
+        // the just-emitted child for its cd contribution — this handles
+        // both flat (`list[a, b, c]`) and nested (`list[list[a, b], c]`)
+        // shapes tree-sitter-bash may produce for `a && b && c`.
+        "program" | "list" | "compound_statement" => {
+            let mut current_cwd = cwd.clone();
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_commands(
+                    child,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    &current_cwd,
+                );
+                current_cwd = apply_cd_effects(child, source, &current_cwd);
+            }
+        }
+        // Other transparent containers: recurse into all named children.
         // Skips anonymous tokens like `;`, `&&`, `||`, `(`, `)`,
         // `do`, `done`, `then`, `fi`, `esac`, keywords, etc.
-        "program"
-        | "list"
-        | "subshell"
+        "subshell"
         | "do_group"
-        | "compound_statement"
         | "else_clause"
         | "command_substitution"
         | "process_substitution"
@@ -792,7 +995,9 @@ fn collect_commands(
         | "negated_command" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                collect_commands(
+                    child, source, commands, pipe_info, redirects, loop_kind, cwd,
+                );
             }
         }
         // while_statement covers both `while` and `until` in tree-sitter-bash.
@@ -803,10 +1008,14 @@ fn collect_commands(
             let kind = detect_while_or_until(node, source);
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands, pipe_info, redirects, kind);
+                collect_commands(child, source, commands, pipe_info, redirects, kind, cwd);
             }
         }
-        // pipeline: compute pipe position for each child command.
+        // pipeline: compute pipe position for each child command. All
+        // pipeline stages share the parent shell's cwd at the moment
+        // the pipeline starts; cd inside a pipeline runs in a subshell
+        // and does not leak out, which matches the per-stage `cwd`
+        // propagation here.
         "pipeline" => {
             let children: Vec<_> = {
                 let mut cursor = node.walk();
@@ -818,7 +1027,15 @@ fn collect_commands(
                     stdin: pipe_info.stdin || i > 0,
                     stdout: pipe_info.stdout || i < len - 1,
                 };
-                collect_commands(*child, source, commands, &child_pipe, redirects, loop_kind);
+                collect_commands(
+                    *child,
+                    source,
+                    commands,
+                    &child_pipe,
+                    redirects,
+                    loop_kind,
+                    cwd,
+                );
             }
         }
         // for_statement: recurse into body (do_group) for loop-body commands,
@@ -832,10 +1049,18 @@ fn collect_commands(
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "do_group" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, "for");
+                        collect_commands(child, source, commands, pipe_info, redirects, "for", cwd);
                     }
                     "command_substitution" | "process_substitution" => {
-                        collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                        collect_commands(
+                            child,
+                            source,
+                            commands,
+                            &PipeInfo::default(),
+                            &[],
+                            "",
+                            &CwdAccumulator::Static(PathBuf::new()),
+                        );
                     }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
@@ -852,10 +1077,14 @@ fn collect_commands(
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "case_item" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                        collect_commands(
+                            child, source, commands, pipe_info, redirects, loop_kind, cwd,
+                        );
                     }
                     "command_substitution" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                        collect_commands(
+                            child, source, commands, pipe_info, redirects, loop_kind, cwd,
+                        );
                     }
                     _ => {
                         collect_substitutions_recursive(child, source, commands);
@@ -876,7 +1105,9 @@ fn collect_commands(
                 if node.field_name_for_child(i as u32) == Some("value") {
                     collect_substitutions_recursive(child, source, commands);
                 } else {
-                    collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                    collect_commands(
+                        child, source, commands, pipe_info, redirects, loop_kind, cwd,
+                    );
                 }
             }
         }
@@ -909,7 +1140,15 @@ fn collect_commands(
                 // No swallowed continuation: behave like a plain
                 // redirected statement.
                 (None, Some(body)) => {
-                    collect_commands(body, source, commands, pipe_info, &all_redirects, loop_kind);
+                    collect_commands(
+                        body,
+                        source,
+                        commands,
+                        pipe_info,
+                        &all_redirects,
+                        loop_kind,
+                        cwd,
+                    );
                 }
                 // Swallowed continuation: synthesize the outer
                 // pipeline `[body, *pipe_stages]` and emit each stage
@@ -945,6 +1184,7 @@ fn collect_commands(
                             &stage_pipe,
                             stage_redirects,
                             loop_kind,
+                            cwd,
                         );
                     }
                     let arm_pipe = PipeInfo {
@@ -952,7 +1192,9 @@ fn collect_commands(
                         stdout: pipe_info.stdout,
                     };
                     for arm in &continuation.list_arms {
-                        collect_commands(*arm, source, commands, &arm_pipe, redirects, loop_kind);
+                        collect_commands(
+                            *arm, source, commands, &arm_pipe, redirects, loop_kind, cwd,
+                        );
                     }
                 }
                 // body field missing — defensive only; tree-sitter
@@ -997,7 +1239,7 @@ fn collect_commands(
         // function_definition: recurse into body
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands, pipe_info, redirects, loop_kind);
+                collect_commands(body, source, commands, pipe_info, redirects, loop_kind, cwd);
             }
         }
         // command node: strip leading variable_assignment children
@@ -1049,6 +1291,7 @@ fn collect_commands(
                                 &PipeInfo::default(),
                                 &[],
                                 loop_kind,
+                                &CwdAccumulator::Static(PathBuf::new()),
                             );
                             if let Some(token) = dequote_node(child, source) {
                                 argv.push(token);
@@ -1101,6 +1344,7 @@ fn collect_commands(
                     redirects: cmd_redirects,
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    cwd_offset: cwd.clone().into_offset(),
                 });
             }
         }
@@ -1158,6 +1402,7 @@ fn collect_commands(
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    cwd_offset: cwd.clone().into_offset(),
                 });
             }
         }
@@ -1175,6 +1420,7 @@ fn collect_commands(
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    cwd_offset: cwd.clone().into_offset(),
                 });
             }
         }
@@ -1511,7 +1757,15 @@ fn collect_substitutions_recursive(
             // assignments — all of which run outside any enclosing
             // loop body, so loop_kind resets to "".
             "command_substitution" | "process_substitution" => {
-                collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                collect_commands(
+                    child,
+                    source,
+                    commands,
+                    &PipeInfo::default(),
+                    &[],
+                    "",
+                    &CwdAccumulator::Static(PathBuf::new()),
+                );
             }
             _ => {
                 collect_substitutions_recursive(child, source, commands);
@@ -2962,6 +3216,89 @@ mod tests {
                 stdout: false
             }
         );
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: cwd_offset accumulation across
+    // `cd` invocations in `&& / || / ;` chains. Used by the rule
+    // engine to populate `command.cwd` and resolve `command.real_path`
+    // when an inner command runs after a static `cd`.
+    // ========================================
+
+    fn offsets(input: &str) -> Vec<Option<PathBuf>> {
+        extract_commands_with_metadata(input)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.cwd_offset)
+            .collect()
+    }
+
+    #[rstest]
+    #[case::no_cd("ls -la", vec![Some(PathBuf::new())])]
+    #[case::single_cd_then_cmd("cd subdir && ls -la", vec![Some(PathBuf::new()), Some(PathBuf::from("subdir"))])]
+    #[case::chained_relative_cd(
+        "cd a && cd b && ls -la",
+        vec![
+            Some(PathBuf::new()),
+            Some(PathBuf::from("a")),
+            Some(PathBuf::from("a").join("b")),
+        ]
+    )]
+    #[case::absolute_cd_replaces_offset(
+        "cd a && cd /abs && ls -la",
+        vec![
+            Some(PathBuf::new()),
+            Some(PathBuf::from("a")),
+            Some(PathBuf::from("/abs")),
+        ]
+    )]
+    #[case::semicolon_chain_accumulates(
+        "cd a ; cd b ; ls",
+        vec![
+            Some(PathBuf::new()),
+            Some(PathBuf::from("a")),
+            Some(PathBuf::from("a").join("b")),
+        ]
+    )]
+    fn cwd_offset_accumulates_across_static_cd_chain(
+        #[case] input: &str,
+        #[case] expected: Vec<Option<PathBuf>>,
+    ) {
+        assert_eq!(offsets(input), expected);
+    }
+
+    #[rstest]
+    #[case::dollar_var("cd $TARGET && ls")]
+    #[case::command_sub("cd $(pwd) && ls")]
+    #[case::cd_dash("cd /a && cd - && ls")]
+    #[case::glob("cd */foo && ls")]
+    fn dynamic_cd_makes_subsequent_offset_none(#[case] input: &str) {
+        let offsets = offsets(input);
+        // The last command (the one after the dynamic cd) must have
+        // cwd_offset = None so the rule engine falls back to the
+        // session cwd rather than silently propagating a guessed path.
+        assert_eq!(*offsets.last().unwrap(), None);
+    }
+
+    #[rstest]
+    fn cd_inside_pipeline_does_not_leak_to_parent_chain() {
+        // `(cd a | tail) && ls` — the pipeline runs in subshells, so
+        // ls sees the original cwd. The accumulator only updates at
+        // the list level via direct `command` cd nodes.
+        let offsets = offsets("cd a | tail && ls");
+        // The trailing `ls` must stay at the original offset (empty).
+        assert_eq!(*offsets.last().unwrap(), Some(PathBuf::new()));
+    }
+
+    #[rstest]
+    fn cd_inside_subshell_does_not_leak() {
+        // `(cd a) && ls` runs cd in a subshell; parent shell's cwd is
+        // unchanged so the trailing `ls` keeps the original offset.
+        // Tree-sitter emits the inner cd as its own command; the outer
+        // accumulator skips it because it traverses through a
+        // `subshell` node.
+        let offsets = offsets("(cd a) && ls");
+        assert_eq!(*offsets.last().unwrap(), Some(PathBuf::new()));
     }
 
     // ========================================

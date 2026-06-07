@@ -112,6 +112,24 @@ pub struct ExprContext {
     /// evaluated. Exposed to CEL as `shell.loop_kind`. Values: `"while"`,
     /// `"until"`, `"for"`, or `""` when the command is not inside any loop.
     pub loop_kind: String,
+    /// argv[0] of the command as it appeared in the input, after shell
+    /// dequoting but before any path resolution. Exposed to CEL as
+    /// `command.argv0`. Empty when argv is unavailable (defensive only —
+    /// the parser usually surfaces at least the command name).
+    pub argv0: String,
+    /// Effective cwd at the moment the command runs: an absolute path
+    /// that incorporates the cumulative effect of `cd` invocations
+    /// earlier in the same compound chain. Falls back to the session
+    /// cwd when a dynamic `cd` (`cd $VAR`, `cd -`, etc.) makes static
+    /// simulation unsafe. Exposed to CEL as `command.cwd`.
+    pub effective_cwd: String,
+    /// Canonical absolute path of the executable that would run for
+    /// this command, resolved against `effective_cwd` and `env.PATH`
+    /// and then symlink-canonicalized. Empty (`""`) when resolution
+    /// fails for any reason — caller-friendly default so `when` clauses
+    /// can guard with `command.real_path != ""`. Exposed to CEL as
+    /// `command.real_path`.
+    pub real_path: String,
 }
 
 /// Evaluates a CEL expression against a given context, returning a boolean result.
@@ -202,6 +220,25 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
     )]);
     cel_context.add_variable_from_value("shell", shell_value);
 
+    // Register command.* fields: identity (argv0, real_path) plus the
+    // effective cwd for this invocation. `real_path` is empty when
+    // resolution failed so rules can write `command.real_path != ""`.
+    let command_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
+        (
+            "argv0".to_string(),
+            cel_interpreter::Value::String(context.argv0.clone().into()),
+        ),
+        (
+            "cwd".to_string(),
+            cel_interpreter::Value::String(context.effective_cwd.clone().into()),
+        ),
+        (
+            "real_path".to_string(),
+            cel_interpreter::Value::String(context.real_path.clone().into()),
+        ),
+    ]);
+    cel_context.add_variable_from_value("command", command_value);
+
     cel_context.add_variable_from_value("fs", fs_sentinel());
     // `exists` is also the name of CEL's built-in comprehension macro
     // (`list.exists(v, pred)`), but cel-parser dispatches the 2-arg
@@ -240,6 +277,9 @@ mod tests {
             flag_groups: HashMap::new(),
             os: String::new(),
             loop_kind: String::new(),
+            argv0: String::new(),
+            effective_cwd: String::new(),
+            real_path: String::new(),
         }
     }
 
@@ -591,6 +631,43 @@ mod tests {
     }
 
     // === shell.loop_kind variable access ===
+
+    // === command.* variable access ===
+
+    #[rstest]
+    #[case::argv0_match("command.argv0 == 'cargo'", "cargo", "", "", true)]
+    #[case::argv0_no_match("command.argv0 == 'cargo'", "git", "", "", false)]
+    #[case::cwd_match("command.cwd == '/repo'", "", "/repo", "", true)]
+    #[case::real_path_match(
+        "command.real_path == '/usr/bin/cargo'",
+        "cargo",
+        "/repo",
+        "/usr/bin/cargo",
+        true
+    )]
+    #[case::real_path_empty_string("command.real_path == ''", "missing", "", "", true)]
+    #[case::startswith_cwd(
+        "command.cwd.startsWith('/home/user/')",
+        "",
+        "/home/user/project",
+        "",
+        true
+    )]
+    fn command_variable_access(
+        #[case] expr: &str,
+        #[case] argv0: &str,
+        #[case] cwd: &str,
+        #[case] real_path: &str,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            argv0: argv0.to_string(),
+            effective_cwd: cwd.to_string(),
+            real_path: real_path.to_string(),
+            ..empty_context()
+        };
+        assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
 
     #[rstest]
     #[case::until_matches("shell.loop_kind == 'until'", "until", true)]

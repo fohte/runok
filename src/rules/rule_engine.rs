@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{
     ActionKind, Config, Definitions, MergedSandboxPolicy, RuleEntry, SandboxPreset,
@@ -120,9 +120,19 @@ pub fn evaluate_command(
             &first.redirects,
             &first.pipe,
             &first.loop_kind,
+            first.cwd_offset.as_deref(),
         );
     }
-    evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default(), "")
+    evaluate_command_inner(
+        config,
+        command,
+        context,
+        0,
+        &[],
+        &PipeInfo::default(),
+        "",
+        None,
+    )
 }
 
 /// Like `evaluate_command`, but with pre-extracted redirect and pipe metadata.
@@ -138,7 +148,9 @@ pub fn evaluate_command_with_metadata(
     pipe: &PipeInfo,
     loop_kind: &str,
 ) -> Result<EvalResult, RuleError> {
-    evaluate_command_inner(config, command, context, 0, redirects, pipe, loop_kind)
+    evaluate_command_inner(
+        config, command, context, 0, redirects, pipe, loop_kind, None,
+    )
 }
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
@@ -165,6 +177,7 @@ pub fn evaluate_compound(
             redirects: vec![],
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
+            cwd_offset: Some(PathBuf::new()),
         }]
     });
 
@@ -186,6 +199,7 @@ pub fn evaluate_compound(
             &ext_cmd.redirects,
             &ext_cmd.pipe,
             &ext_cmd.loop_kind,
+            ext_cmd.cwd_offset.as_deref(),
         )?;
 
         // Collect sandbox preset names
@@ -300,6 +314,10 @@ fn normalize_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "metadata parameters accumulate alongside the command being evaluated"
+)]
 fn evaluate_command_inner(
     config: &Config,
     command: &str,
@@ -308,6 +326,7 @@ fn evaluate_command_inner(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    cwd_offset: Option<&Path>,
 ) -> Result<EvalResult, RuleError> {
     if depth > MAX_WRAPPER_DEPTH {
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
@@ -351,6 +370,7 @@ fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    sub.cwd_offset.as_deref(),
                 )?;
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
@@ -378,6 +398,7 @@ fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    sub.cwd_offset.as_deref(),
                 )?;
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
@@ -392,7 +413,7 @@ fn evaluate_command_inner(
                 // Evaluate the original command as a simple command (skip the
                 // compound guard by calling the remaining logic directly).
                 let simple_result = evaluate_simple_command(
-                    config, command, context, depth, redirects, pipe, loop_kind,
+                    config, command, context, depth, redirects, pipe, loop_kind, cwd_offset,
                 )?;
                 return Ok(merge_results(nested_result, simple_result));
             }
@@ -401,7 +422,9 @@ fn evaluate_command_inner(
         // simple-command evaluation.
     }
 
-    evaluate_simple_command(config, command, context, depth, redirects, pipe, loop_kind)
+    evaluate_simple_command(
+        config, command, context, depth, redirects, pipe, loop_kind, cwd_offset,
+    )
 }
 
 /// Evaluate a single (non-compound) command against rules and wrappers.
@@ -411,6 +434,10 @@ fn evaluate_command_inner(
 /// call it directly when it needs to evaluate the original command as
 /// a simple command (e.g. after filtering out self-referencing sub-commands
 /// from command substitutions).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "metadata parameters accumulate alongside the command being evaluated"
+)]
 fn evaluate_simple_command(
     config: &Config,
     command: &str,
@@ -419,6 +446,7 @@ fn evaluate_simple_command(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    cwd_offset: Option<&Path>,
 ) -> Result<EvalResult, RuleError> {
     let rules = match &config.rules {
         Some(rules) => rules,
@@ -470,6 +498,7 @@ fn evaluate_simple_command(
                         pipe,
                         &match_captures,
                         loop_kind,
+                        cwd_offset,
                     );
                     match evaluate(when_expr, &expr_context) {
                         Ok(true) => {}
@@ -497,8 +526,15 @@ fn evaluate_simple_command(
     }
 
     // Try wrapper pattern matching for recursive evaluation
-    let wrapper_result =
-        try_unwrap_wrapper(config, command, context, definitions, depth, loop_kind)?;
+    let wrapper_result = try_unwrap_wrapper(
+        config,
+        command,
+        context,
+        definitions,
+        depth,
+        loop_kind,
+        cwd_offset,
+    )?;
 
     if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {
@@ -564,6 +600,7 @@ fn try_unwrap_wrapper(
     definitions: &Definitions,
     depth: usize,
     loop_kind: &str,
+    cwd_offset: Option<&Path>,
 ) -> Result<Option<EvalResult>, RuleError> {
     let wrappers = match definitions.wrappers.as_ref() {
         Some(w) if !w.is_empty() => w,
@@ -621,6 +658,7 @@ fn try_unwrap_wrapper(
                     &[],
                     &PipeInfo::default(),
                     loop_kind,
+                    cwd_offset,
                 )?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),
@@ -800,6 +838,10 @@ fn collect_value_flags(
 
 /// Build an ExprContext for `when` clause evaluation from the parsed command
 /// and evaluation context.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "context fields exposed to CEL accumulate as the language grows"
+)]
 fn build_expr_context(
     parsed_command: &ParsedCommand,
     eval_context: &EvalContext,
@@ -808,6 +850,7 @@ fn build_expr_context(
     pipe: &PipeInfo,
     match_captures: &MatchCaptures,
     loop_kind: &str,
+    cwd_offset: Option<&Path>,
 ) -> ExprContext {
     let flags: HashMap<String, Option<String>> = parsed_command
         .flags
@@ -834,6 +877,12 @@ fn build_expr_context(
         flag_groups.insert(name.clone(), values.clone());
     }
 
+    let effective_cwd = resolve_effective_cwd(&eval_context.cwd, cwd_offset);
+    let argv0 = parsed_command.command.clone();
+    let real_path = resolve_real_path(&argv0, &effective_cwd, eval_context.env.get("PATH"))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
     ExprContext {
         env: eval_context.env.clone(),
         flags,
@@ -845,7 +894,84 @@ fn build_expr_context(
         flag_groups,
         os: std::env::consts::OS.to_string(),
         loop_kind: loop_kind.to_string(),
+        argv0,
+        effective_cwd: effective_cwd.to_string_lossy().into_owned(),
+        real_path,
     }
+}
+
+/// Apply a static cwd offset (from compound `cd` accumulation) to the
+/// session cwd. A `None` offset, or an empty offset, leaves the session
+/// cwd unchanged. The result is best-effort canonicalized; canonicalize
+/// failure falls back to the un-canonicalized join.
+fn resolve_effective_cwd(session_cwd: &Path, offset: Option<&Path>) -> PathBuf {
+    let joined = match offset {
+        Some(p) if !p.as_os_str().is_empty() => session_cwd.join(p),
+        _ => session_cwd.to_path_buf(),
+    };
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+/// Resolve `argv0` against the effective cwd and `$PATH`, then return
+/// the canonical absolute path. Returns `None` if no resolution succeeds.
+///
+/// Resolution rules match shell `execvp` semantics: a token containing
+/// a `/` is treated as a path (relative to `effective_cwd` unless
+/// absolute) and the `$PATH` walk is skipped. A bare name walks
+/// `$PATH` and returns the first executable hit.
+fn resolve_real_path(
+    argv0: &str,
+    effective_cwd: &Path,
+    path_env: Option<&String>,
+) -> Option<PathBuf> {
+    if argv0.is_empty() {
+        return None;
+    }
+
+    let candidate = if argv0.contains('/') {
+        let p = Path::new(argv0);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            effective_cwd.join(p)
+        }
+    } else {
+        lookup_path(argv0, path_env)?
+    };
+
+    std::fs::canonicalize(&candidate).ok()
+}
+
+/// Walk `$PATH` looking for an executable named `name`. On unix we
+/// require the executable bit; on other platforms we accept any
+/// regular file (mirrors std's lack of a cross-platform exec check).
+fn lookup_path(name: &str, path_env: Option<&String>) -> Option<PathBuf> {
+    let path = path_env?;
+    if path.is_empty() {
+        return None;
+    }
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for dir in path.split(separator) {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(name);
+        let Ok(meta) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o111 == 0 {
+                continue;
+            }
+        }
+        return Some(candidate);
+    }
+    None
 }
 
 #[cfg(test)]

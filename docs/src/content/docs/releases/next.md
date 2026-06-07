@@ -8,6 +8,33 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
+### `command.*` CEL context: invocation-independent identity and effective cwd (TODO(pr-link))
+
+`when` clauses can now reference three new fields under the `command` map:
+
+- `command.argv0` — the raw `argv[0]` token of the command, after shell dequoting and before path resolution.
+- `command.cwd` — the effective cwd at the moment the command runs, with the cumulative effect of statically-resolvable `cd` invocations earlier in the same `&& / || / ;` chain applied.
+- `command.real_path` — the canonical absolute path of the executable that would actually run, after `$PATH` lookup and symlink resolution. Empty string when resolution fails.
+
+This unblocks two rule shapes that were not previously expressible:
+
+```yaml
+# Identity-bound, invocation-independent: matches whether the user typed
+# `./scripts/check`, `~/repo/scripts/check`, or the absolute path.
+- allow: '* *'
+  when: "command.real_path == env.HOME + '/repo/scripts/check'"
+
+# Location-bound: only allow inside a specific directory tree.
+- allow: 'cargo test|build *'
+  when: "command.cwd.startsWith(env.HOME + '/ghq/github.com/fohte/')"
+```
+
+`command.cwd` simulates static `cd` chains (`cd /abs`, `cd subdir`, `cd ~`, `cd $HOME`). Dynamic targets (`cd $VAR`, `cd $(...)`, `cd -`) make the simulator fall back to the session cwd for the rest of the chain — a deliberate conservative choice so `cd $UNTRUSTED && ...` cannot silently match a path-scoped allow rule. `cd` inside a pipeline or subshell does not leak out.
+
+`command.real_path` resolves `argv[0]` with `execvp`-style semantics: tokens containing `/` are joined onto `command.cwd` (when relative) and canonicalized; bare names walk `$PATH` from the evaluation context. For interpreter chains like `bash <script>`, use a wrapper pattern under `definitions.wrappers` so the inner command is re-evaluated and `command.real_path` resolves to the script.
+
+See [When Clauses](/rule-evaluation/when-clause/) for the full reference and effective-cwd simulation rules.
+
 ### Rule-pattern aliases ([#389](https://github.com/fohte/runok/pull/389))
 
 Add a `definitions.aliases` field that factors out repeated prefixes from rule patterns. Each alias name maps to one or more pattern strings. At rule-load time, every rule whose leading command token equals an alias name is expanded by substituting the alias pattern in for the alias name — so a single rule can cover every variant of a shared flag prefix without rewriting the command itself.

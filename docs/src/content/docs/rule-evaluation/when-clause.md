@@ -287,6 +287,74 @@ rules:
     when: 'shell.loop_kind == ""'
 ```
 
+### `command` -- Invoked command identity and effective cwd
+
+A `command` map exposes information about the command being evaluated that is independent of how it was invoked. Use these fields to write rules that bind to the identity of the executable (`real_path`) or the directory it runs in (`cwd`).
+
+| Field               | Type     | Description                                                                                                                                                                                                                                          |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command.argv0`     | `string` | `argv[0]` of the command, after shell dequoting, before path resolution. The token the user actually typed (e.g. `./scripts/foo`, `cargo`, `/usr/bin/git`).                                                                                          |
+| `command.cwd`       | `string` | Effective cwd at the moment the command runs — an absolute, canonicalized path that incorporates the cumulative effect of statically-resolvable `cd` invocations earlier in the same `&& / \|\| / ;` chain. Falls back to the session cwd otherwise. |
+| `command.real_path` | `string` | Canonical absolute path of the executable that would actually run, after `$PATH` lookup and symlink resolution. Empty string (`""`) when resolution fails — guard with `command.real_path != ""` if your rule must require a resolved path.          |
+
+Identity-bound, portable rules:
+
+```yaml
+# Allow exactly this script, regardless of invocation form (`./scripts/check`,
+# `~/repo/scripts/check`, `bash scripts/check`, ...).
+- allow: '* *'
+  when: "command.real_path == env.HOME + '/repo/scripts/check'"
+```
+
+Location-bound rules:
+
+```yaml
+# Allow `cargo test` only inside a specific directory tree.
+- allow: 'cargo test|build *'
+  when: "command.cwd.startsWith(env.HOME + '/ghq/github.com/fohte/')"
+
+# Reject binaries that live on external volumes.
+- allow: 'rg *'
+  when: "!command.real_path.startsWith('/Volumes/')"
+```
+
+#### Effective cwd: `cd` simulation rules
+
+`command.cwd` reflects a _static simulation_ of preceding `cd` invocations. The simulation runs against the same `&& / || / ;` chain — earlier `cd` tokens accumulate, later commands see the updated cwd.
+
+What the simulator accepts as a static target:
+
+- Literal absolute paths: `cd /repo`
+- Literal relative paths: `cd subdir` (joined onto the current effective cwd)
+- Tilde expansion: `cd ~`, `cd ~/repo` (uses `$HOME` from the process env)
+- `$HOME` / `${HOME}` expansion: `cd $HOME/repo`
+
+What falls back to the session cwd (the simulator marks the chain as dynamic and the trailing commands see `EvalContext.cwd`):
+
+- Other variable references: `cd $TARGET`, `cd ${dir}`
+- Command substitution: `` cd `pwd` ``, `cd $(...)`
+- Globs: `cd */foo`, `cd a?`
+- `cd -` (resolves to OLDPWD at runtime), `cd` with no argument (resolves to `$HOME` but treated as dynamic here)
+
+The dynamic fallback is sticky: once any `cd` in the chain is dynamic, every following command in that chain falls back to the session cwd. This is conservative — silently propagating a guessed path would let `cd $UNTRUSTED && rm -rf *` pretend it was running in a known directory.
+
+`cd` inside a pipeline (`cd a | tail`) or subshell (`(cd a) && ls`) does not affect the parent shell's cwd, and therefore does not propagate to siblings outside the pipeline / subshell — matching shell semantics.
+
+#### `command.real_path` resolution
+
+`argv0` is resolved with `execvp`-style semantics, then symlink-canonicalized:
+
+- Contains `/` and is absolute: used as-is.
+- Contains `/` and is relative: joined onto `command.cwd`.
+- Bare name (no `/`): walked through `$PATH` from `EvalContext.env`, taking the first directory entry that is a regular file with the executable bit on Unix.
+- After the candidate is chosen, `std::fs::canonicalize` resolves symlinks.
+
+Any failure along this chain produces `command.real_path = ""`. There is no separate "lookup failed" error — write `command.real_path != ""` if your rule must require a resolved path.
+
+#### Interpreter chains (`bash <script>`, `python <script>`, ...)
+
+`command.real_path` resolves the _outer_ `argv[0]`. For `bash scripts/foo.sh`, that is `bash`, not `scripts/foo.sh`. To bind a rule to the inner script in this case, use a wrapper pattern under `definitions.wrappers` to re-extract and re-evaluate the inner command. The inner evaluation then sees `command.real_path` resolved to the script.
+
 ## Filesystem functions
 
 A `fs` namespace exposes read-only filesystem checks for use inside `when` clauses. These functions let a rule depend on whether a marker file or directory exists on disk -- for example, to gate a rule on the presence of a `.git` directory or a flag file dropped by another tool.

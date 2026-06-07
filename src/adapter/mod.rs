@@ -245,6 +245,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             redirects: vec![],
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
+            cwd_offset: Some(std::path::PathBuf::new()),
         }]
     });
     let commands: Vec<String> = extracted_commands

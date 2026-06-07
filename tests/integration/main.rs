@@ -1,5 +1,6 @@
 mod alias_expansion;
 mod audit_log_integration;
+mod command_context;
 mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod extends_resolution;
