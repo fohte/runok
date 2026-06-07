@@ -49,7 +49,7 @@ The `RuleError::UnsupportedWrapperToken` variant is removed as a side effect. Th
 
 ## Bug Fixes
 
-### `runok check` no longer evaluates standalone `#` comment lines ([TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### `runok check` no longer evaluates standalone `#` comment lines ([#404](https://github.com/fohte/runok/pull/404))
 
 When plaintext input contains a line that is only a `# ...` comment, `runok check` previously emitted a separate evaluation result for that line and fell back to `defaults.action` (typically `ask`). Multi-line scripts piped through Claude Code's Bash tool — for example a pipeline followed by an explanatory `# ...` comment and another pipeline — therefore surfaced an unexpected `ask` between the real commands.
 
