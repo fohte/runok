@@ -17,12 +17,6 @@
     "starlight-links-validator": "0.24.0",
     "starlight-llms-txt": "0.10.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "sharp"
-    ]
-  },
   "devDependencies": {
     "wrangler": "4.95.0"
   }
