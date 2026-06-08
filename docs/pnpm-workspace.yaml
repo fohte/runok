@@ -1,4 +1,12 @@
 allowBuilds:
+  # required by astro / vite for bundling
   esbuild: true
+  # required by astro / @astrojs/starlight for image processing
   sharp: true
+  # required by wrangler for the local Cloudflare Workers runtime
   workerd: true
+
+# Dodge short-lived supply-chain attacks (e.g. shai-hulud, tinycolor) by
+# holding off freshly published versions. Unit is minutes; 10080 = 7 days.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude: []
