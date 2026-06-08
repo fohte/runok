@@ -257,8 +257,6 @@ pub fn matches_with_captures(
 /// Returns `Ok(candidates)` where each candidate is a possible set of tokens
 /// for the `<cmd>` placeholder, ordered from shortest to longest capture.
 /// Returns an empty `Vec` if the pattern does not match or has no `<cmd>` placeholder.
-/// Returns `Err` if the wrapper pattern contains unsupported tokens
-/// (`Optional` or `PathRef`).
 pub fn extract_placeholder(
     pattern: &Pattern,
     command: &ParsedCommand,
@@ -930,11 +928,6 @@ fn match_engine<'a>(
         }
 
         PatternToken::Optional(inner_tokens) => {
-            if is_extract {
-                return Err(RuleError::UnsupportedWrapperToken(
-                    "Optional ([...])".into(),
-                ));
-            }
             // Try matching with the optional tokens present
             let combined: Vec<PatternToken> = inner_tokens
                 .iter()
@@ -943,7 +936,40 @@ fn match_engine<'a>(
                 .collect();
             let saved_dd = after_double_dash.get();
             let saved_vc = var_captures.borrow().clone();
-            // extract is always None here (early return above for is_extract)
+            if let Some((captured, all_candidates)) = &mut extract {
+                // Extract mode: enumerate both interpretations into
+                // `all_candidates` without early return so that the wrapper
+                // engine can compare candidates by action priority.
+                match_engine(
+                    &combined,
+                    cmd_tokens,
+                    definitions,
+                    steps,
+                    None,
+                    Some((captured, all_candidates)),
+                    after_double_dash,
+                    var_captures,
+                    flag_group_captures,
+                )?;
+                after_double_dash.set(saved_dd);
+                *var_captures.borrow_mut() = saved_vc.clone();
+                if optional_flags_absent(inner_tokens, cmd_tokens) {
+                    match_engine(
+                        rest,
+                        cmd_tokens,
+                        definitions,
+                        steps,
+                        None,
+                        Some((captured, all_candidates)),
+                        after_double_dash,
+                        var_captures,
+                        flag_group_captures,
+                    )?;
+                    after_double_dash.set(saved_dd);
+                    *var_captures.borrow_mut() = saved_vc;
+                }
+                return Ok(false);
+            }
             if let Some(caps) = &mut captures {
                 let saved_len = caps.len();
                 if match_engine(
@@ -993,25 +1019,19 @@ fn match_engine<'a>(
         }
 
         PatternToken::PathRef(name) => {
-            if is_extract {
-                return Err(RuleError::UnsupportedWrapperToken(format!(
-                    "PathRef (<path:{name}>)"
-                )));
-            }
             if cmd_tokens.is_empty() {
                 return Ok(false);
             }
             let paths = resolve_paths(name, definitions);
             let normalized_cmd = normalize_path(cmd_tokens[0]);
             if paths.iter().any(|p| normalize_path(p) == normalized_cmd) {
-                // extract is always None here (early return above for is_extract)
                 match_engine(
                     rest,
                     &cmd_tokens[1..],
                     definitions,
                     steps,
                     captures,
-                    None,
+                    extract,
                     after_double_dash,
                     var_captures,
                     flag_group_captures,
@@ -1022,11 +1042,6 @@ fn match_engine<'a>(
         }
 
         PatternToken::VarRef(name) => {
-            if is_extract {
-                return Err(RuleError::UnsupportedWrapperToken(format!(
-                    "VarRef (<var:{name}>)"
-                )));
-            }
             if cmd_tokens.is_empty() {
                 return Ok(false);
             }
@@ -1077,14 +1092,15 @@ fn match_engine<'a>(
                     // `match_engine` itself truncates `caps` on failure (see
                     // the Wildcard / Optional arms), so wildcards captured
                     // during a failed sub-pattern attempt are restored
-                    // automatically. We thread `captures` through unchanged.
+                    // automatically. We thread `captures` / `extract` through
+                    // unchanged.
                     let result = match_engine(
                         &combined,
                         &cmd_tokens[head..],
                         definitions,
                         steps,
                         captures.as_deref_mut(),
-                        None,
+                        extract.as_mut().map(|(c, a)| (&mut **c, &mut **a)),
                         after_double_dash,
                         var_captures,
                         flag_group_captures,
@@ -1111,7 +1127,7 @@ fn match_engine<'a>(
                     definitions,
                     steps,
                     captures,
-                    None,
+                    extract,
                     after_double_dash,
                     var_captures,
                     flag_group_captures,

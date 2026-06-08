@@ -34,6 +34,9 @@ pre-commit:
       glob: '.github/workflows/*.{yml,yaml}'
       run: mise x actionlint -- actionlint {staged_files}
 
+    betterleaks:
+      run: mise x betterleaks -- betterleaks git --pre-commit --redact --staged --verbose
+
     copier-src-path:
       glob: '.copier-answers.yml'
       run: |
