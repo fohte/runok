@@ -8,8 +8,8 @@ importers:
   .:
     dependencies:
       '@astrojs/starlight':
-        specifier: 0.39.2
-        version: 0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
+        specifier: 0.39.3
+        version: 0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
       astro:
         specifier: 6.4.3
         version: 6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)
@@ -18,10 +18,10 @@ importers:
         version: 0.34.5
       starlight-links-validator:
         specifier: 0.24.0
-        version: 0.24.0(@astrojs/starlight@0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
+        version: 0.24.0(@astrojs/starlight@0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
       starlight-llms-txt:
         specifier: 0.10.0
-        version: 0.10.0(@astrojs/starlight@0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
+        version: 0.10.0(@astrojs/starlight@0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
     devDependencies:
       wrangler:
         specifier: 4.97.0
@@ -80,10 +80,10 @@ packages:
         integrity: sha512-f8euLVsyeAmAkSm/1M2Kb8sL8byQmfgbvBNaHFItCheTj/IpiJYSEWVcqDHZ/yEHxiS7+w87mQkzwZaPHmk5GA==,
       }
 
-  '@astrojs/starlight@0.39.2':
+  '@astrojs/starlight@0.39.3':
     resolution:
       {
-        integrity: sha512-vlw+bwnjtf5buCTUtLU7JfV6D3knslxqnspr6LKs6hfRuFZiyr5hT44F7GyDqR9FKANUqFxnIzWM81F1k/kOUA==,
+        integrity: sha512-uvAweA2DwhmLgFVfBT9NqG38Ey14k1ck3+y78XNJbceT1pMdzxCCX69RoBajb1QzTJviufsXzSc1xswgRxJfig==,
       }
     peerDependencies:
       astro: ^6.0.0
@@ -3774,7 +3774,7 @@ snapshots:
       stream-replace-string: 2.0.0
       zod: 4.4.3
 
-  '@astrojs/starlight@0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))':
+  '@astrojs/starlight@0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))':
     dependencies:
       '@astrojs/markdown-remark': 7.2.0
       '@astrojs/mdx': 5.0.6(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
@@ -5991,9 +5991,9 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  starlight-links-validator@0.24.0(@astrojs/starlight@0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)):
+  starlight-links-validator@0.24.0(@astrojs/starlight@0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)):
     dependencies:
-      '@astrojs/starlight': 0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
+      '@astrojs/starlight': 0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
       '@types/picomatch': 4.0.3
       astro: 6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)
       github-slugger: 2.0.0
@@ -6008,10 +6008,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  starlight-llms-txt@0.10.0(@astrojs/starlight@0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)):
+  starlight-llms-txt@0.10.0(@astrojs/starlight@0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)))(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)):
     dependencies:
       '@astrojs/mdx': 5.0.6(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
-      '@astrojs/starlight': 0.39.2(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
+      '@astrojs/starlight': 0.39.3(astro@6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0))
       '@types/hast': 3.0.4
       '@types/micromatch': 4.0.10
       astro: 6.4.3(@types/node@24.12.4)(rollup@4.61.0)(yaml@2.9.0)
