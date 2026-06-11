@@ -15,10 +15,30 @@ if command -v mise > /dev/null 2>&1; then
   mise install
 fi
 
+# Enable corepack so that pnpm version from package.json packageManager field is used
+corepack enable
+
+# Use --frozen-lockfile when a lockfile exists so a Renovate-bumped dep still
+# inside the pnpm-workspace.yaml minimumReleaseAge window does not re-trigger
+# the supply-chain policy check and block bootstrap. Fall back to plain
+# `pnpm install` on freshly generated projects without a lockfile yet.
+pnpm_install() {
+  if [ -f pnpm-lock.yaml ]; then
+    pnpm install --frozen-lockfile
+  else
+    pnpm install
+  fi
+}
+
 # Install git hooks via lefthook (hooks live in the common .git/hooks, shared across worktrees)
 if command -v lefthook > /dev/null 2>&1; then
   lefthook install
 fi
+
+# Install shared dev tools (prettier, commitlint) at the repo root
+pnpm_install
+# Install Node.js dependencies for each subpackage
+(cd docs && pnpm_install)
 
 # Fetch Rust dependencies
 cargo fetch

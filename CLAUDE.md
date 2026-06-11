@@ -6,6 +6,21 @@
 
 Treat each test as a spec: build the expected output as one literal value (object, struct, JSON, array, etc.) and compare it to the actual output with a single equality assertion. Do not split the assertion into per-field checks, and do not use partial matchers (substring contains, `toContain`, `toMatchObject`, prefix/suffix checks, regex-on-substring, etc.). Partial matches silently ignore unexpected fields and extra elements, so the test stops working as a spec the moment the shape of the output changes.
 
+```ts
+// bad: picks fields one by one — silent on any new/changed field
+const ev = run()
+expect(ev.path).toBe('/a')
+expect(ev.event).toBe('ok')
+expect(ev.message).toContain('done')
+
+// good: one literal, one equality — any drift in shape fails the test
+expect(run()).toEqual({
+  path: '/a',
+  event: 'ok',
+  message: 'done',
+})
+```
+
 ```rust
 // bad
 let ev = run();
