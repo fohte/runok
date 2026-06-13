@@ -713,10 +713,6 @@ pub fn extract_commands_with_metadata(
 /// `time ( ... )` as a single `command` node whose argument is the subshell,
 /// so the rule engine's `time <cmd>` wrapper captures it directly.
 /// Simple `time` commands (`time ls`) are likewise left untouched.
-///
-/// Consecutive `time` prefixes (`time time for ...`) are stripped in a single
-/// pass — bash itself accepts the chain and treats each as a no-op timing
-/// reporter for the inner statement.
 fn strip_time_compound_prefix(input: &str) -> Option<&str> {
     let mut cur = input;
     let mut stripped_any = false;
@@ -732,15 +728,21 @@ fn strip_time_compound_prefix(input: &str) -> Option<&str> {
     }
 }
 
-/// If `input` starts with `keyword` followed by ASCII whitespace, return the
-/// remainder with the leading whitespace trimmed. Otherwise return `None`.
+/// If `input` starts with `keyword` followed by a space or tab, return the
+/// remainder with the leading space/tab run trimmed. Otherwise return `None`.
+/// Newlines are excluded so multi-line inputs where `time` sits on its own
+/// line are not joined with the following statement.
 fn strip_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
     let rest = input.strip_prefix(keyword)?;
     let next = rest.chars().next()?;
-    if !next.is_ascii_whitespace() {
+    if !is_inline_whitespace(next) {
         return None;
     }
-    Some(rest.trim_start())
+    Some(rest.trim_start_matches(is_inline_whitespace))
+}
+
+fn is_inline_whitespace(c: char) -> bool {
+    c == ' ' || c == '\t'
 }
 
 /// Whether `input` begins with a compound-statement starter — a keyword that
@@ -757,7 +759,15 @@ fn starts_with_compound_keyword(input: &str) -> bool {
             }
         }
     }
-    matches!(input.chars().next(), Some('{'))
+    // `{` is a brace-group starter only when followed by whitespace;
+    // `{echo hi;}` is parsed by bash as the literal word `{echo`.
+    if let Some(rest) = input.strip_prefix('{') {
+        return match rest.chars().next() {
+            None => true,
+            Some(c) => c.is_ascii_whitespace(),
+        };
+    }
+    false
 }
 
 /// Split a multi-line shell input into top-level command strings.
@@ -3172,6 +3182,18 @@ mod tests {
     #[case::time_subshell_kept(
         "time (echo hi; echo bye)",
         vec!["time (echo hi; echo bye)"],
+    )]
+    #[case::time_dash_p_simple_command_kept(
+        "time -p ls -la",
+        vec!["time -p ls -la"],
+    )]
+    // `{` without following whitespace is not a brace group in bash — the
+    // strip helper must decline and let tree-sitter parse the input verbatim
+    // (it splits the literal word `{echo` off, which is the actual bash
+    // behavior — we just guarantee we do not silently rewrite it).
+    #[case::time_brace_without_space_kept(
+        "time {echo hi;}",
+        vec!["time {echo hi", "}"],
     )]
     fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = split_top_level_commands(input).unwrap();
