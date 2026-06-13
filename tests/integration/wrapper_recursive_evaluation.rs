@@ -874,15 +874,14 @@ fn time_subshell_wrapper_evaluates_inner(
 }
 
 // ========================================
-// Compound-statement bodies under the `time` wrapper.
+// Reserved-word prefixes in front of compound statements.
 //
-// Regression: tree-sitter-bash only treats `time` as a reserved word in
-// front of a pipeline of simple commands. `time for ...; do ...; done`
-// (and similar with while / until / if / brace group) would be split
-// into three top-level commands and each token (`time for ...`, `do ...`,
-// `done`) judged independently. The parser strips the `time` prefix when
-// it precedes a compound keyword so the inner statement evaluates the
-// same way it would without `time`.
+// Regression: tree-sitter-bash misparses bash reserved-word prefixes
+// (`time`, `time -p`, `!`, ...) when they sit in front of a compound
+// statement, splitting the input into multiple top-level commands so
+// the inner body becomes unreachable from rule evaluation. The parser
+// detects the misparse symptom and strips the prefix so the compound
+// evaluates the same way it would on its own.
 // ========================================
 
 #[rstest]
@@ -904,12 +903,28 @@ fn time_subshell_wrapper_evaluates_inner(
 )]
 #[case::time_if_inner_allowed("time if true; then echo y; fi", assert_allow as ActionAssertion)]
 #[case::time_brace_group_inner_allowed("time { echo hi; }", assert_allow as ActionAssertion)]
+#[case::bang_for_inner_allowed(
+    "! for i in 1 2; do echo $i; done",
+    assert_allow as ActionAssertion
+)]
+#[case::bang_while_inner_allowed(
+    "! while true; do echo hi; done",
+    assert_allow as ActionAssertion
+)]
+#[case::time_time_for_inner_allowed(
+    "time time for i in 1 2; do echo $i; done",
+    assert_allow as ActionAssertion
+)]
 #[case::time_for_inner_denied(
     "time for i in 1 2; do rm -rf /; done",
     assert_deny as ActionAssertion
 )]
+#[case::bang_for_inner_denied(
+    "! for i in 1 2; do rm -rf /; done",
+    assert_deny as ActionAssertion
+)]
 #[case::time_brace_group_inner_denied("time { rm -rf /; }", assert_deny as ActionAssertion)]
-fn time_compound_wrapper_evaluates_inner(
+fn reserved_word_prefix_compound_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,
