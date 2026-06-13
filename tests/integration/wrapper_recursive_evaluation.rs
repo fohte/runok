@@ -874,6 +874,65 @@ fn time_subshell_wrapper_evaluates_inner(
 }
 
 // ========================================
+// Compound-statement bodies under the `time` wrapper.
+//
+// Regression: tree-sitter-bash only treats `time` as a reserved word in
+// front of a pipeline of simple commands. `time for ...; do ...; done`
+// (and similar with while / until / if / brace group) would be split
+// into three top-level commands and each token (`time for ...`, `do ...`,
+// `done`) judged independently. The parser strips the `time` prefix when
+// it precedes a compound keyword so the inner statement evaluates the
+// same way it would without `time`.
+// ========================================
+
+#[rstest]
+#[case::time_for_inner_allowed(
+    "time for i in 1 2; do echo $i; done",
+    assert_allow as ActionAssertion
+)]
+#[case::time_dash_p_for_inner_allowed(
+    "time -p for i in 1 2; do echo $i; done",
+    assert_allow as ActionAssertion
+)]
+#[case::time_while_inner_allowed(
+    "time while true; do echo hi; done",
+    assert_allow as ActionAssertion
+)]
+#[case::time_until_inner_allowed(
+    "time until false; do echo hi; done",
+    assert_allow as ActionAssertion
+)]
+#[case::time_if_inner_allowed("time if true; then echo y; fi", assert_allow as ActionAssertion)]
+#[case::time_brace_group_inner_allowed("time { echo hi; }", assert_allow as ActionAssertion)]
+#[case::time_for_inner_denied(
+    "time for i in 1 2; do rm -rf /; done",
+    assert_deny as ActionAssertion
+)]
+#[case::time_brace_group_inner_denied("time { rm -rf /; }", assert_deny as ActionAssertion)]
+fn time_compound_wrapper_evaluates_inner(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - allow: 'echo *'
+          - allow: 'true'
+          - allow: 'false'
+          - deny: 'rm -rf *'
+        defaults:
+          action: ask
+        definitions:
+          wrappers:
+            - 'time <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
 // Optional / PathRef / VarRef in wrapper patterns
 // ========================================
 

@@ -49,6 +49,12 @@ The `RuleError::UnsupportedWrapperToken` variant is removed as a side effect. Th
 
 ## Bug Fixes
 
+### `time` in front of a compound statement is parsed as one statement (TODO(pr-link))
+
+`time for i in 1 2 3; do echo $i; done` and similar inputs where the bash `time` reserved word precedes a compound statement (`for`, `while`, `until`, `if`, `case`, `{ ... }`, `( ... )`) were split across three top-level commands — `time for ...`, `do ...`, `done` — and each token was evaluated independently. With a `time <cmd>` wrapper configured, the inner body could not be reached and every fragment fell through to `defaults.action`.
+
+The parser now strips the `time` (optionally `time -p`) prefix when it sits in front of a compound starter so the inner statement parses normally. `time` is purely a timing prefix in bash, so the rule engine treats it as transparent: `time for i in 1 2; do echo $i; done` evaluates the same way as `for i in 1 2; do echo $i; done`. Simple `time ls` continues to flow through the `time <cmd>` wrapper unchanged.
+
 ### `runok check` no longer evaluates standalone `#` comment lines ([#404](https://github.com/fohte/runok/pull/404))
 
 When plaintext input contains a line that is only a `# ...` comment, `runok check` previously emitted a separate evaluation result for that line and fell back to `defaults.action` (typically `ask`). Multi-line scripts piped through Claude Code's Bash tool — for example a pipeline followed by an explanatory `# ...` comment and another pipeline — therefore surfaced an unexpected `ask` between the real commands.

@@ -669,6 +669,12 @@ pub fn extract_commands_with_metadata(
         return Err(CommandParseError::EmptyCommand);
     }
 
+    // Workaround for a tree-sitter-bash misparse of `time <compound>`.
+    // See `strip_time_compound_prefix`.
+    if let Some(rest) = strip_time_compound_prefix(trimmed) {
+        return extract_commands_with_metadata(rest);
+    }
+
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
@@ -697,6 +703,63 @@ pub fn extract_commands_with_metadata(
     Ok(commands)
 }
 
+/// Strip the bash `time` (optionally `time -p`) reserved-word prefix from
+/// `input` when it precedes a compound statement keyword that tree-sitter-bash
+/// would otherwise misparse into multiple top-level statements. Returns the
+/// prefix-stripped slice, or `None` when the prefix does not apply.
+///
+/// Detected compound starters: `for`, `while`, `until`, `if`, `case`, `{`.
+/// `(` is intentionally excluded: tree-sitter-bash already parses
+/// `time ( ... )` as a single `command` node whose argument is the subshell,
+/// so the rule engine's `time <cmd>` wrapper captures it directly.
+/// Simple `time` commands (`time ls`) are likewise left untouched.
+///
+/// Consecutive `time` prefixes (`time time for ...`) are stripped in a single
+/// pass — bash itself accepts the chain and treats each as a no-op timing
+/// reporter for the inner statement.
+fn strip_time_compound_prefix(input: &str) -> Option<&str> {
+    let mut cur = input;
+    let mut stripped_any = false;
+    while let Some(rest) = strip_keyword(cur, "time") {
+        let rest = strip_keyword(rest, "-p").unwrap_or(rest);
+        cur = rest;
+        stripped_any = true;
+    }
+    if stripped_any && starts_with_compound_keyword(cur) {
+        Some(cur)
+    } else {
+        None
+    }
+}
+
+/// If `input` starts with `keyword` followed by ASCII whitespace, return the
+/// remainder with the leading whitespace trimmed. Otherwise return `None`.
+fn strip_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = input.strip_prefix(keyword)?;
+    let next = rest.chars().next()?;
+    if !next.is_ascii_whitespace() {
+        return None;
+    }
+    Some(rest.trim_start())
+}
+
+/// Whether `input` begins with a compound-statement starter — a keyword that
+/// opens a tree-sitter-bash compound node (`for_statement`, `while_statement`,
+/// `if_statement`, `case_statement`), or a `{` introducing a brace group.
+fn starts_with_compound_keyword(input: &str) -> bool {
+    const KEYWORDS: &[&str] = &["for", "while", "until", "if", "case"];
+    for kw in KEYWORDS {
+        if let Some(rest) = input.strip_prefix(*kw) {
+            match rest.chars().next() {
+                None => return true,
+                Some(c) if c.is_ascii_whitespace() => return true,
+                _ => {}
+            }
+        }
+    }
+    matches!(input.chars().next(), Some('{'))
+}
+
 /// Split a multi-line shell input into top-level command strings.
 ///
 /// Unlike [`extract_commands_with_metadata`], this function only splits at
@@ -715,6 +778,11 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CommandParseError::EmptyCommand);
+    }
+
+    // See `strip_time_compound_prefix`.
+    if let Some(rest) = strip_time_compound_prefix(trimmed) {
+        return split_top_level_commands(rest);
     }
 
     let mut parser = tree_sitter::Parser::new();
@@ -3060,6 +3128,50 @@ mod tests {
             cat bar | wc -l
         "},
         vec!["ls -la | grep foo | head -1", "cat bar | wc -l"],
+    )]
+    // tree-sitter-bash misparses `time <compound>` into multiple top-level
+    // statements; the parser strips the `time` prefix so the compound stays
+    // as one statement.
+    #[case::time_for_loop(
+        "time for i in 1 2 3; do echo $i; done",
+        vec!["for i in 1 2 3; do echo $i; done"],
+    )]
+    #[case::time_dash_p_for_loop(
+        "time -p for i in 1 2 3; do echo $i; done",
+        vec!["for i in 1 2 3; do echo $i; done"],
+    )]
+    #[case::time_while_loop(
+        "time while true; do echo hi; done",
+        vec!["while true; do echo hi; done"],
+    )]
+    #[case::time_until_loop(
+        "time until false; do echo hi; done",
+        vec!["until false; do echo hi; done"],
+    )]
+    #[case::time_if_block(
+        "time if true; then echo y; fi",
+        vec!["if true; then echo y; fi"],
+    )]
+    #[case::time_brace_group(
+        "time { echo hi; }",
+        vec!["{ echo hi; }"],
+    )]
+    #[case::time_time_for_loop(
+        "time time for i in 1 2; do echo $i; done",
+        vec!["for i in 1 2; do echo $i; done"],
+    )]
+    // `time` followed by a simple command must NOT be stripped — tree-sitter
+    // already parses it correctly and the wrapper layer needs the prefix.
+    #[case::time_simple_command_kept(
+        "time ls -la",
+        vec!["time ls -la"],
+    )]
+    // `time (...)` is intentionally left untouched: tree-sitter parses it
+    // as a single `command` node whose argument is the subshell, so the
+    // `time <cmd>` wrapper captures it directly.
+    #[case::time_subshell_kept(
+        "time (echo hi; echo bye)",
+        vec!["time (echo hi; echo bye)"],
     )]
     fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = split_top_level_commands(input).unwrap();
