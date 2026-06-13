@@ -49,7 +49,7 @@ The `RuleError::UnsupportedWrapperToken` variant is removed as a side effect. Th
 
 ## Bug Fixes
 
-### `time` in front of a compound statement is parsed as one statement (TODO(pr-link))
+### `time` in front of a compound statement is parsed as one statement ([#427](https://github.com/fohte/runok/pull/427))
 
 `time for i in 1 2 3; do echo $i; done` and similar inputs where the bash `time` reserved word precedes a compound statement (`for`, `while`, `until`, `if`, `case`, `{ ... }`, `( ... )`) were split across three top-level commands — `time for ...`, `do ...`, `done` — and each token was evaluated independently. With a `time <cmd>` wrapper configured, the inner body could not be reached and every fragment fell through to `defaults.action`.
 
