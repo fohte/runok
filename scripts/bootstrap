@@ -35,9 +35,8 @@ if command -v lefthook > /dev/null 2>&1; then
   lefthook install
 fi
 
-# Install shared dev tools (prettier, commitlint) at the repo root
-pnpm_install
-# Install Node.js dependencies for each subpackage
+# prettier and commitlint live in mise (see .mise.toml); install each
+# node subpackage's dependencies separately.
 (cd docs && pnpm_install)
 
 # Fetch Rust dependencies
