@@ -4,7 +4,6 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@11.5.2",
-<<<<<<< before updating
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
@@ -21,7 +20,4 @@
   "devDependencies": {
     "wrangler": "4.98.0"
   }
-=======
-  "type": "module"
->>>>>>> after updating
 }
