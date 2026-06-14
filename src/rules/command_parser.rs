@@ -669,6 +669,13 @@ pub fn extract_commands_with_metadata(
         return Err(CommandParseError::EmptyCommand);
     }
 
+    // Workaround for tree-sitter-bash misparses of reserved-word prefixes
+    // (`time <compound>`, `! <compound>`, ...). See
+    // `strip_misparsed_compound_prefix`.
+    if let Some(rest) = strip_misparsed_compound_prefix(trimmed) {
+        return extract_commands_with_metadata(rest);
+    }
+
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
@@ -697,6 +704,96 @@ pub fn extract_commands_with_metadata(
     Ok(commands)
 }
 
+/// Detect a tree-sitter-bash misparse triggered by a reserved-word prefix on a
+/// compound statement (`time for ...; do ...; done`, `! while ...; do ...; done`,
+/// future bash reserved words that take a pipeline of compounds, ...) and
+/// strip the offending prefix so the inner compound parses correctly.
+///
+/// The detection is symptom-based rather than keyword-based: when tree-sitter
+/// splits the input into multiple top-level `program` children and any
+/// non-leading child begins with a compound continuation token (`do`, `done`,
+/// `then`, `fi`, `elif`, `else`, `esac`, `}`), the input was misparsed. These
+/// tokens are never the start of a valid simple-command statement, so their
+/// appearance at the top level of a `program` is the signature of a
+/// reserved-word prefix that tree-sitter failed to recognize.
+///
+/// When the symptom is present, the function drops the first whitespace-
+/// delimited token from the input and recurses; multi-token prefixes such as
+/// `time -p` get peeled off one token per recursion until the symptom is gone.
+fn strip_misparsed_compound_prefix(input: &str) -> Option<&str> {
+    if !has_misparsed_compound_symptom(input) {
+        return None;
+    }
+    let stripped = strip_first_token(input)?;
+    Some(strip_misparsed_compound_prefix(stripped).unwrap_or(stripped))
+}
+
+fn has_misparsed_compound_symptom(input: &str) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    let Some(tree) = parser.parse(trimmed, None) else {
+        return false;
+    };
+    let root = tree.root_node();
+    if root.has_error() {
+        return false;
+    }
+    let mut cursor = root.walk();
+    let children: Vec<_> = root.named_children(&mut cursor).collect();
+    if children.len() < 2 {
+        return false;
+    }
+    let source = trimmed.as_bytes();
+    children
+        .iter()
+        .skip(1)
+        .any(|child| starts_with_compound_continuation(*child, source))
+}
+
+/// Whether the source text covered by `node` begins with a token that can
+/// only appear as the continuation of a compound statement, not as the start
+/// of a simple command.
+fn starts_with_compound_continuation(node: tree_sitter::Node, source: &[u8]) -> bool {
+    const KEYWORDS: &[&str] = &["do", "done", "then", "fi", "elif", "else", "esac"];
+    let Ok(text) = std::str::from_utf8(&source[node.start_byte()..node.end_byte()]) else {
+        return false;
+    };
+    let text = text.trim_start();
+    if text.starts_with('}') {
+        return true;
+    }
+    KEYWORDS.iter().any(|kw| {
+        let Some(rest) = text.strip_prefix(*kw) else {
+            return false;
+        };
+        // The keyword must end on a non-word boundary so user-named commands
+        // like `do_thing` / `done_task` are not misclassified.
+        match rest.chars().next() {
+            None => true,
+            Some(c) => !c.is_alphanumeric() && c != '_',
+        }
+    })
+}
+
+/// Strip the first whitespace-delimited token from `input`, returning the
+/// remainder with leading space/tab run trimmed (newlines are preserved so
+/// a token followed by a newline does not silently join with the next line).
+fn strip_first_token(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    let end = trimmed.find(|c: char| c.is_ascii_whitespace())?;
+    let rest = &trimmed[end..];
+    Some(rest.trim_start_matches([' ', '\t']))
+}
+
 /// Split a multi-line shell input into top-level command strings.
 ///
 /// Unlike [`extract_commands_with_metadata`], this function only splits at
@@ -715,6 +812,11 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CommandParseError::EmptyCommand);
+    }
+
+    // See `strip_misparsed_compound_prefix`.
+    if let Some(rest) = strip_misparsed_compound_prefix(trimmed) {
+        return split_top_level_commands(rest);
     }
 
     let mut parser = tree_sitter::Parser::new();
@@ -3060,6 +3162,68 @@ mod tests {
             cat bar | wc -l
         "},
         vec!["ls -la | grep foo | head -1", "cat bar | wc -l"],
+    )]
+    // tree-sitter-bash misparses reserved-word prefixes on compound statements
+    // (`time for ...; do ...; done`, `! while ...`, etc.) into multiple
+    // top-level statements. The parser detects the symptom (a non-leading
+    // `program` child that starts with `do`/`done`/`then`/`fi`/`elif`/`else`/
+    // `esac`/`}`) and strips the offending prefix so the compound stays whole.
+    #[case::time_for_loop(
+        "time for i in 1 2 3; do echo $i; done",
+        vec!["for i in 1 2 3; do echo $i; done"],
+    )]
+    #[case::time_dash_p_for_loop(
+        "time -p for i in 1 2 3; do echo $i; done",
+        vec!["for i in 1 2 3; do echo $i; done"],
+    )]
+    #[case::time_while_loop(
+        "time while true; do echo hi; done",
+        vec!["while true; do echo hi; done"],
+    )]
+    #[case::time_until_loop(
+        "time until false; do echo hi; done",
+        vec!["until false; do echo hi; done"],
+    )]
+    #[case::time_if_block(
+        "time if true; then echo y; fi",
+        vec!["if true; then echo y; fi"],
+    )]
+    #[case::time_brace_group(
+        "time { echo hi; }",
+        vec!["{ echo hi; }"],
+    )]
+    #[case::time_time_for_loop(
+        "time time for i in 1 2; do echo $i; done",
+        vec!["for i in 1 2; do echo $i; done"],
+    )]
+    // `!` is another reserved-word prefix tree-sitter misparses when it
+    // precedes a compound (the leading `negated_command` only captures the
+    // `for`-header and the `do`/`done` get split off as separate statements).
+    #[case::bang_for_loop(
+        "! for i in 1 2; do echo $i; done",
+        vec!["for i in 1 2; do echo $i; done"],
+    )]
+    // Symptom-based detection: any leading prefix that causes tree-sitter to
+    // split the compound apart is peeled off, not just literal `time` / `!`.
+    #[case::arbitrary_prefix_compound(
+        "foo for i in 1 2; do echo $i; done",
+        vec!["for i in 1 2; do echo $i; done"],
+    )]
+    // Simple commands parse cleanly with no symptom, so the prefix stays.
+    #[case::time_simple_command_kept(
+        "time ls -la",
+        vec!["time ls -la"],
+    )]
+    // tree-sitter parses `time (...)` as a single `command` node whose argument
+    // is the subshell, so the symptom never triggers and the wrapper layer
+    // captures the input as-is.
+    #[case::time_subshell_kept(
+        "time (echo hi; echo bye)",
+        vec!["time (echo hi; echo bye)"],
+    )]
+    #[case::time_dash_p_simple_command_kept(
+        "time -p ls -la",
+        vec!["time -p ls -la"],
     )]
     fn split_top_level_commands_cases(#[case] input: &str, #[case] expected: Vec<&str>) {
         let result = split_top_level_commands(input).unwrap();

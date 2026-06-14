@@ -49,6 +49,12 @@ The `RuleError::UnsupportedWrapperToken` variant is removed as a side effect. Th
 
 ## Bug Fixes
 
+### Reserved-word prefixes on bash compound statements no longer fan out into multiple `ask` decisions ([#427](https://github.com/fohte/runok/pull/427))
+
+`time for i in 1 2 3; do echo $i; done` and similar inputs where a bash reserved-word prefix (`time`, `time -p`, `!`, ...) precedes a compound statement (`for`, `while`, `until`, `if`, `case`, `{ ... }`) were split across multiple top-level commands — e.g. `time for ...`, `do ...`, `done` — and each fragment was evaluated independently. With a `time <cmd>` (or similar) wrapper configured, the inner body could not be reached and every fragment fell through to `defaults.action`.
+
+The parser now detects this misparse symptomatically (a non-leading `program` child that begins with `do` / `done` / `then` / `fi` / `elif` / `else` / `esac` / `}`) and strips the leading prefix word so the inner compound parses normally. The detection covers any prefix that triggers the misparse — not just literal `time` — and is robust against future bash reserved words. `time for i in 1 2; do echo $i; done` now evaluates the same way as `for i in 1 2; do echo $i; done`. Simple `time ls` and `time (...)` continue to flow through wrapper matching unchanged because tree-sitter already parses them as a single `command` node.
+
 ### `runok check` no longer evaluates standalone `#` comment lines ([#404](https://github.com/fohte/runok/pull/404))
 
 When plaintext input contains a line that is only a `# ...` comment, `runok check` previously emitted a separate evaluation result for that line and fell back to `defaults.action` (typically `ask`). Multi-line scripts piped through Claude Code's Bash tool — for example a pipeline followed by an explanatory `# ...` comment and another pipeline — therefore surfaced an unexpected `ask` between the real commands.
