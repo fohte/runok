@@ -3,6 +3,7 @@
   "type": "module",
   "version": "0.0.0",
   "private": true,
+<<<<<<< before updating
   "packageManager": "pnpm@11.5.2",
   "scripts": {
     "dev": "astro dev",
@@ -20,4 +21,8 @@
   "devDependencies": {
     "wrangler": "4.99.0"
   }
+=======
+  "packageManager": "pnpm@11.7.0",
+  "type": "module"
+>>>>>>> after updating
 }
