@@ -4,6 +4,6 @@
   "packageManager": "pnpm@11.5.1",
   "devDependencies": {
     "@commitlint/cli": "21.0.2",
-    "prettier": "3.8.3"
+    "prettier": "3.8.4"
   }
 }
