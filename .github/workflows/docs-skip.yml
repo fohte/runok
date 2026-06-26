@@ -1,0 +1,16 @@
+name: Docs (skip)
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs not touched; reporting success for required check."
