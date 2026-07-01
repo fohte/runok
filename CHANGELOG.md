@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.1](https://github.com/fohte/runok/compare/v0.3.0...v0.3.1) (2026-07-01)
+
+
+### Features
+
+* **aliases:** redesign aliases as a rule-pattern macro ([#389](https://github.com/fohte/runok/issues/389)) ([a2372d3](https://github.com/fohte/runok/commit/a2372d33a6fd6d4f838a38530dee6c6d6723e135))
+* **config:** support command aliases for prefix rewriting ([#377](https://github.com/fohte/runok/issues/377)) ([50b7b81](https://github.com/fohte/runok/commit/50b7b8124575c76efc3e774600c5a6f06747a14e))
+* **wrapper:** allow Optional / PathRef / VarRef in wrapper patterns ([#399](https://github.com/fohte/runok/issues/399)) ([afb7c06](https://github.com/fohte/runok/commit/afb7c060c0354293d70c185fddad129857fa6bd8))
+
+
+### Bug Fixes
+
+* **parser:** drop top-level `#` comment lines from plaintext stdin evaluation ([#404](https://github.com/fohte/runok/issues/404)) ([dcd02e3](https://github.com/fohte/runok/commit/dcd02e30de73dd385d828548ffc63d4aa353f1e0))
+* **parser:** keep reserved-word-prefixed compounds as one statement ([#427](https://github.com/fohte/runok/issues/427)) ([83e22ef](https://github.com/fohte/runok/commit/83e22efd6767135bf322a840acb2ea29b0b16b8a))
+
+
+### Dependencies
+
+* update rust crate chrono to v0.4.45 ([#418](https://github.com/fohte/runok/issues/418)) ([837f8c4](https://github.com/fohte/runok/commit/837f8c46ab2f4fdb1d91710eb25613abb88d1d4b))
+* update rust crate landlock to v0.4.5 ([#370](https://github.com/fohte/runok/issues/370)) ([be60ffd](https://github.com/fohte/runok/commit/be60ffda8673e2dd48d8850ac581561e00086f2f))
+* update rust crate libc to v0.2.186 ([#353](https://github.com/fohte/runok/issues/353)) ([e43c7b5](https://github.com/fohte/runok/commit/e43c7b5114891611546be6ae6fdae847f74eb3fa))
+* update rust crate serde_json to v1.0.150 ([#372](https://github.com/fohte/runok/issues/372)) ([78799a9](https://github.com/fohte/runok/commit/78799a986919bcb7e1ac7d02e17e778e4f5e72f9))
+* update rust crate serde-saphyr to v0.0.26 ([#354](https://github.com/fohte/runok/issues/354)) ([b027fab](https://github.com/fohte/runok/commit/b027fabd4707746358169dcba2e645a3eb7d4efb))
+* update rust crate serde-saphyr to v0.0.27 ([#393](https://github.com/fohte/runok/issues/393)) ([d807119](https://github.com/fohte/runok/commit/d80711994cd344517bce48527858d71036c86eea))
+* Update Rust crate shlex to v2 ([#388](https://github.com/fohte/runok/issues/388)) ([eaed94d](https://github.com/fohte/runok/commit/eaed94d1402c6d13dbc9b5e9593a9685ecece03d))
+* Update Rust crate similar to v3 ([#285](https://github.com/fohte/runok/issues/285)) ([c776919](https://github.com/fohte/runok/commit/c77691915d0c9ec8e2b195b6d4c94d0fbbcb2d6f))
+* update rust crate similar to v3.1.1 ([#382](https://github.com/fohte/runok/issues/382)) ([0687e8d](https://github.com/fohte/runok/commit/0687e8d9f2d0e3c57db24591543f4e036ff4446b))
+* update rust crate tree-sitter to v0.26.9 ([#364](https://github.com/fohte/runok/issues/364)) ([9d33b8e](https://github.com/fohte/runok/commit/9d33b8e3587d1b3acad9a30c1b6c0e6b0e949058))
+
 ## [0.3.0](https://github.com/fohte/runok/compare/v0.2.4...v0.3.0) (2026-05-16)
 
 
