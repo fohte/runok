@@ -1,0 +1,176 @@
+name: Boilerplate update
+
+on:
+  schedule:
+    # Weekly on Monday 03:00 UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      target-version:
+        description: 'Specific template tag to update to (e.g. v0.8.9). Leave empty to use the latest release.'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+
+concurrency:
+  group: boilerplate-update
+  cancel-in-progress: false
+
+jobs:
+  boilerplate-update:
+    runs-on: ubuntu-latest
+    env:
+      TEMPLATE_REPO: fohte/generic-boilerplate
+    steps:
+      - name: Federate GitHub token via octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: fohte
+          identity: ${{ github.event.repository.name }}-boilerplate-update
+          domain: octo-sts.fohte.net
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          token: ${{ steps.octo-sts.outputs.token }}
+
+      - name: Capture current template version
+        id: current-version
+        run: |
+          set -euo pipefail
+          # `_commit:` is the copier-managed field recording the applied template tag.
+          # Strip surrounding quotes in case copier serializes the value as a YAML string.
+          from_version=$(awk '$1 == "_commit:" { print $2 }' .copier-answers.yml | tr -d "\"'")
+          if [ -z "${from_version}" ]; then
+            echo "Failed to read _commit from .copier-answers.yml" >&2
+            exit 1
+          fi
+          echo "version=${from_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Run copier-update-action
+        id: copier-update
+        uses: fohte/copier-update-action@52313ccc7ba83641a9a617252f378e54800de129 # v0.1.1
+        with:
+          template-repo: ${{ env.TEMPLATE_REPO }}
+          target-version: ${{ github.event.inputs.target-version }}
+          github-token: ${{ steps.octo-sts.outputs.token }}
+
+      - name: Restore executable bit on scripts/bootstrap
+        if: steps.copier-update.outputs.changed == 'true'
+        run: |
+          if [ -f scripts/bootstrap ]; then
+            chmod +x scripts/bootstrap
+          fi
+
+      - name: Create branch
+        if: steps.copier-update.outputs.changed == 'true'
+        id: branch
+        env:
+          TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
+        run: |
+          set -euo pipefail
+          branch="copier-update/${TARGET_VERSION}"
+          echo "name=${branch}" >> "$GITHUB_OUTPUT"
+          # copier-update-action leaves unmerged entries in the index when
+          # conflicts remain; stage everything so `git checkout -B` succeeds.
+          git add -A
+          git checkout -B "${branch}"
+
+      - name: Compose commit and PR title
+        if: steps.copier-update.outputs.changed == 'true'
+        id: title
+        env:
+          FROM_VERSION: ${{ steps.current-version.outputs.version }}
+          TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
+        run: |
+          set -euo pipefail
+          echo "value=chore: update ${TEMPLATE_REPO} from ${FROM_VERSION} to ${TARGET_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push changes
+        if: steps.copier-update.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          COMMIT_MESSAGE: ${{ steps.title.outputs.value }}
+        run: |
+          set -euo pipefail
+          git -c 'user.name=fohte-bot[bot]' \
+              -c 'user.email=139195068+fohte-bot[bot]@users.noreply.github.com' \
+              commit -m "${COMMIT_MESSAGE}"
+          # Force-push so the remote branch always equals "default branch HEAD + 1 copier-update commit".
+          # Without this, commits on an existing copier-update/<version> branch accumulate and
+          # the PR drifts from the default branch.
+          #
+          # --force (not --force-with-lease): actions/checkout does not populate
+          # refs/remotes/origin/<branch> for non-checked-out branches, so --force-with-lease
+          # would reject with "stale info" on the second run for the same target version.
+          git push --force origin "${BRANCH}"
+
+      - name: Create or update pull request
+        if: steps.copier-update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          TITLE: ${{ steps.title.outputs.value }}
+          FROM_VERSION: ${{ steps.current-version.outputs.version }}
+          TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
+          UNRESOLVED_FILES: ${{ steps.copier-update.outputs.unresolved-files }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          release_url="https://github.com/${TEMPLATE_REPO}/releases/tag/${TARGET_VERSION}"
+          summary="Update \`${TEMPLATE_REPO}\` from \`${FROM_VERSION}\` to [\`${TARGET_VERSION}\`](${release_url})."
+
+          body="${summary}"
+          if [ -n "${UNRESOLVED_FILES}" ]; then
+            # Prefix each unresolved file with `> - ` so it stays inside the WARNING alert as a bullet.
+            unresolved_list=$(printf '%s\n' "${UNRESOLVED_FILES}" | sed 's/^/> - /')
+            body="${body}
+
+          > [!WARNING]
+          > Manual review required. Unresolved conflicts remain in:
+          >
+          ${unresolved_list}"
+          fi
+
+          body="${body}
+
+          ---
+          <sub>Generated by the [boilerplate-update workflow run](${RUN_URL}).</sub>"
+
+          create_args=(--title "${TITLE}" --body "${body}" --head "${BRANCH}")
+          if [ -n "${UNRESOLVED_FILES}" ]; then
+            create_args+=(--draft)
+          fi
+
+          existing_pr=$(gh pr list --head "${BRANCH}" --state open --json url --jq 'map(.url)[0] // ""')
+          if [ -n "${existing_pr}" ]; then
+            pr_url="${existing_pr}"
+            gh pr edit "${pr_url}" --title "${TITLE}" --body "${body}"
+            if [ -n "${UNRESOLVED_FILES}" ]; then
+              gh pr ready "${pr_url}" --undo
+            else
+              gh pr ready "${pr_url}"
+            fi
+          else
+            pr_url=$(gh pr create "${create_args[@]}")
+          fi
+
+          if [ -z "${UNRESOLVED_FILES}" ]; then
+            if OUTPUT=$(gh pr merge --auto --squash "${pr_url}" 2>&1); then
+              echo "$OUTPUT"
+            elif echo "$OUTPUT" | grep -q "clean status"; then
+              echo "$OUTPUT"
+              gh pr merge --squash "${pr_url}" || echo "Direct merge failed. Leaving PR open."
+            elif echo "$OUTPUT" | grep -q "auto-merge is not enabled"; then
+              echo "$OUTPUT"
+              gh pr merge --squash "${pr_url}" || echo "Direct merge failed (likely due to pending checks). Leaving PR open."
+            else
+              echo "$OUTPUT"
+              exit 1
+            fi
+          fi
