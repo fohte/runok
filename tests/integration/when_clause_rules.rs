@@ -728,3 +728,49 @@ fn os_variable_does_not_match_other_os(empty_context: EvalContext) {
     let result = evaluate_command(&config, "sed -i s/a/b/ file", &empty_context).unwrap();
     assert_allow(&result.action);
 }
+
+// ========================================
+// fs.home / fs.cwd
+// ========================================
+
+#[rstest]
+#[case::inside_prefix("/home/user/ghq/github.com/fohte/runok", assert_deny as ActionAssertion)]
+#[case::outside_prefix("/home/user/other/project", assert_ask as ActionAssertion)]
+fn fs_cwd_gates_rule_by_directory_prefix(
+    #[case] cwd: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        rules:
+          - deny: 'make *'
+            when: "fs.cwd.startsWith('/home/user/ghq/github.com/fohte/')"
+    "#})
+    .unwrap();
+
+    let context = EvalContext {
+        cwd: PathBuf::from(cwd),
+        ..empty_context
+    };
+
+    let result = evaluate_command(&config, "make build", &context).unwrap();
+    expected(&result.action);
+}
+
+#[rstest]
+fn fs_home_reflects_actual_home_directory(empty_context: EvalContext) {
+    let home = runok::config::dirs::home_dir()
+        .expect("HOME must be set in the test environment")
+        .to_string_lossy()
+        .into_owned();
+
+    let config_yaml = formatdoc! {r#"
+        rules:
+          - deny: 'make *'
+            when: "fs.home == '{home}'"
+    "#};
+    let config = parse_config(&config_yaml).unwrap();
+
+    let result = evaluate_command(&config, "make build", &empty_context).unwrap();
+    assert_deny(&result.action);
+}
