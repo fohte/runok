@@ -10,13 +10,13 @@ This page tracks changes that will be included in the next release. It is update
 
 ### `fs.home` and `fs.cwd` in `when` clauses (TODO(pr-link))
 
-The `fs` namespace now exposes `fs.home` and `fs.cwd` as string values, alongside the existing `fs.exists()` / `fs.is_file()` / `fs.is_dir()` functions. These let a rule scope itself to a directory tree without relying on the shell exporting `PWD` or `HOME` into `env`.
+The `fs` namespace now exposes `fs.home` and `fs.cwd` as values, alongside the existing `fs.exists()` / `fs.is_file()` / `fs.is_dir()` functions. `fs.cwd` is read directly from the OS, so unlike `env.PWD` it cannot go stale or be left unset by a shell that does not export `PWD`. `fs.home` is `null` when the home directory cannot be determined, rather than folding that into an empty-string prefix that would silently match everything.
 
 ```yaml
 rules:
-  # Allow `make` only under this user's own repos.
+  # Allow `make` only under a chosen directory tree in the user's home.
   - allow: 'make *'
-    when: "fs.cwd.startsWith(fs.home + '/ghq/github.com/fohte/')"
+    when: "fs.cwd.startsWith(fs.home + '/projects/')"
 ```
 
 See [When Clauses -> Filesystem](/rule-evaluation/when-clause/#filesystem) for details.

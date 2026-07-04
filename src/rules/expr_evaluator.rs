@@ -27,14 +27,15 @@ fn fs_sentinel() -> HashMap<String, Value> {
 
 /// Build the `fs` map exposed to CEL: the sentinel entry that gates
 /// `fs.exists`/`fs.is_file`/`fs.is_dir` method dispatch, plus the `home` and
-/// `cwd` string values that are read as plain map fields (`fs.home`,
-/// `fs.cwd`), not function calls.
+/// `cwd` values that are read as plain map fields (`fs.home`, `fs.cwd`), not
+/// function calls.
 fn fs_namespace(context: &ExprContext) -> HashMap<String, Value> {
     let mut map = fs_sentinel();
-    map.insert(
-        "home".to_string(),
-        Value::String(context.home.clone().into()),
-    );
+    let home = match &context.home {
+        Some(home) => Value::String(home.clone().into()),
+        None => Value::Null,
+    };
+    map.insert("home".to_string(), home);
     map.insert("cwd".to_string(), Value::String(context.cwd.clone().into()));
     map
 }
@@ -126,11 +127,16 @@ pub struct ExprContext {
     /// evaluated. Exposed to CEL as `shell.loop_kind`. Values: `"while"`,
     /// `"until"`, `"for"`, or `""` when the command is not inside any loop.
     pub loop_kind: String,
-    /// Home directory absolute path, exposed to CEL as `fs.home`. Empty
-    /// string when the home directory cannot be determined.
-    pub home: String,
+    /// Home directory absolute path, exposed to CEL as `fs.home`. `None`
+    /// when the home directory cannot be determined (e.g. `HOME` unset),
+    /// which CEL sees as `null` -- `fs.home == null` detects this case
+    /// explicitly, while using `fs.home` in a string operation (e.g.
+    /// `fs.home + '/x'`) raises an evaluation error rather than silently
+    /// treating it as an empty prefix that matches everything.
+    pub home: Option<String>,
     /// Current working directory absolute path at the time runok was
-    /// invoked, exposed to CEL as `fs.cwd`.
+    /// invoked, exposed to CEL as `fs.cwd`. Falls back to `/` if the
+    /// working directory cannot be resolved (see `EvalContext::from_env`).
     pub cwd: String,
 }
 
@@ -262,7 +268,7 @@ mod tests {
             flag_groups: HashMap::new(),
             os: String::new(),
             loop_kind: String::new(),
-            home: String::new(),
+            home: None,
             cwd: String::new(),
         }
     }
@@ -757,28 +763,40 @@ mod tests {
     // === fs.home / fs.cwd (map-field access on the `fs` namespace) ===
 
     #[rstest]
-    #[case::home_match("fs.home == '/home/user'", "/home/user", "", true)]
-    #[case::home_no_match("fs.home == '/home/user'", "/home/other", "", false)]
-    #[case::cwd_match("fs.cwd == '/repo'", "", "/repo", true)]
-    #[case::cwd_no_match("fs.cwd == '/repo'", "", "/other", false)]
+    #[case::home_match("fs.home == '/home/user'", Some("/home/user"), "", true)]
+    #[case::home_no_match("fs.home == '/home/user'", Some("/home/other"), "", false)]
+    #[case::home_null_when_unset("fs.home == null", None, "", true)]
+    #[case::cwd_match("fs.cwd == '/repo'", None, "/repo", true)]
+    #[case::cwd_no_match("fs.cwd == '/repo'", None, "/other", false)]
     #[case::home_starts_with(
         "fs.cwd.startsWith(fs.home + '/ghq/')",
-        "/home/user",
+        Some("/home/user"),
         "/home/user/ghq/github.com/fohte/runok",
         true
     )]
     fn fs_home_and_cwd_access(
         #[case] expr: &str,
-        #[case] home: &str,
+        #[case] home: Option<&str>,
         #[case] cwd: &str,
         #[case] expected: bool,
     ) {
         let context = ExprContext {
-            home: home.to_string(),
+            home: home.map(str::to_string),
             cwd: cwd.to_string(),
             ..empty_context()
         };
         assert_eq!(evaluate(expr, &context).unwrap(), expected);
+    }
+
+    #[test]
+    fn fs_home_concat_errors_when_home_is_unset() {
+        let context = ExprContext {
+            home: None,
+            cwd: "/repo".to_string(),
+            ..empty_context()
+        };
+        let result = evaluate("fs.cwd.startsWith(fs.home + '/ghq/')", &context);
+        assert!(result.is_err(), "expected error, got {result:?}");
     }
 
     #[test]

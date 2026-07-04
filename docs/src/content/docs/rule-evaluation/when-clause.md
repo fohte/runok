@@ -329,22 +329,22 @@ rules:
 
 ### Values
 
-| Value     | Type     | Description                                                            |
-| --------- | -------- | ---------------------------------------------------------------------- |
-| `fs.home` | `string` | Home directory absolute path. Empty string if it cannot be determined. |
-| `fs.cwd`  | `string` | Current working directory absolute path at the time runok was invoked. |
+| Value     | Type               | Description                                                                                                        |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `fs.home` | `string` or `null` | Home directory absolute path, or `null` if it cannot be determined (e.g. `HOME` is unset).                         |
+| `fs.cwd`  | `string`           | Current working directory absolute path at the time runok was invoked. Falls back to `/` if it cannot be resolved. |
 
-Use these to scope a rule to a directory tree, without depending on the shell exporting `PWD`/`HOME` into `env`:
+Use these to scope a rule to a directory tree. Replace `/projects/` below with whatever subdirectory convention you actually use:
 
 ```yaml
 rules:
-  # Allow `make` only under this user's own repos.
+  # Allow `make` only under a chosen directory tree in the user's home.
   - allow: 'make *'
-    when: "fs.cwd.startsWith(fs.home + '/ghq/github.com/fohte/')"
+    when: "fs.cwd.startsWith(fs.home + '/projects/')"
 ```
 
 :::note
-`env.PWD` and `env.HOME` depend on the shell exporting those variables, which is not guaranteed. `fs.cwd` and `fs.home` are always populated from runok's own process state, so prefer them over `env.PWD` / `env.HOME`.
+`fs.cwd` is read directly from the OS, so unlike `env.PWD` it cannot go stale or be left unset by a shell that does not export `PWD`. `fs.home` is exposed as `null` (not a missing key) when it cannot be determined -- `fs.home == '...'` then safely evaluates to `false`, while using `fs.home` in a string operation like `fs.home + '/x'` raises an evaluation error instead of silently matching an empty prefix.
 :::
 
 ## Operators
