@@ -287,9 +287,13 @@ rules:
     when: 'shell.loop_kind == ""'
 ```
 
-## Filesystem functions
+## Filesystem
 
-A `fs` namespace exposes read-only filesystem checks for use inside `when` clauses. These functions let a rule depend on whether a marker file or directory exists on disk -- for example, to gate a rule on the presence of a `.git` directory or a flag file dropped by another tool.
+A `fs` namespace exposes read-only filesystem checks and path values for use inside `when` clauses.
+
+### Functions
+
+These functions let a rule depend on whether a marker file or directory exists on disk -- for example, to gate a rule on the presence of a `.git` directory or a flag file dropped by another tool.
 
 | Function           | Description                                                               |
 | ------------------ | ------------------------------------------------------------------------- |
@@ -312,7 +316,7 @@ rules:
     when: "fs.is_dir('.git')"
 ```
 
-### Behaviour
+#### Behaviour
 
 - **Empty path** (`fs.exists('')`) returns `false`. There is no separate "invalid argument" error.
 - **Symlinks are followed.** A symlink that points at a regular file makes `fs.is_file` return `true`; a symlink that points at a directory makes `fs.is_dir` return `true`.
@@ -320,7 +324,27 @@ rules:
 - **`NotFound` is the only "false" condition.** Any other I/O error (most commonly `EACCES` when a parent directory is not stat-able) is surfaced as a `when` evaluation error rather than being folded into `false`. This prevents a permission problem from silently misclassifying a `fs.exists(marker)` gate as "no marker".
 
 :::caution
-`fs.*` reads the live filesystem each time the `when` clause is evaluated, so the answer can change between two consecutive `runok check` invocations. Use these functions for state that is genuinely meant to gate the rule (a marker file, a working-tree shape) -- not for state that callers cannot reasonably observe.
+`fs.*` functions read the live filesystem each time the `when` clause is evaluated, so the answer can change between two consecutive `runok check` invocations. Use these functions for state that is genuinely meant to gate the rule (a marker file, a working-tree shape) -- not for state that callers cannot reasonably observe.
+:::
+
+### Values
+
+| Value     | Type               | Description                                                                                                        |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `fs.home` | `string` or `null` | Home directory absolute path, or `null` if it cannot be determined (e.g. `HOME` is unset).                         |
+| `fs.cwd`  | `string`           | Current working directory absolute path at the time runok was invoked. Falls back to `/` if it cannot be resolved. |
+
+Use these to scope a rule to a directory tree. Replace `/projects/` below with whatever subdirectory convention you actually use:
+
+```yaml
+rules:
+  # Allow `make` only under a chosen directory tree in the user's home.
+  - allow: 'make *'
+    when: "fs.cwd.startsWith(fs.home + '/projects/')"
+```
+
+:::note
+`fs.cwd` is read directly from the OS, so unlike `env.PWD` it cannot go stale or be left unset by a shell that does not export `PWD`. `fs.home` is exposed as `null` (not a missing key) when it cannot be determined -- `fs.home == '...'` then safely evaluates to `false`, while using `fs.home` in a string operation like `fs.home + '/x'` raises an evaluation error instead of silently matching an empty prefix.
 :::
 
 ## Operators

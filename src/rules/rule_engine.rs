@@ -845,6 +845,8 @@ fn build_expr_context(
         flag_groups,
         os: std::env::consts::OS.to_string(),
         loop_kind: loop_kind.to_string(),
+        home: crate::config::dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
+        cwd: eval_context.cwd.to_string_lossy().into_owned(),
     }
 }
 
