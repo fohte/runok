@@ -10,7 +10,7 @@ release_binary: true
 release_type: rust
 repo_language: en
 subpackages:
-  - name: docs
+-   name: docs
     tests: false
     type: node
 type: rust
