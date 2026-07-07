@@ -233,7 +233,7 @@ Hook-specific: name of the hook event (e.g. `PreToolUse`). `null` when `endpoint
 
 ### `tool_use_id`
 
-Hook-specific: ID of the tool call this evaluation belongs to, as supplied by the agent. Claude Code sends the same `tool_use_id` to the PreToolUse and PostToolUse hooks of one tool call, so this is the correlation key between an `ask` decision entry and its [Ask Resolution Record](#ask-resolution-record). `null` when `endpoint_type` is not `hook`, and in entries written before this field existed.
+Hook-specific: ID of the tool call this evaluation belongs to, as supplied by the agent. The agent sends the same `tool_use_id` to the PreToolUse and PostToolUse hooks of one tool call, so this is the correlation key between an `ask` decision entry and its [Ask Resolution Record](#ask-resolution-record). `null` when `endpoint_type` is not `hook`, and in entries written before this field existed.
 
 **Type:** `str | null`\
 **Always present:** Yes (may be `null`)
@@ -242,7 +242,7 @@ Hook-specific: ID of the tool call this evaluation belongs to, as supplied by th
 
 Written when the user approves an `ask` decision in the agent's permission dialog. Recording these requires the opt-in PostToolUse hook (see [Claude Code Integration](/getting-started/claude-code/#track-ask-approvals-optional)); without it, no `ask_resolution` records appear.
 
-Only approvals are recordable: Claude Code fires no hook after the user denies a permission dialog, so an `ask` entry without a resolution record means "denied or not yet decided", not "denied".
+Denials cannot be observed (see [Claude Code Integration](/getting-started/claude-code/#track-ask-approvals-optional) for why), so an `ask` entry without a resolution record means "denied or not yet decided", not "denied".
 
 ```json
 {
@@ -280,7 +280,7 @@ How the ask was resolved. Currently always `"approved"`.
 
 ### `tool_use_id`
 
-Tool use ID of the approved tool call, matching [`metadata.tool_use_id`](#tool_use_id) of the correlated `ask` decision entry. `null` when the hook input carried no `tool_use_id` (older agent versions); correlation then fell back to session + command matching.
+Tool use ID of the approved tool call, matching [`metadata.tool_use_id`](#tool_use_id) of the correlated `ask` decision entry. `null` when neither the hook input nor the correlated entry carried a `tool_use_id`; correlation then fell back to session + command matching.
 
 **Type:** `str | null`\
 **Always present:** Yes (may be `null`)

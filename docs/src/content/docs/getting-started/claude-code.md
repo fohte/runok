@@ -126,7 +126,7 @@ By default, the audit log records that runok answered `ask` for a command, but n
 }
 ```
 
-The PostToolUse invocation never blocks or modifies the session: it writes no stdout and always exits `0`, and it only appends a record when the tool call matches an unresolved `ask` decision.
+The PostToolUse invocation never blocks or modifies the session: it writes no stdout, exits `0` apart from the [non-blocking hook-mode failures](/cli/check/#hook-mode---input-format-claude-code-hook) that exit `1`, and only appends a record when the tool call matches an unresolved `ask` decision.
 
 :::note[Denials are not recorded]
 Claude Code fires no hook after you deny a permission dialog, so only approvals can be recorded. An `ask` entry without a resolution means "denied or not yet decided".

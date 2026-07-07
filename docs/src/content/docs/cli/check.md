@@ -116,7 +116,7 @@ When checking multiple commands (multi-line stdin), the exit code is the highest
 The hook input's `hook_event_name` field selects what runok does:
 
 - **`PreToolUse`** (or absent): evaluate the command against the rules and print the permission decision, as described above.
-- **`PostToolUse`**: no rule evaluation. runok records an `ask_resolution` record in the audit log when the tool call corresponds to an `ask` decision it made at PreToolUse time (i.e. the user approved the permission dialog). Nothing is written to stdout and the exit code is always `0` — the command has already run, so failures must not disturb the session. See [tracking ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
+- **`PostToolUse`**: no rule evaluation. runok records an `ask_resolution` record in the audit log when the tool call corresponds to an `ask` decision it made at PreToolUse time (i.e. the user approved the permission dialog). Nothing is written to stdout, and once the event is dispatched the exit code is always `0` — the command has already run, so failures must not disturb the session. The hook-mode failures listed below (config load errors, input parse errors) happen before the event is dispatched and exit `1` as usual. See [tracking ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
 
 In hook mode, the following runok-side failures exit with code `1` instead of `2`:
 
