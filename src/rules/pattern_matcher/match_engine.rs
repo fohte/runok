@@ -27,10 +27,14 @@ const MAX_MATCH_STEPS: usize = 10_000;
 /// the pattern token list.  Used by the Literal matcher to identify value-flag
 /// tokens whose values should also be skipped when searching for the first
 /// positional argument in `cmd_tokens`.
-fn collect_value_flag_aliases(
-    tokens: &[PatternToken],
-    definitions: &Definitions,
-    aliases: &mut HashSet<String>,
+///
+/// Borrows aliases from `tokens` and `definitions` rather than cloning them,
+/// since this runs on every recursive `match_engine` step (up to
+/// `MAX_MATCH_STEPS`).
+fn collect_value_flag_aliases<'a>(
+    tokens: &'a [PatternToken],
+    definitions: &'a Definitions,
+    aliases: &mut HashSet<&'a str>,
 ) {
     for token in tokens {
         match token {
@@ -39,7 +43,7 @@ fn collect_value_flag_aliases(
                 ..
             } => {
                 for a in flag_aliases {
-                    aliases.insert(a.clone());
+                    aliases.insert(a.as_str());
                 }
             }
             PatternToken::FlagGroupRef { name, .. } => {
@@ -53,7 +57,7 @@ fn collect_value_flag_aliases(
                     // pattern) so the positional-argument finder skips their
                     // values correctly.
                     for a in &parsed.aliases {
-                        aliases.insert(a.clone());
+                        aliases.insert(a.as_str());
                     }
                 }
             }
@@ -82,10 +86,7 @@ fn collect_value_flag_aliases(
 /// Find the index of the first positional (non-flag) token in `cmd_tokens`,
 /// skipping over flag tokens and their associated values based on
 /// `value_flag_aliases`.  Returns `None` if no positional token is found.
-fn find_first_positional(
-    cmd_tokens: &[&str],
-    value_flag_aliases: &HashSet<String>,
-) -> Option<usize> {
+fn find_first_positional(cmd_tokens: &[&str], value_flag_aliases: &HashSet<&str>) -> Option<usize> {
     let mut i = 0;
     while i < cmd_tokens.len() {
         let t = cmd_tokens[i];
