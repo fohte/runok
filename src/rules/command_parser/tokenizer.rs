@@ -25,7 +25,7 @@ use super::{FlagSchema, ParsedCommand};
 /// Returns `SyntaxError` if tree-sitter-bash cannot parse the input as a
 /// single top-level command (pipelines, `&&`/`||`/`;`, control
 /// structures, parse errors) — those inputs are expected to be split
-/// upstream by [`extract_commands_with_metadata`].
+/// upstream by [`extract_commands_with_metadata`](super::extract_commands_with_metadata).
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
     let raw_tokens = tokenize_command(input)?;
     let command = raw_tokens[0].clone();
@@ -523,7 +523,7 @@ fn decode_double_quote_escapes(text: &str) -> String {
 /// nodes" from "anything more structured" (pipelines, `&&`/`||`/`;`,
 /// control flow). Only the former is a valid input for [`tokenize_command`];
 /// for everything else callers must split first via
-/// [`extract_commands_with_metadata`].
+/// [`extract_commands_with_metadata`](super::extract_commands_with_metadata).
 fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     match node.kind() {
         // A regular shell command (`echo hello`, `git -C foo log`, ...).
