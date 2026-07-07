@@ -4,7 +4,7 @@ use crate::config::{Config, Definitions, MergedSandboxPolicy, SandboxPreset};
 use crate::rules::RuleError;
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 
-use super::simple_eval::evaluate_command_inner;
+use super::dispatch::evaluate_command_inner;
 use super::{Action, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SubCommandDetail};
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)

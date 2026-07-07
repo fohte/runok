@@ -6,12 +6,14 @@ use crate::rules::RuleError;
 use crate::rules::command_parser::{PipeInfo, RedirectInfo, extract_commands_with_metadata};
 
 mod compound;
+mod dispatch;
 mod flag_schema;
 mod simple_eval;
+mod wrapper;
 
 pub use compound::{default_action, evaluate_compound};
 
-use simple_eval::evaluate_command_inner;
+use dispatch::evaluate_command_inner;
 
 /// Context for rule evaluation, providing environment variables and
 /// working directory for `when` clause evaluation.
