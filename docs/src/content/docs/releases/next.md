@@ -21,7 +21,7 @@ rules:
 
 See [When Clauses -> Filesystem](/rule-evaluation/when-clause/#filesystem) for details.
 
-### `glob_matches()` and `definitions` in `when` clauses (TODO(pr-link))
+### `glob_matches()` and `definitions` in `when` clauses ([#467](https://github.com/fohte/runok/pull/467))
 
 `when` clauses can now call `glob_matches(pattern, value)` and read the raw contents of `definitions.paths` / `definitions.vars` through the new `definitions` context variable. Combined, these let a `deny`/`when` guard and an `allow`/`<var:name>` pattern share a single declared list of `type: pattern` glob values, instead of duplicating the list:
 
