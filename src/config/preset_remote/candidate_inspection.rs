@@ -131,11 +131,10 @@ fn inspect_candidate_recursive<G: GitClient>(
     current: &semver::Version,
     visited: &mut std::collections::HashSet<String>,
 ) -> Result<(), CandidateInspectionError> {
-    if visited.contains(rel_path) {
+    if !visited.insert(rel_path.to_string()) {
         // Already inspected (cycle or shared dependency). Do not re-check.
         return Ok(());
     }
-    visited.insert(rel_path.to_string());
 
     let content = git_client
         .show_file(dir, git_ref, rel_path)
