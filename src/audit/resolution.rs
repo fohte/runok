@@ -75,6 +75,11 @@ pub fn record_approval(
 /// Correlation uses `tool_use_id` when the entry has one; otherwise it falls
 /// back to session + command matching, requiring the resolution to be no
 /// older than the entry (a resolution cannot precede its ask).
+///
+/// The fallback is best-effort: when the same command is asked several times
+/// in one session, an approval can also match an earlier ask the user
+/// denied, because denials leave no record to disambiguate with. Only agents
+/// that send no `tool_use_id` are affected.
 pub fn is_approved(entry: &AuditEntry, resolutions: &[AskResolution]) -> bool {
     if !is_ask(entry) {
         return false;
@@ -151,22 +156,19 @@ fn scan_recent_records(base_dir: &Path, needle: &str) -> (Vec<AuditEntry>, Vec<A
     (entries, resolutions)
 }
 
+// Both finders reuse `is_approved` as the already-resolved check so the
+// display join and the duplicate-write guard cannot silently diverge.
+
 fn find_unresolved_by_tool_use_id<'a>(
     entries: &'a [AuditEntry],
     resolutions: &[AskResolution],
     tool_use_id: &str,
 ) -> Option<&'a AuditEntry> {
-    // A resolution for this tool call already exists — do not write twice.
-    if resolutions
-        .iter()
-        .any(|r| r.tool_use_id.as_deref() == Some(tool_use_id))
-    {
-        return None;
-    }
-    entries
-        .iter()
-        .rev()
-        .find(|e| is_ask(e) && e.metadata.tool_use_id.as_deref() == Some(tool_use_id))
+    entries.iter().rev().find(|e| {
+        is_ask(e)
+            && e.metadata.tool_use_id.as_deref() == Some(tool_use_id)
+            && !is_approved(e, resolutions)
+    })
 }
 
 fn find_unresolved_by_session<'a>(
@@ -178,11 +180,7 @@ fn find_unresolved_by_session<'a>(
         is_ask(e)
             && e.metadata.session_id.as_deref() == Some(approval.session_id.as_str())
             && command_matches(e, &approval.executed_command)
-            && !resolutions.iter().any(|r| {
-                r.session_id.as_deref() == Some(approval.session_id.as_str())
-                    && r.command == e.command
-                    && timestamp_ge(&r.timestamp, &e.timestamp)
-            })
+            && !is_approved(e, resolutions)
     })
 }
 
@@ -296,8 +294,15 @@ mod tests {
         resolution
     }
 
+    // The sandbox_wrapped case covers updatedInput rewrites: the executed
+    // command differs from the original and is recorded separately.
     #[rstest]
-    fn approval_with_matching_tool_use_id_writes_resolution(audit_dir: TempDir) {
+    #[case::verbatim("terraform apply")]
+    #[case::sandbox_wrapped("runok exec --sandbox restricted -- 'terraform apply'")]
+    fn approval_with_matching_tool_use_id_writes_resolution(
+        audit_dir: TempDir,
+        #[case] executed_command: &str,
+    ) {
         let entry = ask_entry(
             "2026-07-08T10:00:00Z",
             "terraform apply",
@@ -307,7 +312,7 @@ mod tests {
         write_today_file(&audit_dir, &[to_value(&entry)]);
 
         let config = make_config(&audit_dir);
-        let written = record_approval(&config, &approval(Some("toolu_01"), "terraform apply"))
+        let written = record_approval(&config, &approval(Some("toolu_01"), executed_command))
             .unwrap()
             .unwrap();
 
@@ -320,7 +325,7 @@ mod tests {
                 session_id: Some("sess-1".to_owned()),
                 cwd: Some("/tmp".to_owned()),
                 command: "terraform apply".to_owned(),
-                executed_command: "terraform apply".to_owned(),
+                executed_command: executed_command.to_owned(),
             },
         );
 
@@ -329,38 +334,6 @@ mod tests {
         let content =
             std::fs::read_to_string(audit_dir.path().join(format!("audit-{today}.jsonl"))).unwrap();
         assert_eq!(content.lines().count(), 2);
-    }
-
-    #[rstest]
-    fn approval_records_rewritten_command_separately(audit_dir: TempDir) {
-        // updatedInput rewrote the command at PreToolUse time, so the
-        // executed command differs from the original.
-        let entry = ask_entry(
-            "2026-07-08T10:00:00Z",
-            "terraform apply",
-            "sess-1",
-            Some("toolu_01"),
-        );
-        write_today_file(&audit_dir, &[to_value(&entry)]);
-
-        let config = make_config(&audit_dir);
-        let executed = "runok exec --sandbox restricted -- 'terraform apply'";
-        let written = record_approval(&config, &approval(Some("toolu_01"), executed))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            normalize_timestamp(written),
-            AskResolution {
-                timestamp: "TIMESTAMP".to_owned(),
-                outcome: AskResolutionOutcome::Approved,
-                tool_use_id: Some("toolu_01".to_owned()),
-                session_id: Some("sess-1".to_owned()),
-                cwd: Some("/tmp".to_owned()),
-                command: "terraform apply".to_owned(),
-                executed_command: executed.to_owned(),
-            },
-        );
     }
 
     #[rstest]
