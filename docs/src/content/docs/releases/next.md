@@ -26,10 +26,6 @@ The audit log used to record only that runok answered `ask` for a command -- not
 
 See [Claude Code Integration -> Track ask approvals](/getting-started/claude-code/#track-ask-approvals-optional) and [Audit Log JSON Schema -> Ask Resolution Record](/cli/audit-log-schema/#ask-resolution-record) for details.
 
-### `runok init` no longer replaces an existing `runok.yml` with boilerplate (TODO(pr-link))
-
-Applying Claude Code integration changes in `runok init` used to rewrite an existing `runok.yml` with the boilerplate template when no permission migration happened. The wizard now only rewrites an existing config when a migration was accepted; re-running init just to register hooks leaves the file untouched.
-
 ### `fs.home` and `fs.cwd` in `when` clauses ([#451](https://github.com/fohte/runok/pull/451))
 
 The `fs` namespace now exposes `fs.home` and `fs.cwd` as values, alongside the existing `fs.exists()` / `fs.is_file()` / `fs.is_dir()` functions. `fs.cwd` is read directly from the OS, so unlike `env.PWD` it cannot go stale or be left unset by a shell that does not export `PWD`. `fs.home` is `null` when the home directory cannot be determined, rather than folding that into an empty-string prefix that would silently match everything.
@@ -42,3 +38,9 @@ rules:
 ```
 
 See [When Clauses -> Filesystem](/rule-evaluation/when-clause/#filesystem) for details.
+
+## Bug Fixes
+
+### `runok init` no longer replaces an existing `runok.yml` with boilerplate (TODO(pr-link))
+
+Applying Claude Code integration changes in `runok init` used to rewrite an existing `runok.yml` with the boilerplate template when no permission migration happened. The wizard now only rewrites an existing config when a migration was accepted; re-running init just to register hooks leaves the file untouched.
