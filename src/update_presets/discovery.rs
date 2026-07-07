@@ -165,19 +165,18 @@ mod tests {
     // === collect_remote_references ===
 
     #[rstest]
-    #[case::github_shorthand("github:org/repo@v1", true)]
-    #[case::git_url("https://github.com/org/repo.git@main", true)]
-    #[case::local_path("./local.yml", false)]
-    fn collect_remote_references_filters_local(
-        #[case] reference: &str,
-        #[case] expected_included: bool,
-    ) {
+    #[case::github_shorthand("github:org/repo@v1", &["github:org/repo@v1"])]
+    #[case::git_url(
+        "https://github.com/org/repo.git@main",
+        &["https://github.com/org/repo.git@main"]
+    )]
+    #[case::local_path("./local.yml", &[])]
+    fn collect_remote_references_filters_local(#[case] reference: &str, #[case] expected: &[&str]) {
         let config = Config {
             extends: Some(vec![reference.to_string()]),
             ..Config::default()
         };
-        let refs = collect_remote_references(&config);
-        assert_eq!(refs.contains(&reference), expected_included);
+        assert_eq!(collect_remote_references(&config), expected);
     }
 
     #[rstest]

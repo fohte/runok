@@ -143,6 +143,22 @@ fn attach_skipped(result: &mut UpdateResult, mut extra: Vec<SkippedCandidate>) {
     }
 }
 
+/// Fetch remote refs for `url`, using `refs_cache` to avoid redundant network
+/// calls. Only allocates a new cache key on a miss.
+fn get_or_fetch_refs<'a, G: GitClient>(
+    refs_cache: &'a mut HashMap<String, Vec<RemoteRef>>,
+    url: &str,
+    git_client: &G,
+) -> Result<&'a Vec<RemoteRef>, String> {
+    if !refs_cache.contains_key(url) {
+        let refs = git_client
+            .ls_remote_refs(url)
+            .map_err(|e| format!("ls-remote failed: {e}"))?;
+        refs_cache.insert(url.to_string(), refs);
+    }
+    Ok(&refs_cache[url])
+}
+
 /// Try to upgrade a version-tagged preset to the latest compatible version.
 ///
 /// Candidate tags are tried from newest to oldest. Each candidate is inspected
@@ -162,15 +178,10 @@ fn try_tag_upgrade<G: GitClient>(
     refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
 ) -> UpdateResult {
     // Fetch remote refs (cached per URL to avoid redundant network calls)
-    if !refs_cache.contains_key(url) {
-        match git_client.ls_remote_refs(url) {
-            Ok(refs) => {
-                refs_cache.insert(url.to_string(), refs);
-            }
-            Err(err) => return UpdateResult::Error(format!("ls-remote failed: {err}")),
-        }
-    }
-    let remote_refs = &refs_cache[url];
+    let remote_refs = match get_or_fetch_refs(refs_cache, url, git_client) {
+        Ok(refs) => refs,
+        Err(msg) => return UpdateResult::Error(msg),
+    };
 
     let ref_names: Vec<String> = remote_refs.iter().map(|r| r.name.clone()).collect();
     let candidates = find_upgrade_candidates(current_tag, &ref_names);
