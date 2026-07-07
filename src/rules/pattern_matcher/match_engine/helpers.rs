@@ -1,4 +1,8 @@
 //! Shared helpers used by more than one match arm function in this module.
+//!
+//! Kept separate from the arm modules themselves since e.g.
+//! `collect_value_flag_aliases` is used by the `Literal`, `Alternation`, and
+//! `Negation` arms, which otherwise live in different files.
 
 use std::collections::HashSet;
 

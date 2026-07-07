@@ -5,6 +5,14 @@
 //! optional groups, flag groups, and variable/path references. Each match
 //! arm below delegates to a function in a sibling module, grouped by the
 //! kind of `PatternToken` it handles.
+//!
+//! Every arm function threads through the same five invariant parameters
+//! (`definitions`, `steps`, `after_double_dash`, `var_captures`,
+//! `flag_group_captures`) alongside the two that actually vary per call
+//! (`captures`, `extract`). Bundling the invariant five into a context
+//! struct (as `EvalContext`/`ExprContext` do elsewhere in `rules/`) would cut
+//! down the repetition, but changes every call site; left as a follow-up
+//! rather than folded into this move.
 
 mod alternation_negation;
 mod basic_tokens;

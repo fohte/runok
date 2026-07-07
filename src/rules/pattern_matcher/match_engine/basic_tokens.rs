@@ -1,4 +1,8 @@
 //! Match arm functions for `Wildcard`, `Literal`, and `PathRef` pattern tokens.
+//!
+//! Each function here is the body of one `match_engine` arm, extracted
+//! verbatim, and recurses back into `match_engine` for the rest of the
+//! pattern.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -11,6 +15,8 @@ use super::super::token_matching::{literal_matches, normalize_path, resolve_path
 use super::helpers::{collect_value_flag_aliases, find_first_positional, remove_indices};
 use super::match_engine;
 
+/// Match `PatternToken::Wildcard`: try every possible number of `cmd_tokens`
+/// consumed (0 through all of them), recursing on the remainder for each.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -77,6 +83,9 @@ pub(super) fn match_wildcard<'a>(
     Ok(false)
 }
 
+/// Match `PatternToken::Literal`: exact (or glob) match against a single
+/// command token, either at a fixed position (after `--`, or for flag-like
+/// literals) or order-independently against the first non-flag token.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -163,6 +172,8 @@ pub(super) fn match_literal<'a>(
     }
 }
 
+/// Match `PatternToken::PathRef`: the command token must normalize to one of
+/// the paths listed under `definitions.paths[name]`.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"

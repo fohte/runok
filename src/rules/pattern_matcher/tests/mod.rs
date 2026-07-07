@@ -1,3 +1,8 @@
+//! Tests for the pattern-matching engine, split by the kind of `PatternToken`
+//! each theme module exercises. Shared test helpers and fixtures used across
+//! more than one theme module live here; helpers used by only one theme
+//! module live in that module instead.
+
 use super::*;
 use crate::rules::command_parser::{FlagSchema, parse_command};
 use crate::rules::pattern_parser::{PatternToken, parse as parse_pattern};
@@ -16,28 +21,6 @@ fn check_match(pattern_str: &str, command_str: &str, definitions: &Definitions) 
     let schema = build_schema_from_pattern(&pattern, definitions);
     let command = parse_command(command_str, &schema).unwrap();
     matches(&pattern, &command, definitions)
-}
-
-fn check_captures(
-    pattern_str: &str,
-    command_str: &str,
-    definitions: &Definitions,
-) -> Option<Vec<String>> {
-    let pattern = parse_pattern(pattern_str).unwrap();
-    let schema = build_schema_from_pattern(&pattern, definitions);
-    let command = parse_command(command_str, &schema).unwrap();
-    matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
-}
-
-fn check_var_captures(
-    pattern_str: &str,
-    command_str: &str,
-    definitions: &Definitions,
-) -> Option<HashMap<String, String>> {
-    let pattern = parse_pattern(pattern_str).unwrap();
-    let schema = build_schema_from_pattern(&pattern, definitions);
-    let command = parse_command(command_str, &schema).unwrap();
-    matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
 }
 
 /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef

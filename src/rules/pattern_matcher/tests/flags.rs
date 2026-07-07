@@ -1,3 +1,6 @@
+//! Tests for `FlagWithValue` matching and `<flag:name>` (`FlagGroupRef`)
+//! matching at the matcher level.
+
 use super::*;
 use rstest::rstest;
 

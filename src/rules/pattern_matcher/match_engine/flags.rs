@@ -1,4 +1,8 @@
 //! Match arm functions for `FlagGroupRef` and `FlagWithValue` pattern tokens.
+//!
+//! Each function here is the body of one `match_engine` arm, extracted
+//! verbatim, and recurses back into `match_engine` for the rest of the
+//! pattern.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -12,6 +16,9 @@ use super::super::token_matching::match_single_token;
 use super::helpers::remove_indices;
 use super::match_engine;
 
+/// Match `PatternToken::FlagGroupRef`: greedily consume every command token
+/// matching a `definitions.flag_groups[name]` alias, capturing each
+/// occurrence's value (or presence, for bool flags) into `flag_group_captures`.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -146,6 +153,10 @@ pub(super) fn match_flag_group_ref<'a>(
     result
 }
 
+/// Match `PatternToken::FlagWithValue`: scans for a token matching one of
+/// `aliases` (space-separated, `=`-joined, or fused short-flag form) whose
+/// value matches `value`, trying each occurrence in turn via
+/// [`try_recurse_flag_value`].
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"

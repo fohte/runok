@@ -1,5 +1,30 @@
+//! Tests for `Optional` matching and for wildcard/var capture extraction
+//! (`matches_with_captures`), including backtracking edge cases.
+
 use super::*;
 use rstest::rstest;
+
+fn check_captures(
+    pattern_str: &str,
+    command_str: &str,
+    definitions: &Definitions,
+) -> Option<Vec<String>> {
+    let pattern = parse_pattern(pattern_str).unwrap();
+    let schema = build_schema_from_pattern(&pattern, definitions);
+    let command = parse_command(command_str, &schema).unwrap();
+    matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
+}
+
+fn check_var_captures(
+    pattern_str: &str,
+    command_str: &str,
+    definitions: &Definitions,
+) -> Option<HashMap<String, String>> {
+    let pattern = parse_pattern(pattern_str).unwrap();
+    let schema = build_schema_from_pattern(&pattern, definitions);
+    let command = parse_command(command_str, &schema).unwrap();
+    matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
+}
 
 // ========================================
 // Optional matching
@@ -112,20 +137,6 @@ fn combined_optional_and_wildcard() {
     assert!(check_match(
         pattern_str,
         "git -C /home/user/repo status",
-        &empty_defs()
-    ));
-}
-
-#[test]
-fn equals_joined_token() {
-    assert!(check_match(
-        "java -Denv=prod",
-        "java -Denv=prod",
-        &empty_defs()
-    ));
-    assert!(!check_match(
-        "java -Denv=prod",
-        "java -Denv=staging",
         &empty_defs()
     ));
 }

@@ -1,3 +1,7 @@
+//! Tests for `Literal`, `Wildcard`, and `PathRef` matching, plus a handful of
+//! matcher-wide behaviors (glob wildcards, quoting, `--`, path normalization,
+//! and the wildcard step-limit DoS guard) that don't fit a single arm.
+
 use super::*;
 use rstest::rstest;
 
@@ -321,4 +325,18 @@ fn quoted_literal_matching(
         expected,
         "pattern {pattern_str:?} vs command {command_str:?}",
     );
+}
+
+#[test]
+fn equals_joined_token() {
+    assert!(check_match(
+        "java -Denv=prod",
+        "java -Denv=prod",
+        &empty_defs()
+    ));
+    assert!(!check_match(
+        "java -Denv=prod",
+        "java -Denv=staging",
+        &empty_defs()
+    ));
 }

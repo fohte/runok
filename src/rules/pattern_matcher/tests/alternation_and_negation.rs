@@ -1,3 +1,7 @@
+//! Tests for `Alternation` and `Negation` matching, including glob wildcards
+//! within alternatives, multi-word alternation (`parse_multi`), and negation
+//! as a flag value.
+
 use super::*;
 use rstest::rstest;
 

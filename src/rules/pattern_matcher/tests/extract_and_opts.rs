@@ -1,3 +1,6 @@
+//! Tests for `<opts>` matching outside a wrapper pattern, and for
+//! `extract_placeholder`'s `<cmd>` candidate extraction.
+
 use super::*;
 use rstest::rstest;
 

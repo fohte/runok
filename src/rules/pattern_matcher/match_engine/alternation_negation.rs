@@ -1,4 +1,8 @@
 //! Match arm functions for `Alternation` and `Negation` pattern tokens.
+//!
+//! Each function here is the body of one `match_engine` arm, extracted
+//! verbatim, and recurses back into `match_engine` for the rest of the
+//! pattern.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -14,6 +18,10 @@ use super::super::token_matching::{
 use super::helpers::{collect_value_flag_aliases, find_first_positional, remove_indices};
 use super::match_engine;
 
+/// Match `PatternToken::Alternation`: any one of `alts` may match. Flag-like
+/// alternatives scan all tokens order-independently (including their
+/// `=`-joined form); non-flag alternatives match the first non-flag token,
+/// or positionally after `--`.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -174,6 +182,9 @@ pub(super) fn match_alternation<'a>(
     }
 }
 
+/// Match `PatternToken::Negation`: `inner` must NOT match. Flag-only
+/// negations scan all tokens for the forbidden flag; other negations check
+/// against a fixed position (after `--`) or the first non-flag token.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"

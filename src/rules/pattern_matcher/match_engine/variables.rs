@@ -1,4 +1,8 @@
 //! Match arm functions for `Optional`, `VarRef`, and `Placeholder` pattern tokens.
+//!
+//! Each function here is the body of one `match_engine` arm, extracted
+//! verbatim, and recurses back into `match_engine` for the rest of the
+//! pattern.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -11,6 +15,9 @@ use super::super::flag_utils::optional_flags_absent;
 use super::super::token_matching;
 use super::match_engine;
 
+/// Match `PatternToken::Optional`: try matching with `inner_tokens` spliced
+/// in first, then (if none of the referenced flags are present) fall back to
+/// matching without them.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -117,6 +124,10 @@ pub(super) fn match_optional<'a>(
     Ok(false)
 }
 
+/// Match `PatternToken::VarRef`: for pattern-typed vars, inline-expand each
+/// parsed sub-pattern in place of the reference; otherwise delegate to
+/// [`token_matching::match_var_ref`]. Either way, the matched token is
+/// recorded in `var_captures[name]`.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
@@ -228,6 +239,9 @@ pub(super) fn match_var_ref<'a>(
     }
 }
 
+/// Match `PatternToken::Placeholder`: in boolean mode, consumes exactly one
+/// command token; in extract mode, `<cmd>` captures every possible prefix
+/// (rejecting flag-like starts), while other placeholders capture one token.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors match_engine signature for this arm"
