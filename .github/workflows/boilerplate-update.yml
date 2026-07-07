@@ -53,7 +53,7 @@ jobs:
 
       - name: Run copier-update-action
         id: copier-update
-        uses: fohte/copier-update-action@6bfc176a40a84743b18bcad41d36d3c4e8fff79d # v0.1.2
+        uses: fohte/copier-update-action@b6cf0fa2396de17ddd38c98782c8143d423caa09 # v0.1.3
         with:
           template-repo: ${{ env.TEMPLATE_REPO }}
           target-version: ${{ github.event.inputs.target-version }}
@@ -92,11 +92,11 @@ jobs:
       - name: Create branch
         if: steps.should-update.outputs.value == 'true'
         id: branch
-        env:
-          TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
         run: |
           set -euo pipefail
-          branch="copier-update/${TARGET_VERSION}"
+          # Fixed per template repo (not per version) so repeated runs reuse the
+          # same branch/PR instead of piling up one per target version.
+          branch="copier-update/${TEMPLATE_REPO#*/}"
           echo "name=${branch}" >> "$GITHUB_OUTPUT"
           # copier-update-action leaves unmerged entries in the index when
           # conflicts remain; stage everything so `git checkout -B` succeeds.
@@ -124,12 +124,12 @@ jobs:
               -c 'user.email=139195068+fohte-bot[bot]@users.noreply.github.com' \
               commit -m "${COMMIT_MESSAGE}"
           # Force-push so the remote branch always equals "default branch HEAD + 1 copier-update commit".
-          # Without this, commits on an existing copier-update/<version> branch accumulate and
-          # the PR drifts from the default branch.
+          # Without this, commits on the branch (fixed per template repo, reused across
+          # versions) accumulate and the PR drifts from the default branch.
           #
           # --force (not --force-with-lease): actions/checkout does not populate
           # refs/remotes/origin/<branch> for non-checked-out branches, so --force-with-lease
-          # would reject with "stale info" on the second run for the same target version.
+          # would reject with "stale info" on a later run against the same branch.
           git push --force origin "${BRANCH}"
 
       - name: Create or update pull request
