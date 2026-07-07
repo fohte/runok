@@ -212,14 +212,14 @@ pub(super) fn determine_preset_base_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::cache::CacheMetadata;
     use crate::config::git_client::mock::MockGitClient;
     use crate::config::parse_config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
+
+    use super::super::test_support::{make_cache, seed_remote_preset};
 
     #[fixture]
     fn tmp() -> TempDir {
@@ -678,37 +678,6 @@ mod tests {
     }
 
     // === Remote preset inline tests are stripped ===
-
-    fn current_timestamp() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
-    /// Build a `PresetCache` rooted at `root` with a one-hour TTL.
-    fn make_cache(root: &Path) -> PresetCache {
-        PresetCache::with_config(root.to_path_buf(), std::time::Duration::from_secs(3600))
-    }
-
-    /// Seed `cache` with a remote preset at `reference`: write each
-    /// `(file_name, yaml)` entry into the cache dir and persist its metadata.
-    /// Returns the cache dir for callers that need it directly.
-    fn seed_remote_preset(cache: &PresetCache, reference: &str, files: &[(&str, &str)]) -> PathBuf {
-        let cache_dir = cache.cache_dir(reference);
-        fs::create_dir_all(&cache_dir).unwrap();
-        for (name, body) in files {
-            fs::write(cache_dir.join(name), body).unwrap();
-        }
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference.to_string(),
-            resolved_sha: None,
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
-        cache_dir
-    }
 
     /// User config that locally extends a remote preset must keep its own
     /// tests, but every preset reached through the remote (including its

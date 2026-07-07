@@ -262,17 +262,62 @@ pub fn load_and_resolve_preset_with<G: GitClient>(
     resolve_extends_with(config, &preset_base_dir, reference, git_client, cache)
 }
 
+/// Test-only helpers shared by both `preset::tests` and `preset::extends::tests`
+/// so that seeding a `PresetCache` with a fake remote preset isn't duplicated
+/// per test module.
+#[cfg(test)]
+mod test_support {
+    use super::*;
+    use crate::config::cache::CacheMetadata;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    pub(super) fn current_timestamp() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// Build a `PresetCache` rooted at `root` with a one-hour TTL.
+    pub(super) fn make_cache(root: &Path) -> PresetCache {
+        PresetCache::with_config(root.to_path_buf(), std::time::Duration::from_secs(3600))
+    }
+
+    /// Seed `cache` with a remote preset at `reference`: write each
+    /// `(file_name, yaml)` entry into the cache dir and persist its metadata.
+    /// Returns the cache dir for callers that need it directly.
+    pub(super) fn seed_remote_preset(
+        cache: &PresetCache,
+        reference: &str,
+        files: &[(&str, &str)],
+    ) -> PathBuf {
+        let cache_dir = cache.cache_dir(reference);
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        for (name, body) in files {
+            std::fs::write(cache_dir.join(name), body).unwrap();
+        }
+        let metadata = CacheMetadata {
+            fetched_at: current_timestamp(),
+            is_immutable: false,
+            reference: reference.to_string(),
+            resolved_sha: None,
+        };
+        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
+        cache_dir
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::cache::CacheMetadata;
     use crate::config::git_client::mock::MockGitClient;
     use crate::config::parse_config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
+
+    use super::test_support::{make_cache, seed_remote_preset};
 
     #[fixture]
     fn tmp() -> TempDir {
@@ -514,37 +559,6 @@ mod tests {
     }
 
     // === Remote preset inline tests are stripped ===
-
-    fn current_timestamp() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
-    /// Build a `PresetCache` rooted at `root` with a one-hour TTL.
-    fn make_cache(root: &Path) -> PresetCache {
-        PresetCache::with_config(root.to_path_buf(), std::time::Duration::from_secs(3600))
-    }
-
-    /// Seed `cache` with a remote preset at `reference`: write each
-    /// `(file_name, yaml)` entry into the cache dir and persist its metadata.
-    /// Returns the cache dir for callers that need it directly.
-    fn seed_remote_preset(cache: &PresetCache, reference: &str, files: &[(&str, &str)]) -> PathBuf {
-        let cache_dir = cache.cache_dir(reference);
-        fs::create_dir_all(&cache_dir).unwrap();
-        for (name, body) in files {
-            fs::write(cache_dir.join(name), body).unwrap();
-        }
-        let metadata = CacheMetadata {
-            fetched_at: current_timestamp(),
-            is_immutable: false,
-            reference: reference.to_string(),
-            resolved_sha: None,
-        };
-        PresetCache::write_metadata(&cache_dir, &metadata).unwrap();
-        cache_dir
-    }
 
     #[rstest]
     fn remote_preset_inline_tests_stripped(tmp: TempDir) {
