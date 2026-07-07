@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use super::*;
+use super::Config;
 
 thread_local! {
     static PARSE_WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -56,6 +56,7 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
+    use super::super::{ActionKind, VarType};
     use super::*;
 
     // === Basic parsing ===

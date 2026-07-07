@@ -1,4 +1,6 @@
-use super::*;
+#[cfg(any(feature = "config-schema", test))]
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 /// Audit log configuration.
 #[derive(Debug, Deserialize, Clone, PartialEq)]

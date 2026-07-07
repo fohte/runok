@@ -1,4 +1,4 @@
-use super::*;
+use super::{ActionKind, Config, VarType};
 
 impl Config {
     /// Expand `<path:name>` references in sandbox preset `fs.deny` lists.
@@ -407,6 +407,7 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
+    use super::super::{RuleEntry, parse_config};
     use super::*;
 
     // === Config::validate ===

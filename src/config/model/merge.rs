@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::*;
+use super::{AuditConfig, Config, Defaults, Definitions, RotationConfig, VarDefinition};
 
 impl Config {
     /// Merge two configs. `self` is the base (e.g. global), `other` is the override (e.g. local).
@@ -153,6 +153,9 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        ActionKind, FsAccessPolicy, FsPolicy, NetworkPolicy, RuleEntry, SandboxPreset, VarType,
+    };
     use super::*;
 
     // === Config::merge ===
