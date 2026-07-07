@@ -54,7 +54,6 @@ pub fn evaluate_compound(
             &ext_cmd.loop_kind,
         )?;
 
-        // Collect sandbox preset names
         if let Some(ref name) = result.sandbox_preset {
             preset_names.push(name.clone());
         }
@@ -65,7 +64,6 @@ pub fn evaluate_compound(
             matched_rules: result.matched_rules.clone(),
         });
 
-        // Aggregate action using Explicit Deny Wins
         merged_action = Some(match merged_action {
             Some(prev) => merge_actions(prev, result.action.clone()),
             None => result.action.clone(),
@@ -83,7 +81,6 @@ pub fn evaluate_compound(
         .filter(|n| seen.insert(n.as_str()))
         .collect();
 
-    // Resolve sandbox presets and merge policies
     let sandbox_policy = if unique_names.is_empty() {
         None
     } else if let Some(sandbox_map) = sandbox_defs {
@@ -138,7 +135,6 @@ fn has_writable_contradiction(
         None => return false,
     };
 
-    // Check if any source preset actually defined writable roots
     preset_names.iter().any(|name| {
         sandbox_map
             .get(name.as_str())

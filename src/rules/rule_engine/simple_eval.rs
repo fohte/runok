@@ -56,7 +56,6 @@ pub(super) fn evaluate_command_inner(
         let had_self_reference = nested_subs.len() < sub_commands.len();
 
         if !had_self_reference {
-            // Pure compound (no self-reference): evaluate all sub-commands and return.
             let mut merged: Option<EvalResult> = None;
             for sub in &nested_subs {
                 let result = evaluate_command_inner(
@@ -151,7 +150,6 @@ fn evaluate_simple_command(
     let default_definitions = Definitions::default();
     let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
 
-    // Collect all matched rules with their parsed patterns
     let mut matched: Vec<MatchedRule> = Vec::new();
     let mut match_infos: Vec<RuleMatchInfo> = Vec::new();
 
@@ -212,7 +210,6 @@ fn evaluate_simple_command(
         }
     }
 
-    // Try wrapper pattern matching for recursive evaluation
     let wrapper_result =
         try_unwrap_wrapper(config, command, context, definitions, depth, loop_kind)?;
 
@@ -225,7 +222,6 @@ fn evaluate_simple_command(
         });
     }
 
-    // Determine the direct rule result
     let direct_result = if matched.is_empty() {
         None
     } else {
@@ -256,7 +252,6 @@ fn evaluate_simple_command(
         })
     };
 
-    // Merge direct result with wrapper result using Explicit Deny Wins
     let merged = match (direct_result, wrapper_result) {
         (Some(direct), Some(wrapper)) => merge_results(direct, wrapper),
         (Some(direct), None) => direct,
@@ -289,7 +284,6 @@ fn try_unwrap_wrapper(
     for wrapper_pattern_str in wrappers {
         let patterns = parse_multi(wrapper_pattern_str)?;
 
-        // Try each expanded pattern for this wrapper definition
         let mut all_candidates: Vec<Vec<String>> = Vec::new();
         for pattern in &patterns {
             let schema = build_flag_schema(pattern, definitions);
