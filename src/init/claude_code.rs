@@ -744,19 +744,23 @@ mod tests {
             &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            value["hooks"]["PostToolUse"],
-            serde_json::json!([
+        let runok_hook_entry = serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [
                 {
-                    "matcher": "Bash",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
-                        }
-                    ]
+                    "type": "command",
+                    "command": "runok check --input-format claude-code-hook"
                 }
-            ])
+            ]
+        });
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [runok_hook_entry.clone()],
+                    "PostToolUse": [runok_hook_entry]
+                }
+            })
         );
     }
 

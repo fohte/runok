@@ -263,9 +263,9 @@ fn config_with_bash_rules() -> String {
 // original axes stay comparable; the opt-in behavior itself is covered by
 // dedicated tests in src/init/wizard and tests/e2e/init.rs. Because that
 // question makes the "Detected" block trigger for user scope whenever the
-// PostToolUse hook is missing, the standalone Overwrite? prompt is no
-// longer reachable in those cases (rows 11-13), and an existing runok.yml
-// is only rewritten by an accepted migration (Migrate? = yes) — never
+// PostToolUse hook is missing, the standalone Overwrite? prompt is not
+// reachable in those cases (rows 11-13), and an existing runok.yml is
+// only rewritten by an accepted migration (Migrate? = yes) — never
 // replaced with boilerplate (rows 8, 12, 25, 33, 41, 49).
 //
 // |    |                           State                                |          Response              |               Result               |

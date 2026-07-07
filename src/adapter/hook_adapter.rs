@@ -10,6 +10,7 @@ use crate::rules::rule_engine::{Action, DenyResponse};
 /// etc.) that are ignored here.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct HookInput {
     pub session_id: String,
     pub transcript_path: String,
@@ -289,7 +290,7 @@ mod tests {
     use crate::adapter::SandboxInfo;
     use crate::rules::rule_engine::DenyResponse;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
 
     fn make_hook_input(tool_name: &str, tool_input: serde_json::Value) -> HookInput {
@@ -707,7 +708,7 @@ mod tests {
     #[rstest]
     fn hook_input_deserializes_without_event_name_and_tool_use_id() {
         // Minimal inputs (older Claude Code versions, hand-crafted JSON)
-        // must still parse; absent hook_event_name means PreToolUse.
+        // must still parse.
         let json_str = indoc! {r#"
             {
                 "session_id": "sess-123",
@@ -721,9 +722,24 @@ mod tests {
 
         let input: HookInput = serde_json::from_str(json_str)
             .unwrap_or_else(|e| panic!("deserialization failed: {e}"));
-        assert_eq!(input.hook_event_name, None);
-        assert_eq!(input.tool_use_id, None);
-        assert!(!ClaudeCodeHookAdapter::new(input).is_post_tool_use());
+        assert_eq!(
+            input,
+            HookInput {
+                session_id: "sess-123".to_string(),
+                transcript_path: "/tmp/transcript.json".to_string(),
+                cwd: "/home/user".to_string(),
+                permission_mode: "default".to_string(),
+                hook_event_name: None,
+                tool_name: "Bash".to_string(),
+                tool_input: json!({"command": "git status"}),
+                tool_use_id: None,
+            },
+        );
+    }
+
+    #[fixture]
+    fn audit_dir() -> TempDir {
+        TempDir::new().unwrap()
     }
 
     fn config_with_audit(dir: &TempDir) -> Config {
@@ -773,54 +789,71 @@ mod tests {
         std::fs::write(path, format!("{line}\n")).unwrap();
     }
 
+    /// Normalize the dynamic timestamp so the whole record can be asserted
+    /// with a single equality check.
+    fn normalize_timestamp(
+        mut resolution: crate::audit::AskResolution,
+    ) -> crate::audit::AskResolution {
+        resolution.timestamp = "TIMESTAMP".to_owned();
+        resolution
+    }
+
     #[rstest]
-    fn handle_post_tool_use_records_resolution_for_matching_ask() {
-        let dir = TempDir::new().unwrap();
-        write_ask_entry(&dir, "terraform apply", "test-tool-use-id");
+    fn handle_post_tool_use_records_resolution_for_matching_ask(audit_dir: TempDir) {
+        write_ask_entry(&audit_dir, "terraform apply", "test-tool-use-id");
         let adapter = ClaudeCodeHookAdapter::new(make_hook_input_for_event(
             "Bash",
             bash_tool_input("terraform apply"),
             "PostToolUse",
         ));
 
-        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&dir));
+        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&audit_dir));
 
         assert_eq!(exit_code, 0);
-        let lines = audit_lines(&dir);
+        let lines = audit_lines(&audit_dir);
         assert_eq!(lines.len(), 2);
         let resolution: crate::audit::AskResolution = serde_json::from_str(&lines[1]).unwrap();
-        assert_eq!(resolution.tool_use_id.as_deref(), Some("test-tool-use-id"));
-        assert_eq!(resolution.command, "terraform apply");
+        assert_eq!(
+            normalize_timestamp(resolution),
+            crate::audit::AskResolution {
+                timestamp: "TIMESTAMP".to_owned(),
+                outcome: crate::audit::AskResolutionOutcome::Approved,
+                tool_use_id: Some("test-tool-use-id".to_owned()),
+                session_id: Some("test-session".to_owned()),
+                cwd: Some("/tmp".to_owned()),
+                command: "terraform apply".to_owned(),
+                executed_command: "terraform apply".to_owned(),
+            },
+        );
     }
 
     #[rstest]
     #[case::non_bash_tool("Read", json!({"path": "/tmp"}))]
     #[case::invalid_bash_input("Bash", json!({"not_command": "x"}))]
     fn handle_post_tool_use_never_fails(
+        audit_dir: TempDir,
         #[case] tool_name: &str,
         #[case] tool_input: serde_json::Value,
     ) {
-        let dir = TempDir::new().unwrap();
         let adapter = ClaudeCodeHookAdapter::new(make_hook_input_for_event(
             tool_name,
             tool_input,
             "PostToolUse",
         ));
 
-        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&dir));
+        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&audit_dir));
 
         assert_eq!(exit_code, 0);
-        assert_eq!(audit_lines(&dir), Vec::<String>::new());
+        assert_eq!(audit_lines(&audit_dir), Vec::<String>::new());
     }
 
     #[rstest]
-    fn handle_post_tool_use_skips_when_audit_disabled() {
-        let dir = TempDir::new().unwrap();
-        write_ask_entry(&dir, "terraform apply", "test-tool-use-id");
+    fn handle_post_tool_use_skips_when_audit_disabled(audit_dir: TempDir) {
+        write_ask_entry(&audit_dir, "terraform apply", "test-tool-use-id");
         let config = Config {
             audit: Some(crate::config::AuditConfig {
                 enabled: Some(false),
-                path: Some(dir.path().to_string_lossy().to_string()),
+                path: Some(audit_dir.path().to_string_lossy().to_string()),
                 rotation: None,
             }),
             ..Default::default()
@@ -835,7 +868,7 @@ mod tests {
 
         assert_eq!(exit_code, 0);
         assert_eq!(
-            audit_lines(&dir).len(),
+            audit_lines(&audit_dir).len(),
             1,
             "only the pre-existing ask entry"
         );

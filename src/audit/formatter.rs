@@ -246,27 +246,23 @@ mod tests {
         }
     }
 
+    /// The marked/unmarked decision itself is covered per-case by
+    /// `action_display_marks_approved_asks`; this only pins that the marker
+    /// reaches the TSV output.
     #[rstest]
-    #[case::approved_ask_is_marked(
-        vec![make_resolution("toolu_01", "terraform apply")],
-        "ask ✓",
-    )]
-    #[case::unresolved_ask_is_not_marked(vec![], "ask")]
-    fn print_tsv_marks_approved_asks(
-        #[case] resolutions: Vec<AskResolution>,
-        #[case] expected_action: &str,
-    ) {
+    fn print_tsv_marks_approved_asks() {
         let entries = vec![make_ask_entry_with_tool_use_id(
             "terraform apply",
             "toolu_01",
         )];
+        let resolutions = vec![make_resolution("toolu_01", "terraform apply")];
 
         let mut buf = Vec::new();
         print_tsv(&mut buf, &entries, &resolutions);
         let output = String::from_utf8(buf).unwrap();
 
         let columns: Vec<&str> = output.trim().split('\t').collect();
-        assert_eq!(columns[1..], [expected_action, "terraform apply"]);
+        assert_eq!(columns[1..], ["ask ✓", "terraform apply"]);
     }
 
     #[rstest]
