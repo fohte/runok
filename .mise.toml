@@ -1,15 +1,15 @@
 [tools]
 lefthook = "2.1.9"
-"github:ast-grep/ast-grep" = "0.43.0"
+"github:ast-grep/ast-grep" = "0.44.0"
 
 # lefthook hooks
 actionlint = "1.7.12"
 "github:betterleaks/betterleaks" = "1.5.0"
-node = "24.17.0"
+node = "24.18.0"
 pinact = "4.1.0"
 "github:fohte/basefmt" = "0.1.0"
-"npm:@commitlint/cli" = "21.0.2"
-"npm:prettier" = "3.8.4"
+"npm:@commitlint/cli" = "21.1.0"
+"npm:prettier" = "3.9.4"
 shellcheck = "0.11.0"
 shfmt = "3.13.1"
 
