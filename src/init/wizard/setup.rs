@@ -201,9 +201,9 @@ pub(super) fn setup_scope(
                     );
                 }
                 eprintln!();
-                post_hook_preview.unwrap_or(after_hook_content.clone())
+                post_hook_preview.unwrap_or(after_hook_content)
             } else {
-                after_hook_content.clone()
+                after_hook_content
             };
 
             // Show warning about conflicting hooks before the confirmation prompt
