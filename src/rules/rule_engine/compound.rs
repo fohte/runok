@@ -98,8 +98,6 @@ pub fn evaluate_compound(
         None
     };
 
-    // If sandbox policy has contradicting writable roots (empty after intersection
-    // but presets did define writable roots), escalate action to Ask
     let (final_action, final_policy) = match (action, sandbox_policy) {
         (action, Some(policy))
             if has_writable_contradiction(&policy, &unique_names, sandbox_defs) =>
