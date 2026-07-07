@@ -18,8 +18,12 @@ const ASK_RESOLUTION_KIND: &str = "ask_resolution";
 /// `ask_resolution`) carry one so readers can dispatch without fully
 /// parsing the line.
 fn parse_kind(line: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    value.get("kind")?.as_str().map(str::to_owned)
+    /// Lightweight view of a record that only captures the `kind` tag.
+    #[derive(serde::Deserialize)]
+    struct RecordKind {
+        kind: Option<String>,
+    }
+    serde_json::from_str::<RecordKind>(line).ok()?.kind
 }
 
 /// Time-resolved filter criteria ready for matching against entries.

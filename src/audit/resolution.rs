@@ -120,6 +120,16 @@ fn timestamp_ge(a: &str, b: &str) -> bool {
 /// Unreadable files and unparseable lines are skipped: recording a
 /// resolution is best-effort and must never fail the hook.
 fn scan_recent_records(base_dir: &Path, needle: &str) -> (Vec<AuditEntry>, Vec<AskResolution>) {
+    use std::io::BufRead;
+
+    /// Lightweight view of a record that only captures the `kind` tag, so
+    /// lines are dispatched to the right parser without going through a
+    /// full `serde_json::Value`.
+    #[derive(serde::Deserialize)]
+    struct RecordKind {
+        kind: Option<String>,
+    }
+
     let today = Utc::now().date_naive();
     let dates = [today - chrono::Duration::days(1), today];
 
@@ -127,26 +137,29 @@ fn scan_recent_records(base_dir: &Path, needle: &str) -> (Vec<AuditEntry>, Vec<A
     let mut resolutions = Vec::new();
     for date in dates {
         let path = base_dir.join(format!("audit-{}.jsonl", date.format("%Y-%m-%d")));
-        let Ok(content) = std::fs::read_to_string(&path) else {
+        let Ok(file) = std::fs::File::open(&path) else {
             continue;
         };
-        for line in content.lines() {
+        for line in std::io::BufReader::new(file).lines() {
+            let Ok(line) = line else {
+                continue;
+            };
             if !line.contains(needle) {
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            let Ok(record_kind) = serde_json::from_str::<RecordKind>(&line) else {
                 continue;
             };
-            match value.get("kind").and_then(|k| k.as_str()) {
+            match record_kind.kind.as_deref() {
                 Some("ask_resolution") => {
-                    if let Ok(r) = serde_json::from_value::<AskResolution>(value) {
+                    if let Ok(r) = serde_json::from_str::<AskResolution>(&line) {
                         resolutions.push(r);
                     }
                 }
                 // Unknown record kinds from newer runok versions.
                 Some(_) => {}
                 None => {
-                    if let Ok(e) = serde_json::from_value::<AuditEntry>(value) {
+                    if let Ok(e) = serde_json::from_str::<AuditEntry>(&line) {
                         entries.push(e);
                     }
                 }
