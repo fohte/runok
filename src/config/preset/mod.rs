@@ -11,7 +11,7 @@ mod extends;
 pub use extends::{resolve_extends, resolve_extends_with};
 
 fn home_dir() -> Option<String> {
-    std::env::var("HOME").ok().filter(|h| !h.is_empty())
+    crate::config::dirs::home_dir().map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Resolve a preset reference string into a filesystem path.
