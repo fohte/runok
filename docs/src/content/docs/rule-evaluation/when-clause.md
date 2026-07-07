@@ -188,6 +188,40 @@ rules:
 The `vars` map only contains entries for `<var:name>` placeholders that were present in the matched pattern. If the pattern doesn't use `<var:name>`, the `vars` map is empty. Use `has(vars.name)` to safely check for a variable before accessing it.
 :::
 
+### `definitions` -- Raw definitions data
+
+A nested map exposing the raw contents of `definitions.paths` and `definitions.vars`, independent of what the current rule's pattern captured.
+
+| Field               | Type                    | Description                                                       |
+| ------------------- | ----------------------- | ----------------------------------------------------------------- |
+| `definitions.paths` | `map<string, [string]>` | Same data as [`paths`](#paths--defined-path-lists) above (alias). |
+| `definitions.vars`  | `map<string, [string]>` | Every declared value for each `definitions.vars` entry.           |
+
+Unlike `vars` above, which only contains the single value a matched `<var:name>` placeholder captured, `definitions.vars["name"]` always lists every value declared for that variable -- useful when a `when` clause needs to check a token against the full list rather than the one value the pattern happened to capture.
+
+This is most useful together with [`glob_matches`](#glob_matchespattern-value), to keep a single source of truth for a list of glob patterns that both a `deny`/`when` guard and an `allow`/`<var:name>` pattern need to agree on:
+
+```yaml
+definitions:
+  vars:
+    safe-rm-paths:
+      type: pattern
+      values:
+        - '**/node_modules'
+        - 'node_modules'
+        - '**/dist'
+        - 'dist'
+        - '/tmp/*'
+
+rules:
+  # Deny `rm -rf` unless every argument matches one of the safe-rm-paths patterns
+  - deny: 'rm -rf *'
+    when: '!args.all(a, definitions.vars["safe-rm-paths"].exists(p, glob_matches(p, a)))'
+  - allow: 'rm -rf <var:safe-rm-paths>'
+```
+
+Without `definitions.vars`, the same path list would have to be duplicated between the `when` clause and the `<var:safe-rm-paths>` pattern, risking drift between the two.
+
 ### `flag_groups` -- Captured flag group values
 
 A map of values captured by [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) placeholders, keyed by flag group name. **Each value is always a list**, even when only one flag value was captured, so `when` clauses can use list-aware CEL macros (`exists`, `all`, `size`) uniformly.
@@ -347,6 +381,29 @@ rules:
 `fs.cwd` is read directly from the OS, so unlike `env.PWD` it cannot go stale or be left unset by a shell that does not export `PWD`. `fs.home` is exposed as `null` (not a missing key) when it cannot be determined -- `fs.home == '...'` then safely evaluates to `false`, while using `fs.home` in a string operation like `fs.home + '/x'` raises an evaluation error instead of silently matching an empty prefix.
 :::
 
+## Glob matching
+
+### `glob_matches(pattern, value)`
+
+Checks whether `value` matches `pattern`, using the same glob syntax as [`<var:name>`](/pattern-syntax/placeholders/#variable-references-varname) and [`<path:name>`](/pattern-syntax/placeholders/#path-references-pathname): `*` matches zero or more arbitrary characters; otherwise an exact match is required. Both arguments are `string`, and the function returns a `bool`.
+
+```yaml
+rules:
+  - allow: 'rm -rf *'
+    when: 'glob_matches("**/node_modules", args[0])'
+```
+
+`glob_matches` is a plain function, not a `paths`/`vars`/`definitions.*` method, so it is called directly rather than as `x.glob_matches(...)`. It is most useful together with [`definitions.vars`](#definitions--raw-definitions-data) to check a command argument against an entire declared list of patterns:
+
+```yaml
+- deny: 'rm -rf *'
+  when: '!args.all(a, definitions.vars["safe-rm-paths"].exists(p, glob_matches(p, a)))'
+```
+
+:::note
+`glob_matches` does not treat `/` specially -- `**` is not a recursive-directory wildcard the way it is in shell globbing or `.gitignore` files. `glob_matches("**/node_modules", "node_modules")` is `false` because there is no literal `/node_modules` suffix in the text; declare both `'**/node_modules'` and `'node_modules'` if you need to match at any depth including the top level.
+:::
+
 ## Operators
 
 CEL supports standard operators for building conditions:
@@ -475,6 +532,27 @@ rules:
   - allow: 'gsed *'
   - allow: 'sed *'
     when: "os == 'linux'"
+```
+
+### Single-sourced safe-path allowlist
+
+```yaml
+definitions:
+  vars:
+    safe-rm-paths:
+      type: pattern
+      values:
+        - '**/node_modules'
+        - 'node_modules'
+        - '**/dist'
+        - 'dist'
+        - '/tmp/*'
+
+rules:
+  # Deny rm -rf unless every argument matches a safe-rm-paths pattern
+  - deny: 'rm -rf *'
+    when: '!args.all(a, definitions.vars["safe-rm-paths"].exists(p, glob_matches(p, a)))'
+  - allow: 'rm -rf <var:safe-rm-paths>'
 ```
 
 ## Related

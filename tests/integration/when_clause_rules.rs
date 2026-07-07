@@ -774,3 +774,74 @@ fn fs_home_reflects_actual_home_directory(empty_context: EvalContext) {
     let result = evaluate_command(&config, "make build", &empty_context).unwrap();
     assert_deny(&result.action);
 }
+
+// ========================================
+// `definitions.paths` -- alias of `paths`
+// ========================================
+
+#[rstest]
+#[case::sensitive_path_denied("cat /etc/passwd", assert_deny as ActionAssertion)]
+#[case::safe_path_default("cat /tmp/safe.txt", assert_ask as ActionAssertion)]
+fn definitions_paths_aliases_paths_in_when_clause(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'cat *'
+            when: \"args[0] in definitions.paths.sensitive\"
+        definitions:
+          paths:
+            sensitive:
+              - /etc/passwd
+              - /etc/shadow
+              - .env
+    "})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}
+
+// ========================================
+// `definitions.vars` + `glob_matches` -- allow `rm -rf` only for a
+// single-sourced list of safe paths (no duplicated path list between the
+// `deny`/`when` guard and the `allow`/`<var:name>` pattern)
+// ========================================
+
+#[rstest]
+#[case::glob_matched_nested_node_modules(
+    "rm -rf packages/foo/node_modules",
+    assert_allow as ActionAssertion
+)]
+#[case::exact_matched_top_level_dist("rm -rf dist", assert_allow as ActionAssertion)]
+#[case::glob_matched_tmp_wildcard("rm -rf /tmp/scratch", assert_allow as ActionAssertion)]
+#[case::unmatched_path_denied("rm -rf /important-dir", assert_deny as ActionAssertion)]
+fn glob_matches_and_definitions_vars_gate_safe_rm_paths(
+    #[case] command: &str,
+    #[case] expected: ActionAssertion,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {r#"
+        definitions:
+          vars:
+            safe-rm-paths:
+              type: pattern
+              values:
+                - '**/node_modules'
+                - 'node_modules'
+                - '**/dist'
+                - 'dist'
+                - '/tmp/*'
+
+        rules:
+          - deny: 'rm -rf *'
+            when: '!args.all(a, definitions.vars["safe-rm-paths"].exists(p, glob_matches(p, a)))'
+          - allow: 'rm -rf <var:safe-rm-paths>'
+    "#})
+    .unwrap();
+
+    let result = evaluate_command(&config, command, &empty_context).unwrap();
+    expected(&result.action);
+}

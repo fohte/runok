@@ -821,6 +821,22 @@ fn build_expr_context(
 
     let paths = definitions.paths.clone().unwrap_or_default();
 
+    // Raw values for every `definitions.vars` entry, regardless of whether
+    // the current rule's pattern captured them via `<var:name>`. Exposed to
+    // CEL as `definitions.vars`.
+    let var_definitions: HashMap<String, Vec<String>> = definitions
+        .vars
+        .as_ref()
+        .map(|vars| {
+            vars.iter()
+                .map(|(name, def)| {
+                    let values = def.values.iter().map(|v| v.value().to_string()).collect();
+                    (name.clone(), values)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Seed flag_groups with every group declared in definitions so that
     // `flag_groups["name"]` always succeeds in CEL (returning an empty list
     // when no flag from the group was matched). Then overlay the values
@@ -839,6 +855,7 @@ fn build_expr_context(
         flags,
         args: parsed_command.args.clone(),
         paths,
+        var_definitions,
         redirects: redirects.to_vec(),
         pipe: pipe.clone(),
         vars: match_captures.vars.clone(),
