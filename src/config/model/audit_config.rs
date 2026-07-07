@@ -2,8 +2,6 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::config::dirs::home_dir;
-
 /// Audit log configuration.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
@@ -41,7 +39,7 @@ impl AuditConfig {
             {
                 return format!("{data_home}/runok/");
             }
-            home_dir()
+            crate::config::dirs::home_dir()
                 .map(|h| format!("{}/.local/share/runok/", h.display()))
                 .unwrap_or_else(|| ".local/share/runok/".to_string())
         })
@@ -56,12 +54,12 @@ impl AuditConfig {
                 // set_permissions(0o700) to restrict the home directory.
                 // Treat it the same as "~/" by appending the default subpath.
                 if p == "~" || p == "~/" {
-                    match home_dir() {
+                    match crate::config::dirs::home_dir() {
                         Some(home) => home.join(".local/share/runok"),
                         None => default_audit_dir(),
                     }
                 } else if let Some(rest) = p.strip_prefix("~/") {
-                    if let Some(home) = home_dir() {
+                    if let Some(home) = crate::config::dirs::home_dir() {
                         home.join(rest)
                     } else {
                         // Using the path literally would create a directory
@@ -113,10 +111,11 @@ fn default_audit_dir() -> std::path::PathBuf {
             return data_home.join("runok");
         }
     }
-    match home_dir() {
+    match crate::config::dirs::home_dir() {
         Some(home) => home.join(".local/share/runok"),
         // Writing to a relative path could be surprising for the user.
-        // Fall back to a temporary directory if HOME is not set.
+        // Fall back to a temporary directory when the home directory can't
+        // be determined (HOME unset or empty).
         None => std::env::temp_dir().join("runok/audit"),
     }
 }
