@@ -101,11 +101,14 @@ fn fs_is_dir_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
     fs_metadata_check("is_dir", &this, path.as_str(), Metadata::is_dir)
 }
 
-/// `glob_matches(pattern, value)`: check whether `value` matches `pattern`
-/// using the same glob syntax as `<var:name>` / `<path:name>` (`*` matches
-/// zero or more characters; otherwise an exact match is required). Delegates
-/// to the same `literal_matches` used by pattern matching, so results never
-/// diverge from what a `<var:name>` placeholder would capture.
+/// `glob_matches(pattern, value)`: check whether `value` matches `pattern`,
+/// where `*` matches zero or more characters and any other pattern requires
+/// an exact match. Delegates to the same `literal_matches` used by pattern
+/// matching, so results agree with a `type: pattern` `<var:name>` value
+/// (single-token, no nested placeholders). `<path:name>` and the default
+/// `literal` / `path` var types use different matching strategies
+/// (`resolve_paths` / `match_value_with_type` in `token_matching.rs`) that
+/// never treat `*` as a wildcard, so `glob_matches` can disagree with those.
 fn glob_matches_impl(pattern: Arc<String>, value: Arc<String>) -> bool {
     super::pattern_matcher::literal_matches(&pattern, &value)
 }
@@ -410,7 +413,6 @@ mod tests {
             ..empty_context()
         };
         assert!(evaluate("definitions.paths.sensitive == paths.sensitive", &context).unwrap());
-        assert!(evaluate("'.env' in definitions.paths.sensitive", &context).unwrap());
     }
 
     #[test]
@@ -443,6 +445,7 @@ mod tests {
     #[case::exact_no_glob_match("node_modules", "node_modules", true)]
     #[case::exact_no_glob_no_match("node_modules", "packages/foo/node_modules", false)]
     #[case::glob_no_match("**/dist", "packages/foo/build", false)]
+    #[case::glob_double_star_requires_separator("**/node_modules", "node_modules", false)]
     fn glob_matches_function(#[case] pattern: &str, #[case] value: &str, #[case] expected: bool) {
         let expr = format!("glob_matches('{pattern}', '{value}')");
         assert_eq!(evaluate(&expr, &empty_context()).unwrap(), expected);

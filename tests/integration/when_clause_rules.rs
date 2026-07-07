@@ -782,7 +782,7 @@ fn fs_home_reflects_actual_home_directory(empty_context: EvalContext) {
 #[rstest]
 #[case::sensitive_path_denied("cat /etc/passwd", assert_deny as ActionAssertion)]
 #[case::safe_path_default("cat /tmp/safe.txt", assert_ask as ActionAssertion)]
-fn definitions_paths_aliases_paths_in_when_clause(
+fn cat_denies_sensitive_path_via_definitions_paths_alias(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
     empty_context: EvalContext,

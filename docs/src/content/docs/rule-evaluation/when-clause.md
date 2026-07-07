@@ -222,6 +222,10 @@ rules:
 
 Without `definitions.vars`, the same path list would have to be duplicated between the `when` clause and the `<var:safe-rm-paths>` pattern, risking drift between the two.
 
+:::caution
+`definitions.vars["name"]` exposes each value's raw string only, not its effective [type](/pattern-syntax/placeholders/#variable-types) (`literal`, `path`, or `pattern`). Combining it with `glob_matches` (below) to stay in sync with `<var:name>` matching only works for `type: pattern` values -- the default `literal` type matches `<var:name>` by exact string comparison (no `*` wildcard), and `path` matches by canonicalizing both sides, so `glob_matches` can disagree with `<var:name>` for those types.
+:::
+
 ### `flag_groups` -- Captured flag group values
 
 A map of values captured by [`<flag:name>`](/pattern-syntax/placeholders/#flag-groups-flagname) placeholders, keyed by flag group name. **Each value is always a list**, even when only one flag value was captured, so `when` clauses can use list-aware CEL macros (`exists`, `all`, `size`) uniformly.
@@ -385,7 +389,9 @@ rules:
 
 ### `glob_matches(pattern, value)`
 
-Checks whether `value` matches `pattern`, using the same glob syntax as [`<var:name>`](/pattern-syntax/placeholders/#variable-references-varname) and [`<path:name>`](/pattern-syntax/placeholders/#path-references-pathname): `*` matches zero or more arbitrary characters; otherwise an exact match is required. Both arguments are `string`, and the function returns a `bool`.
+Checks whether `value` matches `pattern`: `*` matches zero or more arbitrary characters, otherwise an exact match is required. Both arguments are `string`, and the function returns a `bool`.
+
+This is the same glob syntax used by a `type: pattern` value in [`<var:name>`](/pattern-syntax/placeholders/#variable-references-varname) (single-token, no nested placeholders). It is **not** the same as [`<path:name>`](/pattern-syntax/placeholders/#path-references-pathname) or the default `literal` / `path` [variable types](/pattern-syntax/placeholders/#variable-types), which never treat `*` as a wildcard -- see the caution in [`definitions`](#definitions--raw-definitions-data) above.
 
 ```yaml
 rules:

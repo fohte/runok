@@ -823,7 +823,12 @@ fn build_expr_context(
 
     // Raw values for every `definitions.vars` entry, regardless of whether
     // the current rule's pattern captured them via `<var:name>`. Exposed to
-    // CEL as `definitions.vars`.
+    // CEL as `definitions.vars`. Drops each value's effective type
+    // (`v.effective_type(def.var_type)`), so `glob_matches` against these
+    // strings only agrees with `<var:name>` matching for `type: pattern`
+    // values -- `literal` (exact match, no wildcard) and `path`
+    // (canonicalized comparison) values are matched differently by
+    // `<var:name>` than by `glob_matches`.
     let var_definitions: HashMap<String, Vec<String>> = definitions
         .vars
         .as_ref()

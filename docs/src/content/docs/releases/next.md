@@ -23,7 +23,7 @@ See [When Clauses -> Filesystem](/rule-evaluation/when-clause/#filesystem) for d
 
 ### `glob_matches()` and `definitions` in `when` clauses (TODO(pr-link))
 
-`when` clauses can now call `glob_matches(pattern, value)` and read the raw contents of `definitions.paths` / `definitions.vars` through the new `definitions` context variable. Combined, these let a `deny`/`when` guard and an `allow`/`<var:name>` pattern share a single declared list of glob patterns, instead of duplicating it:
+`when` clauses can now call `glob_matches(pattern, value)` and read the raw contents of `definitions.paths` / `definitions.vars` through the new `definitions` context variable. Combined, these let a `deny`/`when` guard and an `allow`/`<var:name>` pattern share a single declared list of `type: pattern` glob values, instead of duplicating the list:
 
 ```yaml
 definitions:
