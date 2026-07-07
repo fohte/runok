@@ -6,7 +6,7 @@ use fs2::FileExt;
 
 use super::error::AuditError;
 use super::log_rotator::LogRotator;
-use super::model::AuditEntry;
+use super::model::{AskResolution, AuditEntry};
 use crate::config::AuditConfig;
 
 pub struct AuditWriter {
@@ -24,6 +24,16 @@ impl AuditWriter {
     /// Writes an audit entry as a single JSONL line.
     /// Uses flock + O_APPEND for concurrent write safety.
     pub fn write(&self, entry: &AuditEntry) -> Result<(), AuditError> {
+        self.append_record(entry)
+    }
+
+    /// Writes an ask-resolution record as a single JSONL line, into the same
+    /// date-partitioned file as decision entries.
+    pub fn write_resolution(&self, resolution: &AskResolution) -> Result<(), AuditError> {
+        self.append_record(resolution)
+    }
+
+    fn append_record<T: serde::Serialize>(&self, record: &T) -> Result<(), AuditError> {
         if !self.config.is_enabled() {
             return Ok(());
         }
@@ -43,7 +53,7 @@ impl AuditWriter {
             .open(&log_path)?;
 
         file.lock_exclusive()?;
-        let result = write_entry(&file, entry);
+        let result = write_record(&file, record);
         // Always unlock, even on write failure
         let _ = file.unlock();
 
@@ -58,8 +68,8 @@ impl AuditWriter {
     }
 }
 
-fn write_entry(mut file: &File, entry: &AuditEntry) -> Result<(), AuditError> {
-    serde_json::to_writer(&mut file, entry)?;
+fn write_record<T: serde::Serialize>(mut file: &File, record: &T) -> Result<(), AuditError> {
+    serde_json::to_writer(&mut file, record)?;
     file.write_all(b"\n")?;
     Ok(())
 }
@@ -206,6 +216,7 @@ mod tests {
                 cwd: Some("/home/user".to_string()),
                 tool_name: Some("Bash".to_string()),
                 hook_event_name: Some("PreToolUse".to_string()),
+                tool_use_id: Some("toolu_01".to_string()),
             },
             command_evaluations: vec![crate::audit::CommandEvaluation {
                 command: "git push".to_string(),
@@ -242,6 +253,38 @@ mod tests {
         );
         assert_eq!(parsed["metadata"]["session_id"], "sess-123");
         assert_eq!(parsed["metadata"]["tool_name"], "Bash");
+    }
+
+    #[rstest]
+    fn write_resolution_appends_to_same_file_as_entries(audit_dir: TempDir) {
+        let config = make_config(&audit_dir);
+        let writer = AuditWriter::new(config);
+
+        writer
+            .write(&make_entry(
+                "terraform apply",
+                SerializableAction::Ask { message: None },
+            ))
+            .unwrap();
+        let resolution = crate::audit::AskResolution {
+            timestamp: Utc::now().to_rfc3339(),
+            outcome: crate::audit::AskResolutionOutcome::Approved,
+            tool_use_id: Some("toolu_01".to_string()),
+            session_id: Some("sess-123".to_string()),
+            cwd: Some("/home/user".to_string()),
+            command: "terraform apply".to_string(),
+            executed_command: "terraform apply".to_string(),
+        };
+        writer.write_resolution(&resolution).unwrap();
+
+        let today = Utc::now().format("%Y-%m-%d");
+        let log_path = audit_dir.path().join(format!("audit-{today}.jsonl"));
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let parsed: crate::audit::AskResolution = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(parsed, resolution);
     }
 
     #[rstest]

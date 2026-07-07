@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
-use crate::audit::AuditMetadata;
-use crate::config::{ActionKind, Defaults};
+use crate::audit::{ApprovedToolUse, AuditMetadata, record_approval};
+use crate::config::{ActionKind, Config, Defaults};
 use crate::rules::rule_engine::{Action, DenyResponse};
 
-/// Claude Code PreToolUse Hook input (stdin JSON).
+/// Claude Code hook input (stdin JSON), for both PreToolUse and PostToolUse
+/// events. PostToolUse carries extra fields (`tool_response`, `duration_ms`,
+/// etc.) that are ignored here.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct HookInput {
@@ -13,10 +15,11 @@ pub struct HookInput {
     pub transcript_path: String,
     pub cwd: String,
     pub permission_mode: String,
-    pub hook_event_name: String,
+    /// Absent inputs are treated as PreToolUse.
+    pub hook_event_name: Option<String>,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub tool_use_id: String,
+    pub tool_use_id: Option<String>,
 }
 
 /// Bash tool's tool_input structure.
@@ -79,6 +82,48 @@ fn build_deny_reason(deny: &DenyResponse) -> String {
 impl ClaudeCodeHookAdapter {
     pub fn new(input: HookInput) -> Self {
         Self { input }
+    }
+
+    /// Whether the input is a PostToolUse event, which is handled by
+    /// [`Self::handle_post_tool_use`] instead of the rule-evaluation flow.
+    pub fn is_post_tool_use(&self) -> bool {
+        self.input.hook_event_name.as_deref() == Some("PostToolUse")
+    }
+
+    /// Handle a PostToolUse hook invocation: when this tool call corresponds
+    /// to an ask decision runok made at PreToolUse time, record that the
+    /// user approved it.
+    ///
+    /// Never writes to stdout and always exits 0. PostToolUse fires after
+    /// the command already ran, so nothing runok reports can change the
+    /// session; failures only go to stderr (fail-open, the same policy as
+    /// audit log writes).
+    pub fn handle_post_tool_use(&self, config: &Config) -> i32 {
+        if let Err(e) = self.record_ask_resolution(config) {
+            eprintln!("runok: warning: ask resolution record failed: {e:#}");
+        }
+        0
+    }
+
+    fn record_ask_resolution(&self, config: &Config) -> Result<(), anyhow::Error> {
+        if self.input.tool_name != "Bash" {
+            return Ok(());
+        }
+        let audit_config = config.audit.clone().unwrap_or_default();
+        if !audit_config.is_enabled() {
+            return Ok(());
+        }
+        let bash_input = self.parse_bash_input()?;
+        record_approval(
+            &audit_config,
+            &ApprovedToolUse {
+                tool_use_id: self.input.tool_use_id.clone(),
+                session_id: self.input.session_id.clone(),
+                cwd: self.input.cwd.clone(),
+                executed_command: bash_input.command,
+            },
+        )?;
+        Ok(())
     }
 
     fn parse_bash_input(&self) -> Result<BashToolInput, anyhow::Error> {
@@ -198,7 +243,8 @@ impl Endpoint for ClaudeCodeHookAdapter {
             session_id: Some(self.input.session_id.clone()),
             cwd: Some(self.input.cwd.clone()),
             tool_name: Some(self.input.tool_name.clone()),
-            hook_event_name: Some(self.input.hook_event_name.clone()),
+            hook_event_name: self.input.hook_event_name.clone(),
+            tool_use_id: self.input.tool_use_id.clone(),
         }
     }
 
@@ -247,15 +293,23 @@ mod tests {
     use serde_json::json;
 
     fn make_hook_input(tool_name: &str, tool_input: serde_json::Value) -> HookInput {
+        make_hook_input_for_event(tool_name, tool_input, "PreToolUse")
+    }
+
+    fn make_hook_input_for_event(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        hook_event_name: &str,
+    ) -> HookInput {
         HookInput {
             session_id: "test-session".to_string(),
             transcript_path: "/tmp/transcript".to_string(),
             cwd: "/tmp".to_string(),
             permission_mode: "default".to_string(),
-            hook_event_name: "PreToolUse".to_string(),
+            hook_event_name: Some(hook_event_name.to_string()),
             tool_name: tool_name.to_string(),
             tool_input,
-            tool_use_id: "test-tool-use-id".to_string(),
+            tool_use_id: Some("test-tool-use-id".to_string()),
         }
     }
 
@@ -613,17 +667,177 @@ mod tests {
     fn audit_metadata_returns_hook_endpoint_type() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
-        let metadata = adapter.audit_metadata();
-        assert_eq!(metadata.endpoint_type, "hook");
-        assert_eq!(metadata.session_id.as_deref(), Some("test-session"));
-        assert_eq!(metadata.cwd.as_deref(), Some("/tmp"));
-        assert_eq!(metadata.tool_name.as_deref(), Some("Bash"));
-        assert_eq!(metadata.hook_event_name.as_deref(), Some("PreToolUse"));
+        assert_eq!(
+            adapter.audit_metadata(),
+            AuditMetadata {
+                endpoint_type: "hook".to_string(),
+                session_id: Some("test-session".to_string()),
+                cwd: Some("/tmp".to_string()),
+                tool_name: Some("Bash".to_string()),
+                hook_event_name: Some("PreToolUse".to_string()),
+                tool_use_id: Some("test-tool-use-id".to_string()),
+            },
+        );
     }
 
     #[rstest]
     fn is_auditable_returns_true() {
         let adapter = ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("ls")));
         assert!(adapter.is_auditable());
+    }
+
+    // --- PostToolUse ---
+
+    use tempfile::TempDir;
+
+    #[rstest]
+    #[case::post_tool_use(Some("PostToolUse"), true)]
+    #[case::pre_tool_use(Some("PreToolUse"), false)]
+    #[case::absent(None, false)]
+    fn is_post_tool_use_checks_event_name(
+        #[case] hook_event_name: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let mut input = make_hook_input("Bash", bash_tool_input("git status"));
+        input.hook_event_name = hook_event_name.map(str::to_string);
+        let adapter = ClaudeCodeHookAdapter::new(input);
+        assert_eq!(adapter.is_post_tool_use(), expected);
+    }
+
+    #[rstest]
+    fn hook_input_deserializes_without_event_name_and_tool_use_id() {
+        // Minimal inputs (older Claude Code versions, hand-crafted JSON)
+        // must still parse; absent hook_event_name means PreToolUse.
+        let json_str = indoc! {r#"
+            {
+                "session_id": "sess-123",
+                "transcript_path": "/tmp/transcript.json",
+                "cwd": "/home/user",
+                "permission_mode": "default",
+                "tool_name": "Bash",
+                "tool_input": {"command": "git status"}
+            }
+        "#};
+
+        let input: HookInput = serde_json::from_str(json_str)
+            .unwrap_or_else(|e| panic!("deserialization failed: {e}"));
+        assert_eq!(input.hook_event_name, None);
+        assert_eq!(input.tool_use_id, None);
+        assert!(!ClaudeCodeHookAdapter::new(input).is_post_tool_use());
+    }
+
+    fn config_with_audit(dir: &TempDir) -> Config {
+        Config {
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(true),
+                path: Some(dir.path().to_string_lossy().to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn audit_lines(dir: &TempDir) -> Vec<String> {
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let path = dir.path().join(format!("audit-{today}.jsonl"));
+        if !path.exists() {
+            return vec![];
+        }
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read audit file: {e}"))
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn write_ask_entry(dir: &TempDir, command: &str, tool_use_id: &str) {
+        let entry = crate::audit::AuditEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            command: command.to_owned(),
+            action: crate::audit::SerializableAction::Ask { message: None },
+            sandbox_preset: None,
+            default_action: None,
+            metadata: AuditMetadata {
+                endpoint_type: "hook".to_owned(),
+                session_id: Some("test-session".to_owned()),
+                cwd: Some("/tmp".to_owned()),
+                tool_name: Some("Bash".to_owned()),
+                hook_event_name: Some("PreToolUse".to_owned()),
+                tool_use_id: Some(tool_use_id.to_owned()),
+            },
+            command_evaluations: vec![],
+        };
+        let today = chrono::Utc::now().format("%Y-%m-%d");
+        let path = dir.path().join(format!("audit-{today}.jsonl"));
+        let line = serde_json::to_string(&entry).unwrap();
+        std::fs::write(path, format!("{line}\n")).unwrap();
+    }
+
+    #[rstest]
+    fn handle_post_tool_use_records_resolution_for_matching_ask() {
+        let dir = TempDir::new().unwrap();
+        write_ask_entry(&dir, "terraform apply", "test-tool-use-id");
+        let adapter = ClaudeCodeHookAdapter::new(make_hook_input_for_event(
+            "Bash",
+            bash_tool_input("terraform apply"),
+            "PostToolUse",
+        ));
+
+        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&dir));
+
+        assert_eq!(exit_code, 0);
+        let lines = audit_lines(&dir);
+        assert_eq!(lines.len(), 2);
+        let resolution: crate::audit::AskResolution = serde_json::from_str(&lines[1]).unwrap();
+        assert_eq!(resolution.tool_use_id.as_deref(), Some("test-tool-use-id"));
+        assert_eq!(resolution.command, "terraform apply");
+    }
+
+    #[rstest]
+    #[case::non_bash_tool("Read", json!({"path": "/tmp"}))]
+    #[case::invalid_bash_input("Bash", json!({"not_command": "x"}))]
+    fn handle_post_tool_use_never_fails(
+        #[case] tool_name: &str,
+        #[case] tool_input: serde_json::Value,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let adapter = ClaudeCodeHookAdapter::new(make_hook_input_for_event(
+            tool_name,
+            tool_input,
+            "PostToolUse",
+        ));
+
+        let exit_code = adapter.handle_post_tool_use(&config_with_audit(&dir));
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(audit_lines(&dir), Vec::<String>::new());
+    }
+
+    #[rstest]
+    fn handle_post_tool_use_skips_when_audit_disabled() {
+        let dir = TempDir::new().unwrap();
+        write_ask_entry(&dir, "terraform apply", "test-tool-use-id");
+        let config = Config {
+            audit: Some(crate::config::AuditConfig {
+                enabled: Some(false),
+                path: Some(dir.path().to_string_lossy().to_string()),
+                rotation: None,
+            }),
+            ..Default::default()
+        };
+        let adapter = ClaudeCodeHookAdapter::new(make_hook_input_for_event(
+            "Bash",
+            bash_tool_input("terraform apply"),
+            "PostToolUse",
+        ));
+
+        let exit_code = adapter.handle_post_tool_use(&config);
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            audit_lines(&dir).len(),
+            1,
+            "only the pre-existing ask entry"
+        );
     }
 }

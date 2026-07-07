@@ -85,13 +85,16 @@ In text mode (default), the output adapts to the terminal:
 TIMESTAMP            ACTION   COMMAND
 2026-03-13 19:30:00  allow    git status
 2026-03-13 19:31:00  deny     rm -rf /
+2026-03-13 19:32:00  ask ✓    terraform apply
 ```
 
 - **Non-TTY** (piped): tab-separated values without colors or truncation, suitable for further processing.
 
 Timestamps are displayed in local time in both modes.
 
-In JSON mode (`--json`), each line is a complete JSON object describing one evaluation. The full field-by-field reference -- including every enum value and every "omitted when empty" condition -- lives on a dedicated page: see [Audit Log JSON Schema](/cli/audit-log-schema/).
+An `ask` entry whose approval was recorded (see [tracking ask approvals](/getting-started/claude-code/#track-ask-approvals-optional)) is shown as `ask ✓` in both modes. An unmarked `ask` means "denied or not yet decided" — denials cannot be observed.
+
+In JSON mode (`--json`), each line is a complete JSON object: decision entries and `ask_resolution` records (when ask-approval tracking is enabled) are emitted as-is, merged into one timestamp-ordered stream. The full field-by-field reference -- including every enum value and every "omitted when empty" condition -- lives on a dedicated page: see [Audit Log JSON Schema](/cli/audit-log-schema/).
 
 The most common shape worth knowing here: each entry exposes a `command_evaluations` array with one entry per shell command extracted from the input. Single inputs produce one entry, compound (`a && b`) and pipelined (`a | b`) inputs produce one per branch in source order, and inputs with no runnable command (comment-only, parse failure) produce an empty array. Each entry carries the rule-evaluation result (`action`, `matched_rules`) and the shell-level parse result (`env`, `argv`, `redirects`, `pipe`) side by side, so audit consumers can filter on the actual binary in one `jq` line:
 

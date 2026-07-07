@@ -257,6 +257,17 @@ fn config_with_bash_rules() -> String {
 //
 // Condition axes, grouped into State / Response / Result:
 //
+// In user scope with a settings.json present, the wizard also asks the
+// PostToolUse opt-in ("Track ask approvals in the audit log?") between
+// Migrate? and Apply?. Every case in this matrix answers it No so the
+// original axes stay comparable; the opt-in behavior itself is covered by
+// dedicated tests in src/init/wizard and tests/e2e/init.rs. Because that
+// question makes the "Detected" block trigger for user scope whenever the
+// PostToolUse hook is missing, the standalone Overwrite? prompt is no
+// longer reachable in those cases (rows 11-13), and an existing runok.yml
+// is only rewritten by an accepted migration (Migrate? = yes) — never
+// replaced with boilerplate (rows 8, 12, 25, 33, 41, 49).
+//
 // |    |                           State                                |          Response              |               Result               |
 // | #  | settings.json | Bash perms | Hook exists | Scope   | runok.yml | Migrate? | Apply? | Overwrite? | runok.yml   | settings.json change |
 // |----|---------------|------------|-------------|---------|-----------|----------|--------|------------|-------------|----------------------|
@@ -267,12 +278,12 @@ fn config_with_bash_rules() -> String {
 // |  5 | no            | N/A        | N/A         | project | yes       | N/A      | N/A    | yes        | boilerplate | N/A                  |
 // |  6 | no            | N/A        | N/A         | project | yes       | N/A      | N/A    | no         | preserved   | N/A                  |
 // |  7 | yes           | no         | no          | user    | no        | N/A      | yes    | N/A        | boilerplate | hook added           |
-// |  8 | yes           | no         | no          | user    | yes       | N/A      | yes    | N/A        | boilerplate | hook added           |
+// |  8 | yes           | no         | no          | user    | yes       | N/A      | yes    | N/A        | preserved   | hook added           |
 // |  9 | yes           | no         | no          | user    | no        | N/A      | no     | N/A        | none        | none                 |
 // | 10 | yes           | no         | no          | user    | yes       | N/A      | no     | N/A        | preserved   | none                 |
-// | 11 | yes           | no         | yes         | user    | no        | N/A      | N/A    | N/A        | boilerplate | none                 |
-// | 12 | yes           | no         | yes         | user    | yes       | N/A      | N/A    | yes        | boilerplate | none                 |
-// | 13 | yes           | no         | yes         | user    | yes       | N/A      | N/A    | no         | preserved   | none                 |
+// | 11 | yes           | no         | yes         | user    | no        | N/A      | yes    | N/A        | boilerplate | none                 |
+// | 12 | yes           | no         | yes         | user    | yes       | N/A      | yes    | N/A        | preserved   | none                 |
+// | 13 | yes           | no         | yes         | user    | yes       | N/A      | no     | N/A        | preserved   | none                 |
 // | 14 | yes           | no         | no          | project | no        | N/A      | N/A    | N/A        | boilerplate | none                 |
 // | 15 | yes           | no         | no          | project | yes       | N/A      | N/A    | yes        | boilerplate | none                 |
 // | 16 | yes           | no         | no          | project | yes       | N/A      | N/A    | no         | preserved   | none                 |
@@ -284,7 +295,7 @@ fn config_with_bash_rules() -> String {
 // | 22 | yes           | yes        | no          | user    | no        | yes      | no     | N/A        | none        | none                 |
 // | 23 | yes           | yes        | no          | user    | yes       | yes      | no     | N/A        | preserved   | none                 |
 // | 24 | yes           | yes        | no          | user    | no        | no       | yes    | N/A        | boilerplate | hook added           |
-// | 25 | yes           | yes        | no          | user    | yes       | no       | yes    | N/A        | boilerplate | hook added           |
+// | 25 | yes           | yes        | no          | user    | yes       | no       | yes    | N/A        | preserved   | hook added           |
 // | 26 | yes           | yes        | no          | user    | no        | no       | no     | N/A        | none        | none                 |
 // | 27 | yes           | yes        | no          | user    | yes       | no       | no     | N/A        | preserved   | none                 |
 // | 28 | yes           | yes        | yes         | user    | no        | yes      | yes    | N/A        | with rules  | perms removed        |
@@ -292,7 +303,7 @@ fn config_with_bash_rules() -> String {
 // | 30 | yes           | yes        | yes         | user    | no        | yes      | no     | N/A        | none        | none                 |
 // | 31 | yes           | yes        | yes         | user    | yes       | yes      | no     | N/A        | preserved   | none                 |
 // | 32 | yes           | yes        | yes         | user    | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 33 | yes           | yes        | yes         | user    | yes       | no       | yes    | N/A        | boilerplate | none                 |
+// | 33 | yes           | yes        | yes         | user    | yes       | no       | yes    | N/A        | preserved   | none                 |
 // | 34 | yes           | yes        | yes         | user    | no        | no       | no     | N/A        | none        | none                 |
 // | 35 | yes           | yes        | yes         | user    | yes       | no       | no     | N/A        | preserved   | none                 |
 // | 36 | yes           | yes        | no          | project | no        | yes      | yes    | N/A        | with rules  | perms removed        |
@@ -300,7 +311,7 @@ fn config_with_bash_rules() -> String {
 // | 38 | yes           | yes        | no          | project | no        | yes      | no     | N/A        | none        | none                 |
 // | 39 | yes           | yes        | no          | project | yes       | yes      | no     | N/A        | preserved   | none                 |
 // | 40 | yes           | yes        | no          | project | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 41 | yes           | yes        | no          | project | yes       | no       | yes    | N/A        | boilerplate | none                 |
+// | 41 | yes           | yes        | no          | project | yes       | no       | yes    | N/A        | preserved   | none                 |
 // | 42 | yes           | yes        | no          | project | no        | no       | no     | N/A        | none        | none                 |
 // | 43 | yes           | yes        | no          | project | yes       | no       | no     | N/A        | preserved   | none                 |
 // | 44 | yes           | yes        | yes         | project | no        | yes      | yes    | N/A        | with rules  | perms removed        |
@@ -308,7 +319,7 @@ fn config_with_bash_rules() -> String {
 // | 46 | yes           | yes        | yes         | project | no        | yes      | no     | N/A        | none        | none                 |
 // | 47 | yes           | yes        | yes         | project | yes       | yes      | no     | N/A        | preserved   | none                 |
 // | 48 | yes           | yes        | yes         | project | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 49 | yes           | yes        | yes         | project | yes       | no       | yes    | N/A        | boilerplate | none                 |
+// | 49 | yes           | yes        | yes         | project | yes       | no       | yes    | N/A        | preserved   | none                 |
 // | 50 | yes           | yes        | yes         | project | no        | no       | no     | N/A        | none        | none                 |
 // | 51 | yes           | yes        | yes         | project | yes       | no       | no     | N/A        | preserved   | none                 |
 //
@@ -495,28 +506,28 @@ fn no() -> Response {
 // --- No Bash perms, no hook (cases 7-10) ---
 #[case::p07_no_bash_no_hook_user_apply_yes(Case {
     settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: false,
-    responses: vec![yes()],
+    responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p08_no_bash_no_hook_user_existing_apply_yes(Case {
     settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    responses: vec![no(), yes()],
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p09_no_bash_no_hook_user_apply_no(Case {
     settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: false,
-    responses: vec![no()],
+    responses: vec![no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(no_bash_perms()),
     assert_no_settings_created: false,
 })]
 #[case::p10_no_bash_no_hook_user_existing_apply_no(Case {
     settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: true,
-    responses: vec![no()],
+    responses: vec![no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(no_bash_perms()),
     assert_no_settings_created: false,
@@ -524,21 +535,21 @@ fn no() -> Response {
 // --- No Bash perms, hook exists (cases 11-13) ---
 #[case::p11_no_bash_hook_exists_user(Case {
     settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![],
+    responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
-#[case::p12_no_bash_hook_exists_user_existing_overwrite_yes(Case {
+#[case::p12_no_bash_hook_exists_user_existing_apply_yes(Case {
     settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    responses: vec![no(), yes()],
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
-#[case::p13_no_bash_hook_exists_user_existing_overwrite_no(Case {
+#[case::p13_no_bash_hook_exists_user_existing_apply_no(Case {
     settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no()],
+    responses: vec![no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
@@ -590,56 +601,56 @@ fn no() -> Response {
 // --- Bash perms, no hook, user (cases 20-27) ---
 #[case::p20_bash_no_hook_user_mig_yes_app_yes(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), yes()],
+    responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p21_bash_no_hook_user_existing_mig_yes_app_yes(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), yes()],
+    responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p22_bash_no_hook_user_mig_yes_app_no(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), no()],
+    responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
 #[case::p23_bash_no_hook_user_existing_mig_yes_app_no(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), no()],
+    responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
 #[case::p24_bash_no_hook_user_mig_no_app_yes(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
-    responses: vec![no(), yes()],
+    responses: vec![no(), no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p25_bash_no_hook_user_existing_mig_no_app_yes(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    responses: vec![no(), no(), yes()],
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p26_bash_no_hook_user_mig_no_app_no(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
-    responses: vec![no(), no()],
+    responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
 #[case::p27_bash_no_hook_user_existing_mig_no_app_no(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no()],
+    responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
@@ -647,56 +658,56 @@ fn no() -> Response {
 // --- Bash perms, hook exists, user (cases 28-35) ---
 #[case::p28_bash_hook_user_mig_yes_app_yes(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), yes()],
+    responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p29_bash_hook_user_existing_mig_yes_app_yes(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), yes()],
+    responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p30_bash_hook_user_mig_yes_app_no(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), no()],
+    responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
 #[case::p31_bash_hook_user_existing_mig_yes_app_no(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), no()],
+    responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
 #[case::p32_bash_hook_user_mig_no_app_yes(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![no(), yes()],
+    responses: vec![no(), no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
 #[case::p33_bash_hook_user_existing_mig_no_app_yes(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    responses: vec![no(), no(), yes()],
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
 #[case::p34_bash_hook_user_mig_no_app_no(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![no(), no()],
+    responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
 #[case::p35_bash_hook_user_existing_mig_no_app_no(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no()],
+    responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
@@ -740,7 +751,7 @@ fn no() -> Response {
 #[case::p41_bash_no_hook_project_existing_mig_no_app_yes(Case {
     settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: true,
     responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
@@ -797,7 +808,7 @@ fn no() -> Response {
 #[case::p49_bash_hook_project_existing_mig_no_app_yes(Case {
     settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: true,
     responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
+    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]

@@ -4,21 +4,23 @@ use chrono::{DateTime, Local, Utc};
 use owo_colors::{OwoColorize, Stream::Stdout};
 use terminal_size::{Width, terminal_size};
 
-use super::model::{AuditEntry, SerializableAction};
+use super::model::{AskResolution, AuditEntry, SerializableAction};
+use super::resolution::is_approved;
 
-/// Format and print audit entries to stdout.
+/// Format and print audit entries to stdout, joining ask entries with their
+/// resolution records (approved asks are marked in the ACTION column).
 ///
 /// In TTY mode: prints a table with ANSI colors, truncating the COMMAND column
 /// to fit the terminal width.
 /// In non-TTY mode: prints tab-separated values without colors or truncation.
-pub fn print_entries(entries: &[AuditEntry]) {
+pub fn print_entries(entries: &[AuditEntry], resolutions: &[AskResolution]) {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
     if stdout.is_terminal() {
-        print_table(&mut out, entries);
+        print_table(&mut out, entries, resolutions);
     } else {
-        print_tsv(&mut out, entries);
+        print_tsv(&mut out, entries, resolutions);
     }
 }
 
@@ -28,6 +30,17 @@ fn action_str(action: &SerializableAction) -> &'static str {
         SerializableAction::Deny { .. } => "deny",
         SerializableAction::Ask { .. } => "ask",
         SerializableAction::Default => "default",
+    }
+}
+
+/// ACTION column text for an entry: the action name, with a check mark
+/// appended when the ask was approved in the permission dialog.
+fn action_display(entry: &AuditEntry, resolutions: &[AskResolution]) -> String {
+    let base = action_str(&entry.action);
+    if is_approved(entry, resolutions) {
+        format!("{base} ✓")
+    } else {
+        base.to_owned()
     }
 }
 
@@ -47,7 +60,7 @@ fn escape_control_chars(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
-fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
+fn print_table(out: &mut impl Write, entries: &[AuditEntry], resolutions: &[AskResolution]) {
     if entries.is_empty() {
         return;
     }
@@ -80,7 +93,7 @@ fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
 
     for entry in entries {
         let ts = format_timestamp_local(&entry.timestamp);
-        let action = action_str(&entry.action);
+        let action = action_display(entry, resolutions);
         let command = escape_control_chars(&entry.command);
 
         // Truncate command to fit terminal width, respecting UTF-8 char boundaries
@@ -131,10 +144,10 @@ fn print_table(out: &mut impl Write, entries: &[AuditEntry]) {
     }
 }
 
-fn print_tsv(out: &mut impl Write, entries: &[AuditEntry]) {
+fn print_tsv(out: &mut impl Write, entries: &[AuditEntry], resolutions: &[AskResolution]) {
     for entry in entries {
         let ts = format_timestamp_local(&entry.timestamp);
-        let action = action_str(&entry.action);
+        let action = action_display(entry, resolutions);
         let command = escape_control_chars(&entry.command);
         let _ = writeln!(out, "{}\t{}\t{}", ts, action, command);
     }
@@ -145,7 +158,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::audit::AuditMetadata;
+    use crate::audit::{AskResolutionOutcome, AuditMetadata};
 
     fn make_entry(timestamp: &str, command: &str, action: SerializableAction) -> AuditEntry {
         AuditEntry {
@@ -156,6 +169,32 @@ mod tests {
             default_action: None,
             metadata: AuditMetadata::default(),
             command_evaluations: vec![],
+        }
+    }
+
+    fn make_ask_entry_with_tool_use_id(command: &str, tool_use_id: &str) -> AuditEntry {
+        AuditEntry {
+            metadata: AuditMetadata {
+                tool_use_id: Some(tool_use_id.to_owned()),
+                ..AuditMetadata::default()
+            },
+            ..make_entry(
+                "2026-03-13T10:30:00Z",
+                command,
+                SerializableAction::Ask { message: None },
+            )
+        }
+    }
+
+    fn make_resolution(tool_use_id: &str, command: &str) -> AskResolution {
+        AskResolution {
+            timestamp: "2026-03-13T10:31:00Z".to_owned(),
+            outcome: AskResolutionOutcome::Approved,
+            tool_use_id: Some(tool_use_id.to_owned()),
+            session_id: Some("sess-1".to_owned()),
+            cwd: Some("/tmp".to_owned()),
+            command: command.to_owned(),
+            executed_command: command.to_owned(),
         }
     }
 
@@ -196,7 +235,7 @@ mod tests {
         ];
 
         let mut buf = Vec::new();
-        print_tsv(&mut buf, &entries);
+        print_tsv(&mut buf, &entries, &[]);
         let output = String::from_utf8(buf).unwrap();
 
         // TSV should have 3 tab-separated columns per line, no header
@@ -205,6 +244,53 @@ mod tests {
         for line in &lines {
             assert_eq!(line.split('\t').count(), 3);
         }
+    }
+
+    #[rstest]
+    #[case::approved_ask_is_marked(
+        vec![make_resolution("toolu_01", "terraform apply")],
+        "ask ✓",
+    )]
+    #[case::unresolved_ask_is_not_marked(vec![], "ask")]
+    fn print_tsv_marks_approved_asks(
+        #[case] resolutions: Vec<AskResolution>,
+        #[case] expected_action: &str,
+    ) {
+        let entries = vec![make_ask_entry_with_tool_use_id(
+            "terraform apply",
+            "toolu_01",
+        )];
+
+        let mut buf = Vec::new();
+        print_tsv(&mut buf, &entries, &resolutions);
+        let output = String::from_utf8(buf).unwrap();
+
+        let columns: Vec<&str> = output.trim().split('\t').collect();
+        assert_eq!(columns[1..], [expected_action, "terraform apply"]);
+    }
+
+    #[rstest]
+    #[case::approved_ask(
+        make_ask_entry_with_tool_use_id("terraform apply", "toolu_01"),
+        vec![make_resolution("toolu_01", "terraform apply")],
+        "ask ✓",
+    )]
+    #[case::unresolved_ask(
+        make_ask_entry_with_tool_use_id("terraform apply", "toolu_01"),
+        vec![],
+        "ask",
+    )]
+    #[case::allow_never_marked(
+        make_entry("2026-03-13T10:30:00Z", "echo hi", SerializableAction::Allow),
+        vec![make_resolution("toolu_01", "echo hi")],
+        "allow",
+    )]
+    fn action_display_marks_approved_asks(
+        #[case] entry: AuditEntry,
+        #[case] resolutions: Vec<AskResolution>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(action_display(&entry, &resolutions), expected);
     }
 
     #[test]
@@ -216,7 +302,7 @@ mod tests {
         )];
 
         let mut buf = Vec::new();
-        print_tsv(&mut buf, &entries);
+        print_tsv(&mut buf, &entries, &[]);
         let output = String::from_utf8(buf).unwrap();
 
         // Command should be on a single line with escaped newline
@@ -228,7 +314,7 @@ mod tests {
     #[test]
     fn test_print_table_empty() {
         let mut buf = Vec::new();
-        print_table(&mut buf, &[]);
+        print_table(&mut buf, &[], &[]);
         assert!(buf.is_empty());
     }
 
@@ -241,7 +327,7 @@ mod tests {
         )];
 
         let mut buf = Vec::new();
-        print_table(&mut buf, &entries);
+        print_table(&mut buf, &entries, &[]);
         let output = String::from_utf8(buf).unwrap();
 
         let lines: Vec<&str> = output.trim().lines().collect();
@@ -263,7 +349,7 @@ mod tests {
 
         let mut buf = Vec::new();
         // This should not panic even with a very narrow terminal width
-        print_table(&mut buf, &entries);
+        print_table(&mut buf, &entries, &[]);
         let output = String::from_utf8(buf).unwrap();
         assert!(!output.is_empty());
     }

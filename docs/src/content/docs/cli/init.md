@@ -34,8 +34,9 @@ Accept all defaults without prompting. Useful for scripted setups.
 2. **Claude Code detection** — If a `.claude/settings.json` exists with Bash permissions or a missing runok hook, the wizard offers to:
    - **Migrate Bash permissions** — Convert `permissions.allow` and `permissions.deny` entries for `Bash(...)` patterns into runok rules, and remove them from `settings.json`.
    - **Register the hook** — Add the `runok check` PreToolUse hook to `settings.json` (user scope only).
+   - **Track ask approvals** (opt-in) — Also register the same command as a PostToolUse hook so approvals of `ask` decisions are recorded in the audit log (user scope only). See [Track ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
 3. **Preview and confirm** — Show a unified diff of all proposed changes and ask for confirmation.
-4. **Create `runok.yml`** — Write the configuration file with migrated rules (if any) or a boilerplate template.
+4. **Create `runok.yml`** — Write the configuration file with migrated rules (if any) or a boilerplate template. An existing `runok.yml` is only rewritten when a migration was accepted; re-running init just to register hooks leaves it untouched.
 5. **Conflicting hook detection** — The wizard checks for other PreToolUse hooks that also match `Bash`. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), runok's sandbox may not work when multiple PreToolUse hooks match Bash — commands that should be sandboxed could run without any restrictions. If conflicts are found, a warning is displayed advising you to merge all Bash-matching hooks into a single entry.
 
 ## Examples

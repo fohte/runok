@@ -27,25 +27,38 @@ pub(super) fn preview_remove_permissions(content: &str) -> Result<String, InitEr
     Ok(serde_json::to_string_pretty(&root)?)
 }
 
-/// Simulate registering the hook in settings.json content and return the result.
-/// Returns `None` if the hook is already registered.
+/// Simulate registering the PreToolUse hook in settings.json content and
+/// return the result. Returns `None` if the hook is already registered.
 pub(super) fn preview_register_hook(content: &str) -> Result<Option<String>, InitError> {
+    preview_register_hook_for_event(content, "PreToolUse")
+}
+
+/// Simulate registering the PostToolUse hook (ask approval tracking).
+/// Returns `None` if the hook is already registered.
+pub(super) fn preview_register_post_tool_use_hook(
+    content: &str,
+) -> Result<Option<String>, InitError> {
+    preview_register_hook_for_event(content, "PostToolUse")
+}
+
+fn preview_register_hook_for_event(
+    content: &str,
+    event: &str,
+) -> Result<Option<String>, InitError> {
     let mut root = if content.is_empty() {
         serde_json::json!({})
     } else {
         serde_json::from_str::<serde_json::Value>(content)?
     };
 
-    let hook_command = "runok check --input-format claude-code-hook";
-
     // Check if already registered
     if let Some(arr) = root
         .get("hooks")
-        .and_then(|h| h.get("PreToolUse"))
+        .and_then(|h| h.get(event))
         .and_then(|p| p.as_array())
     {
         for entry in arr {
-            if claude_code::entry_has_runok_hook(entry, hook_command) {
+            if claude_code::entry_has_runok_hook(entry, claude_code::HOOK_COMMAND) {
                 return Ok(None);
             }
         }
@@ -53,7 +66,7 @@ pub(super) fn preview_register_hook(content: &str) -> Result<Option<String>, Ini
 
     let hook_entry = serde_json::json!({
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": hook_command}]
+        "hooks": [{"type": "command", "command": claude_code::HOOK_COMMAND}]
     });
 
     let hooks = root
@@ -67,20 +80,20 @@ pub(super) fn preview_register_hook(content: &str) -> Result<Option<String>, Ini
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}));
 
-    let pre_tool_use = hooks
+    let event_hooks = hooks
         .as_object_mut()
         .ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "hooks is not an object")
         })?
-        .entry("PreToolUse")
+        .entry(event)
         .or_insert_with(|| serde_json::json!([]));
 
-    pre_tool_use
+    event_hooks
         .as_array_mut()
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "PreToolUse is not an array",
+                format!("{event} is not an array"),
             )
         })?
         .push(hook_entry);
@@ -268,6 +281,66 @@ mod tests {
             }
         "#};
         let result = preview_register_hook(input).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
+    fn preview_register_post_tool_use_hook_adds_entry_independently_of_pre_hook() {
+        // A registered PreToolUse hook must not suppress the PostToolUse
+        // preview; the two events are independent.
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_register_post_tool_use_hook(input).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["hooks"]["PostToolUse"],
+            serde_json::json!([
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "runok check --input-format claude-code-hook"
+                        }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[rstest]
+    fn preview_register_post_tool_use_hook_returns_none_when_already_registered() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PostToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_register_post_tool_use_hook(input).unwrap();
         assert_eq!(result, None);
     }
 

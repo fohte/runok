@@ -113,28 +113,29 @@ fn init_user_scope_with_claude_code_integration() {
         "}
     );
 
-    // Verify hook registered and permissions removed
+    // Verify both hooks registered (`-y` accepts the PostToolUse opt-in)
+    // and permissions removed
     let settings_json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(claude_dir.join("settings.json"))
             .unwrap_or_else(|e| panic!("failed to read settings: {e}")),
     )
     .unwrap_or_else(|e| panic!("failed to parse settings: {e}"));
+    let runok_hook_entry = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": "runok check --input-format claude-code-hook"
+            }
+        ]
+    });
     assert_eq!(
         settings_json,
         serde_json::json!({
             "permissions": {},
             "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "runok check --input-format claude-code-hook"
-                            }
-                        ]
-                    }
-                ]
+                "PreToolUse": [runok_hook_entry.clone()],
+                "PostToolUse": [runok_hook_entry]
             }
         })
     );

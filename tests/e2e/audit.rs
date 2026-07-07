@@ -431,6 +431,141 @@ fn exec_compound_command_audit_log(exec_audit_env: AuditTestEnv) {
 }
 
 // ========================================
+// Ask resolution (PostToolUse) E2E
+// ========================================
+
+fn hook_json_for_event(event: &str, command: &str, tool_use_id: &str) -> String {
+    serde_json::json!({
+        "session_id": "sess-e2e",
+        "transcript_path": "/tmp/transcript",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": event,
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": tool_use_id
+    })
+    .to_string()
+}
+
+#[fixture]
+fn ask_terraform_env() -> AuditTestEnv {
+    AuditTestEnv::new(indoc! {"
+        rules:
+          - ask: 'terraform *'
+          - allow: 'echo *'
+    "})
+}
+
+fn run_hook(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str) {
+    env.command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(hook_json_for_event(event, command, tool_use_id))
+        .assert()
+        .code(0);
+}
+
+#[rstest]
+fn post_tool_use_records_ask_resolution(ask_terraform_env: AuditTestEnv) {
+    // PreToolUse: runok decides ask and writes a decision entry.
+    run_hook(
+        &ask_terraform_env,
+        "PreToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+
+    // PostToolUse fires after the user approved the dialog: no stdout,
+    // exit 0, and an ask_resolution record is appended.
+    ask_terraform_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(hook_json_for_event(
+            "PostToolUse",
+            "terraform apply",
+            "toolu_e2e",
+        ))
+        .assert()
+        .code(0)
+        .stdout(predicates::str::is_empty());
+
+    let entries = ask_terraform_env.read_audit_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["action"]["type"], "ask");
+    assert_eq!(entries[0]["metadata"]["tool_use_id"], "toolu_e2e");
+
+    let mut resolution = entries[1].clone();
+    resolution["timestamp"] = "TIMESTAMP".into();
+    assert_eq!(
+        resolution,
+        serde_json::json!({
+            "kind": "ask_resolution",
+            "timestamp": "TIMESTAMP",
+            "outcome": "approved",
+            "tool_use_id": "toolu_e2e",
+            "session_id": "sess-e2e",
+            "cwd": "/tmp",
+            "command": "terraform apply",
+            "executed_command": "terraform apply"
+        })
+    );
+}
+
+#[rstest]
+fn post_tool_use_for_allowed_command_writes_no_resolution(ask_terraform_env: AuditTestEnv) {
+    // PostToolUse fires for every Bash call; only asks get a resolution.
+    run_hook(
+        &ask_terraform_env,
+        "PreToolUse",
+        "echo hello",
+        "toolu_allow",
+    );
+    run_hook(
+        &ask_terraform_env,
+        "PostToolUse",
+        "echo hello",
+        "toolu_allow",
+    );
+
+    let entries = ask_terraform_env.read_audit_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["action"]["type"], "allow");
+}
+
+#[rstest]
+fn audit_marks_approved_ask_and_json_includes_resolution(ask_terraform_env: AuditTestEnv) {
+    run_hook(
+        &ask_terraform_env,
+        "PreToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+    run_hook(
+        &ask_terraform_env,
+        "PostToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+
+    // Non-TTY text output marks the approved ask in the ACTION column.
+    let assert = ask_terraform_env.command().args(["audit"]).assert().code(0);
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let columns: Vec<&str> = stdout.trim().split('\t').collect();
+    assert_eq!(columns[1..], ["ask ✓", "terraform apply"]);
+
+    // --json outputs both the decision entry and the resolution record.
+    let json_assert = ask_terraform_env
+        .command()
+        .args(["audit", "--json"])
+        .assert()
+        .code(0);
+    let records = parse_json_stdout(&json_assert);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["action"]["type"], "ask");
+    assert_eq!(records[1]["kind"], "ask_resolution");
+}
+
+// ========================================
 // No config audit section defaults
 // ========================================
 
