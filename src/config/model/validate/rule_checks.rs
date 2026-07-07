@@ -1,4 +1,4 @@
-use crate::config::{ActionKind, Config, RuleEntry, VarType};
+use crate::config::{ActionKind, Config, VarType};
 
 use super::pattern_refs::{collect_flag_group_refs, collect_var_refs_inside_optional};
 
@@ -65,14 +65,11 @@ impl Config {
         }
     }
 
-    /// Validate that each rule has exactly one of deny/allow/ask set, that
-    /// deny rules do not carry a sandbox attribute, and that any sandbox name
-    /// referenced by a rule is defined in `definitions.sandbox`.
-    pub(super) fn validate_rule_actions_and_sandboxes(
-        &self,
-        rules: &[RuleEntry],
-        errors: &mut Vec<String>,
-    ) {
+    pub(super) fn validate_rule_actions_and_sandboxes(&self, errors: &mut Vec<String>) {
+        let Some(rules) = &self.rules else {
+            return;
+        };
+
         let defined_sandboxes: std::collections::HashSet<&str> = self
             .definitions
             .as_ref()
@@ -112,7 +109,7 @@ impl Config {
 mod tests {
     use indoc::indoc;
 
-    use crate::config::parse_config;
+    use crate::config::{RuleEntry, parse_config};
 
     use super::*;
 

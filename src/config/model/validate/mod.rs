@@ -88,15 +88,15 @@ impl Config {
         self.validate_flag_groups(&mut errors);
         self.validate_rule_pattern_refs(&mut errors);
 
-        let Some(rules) = &self.rules else {
+        if self.rules.is_none() {
             return if errors.is_empty() {
                 Ok(())
             } else {
                 Err(crate::config::ConfigError::Validation(errors))
             };
-        };
+        }
 
-        self.validate_rule_actions_and_sandboxes(rules, &mut errors);
+        self.validate_rule_actions_and_sandboxes(&mut errors);
 
         if errors.is_empty() {
             // Pre-parse flag group definitions and pattern-typed variable

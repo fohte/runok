@@ -110,7 +110,8 @@ pub struct TestSection {
 mod tests {
     use rstest::rstest;
 
-    use super::super::parse_config;
+    use crate::config::parse_config;
+
     use super::*;
 
     // === ActionKind ===

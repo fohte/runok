@@ -94,8 +94,6 @@ impl Config {
         }
     }
 
-    /// Validate `definitions.flag_groups`: each value is a pattern string
-    /// that must parse successfully and contain at least one valid flag alias.
     pub(super) fn validate_flag_groups(&self, errors: &mut Vec<String>) {
         if let Some(defs) = &self.definitions
             && let Some(flag_groups) = &defs.flag_groups
