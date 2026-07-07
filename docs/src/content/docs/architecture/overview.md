@@ -26,7 +26,7 @@ runok merges configuration from [four layers](/configuration/file-discovery/#mer
 
 The [`extends`](/configuration/extends/) field triggers recursive preset resolution (DFS with cycle detection, max depth 10). Presets can be loaded from local paths or remote GitHub repositories.
 
-Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset.rs`](https://github.com/fohte/runok/blob/main/src/config/preset.rs)
+Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset/`](https://github.com/fohte/runok/tree/main/src/config/preset)
 
 ### 2. Command Parsing
 
