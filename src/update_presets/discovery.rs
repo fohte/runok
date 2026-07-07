@@ -10,7 +10,7 @@ pub(super) struct TrackedReference {
 }
 
 /// Collect all `extends` references from a parsed config, returning only remote ones.
-fn collect_remote_references(config: &Config) -> Vec<String> {
+fn collect_remote_references(config: &Config) -> Vec<&str> {
     config
         .extends
         .as_ref()
@@ -21,7 +21,7 @@ fn collect_remote_references(config: &Config) -> Vec<String> {
                         .map(|p| !matches!(p, PresetReference::Local(_)))
                         .unwrap_or(false)
                 })
-                .cloned()
+                .map(|r| r.as_str())
                 .collect()
         })
         .unwrap_or_default()
@@ -142,7 +142,7 @@ fn collect_tracked_from_file(
         let key = format!("{}:{}", r, path.display());
         if seen.insert(key) {
             tracked.push(TrackedReference {
-                reference: r,
+                reference: r.to_string(),
                 source_file: path.to_path_buf(),
             });
         }
@@ -177,7 +177,7 @@ mod tests {
             ..Config::default()
         };
         let refs = collect_remote_references(&config);
-        assert_eq!(refs.contains(&reference.to_string()), expected_included);
+        assert_eq!(refs.contains(&reference), expected_included);
     }
 
     #[rstest]

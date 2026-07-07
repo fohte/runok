@@ -162,13 +162,15 @@ fn try_tag_upgrade<G: GitClient>(
     refs_cache: &mut HashMap<String, Vec<RemoteRef>>,
 ) -> UpdateResult {
     // Fetch remote refs (cached per URL to avoid redundant network calls)
-    let remote_refs = match refs_cache.entry(url.to_string()) {
-        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-        std::collections::hash_map::Entry::Vacant(e) => match git_client.ls_remote_refs(url) {
-            Ok(refs) => e.insert(refs),
+    if !refs_cache.contains_key(url) {
+        match git_client.ls_remote_refs(url) {
+            Ok(refs) => {
+                refs_cache.insert(url.to_string(), refs);
+            }
             Err(err) => return UpdateResult::Error(format!("ls-remote failed: {err}")),
-        },
-    };
+        }
+    }
+    let remote_refs = &refs_cache[url];
 
     let ref_names: Vec<String> = remote_refs.iter().map(|r| r.name.clone()).collect();
     let candidates = find_upgrade_candidates(current_tag, &ref_names);
