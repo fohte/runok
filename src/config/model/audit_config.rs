@@ -2,6 +2,8 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::config::dirs::home_dir;
+
 /// Audit log configuration.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
@@ -39,9 +41,9 @@ impl AuditConfig {
             {
                 return format!("{data_home}/runok/");
             }
-            std::env::var("HOME")
-                .map(|h| format!("{h}/.local/share/runok/"))
-                .unwrap_or_else(|_| ".local/share/runok/".to_string())
+            home_dir()
+                .map(|h| format!("{}/.local/share/runok/", h.display()))
+                .unwrap_or_else(|| ".local/share/runok/".to_string())
         })
     }
 
@@ -102,10 +104,6 @@ impl RotationConfig {
     pub fn resolved_retention_days(&self) -> u32 {
         self.retention_days.unwrap_or(7)
     }
-}
-
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 fn default_audit_dir() -> std::path::PathBuf {

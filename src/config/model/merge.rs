@@ -77,8 +77,12 @@ impl Config {
             (Some(mut b), Some(o)) => {
                 for (key, over_values) in o {
                     let entry = b.entry(key).or_default();
-                    let existing: HashSet<String> = entry.iter().cloned().collect();
-                    entry.extend(over_values.into_iter().filter(|v| !existing.contains(v)));
+                    let existing: HashSet<&str> = entry.iter().map(|s| s.as_str()).collect();
+                    let to_add: Vec<String> = over_values
+                        .into_iter()
+                        .filter(|v| !existing.contains(v.as_str()))
+                        .collect();
+                    entry.extend(to_add);
                 }
                 Some(b)
             }

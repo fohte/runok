@@ -42,7 +42,7 @@ impl Config {
                 };
 
                 let mut expanded = Vec::new();
-                for entry in deny.iter() {
+                for entry in std::mem::take(deny) {
                     if let Some(name) = entry
                         .strip_prefix("<path:")
                         .and_then(|s| s.strip_suffix('>'))
@@ -56,7 +56,7 @@ impl Config {
                             )),
                         }
                     } else {
-                        expanded.push(entry.clone());
+                        expanded.push(entry);
                     }
                 }
                 *deny = expanded;
