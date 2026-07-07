@@ -193,9 +193,9 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
     // pattern captured. `definitions.paths` aliases the same data as `paths`
     // above; `definitions.vars` holds every declared value for every
     // `definitions.vars` entry.
-    let definitions_value: HashMap<String, HashMap<String, Vec<String>>> = HashMap::from([
-        ("paths".to_string(), context.paths.clone()),
-        ("vars".to_string(), context.var_definitions.clone()),
+    let definitions_value = HashMap::from([
+        ("paths", &context.paths),
+        ("vars", &context.var_definitions),
     ]);
     cel_context
         .add_variable("definitions", definitions_value)
