@@ -11,7 +11,6 @@ mod token_matching;
 pub(crate) use token_matching::literal_matches;
 
 use match_engine::match_engine;
-use match_engine::match_engine_for_prefix_test;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
