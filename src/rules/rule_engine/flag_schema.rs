@@ -13,7 +13,7 @@ use super::EvalContext;
 /// FlagGroupRef aliases are resolved through `definitions.flag_groups` so the
 /// command parser knows that the grouped flags consume the next token as
 /// their value.
-pub(crate) fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
+pub(super) fn build_flag_schema(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
     let mut value_flags = HashSet::new();
     collect_value_flags(&pattern.tokens, definitions, &mut value_flags);
     FlagSchema { value_flags }

@@ -136,3 +136,70 @@ pub fn evaluate_command_with_metadata(
 ) -> Result<EvalResult, RuleError> {
     evaluate_command_inner(config, command, context, 0, redirects, pipe, loop_kind)
 }
+
+/// Shared test fixtures used by `compound::tests` and `simple_eval::tests`.
+#[cfg(test)]
+mod test_support {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use rstest::fixture;
+
+    use crate::config::{Config, RuleEntry};
+
+    use super::EvalContext;
+
+    #[fixture]
+    pub(super) fn empty_context() -> EvalContext {
+        EvalContext {
+            env: HashMap::new(),
+            cwd: PathBuf::from("/tmp"),
+        }
+    }
+
+    pub(super) fn make_config(rules: Vec<RuleEntry>) -> Config {
+        Config {
+            rules: Some(rules),
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn allow_rule(pattern: &str) -> RuleEntry {
+        RuleEntry {
+            allow: Some(pattern.to_string()),
+            deny: None,
+            ask: None,
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+            tests: None,
+        }
+    }
+
+    pub(super) fn deny_rule(pattern: &str) -> RuleEntry {
+        RuleEntry {
+            deny: Some(pattern.to_string()),
+            allow: None,
+            ask: None,
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+            tests: None,
+        }
+    }
+
+    pub(super) fn ask_rule(pattern: &str) -> RuleEntry {
+        RuleEntry {
+            ask: Some(pattern.to_string()),
+            allow: None,
+            deny: None,
+            when: None,
+            message: None,
+            fix_suggestion: None,
+            sandbox: None,
+            tests: None,
+        }
+    }
+}

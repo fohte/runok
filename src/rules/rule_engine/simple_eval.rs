@@ -387,66 +387,13 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     use crate::config::{Config, Defaults, Definitions, RuleEntry};
     use crate::rules::rule_engine::evaluate_command;
 
+    use super::super::test_support::{allow_rule, ask_rule, deny_rule, empty_context, make_config};
     use super::*;
-
-    #[fixture]
-    fn empty_context() -> EvalContext {
-        EvalContext {
-            env: HashMap::new(),
-            cwd: PathBuf::from("/tmp"),
-        }
-    }
-
-    fn make_config(rules: Vec<RuleEntry>) -> Config {
-        Config {
-            rules: Some(rules),
-            ..Default::default()
-        }
-    }
-
-    fn allow_rule(pattern: &str) -> RuleEntry {
-        RuleEntry {
-            allow: Some(pattern.to_string()),
-            deny: None,
-            ask: None,
-            when: None,
-            message: None,
-            fix_suggestion: None,
-            sandbox: None,
-            tests: None,
-        }
-    }
-
-    fn deny_rule(pattern: &str) -> RuleEntry {
-        RuleEntry {
-            deny: Some(pattern.to_string()),
-            allow: None,
-            ask: None,
-            when: None,
-            message: None,
-            fix_suggestion: None,
-            sandbox: None,
-            tests: None,
-        }
-    }
-
-    fn ask_rule(pattern: &str) -> RuleEntry {
-        RuleEntry {
-            ask: Some(pattern.to_string()),
-            allow: None,
-            deny: None,
-            when: None,
-            message: None,
-            fix_suggestion: None,
-            sandbox: None,
-            tests: None,
-        }
-    }
 
     // ========================================
     // No rules -> Default
