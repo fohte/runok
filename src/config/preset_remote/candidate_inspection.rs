@@ -131,10 +131,11 @@ fn inspect_candidate_recursive<G: GitClient>(
     current: &semver::Version,
     visited: &mut std::collections::HashSet<String>,
 ) -> Result<(), CandidateInspectionError> {
-    if !visited.insert(rel_path.to_string()) {
+    if visited.contains(rel_path) {
         // Already inspected (cycle or shared dependency). Do not re-check.
         return Ok(());
     }
+    visited.insert(rel_path.to_string());
 
     let content = git_client
         .show_file(dir, git_ref, rel_path)
@@ -212,7 +213,7 @@ fn inspect_candidate_content<G: GitClient>(
         // Only plain repo-relative paths are reachable via `git show`. Absolute
         // paths and `~/`-prefixed paths are not in the repository at all, so
         // skip them. Same for paths that walk out of the repo with `..`.
-        let rel_str = local_path.to_string_lossy().to_string();
+        let rel_str = local_path.to_string_lossy();
         if rel_str.starts_with('/') || rel_str.starts_with("~/") {
             continue;
         }
@@ -222,7 +223,6 @@ fn inspect_candidate_content<G: GitClient>(
             continue;
         };
 
-        // Try both extensions if the reference does not already include one.
         let has_extension = Path::new(&normalized)
             .extension()
             .is_some_and(|e| e == "yml" || e == "yaml");
@@ -251,7 +251,6 @@ fn inspect_candidate_content<G: GitClient>(
                 }
                 Err(CandidateInspectionError::Other) => {
                     last_other = true;
-                    // keep trying the other extension
                 }
             }
         }
