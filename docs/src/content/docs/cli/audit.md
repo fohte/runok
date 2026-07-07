@@ -41,7 +41,7 @@ Filter entries by working directory. Only shows entries executed in the given di
 
 ### `--limit <n>`
 
-Maximum number of entries to display.
+Maximum number of records to display. In JSON mode, decision entries and `ask_resolution` records count toward the same limit.
 
 **Default:** `50`
 

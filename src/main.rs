@@ -485,7 +485,11 @@ fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::
             }
         }
         records.sort_by(|a, b| a.0.cmp(b.0));
-        for (_, json) in &records {
+        // --limit bounds the merged output stream: resolutions are read
+        // without a limit (the text-mode join needs all of them), so keep
+        // only the newest `limit` records here.
+        let skip = records.len().saturating_sub(filter.limit);
+        for (_, json) in &records[skip..] {
             println!("{json}");
         }
     } else {
