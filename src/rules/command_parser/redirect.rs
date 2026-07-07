@@ -77,17 +77,17 @@ pub(super) fn extract_redirect_info(
             for i in 0..node.child_count() {
                 let child = node.child(i as u32)?;
                 if child.kind() == "file_descriptor" {
-                    let text =
-                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    let bytes = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(bytes).ok()?;
                     descriptor = text.parse::<i64>().ok();
                 } else if !child.is_named() {
                     // Anonymous node = operator token (>, >>, <, >&, <&, &>, &>>, >|)
-                    let text =
-                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    let bytes = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(bytes).ok()?;
                     operator = text.to_string();
                 } else if node.field_name_for_child(i as u32) == Some("destination") {
-                    let text =
-                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    let bytes = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(bytes).ok()?;
                     target = text.to_string();
                 }
             }
@@ -109,8 +109,8 @@ pub(super) fn extract_redirect_info(
             for i in 0..node.child_count() {
                 let child = node.child(i as u32)?;
                 if child.is_named() {
-                    let text =
-                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    let bytes = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(bytes).ok()?;
                     target = text.to_string();
                     break;
                 }
@@ -128,8 +128,8 @@ pub(super) fn extract_redirect_info(
             for i in 0..node.child_count() {
                 let child = node.child(i as u32)?;
                 if !child.is_named() {
-                    let text =
-                        std::str::from_utf8(&source[child.start_byte()..child.end_byte()]).ok()?;
+                    let bytes = source.get(child.start_byte()..child.end_byte())?;
+                    let text = std::str::from_utf8(bytes).ok()?;
                     if text == "<<-" || text == "<<" {
                         operator = text.to_string();
                     }

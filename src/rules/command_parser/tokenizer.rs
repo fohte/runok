@@ -541,11 +541,11 @@ fn find_single_command_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::
         "declaration_command" | "unset_command" => Some(node),
         "program" | "list" => {
             let mut cursor = node.walk();
-            let named: Vec<_> = node.named_children(&mut cursor).collect();
-            if named.len() != 1 {
-                return None;
+            let mut named = node.named_children(&mut cursor);
+            match (named.next(), named.next()) {
+                (Some(first), None) => find_single_command_node(first),
+                _ => None,
             }
-            find_single_command_node(named[0])
         }
         "redirected_statement" => {
             let body = node.child_by_field_name("body")?;
