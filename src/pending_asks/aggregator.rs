@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audit::{AskResolution, AuditEntry, is_approved};
 use crate::config::{ActionKind, Config, ConfigLoader, ConfigSource, DefaultConfigLoader};
-use crate::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use crate::rules::rule_engine::{Action, EvalContext, evaluate_compound};
 
 use super::model::PendingAskGroup;
 
@@ -122,7 +122,13 @@ fn is_pending(
 
     let cached = config_cache.entry(cwd.clone()).or_insert_with(|| {
         let source = ConfigSource::from_flag(None, Path::new(cwd));
-        loader.load(&source).ok()
+        match loader.load(&source) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!("runok: warning: failed to load config for {cwd}: {e}");
+                None
+            }
+        }
     });
     let Some(config) = cached else {
         return true;
@@ -133,12 +139,17 @@ fn is_pending(
         cwd: PathBuf::from(cwd.as_str()),
     };
 
-    match evaluate_command(config, &entry.command, &context) {
+    // `evaluate_compound` (not `evaluate_command`) is the same entry point
+    // `runok exec`/`check` use, so compound commands (`a && b`) re-evaluate
+    // with the same sandbox-contradiction-triggered Ask escalation that
+    // produced the original decision.
+    match evaluate_compound(config, &entry.command, &context) {
         Ok(result) => match result.action {
             Action::Allow | Action::Deny(_) => false,
             Action::Ask(_) => !result
-                .matched_rules
+                .sub_results
                 .iter()
+                .flat_map(|r| &r.matched_rules)
                 .any(|r| r.action_kind == ActionKind::Ask),
         },
         Err(_) => true,
@@ -188,15 +199,31 @@ mod tests {
     }
 
     #[rstest]
-    fn default_fallback_ask_is_pending(project_dir: TempDir) {
-        write_config(&project_dir, "");
+    #[case::no_rule("", true)]
+    #[case::allow_rule(indoc! {"
+        rules:
+          - allow: 'terraform apply'
+    "}, false)]
+    #[case::deny_rule(indoc! {"
+        rules:
+          - deny: 'terraform apply'
+    "}, false)]
+    #[case::explicit_ask_rule(indoc! {"
+        rules:
+          - ask: 'terraform apply'
+    "}, false)]
+    fn pending_status_depends_on_matching_rule(
+        project_dir: TempDir,
+        #[case] yaml: &str,
+        #[case] expect_pending: bool,
+    ) {
+        write_config(&project_dir, yaml);
         let cwd = project_dir.path().to_string_lossy().into_owned();
         let entries = vec![ask_entry("2026-07-01T10:00:00Z", "terraform apply", &cwd)];
 
         let groups = compute_pending_ask_groups(&entries, &[], &hermetic_loader());
 
-        assert_eq!(
-            groups,
+        let expected = if expect_pending {
             vec![PendingAskGroup {
                 command: "terraform apply".to_owned(),
                 ask_count: 1,
@@ -204,31 +231,68 @@ mod tests {
                 first_seen: "2026-07-01T10:00:00Z".to_owned(),
                 last_seen: "2026-07-01T10:00:00Z".to_owned(),
                 cwds: vec![cwd],
-            }],
-        );
+            }]
+        } else {
+            vec![]
+        };
+        assert_eq!(groups, expected);
     }
 
+    // Regression coverage for re-evaluating with `evaluate_compound` (not
+    // `evaluate_command`): a compound command's sub-commands must be checked
+    // against their own rules independently, not matched as one literal
+    // pattern against the whole `a && b` string.
     #[rstest]
-    #[case::allow_rule(indoc! {"
-        rules:
-          - allow: 'terraform apply'
-    "})]
-    #[case::deny_rule(indoc! {"
-        rules:
-          - deny: 'terraform apply'
-    "})]
-    #[case::explicit_ask_rule(indoc! {"
-        rules:
-          - ask: 'terraform apply'
-    "})]
-    fn resolved_or_explicit_rules_exclude_from_pending(project_dir: TempDir, #[case] yaml: &str) {
-        write_config(&project_dir, yaml);
+    fn compound_command_fully_covered_excludes_from_pending(project_dir: TempDir) {
+        write_config(
+            &project_dir,
+            indoc! {"
+                rules:
+                  - allow: 'cd *'
+                  - allow: 'terraform apply'
+            "},
+        );
         let cwd = project_dir.path().to_string_lossy().into_owned();
-        let entries = vec![ask_entry("2026-07-01T10:00:00Z", "terraform apply", &cwd)];
+        let entries = vec![ask_entry(
+            "2026-07-01T10:00:00Z",
+            "cd infra && terraform apply",
+            &cwd,
+        )];
 
         assert_eq!(
             compute_pending_ask_groups(&entries, &[], &hermetic_loader()),
             vec![],
+        );
+    }
+
+    #[rstest]
+    fn compound_command_partially_covered_stays_pending(project_dir: TempDir) {
+        write_config(
+            &project_dir,
+            indoc! {"
+                rules:
+                  - allow: 'cd *'
+            "},
+        );
+        let cwd = project_dir.path().to_string_lossy().into_owned();
+        let entries = vec![ask_entry(
+            "2026-07-01T10:00:00Z",
+            "cd infra && terraform apply",
+            &cwd,
+        )];
+
+        let groups = compute_pending_ask_groups(&entries, &[], &hermetic_loader());
+
+        assert_eq!(
+            groups,
+            vec![PendingAskGroup {
+                command: "cd infra && terraform apply".to_owned(),
+                ask_count: 1,
+                approved_count: 0,
+                first_seen: "2026-07-01T10:00:00Z".to_owned(),
+                last_seen: "2026-07-01T10:00:00Z".to_owned(),
+                cwds: vec![cwd],
+            }],
         );
     }
 

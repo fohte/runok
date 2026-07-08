@@ -384,6 +384,43 @@ fn run_sandbox_exec(args: &cli::SandboxExecArgs) -> ExitCode {
     }
 }
 
+/// Apply `--since`/`--until`/`--command`/`--dir` onto `filter`, shared by
+/// `run_audit` and `run_pending_asks`. Returns the process exit code to use
+/// if any flag fails to parse or resolve.
+fn apply_query_filters(
+    filter: &mut AuditFilter,
+    since: Option<&str>,
+    until: Option<&str>,
+    command: Option<String>,
+    dir: Option<&str>,
+) -> Result<(), i32> {
+    if let Some(since_str) = since {
+        filter.since = Some(TimeSpec::parse(since_str).map_err(|e| {
+            eprintln!("runok: {e}");
+            1
+        })?);
+    }
+
+    if let Some(until_str) = until {
+        filter.until = Some(TimeSpec::parse(until_str).map_err(|e| {
+            eprintln!("runok: {e}");
+            1
+        })?);
+    }
+
+    filter.command_pattern = command;
+
+    if let Some(dir_arg) = dir {
+        let canonical = std::path::Path::new(dir_arg).canonicalize().map_err(|e| {
+            eprintln!("runok: failed to resolve directory path '{dir_arg}': {e}");
+            1
+        })?;
+        filter.cwd = Some(canonical.to_string_lossy().into_owned());
+    }
+
+    Ok(())
+}
+
 fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::path::Path) -> i32 {
     let loader = DefaultConfigLoader::new();
     let source = ConfigSource::from_flag(config_path, cwd);
@@ -413,37 +450,14 @@ fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::
         }
     }
 
-    if let Some(since_str) = &args.since {
-        match TimeSpec::parse(since_str) {
-            Ok(ts) => filter.since = Some(ts),
-            Err(e) => {
-                eprintln!("runok: {e}");
-                return 1;
-            }
-        }
-    }
-
-    if let Some(until_str) = &args.until {
-        match TimeSpec::parse(until_str) {
-            Ok(ts) => filter.until = Some(ts),
-            Err(e) => {
-                eprintln!("runok: {e}");
-                return 1;
-            }
-        }
-    }
-
-    filter.command_pattern = args.command;
-
-    if let Some(dir_arg) = args.dir {
-        let dir_path = std::path::Path::new(&dir_arg);
-        match dir_path.canonicalize() {
-            Ok(canonical) => filter.cwd = Some(canonical.to_string_lossy().into_owned()),
-            Err(e) => {
-                eprintln!("runok: failed to resolve directory path '{}': {e}", dir_arg);
-                return 1;
-            }
-        }
+    if let Err(code) = apply_query_filters(
+        &mut filter,
+        args.since.as_deref(),
+        args.until.as_deref(),
+        args.command,
+        args.dir.as_deref(),
+    ) {
+        return code;
     }
 
     let reader = AuditReader::new(log_dir);
@@ -530,37 +544,14 @@ fn run_pending_asks(
     // here; `args.limit` is applied to the grouped output below.
     filter.limit = usize::MAX;
 
-    if let Some(since_str) = &args.since {
-        match TimeSpec::parse(since_str) {
-            Ok(ts) => filter.since = Some(ts),
-            Err(e) => {
-                eprintln!("runok: {e}");
-                return 1;
-            }
-        }
-    }
-
-    if let Some(until_str) = &args.until {
-        match TimeSpec::parse(until_str) {
-            Ok(ts) => filter.until = Some(ts),
-            Err(e) => {
-                eprintln!("runok: {e}");
-                return 1;
-            }
-        }
-    }
-
-    filter.command_pattern = args.command;
-
-    if let Some(dir_arg) = &args.dir {
-        let dir_path = std::path::Path::new(dir_arg);
-        match dir_path.canonicalize() {
-            Ok(canonical) => filter.cwd = Some(canonical.to_string_lossy().into_owned()),
-            Err(e) => {
-                eprintln!("runok: failed to resolve directory path '{}': {e}", dir_arg);
-                return 1;
-            }
-        }
+    if let Err(code) = apply_query_filters(
+        &mut filter,
+        args.since.as_deref(),
+        args.until.as_deref(),
+        args.command,
+        args.dir.as_deref(),
+    ) {
+        return code;
     }
 
     let reader = AuditReader::new(log_dir);

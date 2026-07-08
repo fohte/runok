@@ -145,10 +145,8 @@ mod tests {
     }
 
     // `first_seen`/`last_seen` go through `format_timestamp_local`, which
-    // converts to the test runner's local timezone. Building the expected
-    // value through the same helper keeps the assertion exact (per repo
-    // convention: normalize dynamic fields rather than weaken the check)
-    // without hardcoding a timezone-dependent literal.
+    // converts to the test runner's local timezone, so the expected value
+    // must be built through the same helper rather than hardcoded.
     #[rstest]
     fn print_tsv_format() {
         let groups = vec![
@@ -212,21 +210,44 @@ mod tests {
         assert!(buf.is_empty());
     }
 
+    /// Strip ANSI escape sequences (`if_supports_color` bolds the header when
+    /// the test process's real stdout is a color-capable terminal) so the
+    /// header content can be asserted exactly regardless of that environment
+    /// difference.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c2 in chars.by_ref() {
+                    if c2 == 'm' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
+    }
+
     #[rstest]
     fn print_table_has_header_and_rows() {
         let groups = vec![make_group("echo hello", 1, 0)];
 
         let mut buf = Vec::new();
         print_table(&mut buf, &groups);
-        let output = String::from_utf8(buf).unwrap();
+        let output = strip_ansi(&String::from_utf8(buf).unwrap());
 
         let lines: Vec<&str> = output.trim_end().lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("ASK_COUNT"));
-        assert!(lines[0].contains("APPROVED"));
-        assert!(lines[0].contains("FIRST_SEEN"));
-        assert!(lines[0].contains("LAST_SEEN"));
-        assert!(lines[0].contains("COMMAND"));
+        assert_eq!(
+            lines[0],
+            format!(
+                "{:<9}  {:<8}  {:<19}  {:<19}  COMMAND",
+                "ASK_COUNT", "APPROVED", "FIRST_SEEN", "LAST_SEEN"
+            ),
+        );
     }
 
     #[rstest]
