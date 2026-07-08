@@ -222,28 +222,6 @@ mod tests {
         matches(&pattern, &command, definitions)
     }
 
-    fn check_captures(
-        pattern_str: &str,
-        command_str: &str,
-        definitions: &Definitions,
-    ) -> Option<Vec<String>> {
-        let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern, definitions);
-        let command = parse_command(command_str, &schema).unwrap();
-        matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
-    }
-
-    fn check_var_captures(
-        pattern_str: &str,
-        command_str: &str,
-        definitions: &Definitions,
-    ) -> Option<HashMap<String, String>> {
-        let pattern = parse_pattern(pattern_str).unwrap();
-        let schema = build_schema_from_pattern(&pattern, definitions);
-        let command = parse_command(command_str, &schema).unwrap();
-        matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
-    }
-
     /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef
     /// tokens. Mirrors the production helper in `rule_engine::build_flag_schema`
     /// so unit tests using `<flag:name>` see the same value-flag set the real
@@ -798,20 +776,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn equals_joined_token() {
-        assert!(check_match(
-            "java -Denv=prod",
-            "java -Denv=prod",
-            &empty_defs()
-        ));
-        assert!(!check_match(
-            "java -Denv=prod",
-            "java -Denv=staging",
-            &empty_defs()
-        ));
-    }
-
     // ========================================
     // Literal bracket command (`[`) matching
     // ========================================
@@ -891,6 +855,28 @@ mod tests {
     // ========================================
     // matches_with_captures tests
     // ========================================
+
+    fn check_captures(
+        pattern_str: &str,
+        command_str: &str,
+        definitions: &Definitions,
+    ) -> Option<Vec<String>> {
+        let pattern = parse_pattern(pattern_str).unwrap();
+        let schema = build_schema_from_pattern(&pattern, definitions);
+        let command = parse_command(command_str, &schema).unwrap();
+        matches_with_captures(&pattern, &command, definitions).map(|c| c.wildcards)
+    }
+
+    fn check_var_captures(
+        pattern_str: &str,
+        command_str: &str,
+        definitions: &Definitions,
+    ) -> Option<HashMap<String, String>> {
+        let pattern = parse_pattern(pattern_str).unwrap();
+        let schema = build_schema_from_pattern(&pattern, definitions);
+        let command = parse_command(command_str, &schema).unwrap();
+        matches_with_captures(&pattern, &command, definitions).map(|c| c.vars)
+    }
 
     #[rstest]
     #[case::no_wildcard("git status", "git status", Some(vec![]))]
@@ -1416,6 +1402,20 @@ mod tests {
             expected,
             "pattern {pattern_str:?} vs command {command_str:?}",
         );
+    }
+
+    #[test]
+    fn equals_joined_token() {
+        assert!(check_match(
+            "java -Denv=prod",
+            "java -Denv=prod",
+            &empty_defs()
+        ));
+        assert!(!check_match(
+            "java -Denv=prod",
+            "java -Denv=staging",
+            &empty_defs()
+        ));
     }
 
     // === Alternation flag with `=`-joined command token ===
