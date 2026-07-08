@@ -26,6 +26,8 @@ pub enum Commands {
     Check(CheckArgs),
     /// View audit log entries
     Audit(AuditArgs),
+    /// Show ask commands still resolved via defaults.action under the current config
+    PendingAsks(PendingAsksArgs),
     /// Run tests defined in the config to verify rules
     Test(TestArgs),
     /// Initialize runok configuration
@@ -172,6 +174,34 @@ pub enum OutputFormat {
     Text,
 }
 
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PendingAsksArgs {
+    /// Show entries since this time (e.g., "1h", "7d", "2026-02-25")
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Show entries until this time (e.g., "1h", "7d", "2026-02-25")
+    #[arg(long)]
+    pub until: Option<String>,
+
+    /// Filter by command substring
+    #[arg(long)]
+    pub command: Option<String>,
+
+    /// Filter by working directory (includes subdirectories)
+    #[arg(long)]
+    pub dir: Option<String>,
+
+    /// Maximum number of pending command groups to show
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +259,18 @@ mod tests {
     #[case::audit_with_all_options(
         &["runok", "audit", "--action", "allow", "--since", "7d", "--until", "1h", "--command", "git", "--limit", "10", "--json"],
         Commands::Audit(AuditArgs { action: Some("allow".into()), since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), dir: None, limit: 10, json: true }),
+    )]
+    #[case::pending_asks_default(
+        &["runok", "pending-asks"],
+        Commands::PendingAsks(PendingAsksArgs { since: None, until: None, command: None, dir: None, limit: 50, json: false }),
+    )]
+    #[case::pending_asks_with_since(
+        &["runok", "pending-asks", "--since", "7d"],
+        Commands::PendingAsks(PendingAsksArgs { since: Some("7d".into()), until: None, command: None, dir: None, limit: 50, json: false }),
+    )]
+    #[case::pending_asks_with_all_options(
+        &["runok", "pending-asks", "--since", "7d", "--until", "1h", "--command", "git", "--dir", "/home/user/project", "--limit", "10", "--json"],
+        Commands::PendingAsks(PendingAsksArgs { since: Some("7d".into()), until: Some("1h".into()), command: Some("git".into()), dir: Some("/home/user/project".into()), limit: 10, json: true }),
     )]
     #[case::init_defaults(
         &["runok", "init"],

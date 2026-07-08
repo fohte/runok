@@ -6,7 +6,8 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use cli::{
-    AuditArgs, CheckRoute, Cli, Commands, find_subcommand, route_check, validate_no_unknown_flags,
+    AuditArgs, CheckRoute, Cli, Commands, PendingAsksArgs, find_subcommand, route_check,
+    validate_no_unknown_flags,
 };
 use runok::adapter::{self, RunOptions};
 use runok::audit::filter::{AuditFilter, TimeSpec};
@@ -249,6 +250,10 @@ fn run_command(
         return run_audit(args, config_path, cwd);
     }
 
+    if let Commands::PendingAsks(args) = command {
+        return run_pending_asks(args, config_path, cwd);
+    }
+
     // Exit code for config errors depends on the subcommand:
     // exec → 1 (general error), check → 2 (input/internal error).
     // For `check --input-format claude-code-hook`, return 1 instead of 2 so
@@ -261,6 +266,7 @@ fn run_command(
         Commands::Check(args) if is_claude_code_hook(args) => 1,
         Commands::Check(_) => 2,
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::PendingAsks(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
         Commands::Migrate(_) => unreachable!("handled in main()"),
@@ -333,6 +339,7 @@ fn run_command(
             }
         }
         Commands::Audit(_) => unreachable!("handled above"),
+        Commands::PendingAsks(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
         Commands::Migrate(_) => unreachable!("handled in main()"),
@@ -494,6 +501,100 @@ fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::
         }
     } else {
         runok::audit::formatter::print_entries(&entries, &resolutions);
+    }
+
+    0
+}
+
+fn run_pending_asks(
+    args: PendingAsksArgs,
+    config_path: Option<&std::path::Path>,
+    cwd: &std::path::Path,
+) -> i32 {
+    let loader = DefaultConfigLoader::new();
+    let source = ConfigSource::from_flag(config_path, cwd);
+    let config = match loader.load(&source) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("runok: config error: {e}");
+            return 1;
+        }
+    };
+
+    let audit_config = config.audit.unwrap_or_default();
+    let log_dir = audit_config.base_dir();
+
+    let mut filter = AuditFilter::new();
+    filter.action = Some(ActionKind::Ask);
+    // Grouping happens after re-evaluation, so read every matching ask entry
+    // here; `args.limit` is applied to the grouped output below.
+    filter.limit = usize::MAX;
+
+    if let Some(since_str) = &args.since {
+        match TimeSpec::parse(since_str) {
+            Ok(ts) => filter.since = Some(ts),
+            Err(e) => {
+                eprintln!("runok: {e}");
+                return 1;
+            }
+        }
+    }
+
+    if let Some(until_str) = &args.until {
+        match TimeSpec::parse(until_str) {
+            Ok(ts) => filter.until = Some(ts),
+            Err(e) => {
+                eprintln!("runok: {e}");
+                return 1;
+            }
+        }
+    }
+
+    filter.command_pattern = args.command;
+
+    if let Some(dir_arg) = &args.dir {
+        let dir_path = std::path::Path::new(dir_arg);
+        match dir_path.canonicalize() {
+            Ok(canonical) => filter.cwd = Some(canonical.to_string_lossy().into_owned()),
+            Err(e) => {
+                eprintln!("runok: failed to resolve directory path '{}': {e}", dir_arg);
+                return 1;
+            }
+        }
+    }
+
+    let reader = AuditReader::new(log_dir);
+    let entries = match reader.read(&filter) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("runok: failed to read audit log: {e}");
+            return 1;
+        }
+    };
+    let resolutions = match reader.read_resolutions(&filter) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("runok: failed to read audit log: {e}");
+            return 1;
+        }
+    };
+
+    let mut groups =
+        runok::pending_asks::compute_pending_ask_groups(&entries, &resolutions, &loader);
+    groups.truncate(args.limit);
+
+    if args.json {
+        for group in &groups {
+            match serde_json::to_string(group) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("runok: serialization error: {e}");
+                    return 1;
+                }
+            }
+        }
+    } else {
+        runok::pending_asks::print_groups(&groups);
     }
 
     0

@@ -8,6 +8,27 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
+### `runok pending-asks` command (TODO(pr-link))
+
+`runok pending-asks` scans the audit log for `ask` decisions, re-evaluates each one against the current config, and reports commands that still fall back to `defaults.action` -- i.e. no `allow`/`deny`/`ask` rule covers them yet. Matching entries are grouped by exact command string with an ask count, approval count, first/last seen timestamps, and the distinct working directories they were asked from:
+
+```sh
+runok pending-asks --since 7d --json
+```
+
+```json
+{
+  "command": "terraform apply",
+  "ask_count": 5,
+  "approved_count": 4,
+  "first_seen": "2026-06-20T09:00:00Z",
+  "last_seen": "2026-07-08T10:30:00Z",
+  "cwds": ["/home/user/projects/infra"]
+}
+```
+
+Commands already covered by an explicit rule -- including an explicit `ask:` rule written on purpose to keep confirming a command -- are excluded, so the output only surfaces genuine candidates for a new rule. See [`runok pending-asks`](/cli/pending-asks/) for details.
+
 ### Track ask approvals in the audit log ([#468](https://github.com/fohte/runok/pull/468))
 
 The audit log used to record only that runok answered `ask` for a command -- not whether the user then approved it in Claude Code's permission dialog. Registering runok as an opt-in **PostToolUse** hook (offered by `runok init --scope user`, or added manually to `settings.json`) closes that gap: approving an ask now appends a self-contained `ask_resolution` record correlated with the original `ask` entry via `tool_use_id`.

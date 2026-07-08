@@ -127,3 +127,4 @@ Old log files are automatically removed based on `rotation.retention_days`.
 - [Audit Log JSON Schema](/cli/audit-log-schema/) -- Field-by-field reference for `runok audit --json` output.
 - [Configuration Schema — `audit`](/configuration/schema/#audit) -- Full audit config reference.
 - [`runok exec`](/cli/exec/) -- Commands evaluated via `exec` are logged.
+- [`runok pending-asks`](/cli/pending-asks/) -- Find `ask` commands still resolved via `defaults.action`, grouped and counted.
