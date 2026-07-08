@@ -108,6 +108,28 @@ impl GroupBuilder {
     }
 }
 
+/// Look up `cwd` in `config_cache`, loading and caching it on a miss.
+/// Checks `contains_key` before inserting so a cache hit never pays for
+/// cloning `cwd` into an owned key.
+fn get_cached_config<'a>(
+    cwd: &str,
+    loader: &DefaultConfigLoader,
+    config_cache: &'a mut HashMap<String, Option<Config>>,
+) -> Option<&'a Config> {
+    if !config_cache.contains_key(cwd) {
+        let source = ConfigSource::from_flag(None, Path::new(cwd));
+        let config = match loader.load(&source) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!("runok: warning: failed to load config for {cwd}: {e}");
+                None
+            }
+        };
+        config_cache.insert(cwd.to_owned(), config);
+    }
+    config_cache.get(cwd).and_then(|opt| opt.as_ref())
+}
+
 /// Whether `entry` is still resolved via `defaults.action` fallback under
 /// the config discovered from its `metadata.cwd`.
 fn is_pending(
@@ -120,17 +142,7 @@ fn is_pending(
         return true;
     };
 
-    let cached = config_cache.entry(cwd.clone()).or_insert_with(|| {
-        let source = ConfigSource::from_flag(None, Path::new(cwd));
-        match loader.load(&source) {
-            Ok(config) => Some(config),
-            Err(e) => {
-                eprintln!("runok: warning: failed to load config for {cwd}: {e}");
-                None
-            }
-        }
-    });
-    let Some(config) = cached else {
+    let Some(config) = get_cached_config(cwd, loader, config_cache) else {
         return true;
     };
 
