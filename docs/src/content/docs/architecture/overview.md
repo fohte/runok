@@ -39,7 +39,7 @@ Each individual command is then structurally parsed using a `FlagSchema` inferre
 
 ### 3. Rule Evaluation
 
-The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
+The rule engine ([`src/rules/rule_engine/`](https://github.com/fohte/runok/tree/main/src/rules/rule_engine)) evaluates each command against the configured rules:
 
 - **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](/architecture/pattern-matching/), then any [`when` clauses](/rule-evaluation/when-clause/) are evaluated using a CEL expression evaluator.
 - **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](/architecture/design-decisions/#explicit-deny-wins) principle.

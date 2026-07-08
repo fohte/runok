@@ -223,9 +223,9 @@ mod tests {
     }
 
     /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef
-    /// tokens. Mirrors the production helper in `rule_engine::build_flag_schema`
-    /// so unit tests using `<flag:name>` see the same value-flag set the real
-    /// command parser does.
+    /// tokens. Mirrors the production helper `build_flag_schema` internal to
+    /// `rule_engine` so unit tests using `<flag:name>` see the same
+    /// value-flag set the real command parser does.
     fn build_schema_from_pattern(pattern: &Pattern, definitions: &Definitions) -> FlagSchema {
         let mut value_flags = HashSet::new();
         collect_value_flags(&pattern.tokens, definitions, &mut value_flags);

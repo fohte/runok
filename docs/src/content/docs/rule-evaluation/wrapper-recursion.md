@@ -126,7 +126,7 @@ The same path handles `time (rm -rf /)` — the inner `rm -rf /` still triggers 
 
 To prevent infinite recursion (e.g., `sudo sudo sudo ...`), runok enforces a maximum recursion depth of **10**. If this limit is exceeded, the evaluation returns a `RecursionDepthExceeded` error.
 
-The depth counter increments each time a wrapped command is extracted and evaluated. The limit is defined as `MAX_WRAPPER_DEPTH = 10` in `src/rules/rule_engine.rs`.
+The depth counter increments each time a wrapped command is extracted and evaluated. The limit is defined as `MAX_WRAPPER_DEPTH = 10` in `src/rules/rule_engine/dispatch.rs`.
 
 ## Ambiguous captures
 
