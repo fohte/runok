@@ -42,7 +42,6 @@ pub(super) fn evaluate_simple_command(
     let default_definitions = Definitions::default();
     let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
 
-    // Collect all matched rules with their parsed patterns
     let mut matched: Vec<MatchedRule> = Vec::new();
     let mut match_infos: Vec<RuleMatchInfo> = Vec::new();
 
@@ -103,7 +102,6 @@ pub(super) fn evaluate_simple_command(
         }
     }
 
-    // Try wrapper pattern matching for recursive evaluation
     let wrapper_result =
         try_unwrap_wrapper(config, command, context, definitions, depth, loop_kind)?;
 
@@ -116,7 +114,6 @@ pub(super) fn evaluate_simple_command(
         });
     }
 
-    // Determine the direct rule result
     let direct_result = if matched.is_empty() {
         None
     } else {
@@ -147,7 +144,6 @@ pub(super) fn evaluate_simple_command(
         })
     };
 
-    // Merge direct result with wrapper result using Explicit Deny Wins
     let merged = match (direct_result, wrapper_result) {
         (Some(direct), Some(wrapper)) => merge_results(direct, wrapper),
         (Some(direct), None) => direct,

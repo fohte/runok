@@ -74,9 +74,6 @@ pub(super) fn evaluate_command_inner(
                 alias_chain: Vec::new(),
             }));
         }
-        // Self-reference detected (e.g. command substitution): evaluate only
-        // the nested sub-commands here, then fall through to evaluate the
-        // original command as a simple command. The results are merged at the end.
         if !nested_subs.is_empty() {
             let mut nested_merged: Option<EvalResult> = None;
             for sub in &nested_subs {

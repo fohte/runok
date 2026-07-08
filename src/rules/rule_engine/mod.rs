@@ -139,7 +139,8 @@ pub fn evaluate_command_with_metadata(
     evaluate_command_inner(config, command, context, 0, redirects, pipe, loop_kind)
 }
 
-/// Shared test fixtures used by `compound::tests` and `simple_eval::tests`.
+/// Shared test fixtures used by `compound::tests`, `dispatch::tests`,
+/// `simple_eval::tests`, and `wrapper::tests`.
 #[cfg(test)]
 mod test_support {
     use std::collections::HashMap;

@@ -32,7 +32,6 @@ pub(super) fn try_unwrap_wrapper(
     for wrapper_pattern_str in wrappers {
         let patterns = parse_multi(wrapper_pattern_str)?;
 
-        // Try each expanded pattern for this wrapper definition
         let mut all_candidates: Vec<Vec<String>> = Vec::new();
         for pattern in &patterns {
             let schema = build_flag_schema(pattern, definitions);
