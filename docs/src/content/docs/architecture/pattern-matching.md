@@ -151,7 +151,7 @@ Example: With wrapper `sudo <cmd>`, the command `sudo rm -rf /` matches, and `rm
 
 ## Command Parser
 
-**Source**: [`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)
+**Source**: [`src/rules/command_parser/`](https://github.com/fohte/runok/blob/main/src/rules/command_parser)
 
 The command parser operates on the input command (not the pattern). It provides:
 

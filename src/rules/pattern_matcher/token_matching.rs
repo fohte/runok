@@ -381,7 +381,7 @@ fn match_pattern_prefix(
         let after_dd = Cell::new(false);
         let var_captures = RefCell::new(HashMap::new());
         let flag_group_captures = RefCell::new(HashMap::new());
-        let ok = super::match_engine_for_prefix_test(
+        let ok = super::match_engine::match_engine_for_prefix_test(
             &sub.tokens,
             &rest[..k],
             definitions,
