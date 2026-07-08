@@ -39,14 +39,8 @@ fn escape_control_chars(s: &str) -> String {
 }
 
 /// Truncate `s` to fit within `max` bytes, respecting UTF-8 char boundaries
-/// and appending `...` when truncation occurs.
-///
-/// Byte length (not `.chars().count()`) is used deliberately: it never
-/// splits a character (the `is_char_boundary` back-off below guarantees
-/// that), and for multi-byte scripts it tracks terminal display width more
-/// closely than a character count would — e.g. a CJK character is ~3 UTF-8
-/// bytes and typically renders 2 columns wide, so counting characters would
-/// under-count the space it needs and risk overflowing the terminal width.
+/// (never splits a multi-byte character mid-sequence) and appending `...`
+/// when truncation occurs.
 fn truncate_to_width(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_owned();
