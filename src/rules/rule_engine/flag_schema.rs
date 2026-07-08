@@ -89,6 +89,27 @@ pub(super) fn build_expr_context(
 
     let paths = definitions.paths.clone().unwrap_or_default();
 
+    // Raw values for every `definitions.vars` entry, regardless of whether
+    // the current rule's pattern captured them via `<var:name>`. Exposed to
+    // CEL as `definitions.vars`. Drops each value's effective type
+    // (`v.effective_type(def.var_type)`), so `glob_matches` against these
+    // strings only agrees with `<var:name>` matching for `type: pattern`
+    // values -- `literal` (exact match, no wildcard) and `path`
+    // (canonicalized comparison) values are matched differently by
+    // `<var:name>` than by `glob_matches`.
+    let var_definitions: HashMap<String, Vec<String>> = definitions
+        .vars
+        .as_ref()
+        .map(|vars| {
+            vars.iter()
+                .map(|(name, def)| {
+                    let values = def.values.iter().map(|v| v.value().to_string()).collect();
+                    (name.clone(), values)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Seed flag_groups with every group declared in definitions so that
     // `flag_groups["name"]` always succeeds in CEL (returning an empty list
     // when no flag from the group was matched). Then overlay the values
@@ -107,6 +128,7 @@ pub(super) fn build_expr_context(
         flags,
         args: parsed_command.args.clone(),
         paths,
+        var_definitions,
         redirects: redirects.to_vec(),
         pipe: pipe.clone(),
         vars: match_captures.vars.clone(),

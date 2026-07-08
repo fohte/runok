@@ -101,6 +101,18 @@ fn fs_is_dir_impl(This(this): This<Value>, path: Arc<String>) -> ResolveResult {
     fs_metadata_check("is_dir", &this, path.as_str(), Metadata::is_dir)
 }
 
+/// `glob_matches(pattern, value)`: check whether `value` matches `pattern`,
+/// where `*` matches zero or more characters and any other pattern requires
+/// an exact match. Delegates to the same `literal_matches` used by pattern
+/// matching, so results agree with a `type: pattern` `<var:name>` value
+/// (single-token, no nested placeholders). `<path:name>` and the default
+/// `literal` / `path` var types use different matching strategies
+/// (`resolve_paths` / `match_value_with_type` in `token_matching.rs`) that
+/// never treat `*` as a wildcard, so `glob_matches` can disagree with those.
+fn glob_matches_impl(pattern: Arc<String>, value: Arc<String>) -> bool {
+    super::pattern_matcher::literal_matches(&pattern, &value)
+}
+
 /// Context for CEL expression evaluation, providing access to
 /// environment variables, parsed flags, positional arguments, path lists,
 /// redirect operators, pipeline position, captured variables, flag groups,
@@ -110,6 +122,12 @@ pub struct ExprContext {
     pub flags: HashMap<String, Option<String>>,
     pub args: Vec<String>,
     pub paths: HashMap<String, Vec<String>>,
+    /// Raw values for every `definitions.vars` entry, keyed by variable name.
+    /// Exposed to CEL as `definitions.vars`. Unlike `vars` below (only the
+    /// value captured by a matched `<var:name>` placeholder in the current
+    /// rule), this contains every declared value for every variable
+    /// regardless of whether the current rule's pattern captured it.
+    pub var_definitions: HashMap<String, Vec<String>>,
     pub redirects: Vec<RedirectInfo>,
     pub pipe: PipeInfo,
     pub vars: HashMap<String, String>,
@@ -168,6 +186,19 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
 
     cel_context
         .add_variable("paths", &context.paths)
+        .map_err(|e| ExprError::Eval(e.to_string()))?;
+
+    // Register `definitions`: a nested map exposing the raw definitions data,
+    // as opposed to `paths`/`vars`, which expose only what the current rule's
+    // pattern captured. `definitions.paths` aliases the same data as `paths`
+    // above; `definitions.vars` holds every declared value for every
+    // `definitions.vars` entry.
+    let definitions_value = HashMap::from([
+        ("paths", &context.paths),
+        ("vars", &context.var_definitions),
+    ]);
+    cel_context
+        .add_variable("definitions", definitions_value)
         .map_err(|e| ExprError::Eval(e.to_string()))?;
 
     // Register redirects: list of maps with type, operator, target, descriptor
@@ -240,6 +271,7 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
     cel_context.add_function("exists", fs_exists_impl);
     cel_context.add_function("is_file", fs_is_file_impl);
     cel_context.add_function("is_dir", fs_is_dir_impl);
+    cel_context.add_function("glob_matches", glob_matches_impl);
 
     let result = program
         .execute(&cel_context)
@@ -262,6 +294,7 @@ mod tests {
             flags: HashMap::new(),
             args: Vec::new(),
             paths: HashMap::new(),
+            var_definitions: HashMap::new(),
             redirects: Vec::new(),
             pipe: PipeInfo::default(),
             vars: HashMap::new(),
@@ -366,6 +399,81 @@ mod tests {
         // CEL's `in` operator checks if a value exists in a list
         assert!(evaluate("'.env' in paths.sensitive", &context).unwrap());
         assert!(!evaluate("'.bashrc' in paths.sensitive", &context).unwrap());
+    }
+
+    // === `definitions` access ===
+
+    #[test]
+    fn definitions_paths_aliases_paths() {
+        let context = ExprContext {
+            paths: HashMap::from([(
+                "sensitive".to_string(),
+                vec![".env".to_string(), ".envrc".to_string()],
+            )]),
+            ..empty_context()
+        };
+        assert!(evaluate("definitions.paths.sensitive == paths.sensitive", &context).unwrap());
+    }
+
+    #[test]
+    fn definitions_vars_exposes_every_declared_value() {
+        let context = ExprContext {
+            var_definitions: HashMap::from([(
+                "safe-rm-paths".to_string(),
+                vec!["**/node_modules".to_string(), "/tmp/*".to_string()],
+            )]),
+            ..empty_context()
+        };
+        assert!(
+            evaluate(
+                "definitions.vars[\"safe-rm-paths\"] == [\"**/node_modules\", \"/tmp/*\"]",
+                &context
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn definitions_vars_empty_when_no_vars_defined() {
+        assert!(evaluate("definitions.vars.size() == 0", &empty_context()).unwrap());
+    }
+
+    // === `glob_matches` function ===
+
+    #[rstest]
+    #[case::glob_prefix_match("**/node_modules", "packages/foo/node_modules", true)]
+    #[case::exact_no_glob_match("node_modules", "node_modules", true)]
+    #[case::exact_no_glob_no_match("node_modules", "packages/foo/node_modules", false)]
+    #[case::glob_no_match("**/dist", "packages/foo/build", false)]
+    #[case::glob_double_star_requires_separator("**/node_modules", "node_modules", false)]
+    fn glob_matches_function(#[case] pattern: &str, #[case] value: &str, #[case] expected: bool) {
+        let expr = format!("glob_matches('{pattern}', '{value}')");
+        assert_eq!(evaluate(&expr, &empty_context()).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::all_args_match_a_safe_pattern(vec!["packages/foo/node_modules", "dist"], true)]
+    #[case::one_arg_matches_no_safe_pattern(vec!["packages/foo/node_modules", "/important-dir"], false)]
+    fn glob_matches_with_definitions_vars_safe_rm_paths(
+        #[case] args: Vec<&str>,
+        #[case] expected: bool,
+    ) {
+        let context = ExprContext {
+            var_definitions: HashMap::from([(
+                "safe-rm-paths".to_string(),
+                vec!["**/node_modules".to_string(), "dist".to_string()],
+            )]),
+            args: args.into_iter().map(str::to_string).collect(),
+            ..empty_context()
+        };
+        assert_eq!(
+            evaluate(
+                "args.all(a, definitions.vars[\"safe-rm-paths\"].exists(p, glob_matches(p, a)))",
+                &context
+            )
+            .unwrap(),
+            expected
+        );
     }
 
     // === Variable reference access ===
