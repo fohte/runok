@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## New Features
 
-### `runok pending-asks` command (TODO(pr-link))
+### `runok pending-asks` command ([#469](https://github.com/fohte/runok/pull/469))
 
 `runok pending-asks` scans the audit log for `ask` decisions, re-evaluates each one against the current config, and reports commands that still fall back to `defaults.action` -- i.e. no `allow`/`deny`/`ask` rule covers them yet. Matching entries are grouped by exact command string with an ask count, approval count, first/last seen timestamps, and the distinct working directories they were asked from:
 
