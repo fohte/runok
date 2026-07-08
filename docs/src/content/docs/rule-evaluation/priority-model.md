@@ -17,7 +17,7 @@ Each action has a fixed restriction level. When multiple rules match, the **most
 | 1           | `ask`   | Prompt the user for confirmation |
 | 0           | `allow` | Permit the command               |
 
-This priority is defined in `action_priority()` in the rule engine (`src/rules/rule_engine.rs`).
+This priority is defined in `action_priority()` in the rule engine (`src/rules/rule_engine/compound.rs`).
 
 ## How it works
 

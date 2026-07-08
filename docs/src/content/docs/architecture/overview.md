@@ -26,11 +26,11 @@ runok merges configuration from [four layers](/configuration/file-discovery/#mer
 
 The [`extends`](/configuration/extends/) field triggers recursive preset resolution (DFS with cycle detection, max depth 10). Presets can be loaded from local paths or remote GitHub repositories.
 
-Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset.rs`](https://github.com/fohte/runok/blob/main/src/config/preset.rs)
+Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/config/loader.rs), [`src/config/preset/`](https://github.com/fohte/runok/tree/main/src/config/preset)
 
 ### 2. Command Parsing
 
-The command parser ([`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)) handles two tasks:
+The command parser ([`src/rules/command_parser/`](https://github.com/fohte/runok/blob/main/src/rules/command_parser)) handles two tasks:
 
 - **Tokenization**: Shell-aware splitting that respects single/double quotes and backslash escapes.
 - **Compound command splitting**: Uses `tree-sitter-bash` to decompose pipelines (`|`), logical operators (`&&`, `||`), semicolons (`;`), subshells, loops, conditionals, and command substitutions into individual commands.
@@ -39,7 +39,7 @@ Each individual command is then structurally parsed using a `FlagSchema` inferre
 
 ### 3. Rule Evaluation
 
-The rule engine ([`src/rules/rule_engine.rs`](https://github.com/fohte/runok/blob/main/src/rules/rule_engine.rs)) evaluates each command against the configured rules:
+The rule engine ([`src/rules/rule_engine/`](https://github.com/fohte/runok/tree/main/src/rules/rule_engine)) evaluates each command against the configured rules:
 
 - **Single commands**: Each rule's pattern is tested against the command via the [pattern matching pipeline](/architecture/pattern-matching/), then any [`when` clauses](/rule-evaluation/when-clause/) are evaluated using a CEL expression evaluator.
 - **Compound commands**: Each sub-command is evaluated individually, then results are aggregated using the [Explicit Deny Wins](/architecture/design-decisions/#explicit-deny-wins) principle.
