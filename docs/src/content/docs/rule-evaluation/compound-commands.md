@@ -9,7 +9,7 @@ Shell commands often combine multiple operations using pipes (`|`), logical oper
 
 ## Decomposition
 
-runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to parse compound commands into an AST. The `extract_commands()` function (`src/rules/command_parser.rs`) recursively walks the AST and extracts individual simple commands from:
+runok uses [tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash) to parse compound commands into an AST. The `extract_commands()` function (`src/rules/command_parser/splitter.rs`) recursively walks the AST and extracts individual simple commands from:
 
 - **Pipelines**: `cmd1 | cmd2`
 - **Logical AND/OR**: `cmd1 && cmd2`, `cmd1 || cmd2`

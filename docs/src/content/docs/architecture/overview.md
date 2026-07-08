@@ -30,7 +30,7 @@ Source: [`src/config/loader.rs`](https://github.com/fohte/runok/blob/main/src/co
 
 ### 2. Command Parsing
 
-The command parser ([`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)) handles two tasks:
+The command parser ([`src/rules/command_parser/`](https://github.com/fohte/runok/blob/main/src/rules/command_parser)) handles two tasks:
 
 - **Tokenization**: Shell-aware splitting that respects single/double quotes and backslash escapes.
 - **Compound command splitting**: Uses `tree-sitter-bash` to decompose pipelines (`|`), logical operators (`&&`, `||`), semicolons (`;`), subshells, loops, conditionals, and command substitutions into individual commands.
