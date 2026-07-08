@@ -154,6 +154,51 @@ pub struct AuditMetadata {
     pub tool_name: Option<String>,
     /// Hook-specific: hook event name.
     pub hook_event_name: Option<String>,
+    /// Hook-specific: tool use ID shared by the PreToolUse and PostToolUse
+    /// inputs of the same tool call. Correlation key for `AskResolution`.
+    pub tool_use_id: Option<String>,
+}
+
+/// Record of an `ask` decision being approved in the agent's permission
+/// dialog.
+///
+/// Written as its own JSONL line in the same date-partitioned files as
+/// decision entries. The `kind` tag discriminates the two record types:
+/// decision entries have no `kind` field. Older runok versions skip these
+/// lines as unparseable, so appending them does not break existing readers.
+///
+/// `command` is copied from the correlated ask decision entry so the record
+/// is self-contained for consumers that aggregate approvals without
+/// re-joining decision entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename = "ask_resolution")]
+pub struct AskResolution {
+    /// ISO 8601 timestamp (UTC) of the approval.
+    pub timestamp: String,
+    /// How the ask was resolved.
+    pub outcome: AskResolutionOutcome,
+    /// Tool use ID of the approved tool call. `None` when the hook input
+    /// carried no `tool_use_id` (correlation fell back to session + command).
+    pub tool_use_id: Option<String>,
+    /// Session ID from the PostToolUse hook input.
+    pub session_id: Option<String>,
+    /// Working directory from the PostToolUse hook input.
+    pub cwd: Option<String>,
+    /// Original command from the correlated ask decision entry.
+    pub command: String,
+    /// Command the agent actually executed. Differs from `command` when the
+    /// PreToolUse response rewrote it via `updatedInput` (sandbox wrapping).
+    pub executed_command: String,
+}
+
+/// How an ask was resolved.
+///
+/// Only `approved` can be observed today: Claude Code fires no hook after
+/// the user denies a permission dialog, so denials are unrecordable.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AskResolutionOutcome {
+    Approved,
 }
 
 /// Serializable representation of an evaluation action.
@@ -466,6 +511,7 @@ mod tests {
             cwd: Some("/home/user/project".to_owned()),
             tool_name: Some("Bash".to_owned()),
             hook_event_name: Some("PreToolUse".to_owned()),
+            tool_use_id: Some("toolu_01".to_owned()),
         },
         command_evaluations: vec![sample_primary_evaluation()],
     })]
@@ -708,6 +754,65 @@ mod tests {
     fn action_to_serializable(#[case] action: Action, #[case] expected: SerializableAction) {
         let result: SerializableAction = action.into();
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::with_tool_use_id(
+        AskResolution {
+            timestamp: "2026-07-08T10:30:00Z".to_owned(),
+            outcome: AskResolutionOutcome::Approved,
+            tool_use_id: Some("toolu_01".to_owned()),
+            session_id: Some("sess-1".to_owned()),
+            cwd: Some("/home/user/project".to_owned()),
+            command: "terraform apply".to_owned(),
+            executed_command: "runok exec --sandbox restricted -- 'terraform apply'".to_owned(),
+        },
+        indoc! {r#"{"kind":"ask_resolution","timestamp":"2026-07-08T10:30:00Z","outcome":"approved","tool_use_id":"toolu_01","session_id":"sess-1","cwd":"/home/user/project","command":"terraform apply","executed_command":"runok exec --sandbox restricted -- 'terraform apply'"}"#},
+    )]
+    #[case::without_tool_use_id(
+        AskResolution {
+            timestamp: "2026-07-08T10:30:00Z".to_owned(),
+            outcome: AskResolutionOutcome::Approved,
+            tool_use_id: None,
+            session_id: Some("sess-1".to_owned()),
+            cwd: Some("/tmp".to_owned()),
+            command: "git push".to_owned(),
+            executed_command: "git push".to_owned(),
+        },
+        indoc! {r#"{"kind":"ask_resolution","timestamp":"2026-07-08T10:30:00Z","outcome":"approved","tool_use_id":null,"session_id":"sess-1","cwd":"/tmp","command":"git push","executed_command":"git push"}"#},
+    )]
+    fn ask_resolution_roundtrip(#[case] resolution: AskResolution, #[case] expected_json: &str) {
+        let serialized = serde_json::to_string(&resolution).unwrap();
+        assert_eq!(serialized, expected_json);
+
+        let deserialized: AskResolution = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, resolution);
+    }
+
+    #[rstest]
+    fn ask_resolution_line_does_not_deserialize_as_audit_entry() {
+        // Decision-entry readers must be able to reject resolution lines;
+        // they lack the required `action` field.
+        let line = indoc! {r#"{"kind":"ask_resolution","timestamp":"2026-07-08T10:30:00Z","outcome":"approved","tool_use_id":"toolu_01","session_id":"s","cwd":"/tmp","command":"git push","executed_command":"git push"}"#};
+        assert!(serde_json::from_str::<AuditEntry>(line).is_err());
+    }
+
+    #[rstest]
+    fn audit_metadata_without_tool_use_id_deserializes_to_none() {
+        // Entries written before the field existed must keep parsing.
+        let legacy_json = indoc! {r#"{"endpoint_type":"hook","session_id":"s","cwd":"/tmp","tool_name":"Bash","hook_event_name":"PreToolUse"}"#};
+        let metadata: AuditMetadata = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(
+            metadata,
+            AuditMetadata {
+                endpoint_type: "hook".to_owned(),
+                session_id: Some("s".to_owned()),
+                cwd: Some("/tmp".to_owned()),
+                tool_name: Some("Bash".to_owned()),
+                hook_event_name: Some("PreToolUse".to_owned()),
+                tool_use_id: None,
+            },
+        );
     }
 
     #[rstest]

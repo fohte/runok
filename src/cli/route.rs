@@ -20,6 +20,19 @@ pub enum CheckRoute {
     Single(Box<dyn Endpoint>),
     /// Multiple commands from multi-line plaintext stdin.
     Multi(Vec<CheckAdapter>),
+    /// Claude Code PostToolUse hook: no rule evaluation, only ask-resolution
+    /// recording. Never writes to stdout and always exits 0.
+    PostToolUseHook(ClaudeCodeHookAdapter),
+}
+
+/// Route a parsed Claude Code hook input by its event name.
+fn route_hook_input(hook_input: HookInput) -> CheckRoute {
+    let adapter = ClaudeCodeHookAdapter::new(hook_input);
+    if adapter.is_post_tool_use() {
+        CheckRoute::PostToolUseHook(adapter)
+    } else {
+        CheckRoute::Single(Box::new(adapter))
+    }
 }
 
 /// Route `runok check` to the appropriate adapter based on CLI args and stdin content.
@@ -106,9 +119,7 @@ fn route_json(
         return match format.as_str() {
             "claude-code-hook" => {
                 let hook_input: HookInput = serde_json::from_value(json_value)?;
-                Ok(CheckRoute::Single(Box::new(ClaudeCodeHookAdapter::new(
-                    hook_input,
-                ))))
+                Ok(route_hook_input(hook_input))
             }
             unknown => Err(anyhow::anyhow!(
                 "Unknown input format: '{unknown}'. Valid formats: claude-code-hook"
@@ -120,9 +131,7 @@ fn route_json(
     // HookInput uses #[serde(rename_all = "snake_case")], so the actual JSON key is "tool_name"
     if json_value.get("tool_name").is_some() {
         let hook_input: HookInput = serde_json::from_value(json_value)?;
-        Ok(CheckRoute::Single(Box::new(ClaudeCodeHookAdapter::new(
-            hook_input,
-        ))))
+        Ok(route_hook_input(hook_input))
     } else if json_value.get("command").is_some() {
         let output_format = to_adapter_output_format(&args.output_format);
         let check_input: CheckInput = serde_json::from_value(json_value)?;
@@ -157,6 +166,7 @@ mod tests {
         match route {
             CheckRoute::Single(ep) => ep,
             CheckRoute::Multi(_) => panic!("expected Single, got Multi"),
+            CheckRoute::PostToolUseHook(_) => panic!("expected Single, got PostToolUseHook"),
         }
     }
 
@@ -165,6 +175,7 @@ mod tests {
         match route {
             CheckRoute::Multi(adapters) => adapters,
             CheckRoute::Single(_) => panic!("expected Multi, got Single"),
+            CheckRoute::PostToolUseHook(_) => panic!("expected Multi, got PostToolUseHook"),
         }
     }
 
@@ -466,6 +477,33 @@ mod tests {
                 .unwrap_or_else(|e| panic!("unexpected error: {e}")),
             Some("ls".to_string())
         );
+    }
+
+    // === route_check: PostToolUse routes to the resolution-only path ===
+
+    #[rstest]
+    #[case::explicit_format(Some("claude-code-hook"))]
+    #[case::auto_detect(None)]
+    fn route_check_post_tool_use_routes_to_post_hook(#[case] input_format: Option<&str>) {
+        let args = check_args(vec![], input_format);
+        let stdin_json = indoc! {r#"
+            {
+                "tool_name": "Bash",
+                "session_id": "s",
+                "transcript_path": "/tmp",
+                "cwd": "/tmp",
+                "permission_mode": "default",
+                "hook_event_name": "PostToolUse",
+                "tool_input": {"command": "git push"},
+                "tool_response": {"stdout": "ok"},
+                "tool_use_id": "toolu_01"
+            }
+        "#};
+        let route = route_check(&args, stdin_json.as_bytes());
+        assert!(matches!(
+            route.unwrap_or_else(|e| panic!("unexpected error: {e}")),
+            CheckRoute::PostToolUseHook(_)
+        ));
     }
 
     #[rstest]

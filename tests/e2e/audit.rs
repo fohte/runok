@@ -431,6 +431,203 @@ fn exec_compound_command_audit_log(exec_audit_env: AuditTestEnv) {
 }
 
 // ========================================
+// Ask resolution (PostToolUse) E2E
+// ========================================
+
+fn hook_json_for_event(event: &str, command: &str, tool_use_id: &str) -> String {
+    serde_json::json!({
+        "session_id": "sess-e2e",
+        "transcript_path": "/tmp/transcript",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": event,
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": tool_use_id
+    })
+    .to_string()
+}
+
+#[fixture]
+fn ask_terraform_env() -> AuditTestEnv {
+    AuditTestEnv::new(indoc! {"
+        rules:
+          - ask: 'terraform *'
+          - allow: 'echo *'
+    "})
+}
+
+fn run_hook(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str) {
+    env.command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(hook_json_for_event(event, command, tool_use_id))
+        .assert()
+        .code(0);
+}
+
+/// Normalize the dynamic timestamp so the whole record can be asserted
+/// with a single equality check.
+fn normalize_timestamp(mut record: serde_json::Value) -> serde_json::Value {
+    record["timestamp"] = "TIMESTAMP".into();
+    record
+}
+
+/// The ask decision entry written by the PreToolUse hook for
+/// `terraform apply` in [`ask_terraform_env`], timestamp normalized.
+fn expected_ask_entry() -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": "TIMESTAMP",
+        "command": "terraform apply",
+        "action": {"type": "ask", "detail": {"message": null}},
+        "sandbox_preset": null,
+        "default_action": null,
+        "metadata": {
+            "endpoint_type": "hook",
+            "session_id": "sess-e2e",
+            "cwd": "/tmp",
+            "tool_name": "Bash",
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "toolu_e2e"
+        },
+        "command_evaluations": [
+            {
+                "command": "terraform apply",
+                "action": {"type": "ask", "detail": {"message": null}},
+                "matched_rules": [
+                    {
+                        "action_kind": "ask",
+                        "pattern": "terraform *",
+                        "matched_tokens": ["apply"]
+                    }
+                ],
+                "eval_type": "primary",
+                "argv": ["terraform", "apply"]
+            }
+        ]
+    })
+}
+
+/// The ask_resolution record written by the PostToolUse hook for the
+/// [`expected_ask_entry`] approval, timestamp normalized.
+fn expected_resolution() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "ask_resolution",
+        "timestamp": "TIMESTAMP",
+        "outcome": "approved",
+        "tool_use_id": "toolu_e2e",
+        "session_id": "sess-e2e",
+        "cwd": "/tmp",
+        "command": "terraform apply",
+        "executed_command": "terraform apply"
+    })
+}
+
+#[rstest]
+fn post_tool_use_records_ask_resolution(ask_terraform_env: AuditTestEnv) {
+    // PreToolUse: runok decides ask and writes a decision entry.
+    run_hook(
+        &ask_terraform_env,
+        "PreToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+
+    // PostToolUse fires after the user approved the dialog: no stdout,
+    // exit 0, and an ask_resolution record is appended.
+    ask_terraform_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(hook_json_for_event(
+            "PostToolUse",
+            "terraform apply",
+            "toolu_e2e",
+        ))
+        .assert()
+        .code(0)
+        .stdout(predicates::str::is_empty());
+
+    let records: Vec<serde_json::Value> = ask_terraform_env
+        .read_audit_entries()
+        .into_iter()
+        .map(normalize_timestamp)
+        .collect();
+    assert_eq!(records, vec![expected_ask_entry(), expected_resolution()]);
+}
+
+#[rstest]
+fn post_tool_use_for_allowed_command_writes_no_resolution(ask_terraform_env: AuditTestEnv) {
+    // PostToolUse fires for every Bash call; only asks get a resolution.
+    run_hook(
+        &ask_terraform_env,
+        "PreToolUse",
+        "echo hello",
+        "toolu_allow",
+    );
+    run_hook(
+        &ask_terraform_env,
+        "PostToolUse",
+        "echo hello",
+        "toolu_allow",
+    );
+
+    let records = ask_terraform_env.read_audit_entries();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["action"]["type"], "allow");
+}
+
+/// Run the full ask → approve flow so the audit log contains one ask
+/// decision entry and its resolution record.
+fn record_approved_ask(env: &AuditTestEnv) {
+    run_hook(env, "PreToolUse", "terraform apply", "toolu_e2e");
+    run_hook(env, "PostToolUse", "terraform apply", "toolu_e2e");
+}
+
+#[rstest]
+fn audit_text_marks_approved_ask(ask_terraform_env: AuditTestEnv) {
+    record_approved_ask(&ask_terraform_env);
+
+    // Non-TTY text output marks the approved ask in the ACTION column.
+    let assert = ask_terraform_env.command().args(["audit"]).assert().code(0);
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let columns: Vec<&str> = stdout.trim().split('\t').collect();
+    assert_eq!(columns[1..], ["ask ✓", "terraform apply"]);
+}
+
+#[rstest]
+fn audit_json_outputs_decision_entry_and_resolution(ask_terraform_env: AuditTestEnv) {
+    record_approved_ask(&ask_terraform_env);
+
+    let assert = ask_terraform_env
+        .command()
+        .args(["audit", "--json"])
+        .assert()
+        .code(0);
+    let records: Vec<serde_json::Value> = parse_json_stdout(&assert)
+        .into_iter()
+        .map(normalize_timestamp)
+        .collect();
+    assert_eq!(records, vec![expected_ask_entry(), expected_resolution()]);
+}
+
+#[rstest]
+fn audit_json_limit_bounds_the_merged_stream(ask_terraform_env: AuditTestEnv) {
+    record_approved_ask(&ask_terraform_env);
+
+    // With 2 records and --limit 1, only the newest (the resolution) is
+    // emitted.
+    let assert = ask_terraform_env
+        .command()
+        .args(["audit", "--json", "--limit", "1"])
+        .assert()
+        .code(0);
+    let records: Vec<serde_json::Value> = parse_json_stdout(&assert)
+        .into_iter()
+        .map(normalize_timestamp)
+        .collect();
+    assert_eq!(records, vec![expected_resolution()]);
+}
+
+// ========================================
 // No config audit section defaults
 // ========================================
 

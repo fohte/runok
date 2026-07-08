@@ -6,8 +6,25 @@ use chrono::{DateTime, Utc};
 
 use super::filter::AuditFilter;
 use super::log_rotator::parse_log_date;
-use super::model::{AuditEntry, SerializableAction};
+use super::model::{AskResolution, AuditEntry, SerializableAction};
 use crate::config::ActionKind;
+
+/// The `kind` tag value of ask-resolution JSONL lines.
+const ASK_RESOLUTION_KIND: &str = "ask_resolution";
+
+/// Extract the top-level `kind` tag from a JSONL line, if any.
+///
+/// Decision entries have no `kind`; other record types (e.g.
+/// `ask_resolution`) carry one so readers can dispatch without fully
+/// parsing the line.
+fn parse_kind(line: &str) -> Option<String> {
+    /// Lightweight view of a record that only captures the `kind` tag.
+    #[derive(serde::Deserialize)]
+    struct RecordKind {
+        kind: Option<String>,
+    }
+    serde_json::from_str::<RecordKind>(line).ok()?.kind
+}
 
 /// Time-resolved filter criteria ready for matching against entries.
 struct ResolvedFilter<'a> {
@@ -69,6 +86,145 @@ impl AuditReader {
         entries.sort_by(oldest_first);
 
         Ok(entries)
+    }
+
+    /// Read ask-resolution records matching the given filter.
+    ///
+    /// Applies the time, command-pattern, and cwd criteria. The action
+    /// criterion does not apply (resolutions only exist for asks), and
+    /// `limit` is intentionally ignored: resolutions are joined to decision
+    /// entries by the caller, and trimming them independently would break
+    /// the join.
+    ///
+    /// Returns records sorted by timestamp in ascending order.
+    pub fn read_resolutions(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<Vec<AskResolution>, anyhow::Error> {
+        let now = Utc::now();
+        self.read_resolutions_with_now(filter, now)
+    }
+
+    fn read_resolutions_with_now(
+        &self,
+        filter: &AuditFilter,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<AskResolution>, anyhow::Error> {
+        let resolved = ResolvedFilter {
+            action: &None,
+            since: filter.since.as_ref().map(|ts| ts.resolve(now)),
+            until: filter.until.as_ref().map(|ts| ts.resolve(now)),
+            command_pattern: &filter.command_pattern,
+            cwd: &filter.cwd,
+        };
+
+        let date_files = self.collect_date_files(resolved.since)?;
+
+        let mut resolutions = Vec::new();
+        for path in &date_files {
+            self.read_resolutions_from_file(path, &resolved, &mut resolutions)?;
+        }
+
+        resolutions.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        Ok(resolutions)
+    }
+
+    /// Read ask-resolution records from a single JSONL file, applying filters.
+    fn read_resolutions_from_file(
+        &self,
+        path: &Path,
+        resolved: &ResolvedFilter,
+        resolutions: &mut Vec<AskResolution>,
+    ) -> Result<(), anyhow::Error> {
+        let file = fs::File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for (line_num, line_result) in reader.lines().enumerate() {
+            let Ok(line) = line_result else { continue };
+            // Cheap pre-filter before JSON parsing; false positives (the
+            // string appearing inside a command) are rejected by the kind
+            // check below.
+            if !line.contains(ASK_RESOLUTION_KIND) {
+                continue;
+            }
+            if parse_kind(&line).as_deref() != Some(ASK_RESOLUTION_KIND) {
+                continue;
+            }
+
+            let resolution: AskResolution = match serde_json::from_str(&line) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "runok: warning: skipping corrupted ask_resolution at line {} in {}: {}",
+                        line_num + 1,
+                        path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if !Self::matches_resolution_filter(&resolution, resolved) {
+                continue;
+            }
+
+            resolutions.push(resolution);
+        }
+
+        Ok(())
+    }
+
+    fn matches_resolution_filter(resolution: &AskResolution, filter: &ResolvedFilter) -> bool {
+        if !Self::within_time_bounds(&resolution.timestamp, filter.since, filter.until) {
+            return false;
+        }
+
+        if let Some(pattern) = filter.command_pattern
+            && !resolution.command.contains(pattern.as_str())
+        {
+            return false;
+        }
+
+        if let Some(filter_cwd) = filter.cwd {
+            match &resolution.cwd {
+                Some(cwd) => {
+                    if !Path::new(cwd).starts_with(filter_cwd) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
+    }
+
+    /// Check a record timestamp against the resolved time bounds.
+    /// Malformed timestamps cannot satisfy time filters.
+    fn within_time_bounds(
+        timestamp: &str,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> bool {
+        if since.is_none() && until.is_none() {
+            return true;
+        }
+        match timestamp.parse::<DateTime<Utc>>() {
+            Ok(ts) => {
+                if let Some(since_dt) = since
+                    && ts < since_dt
+                {
+                    return false;
+                }
+                if let Some(until_dt) = until
+                    && ts > until_dt
+                {
+                    return false;
+                }
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Collect date-partitioned log files, optionally filtering by since date.
@@ -140,6 +296,11 @@ impl AuditReader {
             let entry: AuditEntry = match serde_json::from_str(&line) {
                 Ok(e) => e,
                 Err(e) => {
+                    // Lines with a `kind` tag are other record types sharing
+                    // the file (e.g. ask_resolution), not corrupted entries.
+                    if parse_kind(&line).is_some() {
+                        continue;
+                    }
                     eprintln!(
                         "runok: warning: skipping corrupted entry at line {} in {}: {}",
                         line_num + 1,
@@ -161,23 +322,8 @@ impl AuditReader {
     }
 
     fn matches_filter(entry: &AuditEntry, filter: &ResolvedFilter) -> bool {
-        // Check timestamp filters; malformed timestamps cannot satisfy time filters
-        if filter.since.is_some() || filter.until.is_some() {
-            match entry.timestamp.parse::<DateTime<Utc>>() {
-                Ok(ts) => {
-                    if let Some(since_dt) = filter.since
-                        && ts < since_dt
-                    {
-                        return false;
-                    }
-                    if let Some(until_dt) = filter.until
-                        && ts > until_dt
-                    {
-                        return false;
-                    }
-                }
-                Err(_) => return false,
-            }
+        if !Self::within_time_bounds(&entry.timestamp, filter.since, filter.until) {
+            return false;
         }
 
         // Check action filter
@@ -681,6 +827,149 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].command, "echo project");
+    }
+
+    fn make_resolution(timestamp: &str, command: &str, cwd: Option<&str>) -> AskResolution {
+        AskResolution {
+            timestamp: timestamp.to_owned(),
+            outcome: crate::audit::AskResolutionOutcome::Approved,
+            tool_use_id: Some("toolu_01".to_owned()),
+            session_id: Some("sess-1".to_owned()),
+            cwd: cwd.map(str::to_owned),
+            command: command.to_owned(),
+            executed_command: command.to_owned(),
+        }
+    }
+
+    fn write_mixed_jsonl(
+        dir: &Path,
+        filename: &str,
+        entries: &[AuditEntry],
+        resolutions: &[AskResolution],
+    ) {
+        let path = dir.join(filename);
+        let mut content = String::new();
+        for entry in entries {
+            content.push_str(&serde_json::to_string(entry).unwrap());
+            content.push('\n');
+        }
+        for resolution in resolutions {
+            content.push_str(&serde_json::to_string(resolution).unwrap());
+            content.push('\n');
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    #[rstest]
+    fn read_skips_ask_resolution_lines(temp_log_dir: TempDir) {
+        let entries = vec![make_entry(
+            "2026-02-25T10:00:00Z",
+            "terraform apply",
+            SerializableAction::Ask { message: None },
+        )];
+        let resolutions = vec![make_resolution(
+            "2026-02-25T10:01:00Z",
+            "terraform apply",
+            Some("/tmp"),
+        )];
+        write_mixed_jsonl(
+            temp_log_dir.path(),
+            "audit-2026-02-25.jsonl",
+            &entries,
+            &resolutions,
+        );
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let result = reader.read(&AuditFilter::new()).unwrap();
+
+        assert_eq!(result, entries);
+    }
+
+    #[rstest]
+    fn read_resolutions_returns_sorted_records(temp_log_dir: TempDir) {
+        let entries = vec![make_entry(
+            "2026-02-25T10:00:00Z",
+            "terraform apply",
+            SerializableAction::Ask { message: None },
+        )];
+        let resolutions = vec![
+            make_resolution("2026-02-25T12:00:00Z", "terraform apply", Some("/tmp")),
+            make_resolution("2026-02-25T10:01:00Z", "git push", Some("/tmp")),
+        ];
+        write_mixed_jsonl(
+            temp_log_dir.path(),
+            "audit-2026-02-25.jsonl",
+            &entries,
+            &resolutions,
+        );
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let result = reader.read_resolutions(&AuditFilter::new()).unwrap();
+
+        assert_eq!(result, vec![resolutions[1].clone(), resolutions[0].clone()]);
+    }
+
+    #[rstest]
+    #[case::command_pattern(
+        AuditFilter {
+            command_pattern: Some("terraform".to_owned()),
+            ..AuditFilter::new()
+        },
+        vec![make_resolution("2026-02-25T10:01:00Z", "terraform apply", Some("/tmp"))],
+    )]
+    #[case::cwd_prefix(
+        AuditFilter {
+            cwd: Some("/home/user/project".to_owned()),
+            ..AuditFilter::new()
+        },
+        vec![make_resolution("2026-02-25T11:01:00Z", "git push", Some("/home/user/project/src"))],
+    )]
+    fn read_resolutions_applies_filters(
+        temp_log_dir: TempDir,
+        #[case] filter: AuditFilter,
+        #[case] expected: Vec<AskResolution>,
+    ) {
+        let resolutions = vec![
+            make_resolution("2026-02-25T10:01:00Z", "terraform apply", Some("/tmp")),
+            make_resolution(
+                "2026-02-25T11:01:00Z",
+                "git push",
+                Some("/home/user/project/src"),
+            ),
+        ];
+        write_mixed_jsonl(
+            temp_log_dir.path(),
+            "audit-2026-02-25.jsonl",
+            &[],
+            &resolutions,
+        );
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let result = reader.read_resolutions(&filter).unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn read_resolutions_applies_time_filter(temp_log_dir: TempDir) {
+        let resolutions = vec![
+            make_resolution("2026-02-25T08:00:00Z", "echo old", Some("/tmp")),
+            make_resolution("2026-02-25T12:00:00Z", "echo new", Some("/tmp")),
+        ];
+        write_mixed_jsonl(
+            temp_log_dir.path(),
+            "audit-2026-02-25.jsonl",
+            &[],
+            &resolutions,
+        );
+
+        let reader = AuditReader::new(temp_log_dir.path().to_path_buf());
+        let now = "2026-02-25T14:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut filter = AuditFilter::new();
+        filter.since = Some(TimeSpec::Absolute("2026-02-25T10:00:00Z".parse().unwrap()));
+        let result = reader.read_resolutions_with_now(&filter, now).unwrap();
+
+        assert_eq!(result, vec![resolutions[1].clone()]);
     }
 
     #[rstest]

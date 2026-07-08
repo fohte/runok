@@ -5,11 +5,18 @@ sidebar:
   order: 6
 ---
 
-This page is the field-by-field reference for the JSON object produced by [`runok audit --json`](/cli/audit/#--json) (one object per line, JSONL). Use it to write `jq` queries against audit logs without reading the runok source.
+This page is the field-by-field reference for the JSON objects produced by [`runok audit --json`](/cli/audit/#--json) (one object per line, JSONL). Use it to write `jq` queries against audit logs without reading the runok source.
+
+The output contains two record types, distinguished by the `kind` field:
+
+- **Decision entries** ([Top-Level Object](#top-level-object)) have no `kind` field. One is written per evaluation.
+- **Ask resolution records** ([Ask Resolution Record](#ask-resolution-record)) have `kind: "ask_resolution"`. One is written when the user approves an `ask` decision in the agent's permission dialog (requires the opt-in PostToolUse hook).
+
+`jq` queries that only want decision entries can filter with `select(.kind == null)`.
 
 ## Top-Level Object
 
-Every line of `runok audit --json` output is one `AuditEntry` object with the fields listed below.
+Every decision-entry line of `runok audit --json` output is one `AuditEntry` object with the fields listed below.
 
 Example entry:
 
@@ -31,7 +38,8 @@ Example entry:
     "session_id": "abc-123",
     "cwd": "/home/user/project",
     "tool_name": "Bash",
-    "hook_event_name": "PreToolUse"
+    "hook_event_name": "PreToolUse",
+    "tool_use_id": "toolu_01AbCdEfGh"
   },
   "command_evaluations": [
     {
@@ -176,7 +184,8 @@ Optional fix-suggestion attached to a `deny` rule. See [Denial Feedback](/config
   "session_id": "abc-123",
   "cwd": "/home/user/project",
   "tool_name": "Bash",
-  "hook_event_name": "PreToolUse"
+  "hook_event_name": "PreToolUse",
+  "tool_use_id": "toolu_01AbCdEfGh"
 }
 ```
 
@@ -221,6 +230,88 @@ Hook-specific: name of the hook event (e.g. `PreToolUse`). `null` when `endpoint
 
 **Type:** `str | null`\
 **Always present:** Yes (may be `null`)
+
+### `tool_use_id`
+
+Hook-specific: ID of the tool call this evaluation belongs to, as supplied by the agent. The agent sends the same `tool_use_id` to the PreToolUse and PostToolUse hooks of one tool call, so this is the correlation key between an `ask` decision entry and its [Ask Resolution Record](#ask-resolution-record). `null` when `endpoint_type` is not `hook`, and in entries written before this field existed.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+## Ask Resolution Record
+
+Written when the user approves an `ask` decision in the agent's permission dialog. Recording these requires the opt-in PostToolUse hook (see [Claude Code Integration](/getting-started/claude-code/#track-ask-approvals-optional)); without it, no `ask_resolution` records appear.
+
+Denials cannot be observed (see [Claude Code Integration](/getting-started/claude-code/#track-ask-approvals-optional) for why), so an `ask` entry without a resolution record means "denied or not yet decided", not "denied".
+
+```json
+{
+  "kind": "ask_resolution",
+  "timestamp": "2026-03-13T19:32:10.512345+00:00",
+  "outcome": "approved",
+  "tool_use_id": "toolu_01AbCdEfGh",
+  "session_id": "abc-123",
+  "cwd": "/home/user/project",
+  "command": "terraform apply",
+  "executed_command": "runok exec --sandbox restricted -- 'terraform apply'"
+}
+```
+
+### `kind`
+
+Record type discriminator. Always the literal `"ask_resolution"`. Decision entries have no `kind` field.
+
+**Type:** `"ask_resolution"`\
+**Always present:** Yes
+
+### `timestamp`
+
+RFC 3339 timestamp in UTC of the approval (when the PostToolUse hook fired), in the same format as the decision-entry [`timestamp`](#timestamp).
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `outcome`
+
+How the ask was resolved. Currently always `"approved"`.
+
+**Type:** `"approved"`\
+**Always present:** Yes
+
+### `tool_use_id`
+
+Tool use ID of the approved tool call, matching [`metadata.tool_use_id`](#tool_use_id) of the correlated `ask` decision entry. `null` when neither the hook input nor the correlated entry carried a `tool_use_id`; correlation then fell back to session + command matching.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `session_id`
+
+Session ID from the PostToolUse hook input.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `cwd`
+
+Working directory from the PostToolUse hook input.
+
+**Type:** `str | null`\
+**Always present:** Yes (may be `null`)
+
+### `command`
+
+The original command, copied from the correlated `ask` decision entry. The record is self-contained: aggregating approvals by command needs no join back to decision entries.
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `executed_command`
+
+The command the agent actually executed (`tool_input.command` of the PostToolUse input). Differs from [`command`](#command-1) when the PreToolUse response rewrote the command via `updatedInput` — with runok that happens for [sandbox wrapping](/getting-started/claude-code/#sandbox-execution), producing the `runok exec --sandbox <preset> -- '<command>'` form.
+
+**Type:** `str`\
+**Always present:** Yes
 
 ## CommandEvaluation Object
 

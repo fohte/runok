@@ -13,6 +13,7 @@ struct Summary {
     user_config_created: Option<PathBuf>,
     project_config_created: Option<PathBuf>,
     hook_registered: bool,
+    post_hook_registered: bool,
     converted_rules: Option<String>,
     permissions_removed: bool,
     conflicting_hook_count: usize,
@@ -65,6 +66,9 @@ fn print_summary(summary: &Summary) {
     if summary.hook_registered {
         eprintln!("  - Claude Code hook registered");
     }
+    if summary.post_hook_registered {
+        eprintln!("  - Claude Code PostToolUse hook registered (ask approval tracking)");
+    }
     if summary.converted_rules.is_some() {
         eprintln!("  - Claude Code permissions converted to runok rules");
     }
@@ -85,6 +89,7 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
         summary.project_config_created = result.config_path;
     }
     summary.hook_registered = result.hook_registered;
+    summary.post_hook_registered = result.post_hook_registered;
     summary.converted_rules = result.converted_rules;
     summary.permissions_removed = result.permissions_removed;
     summary.conflicting_hook_count = result.conflicting_hook_count;
@@ -123,6 +128,7 @@ pub fn run_wizard_with_paths(
         user_config_created: None,
         project_config_created: None,
         hook_registered: false,
+        post_hook_registered: false,
         converted_rules: None,
         permissions_removed: false,
         conflicting_hook_count: 0,
@@ -350,7 +356,8 @@ mod tests {
             "}
         );
 
-        // Hook registered, Bash permissions removed, non-Bash preserved
+        // Hooks registered (AutoYes accepts the PostToolUse opt-in too),
+        // Bash permissions removed, non-Bash preserved
         let settings: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(env.user_claude_dir().join("settings.json")).unwrap(),
         )
@@ -361,19 +368,7 @@ mod tests {
                 "permissions": {
                     "allow": ["Read(/tmp)"]
                 },
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
-                                }
-                            ]
-                        }
-                    ]
-                }
+                "hooks": hook_json()
             })
         );
     }
@@ -509,20 +504,25 @@ mod tests {
             .unwrap()
     }
 
-    /// Hook JSON fragment used in expected settings assertions.
-    fn hook_json() -> serde_json::Value {
+    /// The runok hook entry as registered in settings.json.
+    fn runok_hook_entry() -> serde_json::Value {
         serde_json::json!({
-            "PreToolUse": [
+            "matcher": "Bash",
+            "hooks": [
                 {
-                    "matcher": "Bash",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
-                        }
-                    ]
+                    "type": "command",
+                    "command": "runok check --input-format claude-code-hook"
                 }
             ]
+        })
+    }
+
+    /// Hook JSON fragment used in expected settings assertions: both the
+    /// PreToolUse hook and the opt-in PostToolUse hook registered.
+    fn hook_json() -> serde_json::Value {
+        serde_json::json!({
+            "PreToolUse": [runok_hook_entry()],
+            "PostToolUse": [runok_hook_entry()],
         })
     }
 
@@ -543,9 +543,13 @@ mod tests {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        // Confirm(true) for migration ask, Confirm(true) for apply
-        let prompter =
-            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        // Confirm(true) for migration ask, Confirm(true) for PostToolUse
+        // opt-in, Confirm(true) for apply
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(true),
+            Response::Confirm(true),
+        ]);
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
@@ -569,9 +573,13 @@ mod tests {
         let env = TestEnv::new();
         env.setup_user_claude_settings(claude_settings_with_permissions());
 
-        // Confirm(true) for migration ask, Confirm(false) for apply
-        let prompter =
-            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(false)]);
+        // Confirm(true) for migration ask, Confirm(true) for PostToolUse
+        // opt-in, Confirm(false) for apply
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(true),
+            Response::Confirm(false),
+        ]);
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
@@ -639,23 +647,11 @@ mod tests {
             "# yaml-language-server: $schema=https://raw.githubusercontent.com/fohte/runok/main/schema/runok.schema.json\n"
         );
 
-        // Hook should be registered in a newly created settings.json
+        // Both hooks should be registered in a newly created settings.json
         assert_eq!(
             read_settings(&claude_dir),
             serde_json::json!({
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
-                                }
-                            ]
-                        }
-                    ]
-                }
+                "hooks": hook_json()
             })
         );
     }
@@ -687,19 +683,7 @@ mod tests {
                     "allow": ["Read(/tmp)", "WebFetch", "Skill"],
                     "deny": ["Write(/etc/passwd)"]
                 },
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
-                                }
-                            ]
-                        }
-                    ]
-                }
+                "hooks": hook_json()
             })
         );
     }
@@ -804,9 +788,13 @@ mod tests {
             }
         "#});
 
-        // Confirm(true) for migration, Confirm(true) for apply
-        let prompter =
-            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        // Confirm(true) for migration, Confirm(true) for PostToolUse opt-in,
+        // Confirm(true) for apply
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(true),
+            Response::Confirm(true),
+        ]);
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
@@ -842,10 +830,14 @@ mod tests {
             }
         "#});
 
-        // Has Bash permissions but hook already registered.
-        // Confirm(true) for migration, Confirm(true) for apply
-        let prompter =
-            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        // Has Bash permissions but PreToolUse hook already registered.
+        // Confirm(true) for migration, Confirm(true) for PostToolUse opt-in,
+        // Confirm(true) for apply
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(true),
+            Response::Confirm(true),
+        ]);
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
@@ -865,20 +857,73 @@ mod tests {
             read_settings(&env.user_claude_dir()),
             serde_json::json!({
                 "permissions": {},
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
-                                }
-                            ]
-                        }
-                    ]
-                }
+                "hooks": hook_json()
             })
+        );
+    }
+
+    // --- PostToolUse hook opt-in ---
+
+    #[rstest]
+    fn wizard_post_hook_declined_registers_pre_hook_only() {
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(claude_settings_with_permissions());
+
+        // Confirm(true) for migration, Confirm(false) for PostToolUse
+        // opt-in, Confirm(true) for apply
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(false),
+            Response::Confirm(true),
+        ]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
+                "permissions": {
+                    "allow": ["Read(/tmp)"]
+                },
+                "hooks": {
+                    "PreToolUse": [runok_hook_entry()]
+                }
+            }),
+        );
+    }
+
+    #[rstest]
+    fn wizard_post_hook_only_rerun_preserves_existing_config() {
+        // Re-running init on a fully set-up environment where only the
+        // PostToolUse hook is missing must not touch the existing runok.yml.
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(
+            &serde_json::to_string(&serde_json::json!({
+                "hooks": { "PreToolUse": [runok_hook_entry()] }
+            }))
+            .unwrap(),
+        );
+        let existing_config = indoc! {"
+            rules:
+              - allow: 'cargo test'
+        "};
+        std::fs::create_dir_all(&env.user_config_dir).unwrap();
+        std::fs::write(env.user_config_dir.join("runok.yml"), existing_config).unwrap();
+
+        // Confirm(true) for PostToolUse opt-in, Confirm(true) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        let config = std::fs::read_to_string(env.user_config_dir.join("runok.yml")).unwrap();
+        assert_eq!(config, existing_config);
+
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
+                "hooks": hook_json()
+            }),
         );
     }
 }

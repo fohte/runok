@@ -102,6 +102,36 @@ Start a Claude Code session in your project directory. Ask Claude to run a comma
 2. **Denied command**: Ask Claude to run `git push --force origin main`. It should be blocked with the configured message.
 3. **Ask command**: Ask Claude to run `git push origin main`. It should prompt you for confirmation.
 
+## Track ask approvals (optional)
+
+By default, the audit log records that runok answered `ask` for a command, but not whether you then approved or denied it in the permission dialog. Registering the same runok command as a **PostToolUse** hook closes that gap: when you approve an ask and the command runs, Claude Code fires PostToolUse, and runok appends an `ask_resolution` record correlated with the original `ask` entry. `runok audit` then shows those entries as `ask ✓`, and the approval history can drive rule optimization (e.g. promoting frequently-approved asks to `allow` rules).
+
+[`runok init --scope user`](/cli/init/) offers this as an opt-in question. To set it up manually, add the same command under `PostToolUse`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "runok check --input-format claude-code-hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The PostToolUse invocation never blocks or modifies the session: it writes no stdout, exits `0` apart from the [non-blocking hook-mode failures](/cli/check/#hook-mode---input-format-claude-code-hook) that exit `1`, and only appends a record when the tool call matches an unresolved `ask` decision.
+
+:::note[Denials are not recorded]
+Claude Code fires no hook after you deny a permission dialog, so only approvals can be recorded. An `ask` entry without a resolution means "denied or not yet decided".
+:::
+
 ## Sandbox execution
 
 runok can enforce OS-level sandboxing (file system and network restrictions) on commands that Claude Code runs. When an `allow` rule has a `sandbox` field, runok automatically rewrites the command so that Claude Code executes it inside a sandbox.

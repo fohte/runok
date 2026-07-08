@@ -4,13 +4,15 @@ use super::super::error::InitError;
 use super::super::prompt::Prompter;
 use super::super::{claude_code, config_gen};
 use super::preview::{
-    normalize_json, preview_register_hook, preview_remove_permissions, print_diff,
+    normalize_json, preview_register_hook, preview_register_post_tool_use_hook,
+    preview_remove_permissions, print_diff,
 };
 
 /// Result of setting up a single scope.
 pub(super) struct ScopeResult {
     pub config_path: Option<PathBuf>,
     pub hook_registered: bool,
+    pub post_hook_registered: bool,
     pub converted_rules: Option<String>,
     pub permissions_removed: bool,
     /// Number of other PreToolUse entries that also match Bash.
@@ -44,6 +46,8 @@ pub(super) fn setup_scope(
     let mut detected_claude_config = false;
     let mut has_rules = false;
     let mut has_hook_change = false;
+    let mut wants_post_hook = false;
+    let mut should_write_config = false;
     let mut detected_conflict_count: usize = 0;
 
     if let Some(cd) = claude_dir
@@ -73,9 +77,14 @@ pub(super) fn setup_scope(
         } else {
             false
         };
+        let would_add_post_hook = if hook_policy == HookPolicy::Register {
+            preview_register_post_tool_use_hook(&original_content)?.is_some()
+        } else {
+            false
+        };
 
         // Only show "Detected" and ask migration if there's something to do
-        if has_migratable_rules || would_add_hook {
+        if has_migratable_rules || would_add_hook || would_add_post_hook {
             detected_claude_config = true;
             let settings_path_display = settings_path.display();
             eprintln!(
@@ -94,6 +103,15 @@ pub(super) fn setup_scope(
                     converted_rules = Some(conversion.rules.clone());
                     has_rules = true;
                 }
+            }
+
+            // The PostToolUse hook is opt-in: it spawns runok on every Bash
+            // call, so it is only registered when the user asks for it.
+            if would_add_post_hook {
+                wants_post_hook = prompter.confirm(
+                    "Track ask approvals in the audit log? (adds a PostToolUse hook)",
+                    true,
+                )?;
             }
 
             // Build the preview
@@ -123,26 +141,32 @@ pub(super) fn setup_scope(
                 eprintln!();
             }
 
-            // Always show runok.yml creation/update diff
-            let config_content = config_gen::build_config_content(converted_rules.as_deref());
-            let existing_config = if config_path.exists() {
-                std::fs::read_to_string(&config_path)?
-            } else {
-                String::new()
-            };
-            let verb = if config_path.exists() {
-                "Update"
-            } else {
-                "Create"
-            };
-            eprintln!("\x1b[1m{verb} {config_path_display}\x1b[0m");
-            eprintln!();
-            print_diff(
-                &config_path_display.to_string(),
-                &existing_config,
-                &config_content,
-            );
-            eprintln!();
+            // Show the runok.yml diff only when the file would actually
+            // change: created fresh, or replaced with migrated rules.
+            // Re-running init just to add a hook must not touch an
+            // existing config.
+            should_write_config = has_rules || !config_path.exists();
+            if should_write_config {
+                let config_content = config_gen::build_config_content(converted_rules.as_deref());
+                let existing_config = if config_path.exists() {
+                    std::fs::read_to_string(&config_path)?
+                } else {
+                    String::new()
+                };
+                let verb = if config_path.exists() {
+                    "Update"
+                } else {
+                    "Create"
+                };
+                eprintln!("\x1b[1m{verb} {config_path_display}\x1b[0m");
+                eprintln!();
+                print_diff(
+                    &config_path_display.to_string(),
+                    &existing_config,
+                    &config_content,
+                );
+                eprintln!();
+            }
 
             // Determine the final settings.json content (after hook registration)
             // for both the diff preview and the conflicting-hook check.
@@ -163,10 +187,30 @@ pub(super) fn setup_scope(
                 after_permissions.clone()
             };
 
+            let after_post_hook_content = if wants_post_hook {
+                let post_hook_preview = preview_register_post_tool_use_hook(&after_hook_content)?;
+                eprintln!(
+                    "\x1b[1mRegister runok PostToolUse hook in {settings_path_display}\x1b[0m"
+                );
+                eprintln!();
+                if let Some(ref after_post_hook) = post_hook_preview {
+                    print_diff(
+                        &settings_path_display.to_string(),
+                        &after_hook_content,
+                        after_post_hook,
+                    );
+                }
+                eprintln!();
+                post_hook_preview.unwrap_or(after_hook_content)
+            } else {
+                after_hook_content
+            };
+
             // Show warning about conflicting hooks before the confirmation prompt
             // so the user can make an informed decision.
             if hook_policy == HookPolicy::Register {
-                detected_conflict_count = count_conflicting_hooks_in_json(&after_hook_content)?;
+                detected_conflict_count =
+                    count_conflicting_hooks_in_json(&after_post_hook_content)?;
                 if detected_conflict_count > 0 {
                     print_conflicting_hooks_warning(detected_conflict_count);
                     eprintln!();
@@ -213,13 +257,27 @@ pub(super) fn setup_scope(
         false
     };
 
+    let post_hook_registered = if approved && wants_post_hook {
+        claude_dir
+            .map(claude_code::register_post_tool_use_hook)
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     // Create config file:
     // - User approved changes in "Detected" block: create with converted rules
+    //   (skipped when an existing config would be replaced with boilerplate)
     // - No Claude Code config detected: create boilerplate (ask if file exists)
     // - User declined all changes: skip (don't create silently)
     let config_path = if approved {
-        let content = config_gen::build_config_content(converted_rules.as_deref());
-        Some(config_gen::write_config(config_dir, &content)?)
+        if should_write_config {
+            let content = config_gen::build_config_content(converted_rules.as_deref());
+            Some(config_gen::write_config(config_dir, &content)?)
+        } else {
+            None
+        }
     } else if !detected_claude_config {
         let config_path = config_dir.join("runok.yml");
         if config_path.exists() {
@@ -241,6 +299,7 @@ pub(super) fn setup_scope(
     Ok(ScopeResult {
         config_path,
         hook_registered,
+        post_hook_registered,
         converted_rules,
         permissions_removed,
         conflicting_hook_count,

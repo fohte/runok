@@ -309,6 +309,9 @@ fn run_command(
                 Ok(CheckRoute::Single(endpoint)) => {
                     adapter::run_with_options(endpoint.as_ref(), &config, &options)
                 }
+                Ok(CheckRoute::PostToolUseHook(hook_adapter)) => {
+                    hook_adapter.handle_post_tool_use(&config)
+                }
                 Ok(CheckRoute::Multi(adapters)) => {
                     let mut worst_exit = 0;
                     for ep in &adapters {
@@ -445,18 +448,52 @@ fn run_audit(args: AuditArgs, config_path: Option<&std::path::Path>, cwd: &std::
         }
     };
 
+    // Resolutions only exist for asks; skip reading them when the action
+    // filter excludes ask entries.
+    let resolutions = if matches!(filter.action, None | Some(ActionKind::Ask)) {
+        match reader.read_resolutions(&filter) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("runok: failed to read audit log: {e}");
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     if args.json {
+        // Emit decision entries and resolution records as-is, merged into
+        // one timestamp-ordered JSONL stream.
+        let mut records: Vec<(&str, String)> = Vec::new();
         for entry in &entries {
             match serde_json::to_string(entry) {
-                Ok(json) => println!("{json}"),
+                Ok(json) => records.push((&entry.timestamp, json)),
                 Err(e) => {
                     eprintln!("runok: serialization error: {e}");
                     return 1;
                 }
             }
         }
+        for resolution in &resolutions {
+            match serde_json::to_string(resolution) {
+                Ok(json) => records.push((&resolution.timestamp, json)),
+                Err(e) => {
+                    eprintln!("runok: serialization error: {e}");
+                    return 1;
+                }
+            }
+        }
+        records.sort_by(|a, b| a.0.cmp(b.0));
+        // --limit bounds the merged output stream: resolutions are read
+        // without a limit (the text-mode join needs all of them), so keep
+        // only the newest `limit` records here.
+        let skip = records.len().saturating_sub(filter.limit);
+        for (_, json) in &records[skip..] {
+            println!("{json}");
+        }
     } else {
-        runok::audit::formatter::print_entries(&entries);
+        runok::audit::formatter::print_entries(&entries, &resolutions);
     }
 
     0
