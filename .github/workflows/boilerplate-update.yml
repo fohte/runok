@@ -53,7 +53,7 @@ jobs:
 
       - name: Run copier-update-action
         id: copier-update
-        uses: fohte/copier-update-action@b6cf0fa2396de17ddd38c98782c8143d423caa09 # v0.1.3
+        uses: fohte/copier-update-action@9fe7399ce4db739a9d2eb66cc9e40986d3d03f89 # v0.1.4
         with:
           template-repo: ${{ env.TEMPLATE_REPO }}
           target-version: ${{ github.event.inputs.target-version }}
@@ -183,17 +183,47 @@ jobs:
             pr_url=$(gh pr create "${create_args[@]}")
           fi
 
-          if [ -z "${UNRESOLVED_FILES}" ]; then
-            if OUTPUT=$(gh pr merge --auto --squash "${pr_url}" 2>&1); then
-              echo "$OUTPUT"
-            elif echo "$OUTPUT" | grep -q "clean status"; then
-              echo "$OUTPUT"
-              gh pr merge --squash "${pr_url}" || echo "Direct merge failed. Leaving PR open."
-            elif echo "$OUTPUT" | grep -q "auto-merge is not enabled"; then
-              echo "$OUTPUT"
-              gh pr merge --squash "${pr_url}" || echo "Direct merge failed (likely due to pending checks). Leaving PR open."
-            else
-              echo "$OUTPUT"
-              exit 1
+          # `unresolved-files` only reflects copier's own 3-way merge; it says
+          # nothing about whether this branch can still merge into the base
+          # branch. GitHub computes mergeability asynchronously and reports it
+          # as "UNKNOWN" for a few seconds after a push, so poll for a
+          # definite answer before trusting it. A transient `gh pr view`
+          # failure is treated the same as an "UNKNOWN" reading and retried,
+          # rather than aborting the step outright.
+          should_disable_auto=false
+          if [ -n "${UNRESOLVED_FILES}" ]; then
+            should_disable_auto=true
+          else
+            mergeable=UNKNOWN
+            for _ in $(seq 1 10); do
+              if output=$(gh pr view "${pr_url}" --json mergeable --jq .mergeable); then
+                mergeable="${output}"
+                if [ "${mergeable}" != "UNKNOWN" ]; then
+                  break
+                fi
+              fi
+              sleep 2
+            done
+
+            if [ "${mergeable}" != "MERGEABLE" ]; then
+              echo "PR is not cleanly mergeable with the base branch (mergeable=${mergeable}); leaving it for manual review." >&2
+              should_disable_auto=true
             fi
+          fi
+
+          if [ "${should_disable_auto}" = "true" ]; then
+            # Disable auto-merge in case a conflict-free earlier run of this
+            # same reused branch had already armed it.
+            gh pr merge --disable-auto "${pr_url}" || true
+          elif OUTPUT=$(gh pr merge --auto --squash "${pr_url}" 2>&1); then
+            echo "$OUTPUT"
+          elif echo "$OUTPUT" | grep -q "clean status"; then
+            echo "$OUTPUT"
+            gh pr merge --squash "${pr_url}" || echo "Direct merge failed. Leaving PR open."
+          elif echo "$OUTPUT" | grep -q "auto-merge is not enabled"; then
+            echo "$OUTPUT"
+            gh pr merge --squash "${pr_url}" || echo "Direct merge failed (likely due to pending checks). Leaving PR open."
+          else
+            echo "$OUTPUT"
+            exit 1
           fi
