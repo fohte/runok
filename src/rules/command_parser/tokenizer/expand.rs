@@ -1,6 +1,6 @@
 use crate::rules::command_parser::var_env::{VarEnv, VarValue};
 
-use super::dequote::{decode_double_quote_escapes, dequote_node};
+use super::dequote::{dequote_node, dequote_node_with};
 
 /// Resolve one child of a `command` node (the command name or an
 /// argument position) into zero or more tokens, applying variable
@@ -34,58 +34,10 @@ pub(in crate::rules::command_parser) fn expand_argument_tokens(
         }
         _ => {
             let verbatim = dequote_node(node, source)?;
-            let resolved = dequote_node_resolved(node, source, var_env)?;
+            let resolved = dequote_node_with(node, source, Some(var_env))?;
             let expanded = resolved != verbatim;
             Some((vec![resolved], expanded))
         }
-    }
-}
-
-/// Like [`dequote_node`], but resolves a bare `$X` / `${X}` -- whether it
-/// is the whole node, an interpolation inside a double-quoted `string`,
-/// or a piece of a `concatenation` -- to its tracked literal value when
-/// possible. Never splits on whitespace: this is used for embedding a
-/// resolved value into a larger token, where bash would not word-split
-/// either.
-fn dequote_node_resolved(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    var_env: &VarEnv,
-) -> Option<String> {
-    match node.kind() {
-        "string" => {
-            let mut out = String::new();
-            for i in 0..node.child_count() {
-                let child = node.child(i as u32)?;
-                if !child.is_named() {
-                    continue;
-                }
-                if child.kind() == "string_content" {
-                    let text = source.get(child.start_byte()..child.end_byte())?;
-                    let text = std::str::from_utf8(text).ok()?;
-                    out.push_str(&decode_double_quote_escapes(text));
-                } else {
-                    out.push_str(&dequote_node_resolved(child, source, var_env)?);
-                }
-            }
-            Some(out)
-        }
-        "concatenation" => {
-            let mut out = String::new();
-            for i in 0..node.child_count() {
-                let child = node.child(i as u32)?;
-                if !child.is_named() {
-                    continue;
-                }
-                out.push_str(&dequote_node_resolved(child, source, var_env)?);
-            }
-            Some(out)
-        }
-        "simple_expansion" | "expansion" => {
-            resolve_literal(node, source, var_env).or_else(|| dequote_node(node, source))
-        }
-        "command_name" => dequote_node_resolved(node.named_child(0)?, source, var_env),
-        _ => dequote_node(node, source),
     }
 }
 
@@ -94,7 +46,11 @@ fn dequote_node_resolved(
 /// the variable isn't tracked (absent or [`VarValue::Poisoned`]), or when
 /// the expansion isn't a bare variable reference (an operator like
 /// `${X:-default}`, an array subscript, a special variable like `$?`).
-fn resolve_literal(node: tree_sitter::Node<'_>, source: &[u8], var_env: &VarEnv) -> Option<String> {
+pub(in crate::rules::command_parser) fn resolve_literal(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    var_env: &VarEnv,
+) -> Option<String> {
     let name = expansion_var_name(node, source)?;
     match var_env.get(&name) {
         Some(VarValue::Literal(value)) => Some(value.clone()),

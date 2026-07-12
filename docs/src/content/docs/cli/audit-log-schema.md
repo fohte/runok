@@ -336,9 +336,31 @@ One entry per shell command extracted from the input. Higher-level shaping (reso
 }
 ```
 
+When [variable resolution](/rule-evaluation/compound-commands/#variable-resolution) rewrote the branch, `original_command` carries the verbatim source:
+
+```json
+{
+  "command": "git push --force",
+  "original_command": "git push $F",
+  "action": {
+    "type": "deny",
+    "detail": { "message": null, "fix_suggestion": null }
+  },
+  "matched_rules": [
+    {
+      "action_kind": "deny",
+      "pattern": "git push --force*",
+      "matched_tokens": []
+    }
+  ],
+  "eval_type": "primary",
+  "argv": ["git", "push", "--force"]
+}
+```
+
 ### `command`
 
-The branch command as runok extracted it, with redirects stripped but the inline env prefix kept. This is the text rule evaluation actually used, so when [variable resolution](/rule-evaluation/compound-commands/#variable-resolution) rewrote a `$X` / `${X}` reference to its statically known value, this is the **expanded** text -- see `original_command` for the verbatim source. For `eval_type: "primary"` entries this is identical to the top-level [`command`](#command).
+The branch command as runok extracted it, with redirects stripped but the inline env prefix kept. This is the text rule evaluation actually used, so when [variable resolution](/rule-evaluation/compound-commands/#variable-resolution) rewrote a `$X` / `${X}` reference to its statically known value, this is the **expanded** text -- see `original_command` for the verbatim source. For `eval_type: "primary"` entries where nothing was expanded, this is identical to the top-level [`command`](#command); when a rewrite did happen, it's `original_command` (not `command`) that matches the top-level value.
 
 **Type:** `str`\
 **Always present:** Yes

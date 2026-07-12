@@ -23,6 +23,8 @@ Only assignments that are unconditional and statically known are resolved -- a d
 
 When a command is rewritten this way, the audit log records both the resolved text (`command`) and the verbatim source (`original_command`). See [Audit Log JSON Schema -- `original_command`](/cli/audit-log-schema/#original_command) for details.
 
+**What changes for existing rules?** A rule that matches literal `$X` text (e.g. `allow: 'echo $X'`, intending to match the variable reference itself rather than its value) now sees the resolved value instead, when that value is statically known. This is unlikely in practice -- patterns are normally written against a command's real arguments, not its unexpanded source -- but if a rule specifically depended on `$X` staying unresolved, it should be rewritten against the values the variable can actually take, since those are now what reaches rule evaluation.
+
 ### Breaking: `?` in a flag's value position now means "optional value" ([#471](https://github.com/fohte/runok/pull/471))
 
 Some flags accept a value but also work without one (e.g. git's `--abbrev[=<n>]`, `-n[<n>]`). Writing `?` in the value position now matches **zero or one** token, unlike `*` which requires exactly one:
