@@ -30,6 +30,19 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
+### `runok audit --recheck` re-evaluates entries against the current config (TODO(pr-link))
+
+An audit entry's recorded `action` and `matched_rules` are a snapshot from when the entry was decided -- if rules changed since then, the log alone can't tell you how a command would evaluate today. `--recheck` re-evaluates each displayed entry's `command` against the config currently in effect (loaded from the entry's own `metadata.cwd`) and annotates the output with the result. It's an annotation, not a filter: it never changes which entries are shown, and composes with `--action`, `--since`, `--dir`, and the other filters.
+
+```sh
+runok audit --action ask --recheck --json \
+  | jq 'select(.recheck.action.type == "ask")'
+```
+
+Text mode gains a NOW column next to ACTION; JSON mode gains a `recheck` object per entry, distinguishing an `ask` resolved by an explicit rule from one resolved purely via `defaults.action` fallback. Every `ask` decision entry in `--json` output also now carries an `approved` boolean -- the same `ask_resolution` join used for the `ask ✓` marker in text mode.
+
+See [`runok audit` -- `--recheck`](/cli/audit/#--recheck) and [Audit Log JSON Schema -- Recheck Object](/cli/audit-log-schema/#recheck-object) for details.
+
 ### Track ask approvals in the audit log ([#468](https://github.com/fohte/runok/pull/468))
 
 The audit log used to record only that runok answered `ask` for a command -- not whether the user then approved it in Claude Code's permission dialog. Registering runok as an opt-in **PostToolUse** hook (offered by `runok init --scope user`, or added manually to `settings.json`) closes that gap: approving an ask now appends a self-contained `ask_resolution` record correlated with the original `ask` entry via `tool_use_id`.

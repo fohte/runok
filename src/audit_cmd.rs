@@ -2,6 +2,7 @@ use std::path::Path;
 
 use runok::audit::filter::{AuditFilter, TimeSpec};
 use runok::audit::reader::AuditReader;
+use runok::audit::{AuditEntryJson, SerializableAction, is_approved, recheck_entries};
 use runok::config::{ActionKind, ConfigLoader, ConfigSource, DefaultConfigLoader};
 
 use crate::cli::AuditArgs;
@@ -91,12 +92,24 @@ pub fn run_audit(args: AuditArgs, config_path: Option<&Path>, cwd: &Path) -> i32
         Vec::new()
     };
 
+    // Annotation, not a filter: computed for the entries already selected
+    // above, in the same order, so it can be zipped back onto them below.
+    let recheck_results = args.recheck.then(|| recheck_entries(&entries, &loader));
+
     if args.json {
         // Emit decision entries and resolution records as-is, merged into
         // one timestamp-ordered JSONL stream.
         let mut records: Vec<(&str, String)> = Vec::new();
-        for entry in &entries {
-            match serde_json::to_string(entry) {
+        for (i, entry) in entries.iter().enumerate() {
+            let approved = matches!(entry.action, SerializableAction::Ask { .. })
+                .then(|| is_approved(entry, &resolutions));
+            let recheck = recheck_results.as_ref().map(|r| &r[i]);
+            let json_entry = AuditEntryJson {
+                entry,
+                approved,
+                recheck,
+            };
+            match serde_json::to_string(&json_entry) {
                 Ok(json) => records.push((&entry.timestamp, json)),
                 Err(e) => {
                     eprintln!("runok: serialization error: {e}");
@@ -122,7 +135,7 @@ pub fn run_audit(args: AuditArgs, config_path: Option<&Path>, cwd: &Path) -> i32
             println!("{json}");
         }
     } else {
-        runok::audit::formatter::print_entries(&entries, &resolutions);
+        runok::audit::formatter::print_entries(&entries, &resolutions, recheck_results.as_deref());
     }
 
     0
