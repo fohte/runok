@@ -36,6 +36,59 @@ This is decomposed into three commands:
 2. `git commit -m "update"`
 3. `cat`
 
+## Variable resolution
+
+runok tracks shell variable assignments (`X=value`) within a single command string and resolves `$X` / `${X}` references to their statically known value before rule evaluation, if the assignment is unconditional and its value contains no dynamic content.
+
+```yaml
+rules:
+  - deny: 'git push --force*'
+  - allow: 'git push *'
+```
+
+For the command `F=--force; git push $F`:
+
+1. `F=--force` is a static, unconditional assignment -- `F` is recorded as `--force`.
+2. `git push $F` resolves to `git push --force` before matching.
+3. Final result: **deny** -- the flag can no longer evade the rule by being smuggled through a variable.
+
+### What resolves
+
+- A value made only of literal text, a single- or double-quoted string with no interpolation, or a concatenation of those (`X=1`, `X="git status"`, `X='rm -rf'`).
+- The resolved value substitutes for `$X` / `${X}` wherever it's referenced, including the command name position (`X=rm; $X -rf /` evaluates as `rm -rf /`).
+- An unquoted reference is split on whitespace like bash's default `IFS` (`X="git status"; $X` evaluates as two tokens, `git` and `status`); a quoted reference (`"$X"`) is not split.
+- A subshell or command substitution (`(...)`, `$(...)`) forks a child shell, so a reassignment inside it never overwrites the value the parent scope resolves to afterward (`X=--force; (X=--safe); git push $X` still evaluates the outer `git push $X` as `git push --force`).
+
+### What does not resolve
+
+The following are recorded as unresolvable and left as the literal `$X` / `${X}` text:
+
+- A dynamic value: `$(...)`, `` `...` ``, process substitution, or arithmetic expansion (`X=$(cat f)`).
+- A reassignment of a name that was previously dynamic in the same command string (`X=1; X=$(date); echo $X` -- the stale `1` is never reused).
+- An assignment inside a conditional or loop body (`if`/`elif`/`else`/`case`/`for`/`while`/`until`), since it may run zero, one, or many times: `if true; then X=rm; fi; $X /` leaves `$X` unresolved even though the branch always runs.
+- The right-hand side of `&&` / `||`, since it only runs depending on the left side's exit status: `X=--force; false && X=--safe; git push $X` leaves `$X` unresolved.
+- A `for` loop's own iteration variable, since its value changes every iteration (`for i in a b; do echo $i; done` never resolves `$i`).
+- An array-element assignment (`arr[0]=x`), and a bare `export`/`declare`/`unset` with no value (`X=1; export X; echo $X` leaves `$X` unresolved -- `export X` alone doesn't reassign it, but its current value isn't statically known either).
+- An expansion with an operator, such as `${X:-default}` or `${X#pattern}`.
+- Anything inside a function body at definition time (`f() { local X=1; }; echo $X` leaves the outer `$X` unresolved) -- the body is only evaluated when the function is called, which runok does not yet resolve.
+
+### Audit log
+
+When variable resolution rewrites a command, the audit log's `command_evaluations` entry records the resolved text in `command` (the value rule evaluation actually used) and the verbatim source in `original_command`, so both the decision and the original input remain inspectable. `original_command` is omitted when nothing was resolved.
+
+```json
+{
+  "command": "git push --force",
+  "original_command": "git push $F",
+  "action": {
+    "type": "deny",
+    "detail": { "message": null, "fix_suggestion": null }
+  }
+}
+```
+
+See [Audit Log JSON Schema](/cli/audit-log-schema/#original_command) for the full field reference.
+
 ## Strictest wins
 
 After evaluating each sub-command, runok aggregates the results using the same [Explicit Deny Wins](/rule-evaluation/priority-model/) logic:

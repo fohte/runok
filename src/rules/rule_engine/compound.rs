@@ -31,6 +31,7 @@ pub fn evaluate_compound(
             redirects: vec![],
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
+            original_command: None,
         }]
     });
 

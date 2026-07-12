@@ -6,6 +6,7 @@ use misparse::strip_misparsed_compound_prefix;
 
 use crate::rules::CommandParseError;
 
+use super::var_env::VarEnv;
 #[cfg(test)]
 use super::{EnvAssignment, RedirectInfo};
 use super::{ExtractedCommand, PipeInfo};
@@ -57,6 +58,7 @@ pub fn extract_commands_with_metadata(
     }
 
     let mut commands = Vec::new();
+    let mut var_env = VarEnv::new();
     collect_commands(
         root,
         trimmed.as_bytes(),
@@ -64,6 +66,8 @@ pub fn extract_commands_with_metadata(
         &PipeInfo::default(),
         &[],
         "",
+        &mut var_env,
+        false,
     );
 
     Ok(commands)
@@ -607,9 +611,11 @@ mod tests {
         "echo hello > file.txt && cat file.txt",
         vec!["echo hello", "cat file.txt"],
     )]
+    // `$X` resolves to the literal value assigned by `X="test"`; the
+    // redirect is still stripped, which is this case's original intent.
     #[case::redirect_in_compound(
         r#"X="test" && echo "$X" 2>&1"#,
-        vec![r#"echo "$X""#],
+        vec!["echo test"],
     )]
     #[case::process_substitution_in_redirect(
         "cmd > >(nested_cmd)",
@@ -1366,5 +1372,204 @@ mod tests {
             std::mem::discriminant(&err),
             std::mem::discriminant(&expected),
         );
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: variable resolution
+    //
+    // A static, single-value `variable_assignment` (`X=1`) is tracked so a
+    // later bare `$X` / `${X}` in the same command string resolves to its
+    // value: `command` becomes the expanded text and `original_command`
+    // holds the verbatim source. Anything not statically resolvable —
+    // dynamic values, reassignment inside a conditional/loop, array
+    // subscripts, bare `export`/`unset`, a definition-time function body —
+    // is recorded as poisoned, and expansion falls back to the verbatim
+    // `$X` (`original_command: None`).
+    // ========================================
+
+    fn no_expansion(command: &str, argv: &[&str]) -> ExtractedCommand {
+        ExtractedCommand {
+            command: command.to_string(),
+            env: vec![],
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: None,
+        }
+    }
+
+    #[rstest]
+    fn variable_resolution_numeric_value_resolves() {
+        // A purely-numeric value parses as a `number` node (distinct
+        // from `word` in tree-sitter-bash), so it needs its own static
+        // check; regression test for that gap.
+        let result = extract_commands_with_metadata("X=1; echo $X").unwrap();
+        assert_eq!(
+            result,
+            vec![ExtractedCommand {
+                command: "echo 1".to_string(),
+                env: vec![],
+                argv: vec!["echo".to_string(), "1".to_string()],
+                redirects: vec![],
+                pipe: PipeInfo::default(),
+                loop_kind: String::new(),
+                original_command: Some("echo $X".to_string()),
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::subshell_reassignment_does_not_leak("X=1; (X=2); echo $X")]
+    #[case::command_substitution_reassignment_does_not_leak("X=1; Y=$(X=2); echo $X")]
+    fn variable_resolution_subshell_scope_is_isolated(#[case] input: &str) {
+        // A subshell / command substitution forks: an assignment inside
+        // it (here, the inner `X=2`, itself a bare assignment that
+        // contributes no `ExtractedCommand` of its own) must never
+        // overwrite the value the parent scope resolves `$X` to
+        // afterward -- `echo $X` must still expand from the outer
+        // `X=1`, not the shadowed `X=2`.
+        let result = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(
+            result,
+            vec![ExtractedCommand {
+                command: "echo 1".to_string(),
+                env: vec![],
+                argv: vec!["echo".to_string(), "1".to_string()],
+                redirects: vec![],
+                pipe: PipeInfo::default(),
+                loop_kind: String::new(),
+                original_command: Some("echo $X".to_string()),
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::and_then_reassignment_is_poisoned(
+        "X=1; false && X=2; echo $X",
+        vec![no_expansion("false", &["false"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::or_then_reassignment_is_poisoned(
+        "X=1; true || X=2; echo $X",
+        vec![no_expansion("true", &["true"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    fn variable_resolution_list_right_hand_side_is_poisoned(
+        #[case] input: &str,
+        #[case] expected: Vec<ExtractedCommand>,
+    ) {
+        // `X=2` on the right of `&&` / `||` may or may not run depending
+        // on the left side's exit status, so it must poison `X` rather
+        // than being trusted as an unconditional Literal -- regardless
+        // of which operand actually executes at runtime.
+        let result = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    // A literal value containing a space is word-split like bash's
+    // default IFS would: `$X` alone expands to two argv tokens, and the
+    // command name becomes `git` (not the unknown `git status`).
+    #[case::bare_expansion_becomes_two_tokens(
+        r#"X="git status"; $X"#,
+        ExtractedCommand {
+            command: "git status".to_string(),
+            env: vec![],
+            argv: vec!["git".to_string(), "status".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("$X".to_string()),
+        },
+    )]
+    #[case::command_name_position(
+        "X=rm; $X -rf /",
+        ExtractedCommand {
+            command: "rm -rf /".to_string(),
+            env: vec![],
+            argv: vec!["rm".to_string(), "-rf".to_string(), "/".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("$X -rf /".to_string()),
+        },
+    )]
+    // Motivating case: a flag value smuggled through a variable no
+    // longer evades a `deny: 'git push --force*'` rule.
+    #[case::flag_value(
+        "F=--force; git push $F",
+        ExtractedCommand {
+            command: "git push --force".to_string(),
+            env: vec![],
+            argv: vec!["git".to_string(), "push".to_string(), "--force".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("git push $F".to_string()),
+        },
+    )]
+    // `"$X"` is one quoted argument: no IFS splitting, so the whole
+    // command collapses to the single (unknown) command name `git
+    // status`, matching real bash semantics.
+    #[case::quoted_value_stays_one_token(
+        r#"X="git status"; "$X""#,
+        ExtractedCommand {
+            command: "'git status'".to_string(),
+            env: vec![],
+            argv: vec!["git status".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some(r#""$X""#.to_string()),
+        },
+    )]
+    fn variable_resolution_resolves_static_value(
+        #[case] input: &str,
+        #[case] expected: ExtractedCommand,
+    ) {
+        assert_eq!(
+            extract_commands_with_metadata(input).unwrap(),
+            vec![expected]
+        );
+    }
+
+    #[rstest]
+    #[case::dynamic_command_substitution_value(
+        "X=$(cat f); $X",
+        vec![no_expansion("cat f", &["cat", "f"]), no_expansion("$X", &["$X"])],
+    )]
+    #[case::reassigned_via_command_substitution(
+        "X=1; X=$(date); echo $X",
+        vec![no_expansion("date", &["date"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::operator_expansion_not_resolved(
+        "X=default; echo ${X:-fallback}",
+        vec![no_expansion("echo ${X:-fallback}", &["echo", "${X:-fallback}"])],
+    )]
+    #[case::conditional_assignment_stays_poisoned(
+        "if true; then X=rm; fi; $X /",
+        vec![no_expansion("true", &["true"]), no_expansion("$X /", &["$X", "/"])],
+    )]
+    #[case::array_subscript_assignment_poisons_base_name(
+        "X=1; X[0]=2; echo $X",
+        vec![no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::function_body_assignment_does_not_leak(
+        "f() { local X=1; }; echo $X",
+        vec![no_expansion("local X=1", &["local", "X=1"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::declaration_command_bare_name_poisons(
+        "X=1; export X; echo $X",
+        vec![no_expansion("export X", &["export", "X"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::unset_command_poisons(
+        "X=1; unset X; echo $X",
+        vec![no_expansion("unset X", &["unset", "X"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    fn variable_resolution_falls_back_to_verbatim(
+        #[case] input: &str,
+        #[case] expected: Vec<ExtractedCommand>,
+    ) {
+        let result = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(result, expected);
     }
 }

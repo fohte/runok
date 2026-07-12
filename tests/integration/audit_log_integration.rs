@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use runok::adapter::exec_adapter::ExecAdapter;
 use runok::adapter::{self, RunOptions};
-use runok::audit::{AuditEntry, EvalType};
+use runok::audit::{AuditEntry, CommandEvaluation, EvalType};
 use runok::config::parse_config;
 use runok::exec::ExecError;
 use runok::exec::command_executor::{CommandExecutor, CommandInput, ExecMode, SandboxPolicy};
@@ -409,6 +409,70 @@ fn comment_only_input_yields_empty_command_evaluations(audit_dir: TempDir) {
         "comment-only input must produce an empty command_evaluations array, got: {:?}",
         entries[0].command_evaluations
     );
+}
+
+#[rstest]
+fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - deny: 'git push --force*'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["F=--force; git push $F".into()],
+        None,
+        Box::new(MockExecutor::new(3)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].command_evaluations,
+        vec![CommandEvaluation {
+            command: "git push --force".to_owned(),
+            original_command: Some("git push $F".to_owned()),
+            action: runok::audit::SerializableAction::Deny {
+                message: None,
+                fix_suggestion: None,
+            },
+            matched_rules: vec![runok::audit::SerializableRuleMatch {
+                action_kind: "deny".to_owned(),
+                pattern: "git push --force*".to_owned(),
+                matched_tokens: vec![],
+            }],
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec!["git".to_owned(), "push".to_owned(), "--force".to_owned()],
+            redirects: vec![],
+            pipe: runok::audit::SerializablePipe::default(),
+            alias_chain: vec![],
+        }]
+    );
+}
+
+#[rstest]
+fn audit_log_omits_original_command_when_nothing_expanded(
+    allow_echo_audit_config: AuditTestConfig,
+) {
+    let endpoint = echo_hello_endpoint();
+    let options = RunOptions::default();
+
+    adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
+
+    let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
+    assert_eq!(entries.len(), 1);
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 1);
+    assert_eq!(evals[0].original_command, None);
 }
 
 #[rstest]

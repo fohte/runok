@@ -8,6 +8,23 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
+### Static variable resolution closes a deny-bypass gap ([#473](https://github.com/fohte/runok/pull/473))
+
+runok previously matched shell variables (`$X`, `${X}`) as literal, unresolved tokens. This meant a `deny` rule written against a flag's literal text could be bypassed by smuggling the flag through a variable:
+
+```yaml
+rules:
+  - deny: 'git push --force*'
+```
+
+`F=--force; git push $F` used to slip past this rule (`git push $F` never contains the literal text `--force`). runok now tracks static, single-value variable assignments within a command string and resolves `$X` / `${X}` to their value before rule evaluation, so `F=--force; git push $F` is now correctly denied. The same resolution also lets an allow rule match a command hidden behind a variable, e.g. `X="git status"; $X` now evaluates as `git status` instead of falling through to an unknown-command default.
+
+Only assignments that are unconditional and statically known are resolved -- a dynamic value (`$(...)`, backticks, process/arithmetic substitution), a reassignment inside a conditional or loop body, an array-element assignment, or anything referenced inside a function body at definition time falls back to the pre-existing verbatim-token behavior. See [Rule Evaluation -- Variable resolution](/rule-evaluation/compound-commands/#variable-resolution) for the full list and examples.
+
+When a command is rewritten this way, the audit log records both the resolved text (`command`) and the verbatim source (`original_command`). See [Audit Log JSON Schema -- `original_command`](/cli/audit-log-schema/#original_command) for details.
+
+**What changes for existing rules?** A rule that matches literal `$X` text (e.g. `allow: 'echo $X'`, intending to match the variable reference itself rather than its value) now sees the resolved value instead, when that value is statically known. This is unlikely in practice -- patterns are normally written against a command's real arguments, not its unexpanded source -- but if a rule specifically depended on `$X` staying unresolved, it should be rewritten against the values the variable can actually take, since those are now what reaches rule evaluation.
+
 ### Breaking: `?` in a flag's value position now means "optional value" ([#471](https://github.com/fohte/runok/pull/471))
 
 Some flags accept a value but also work without one (e.g. git's `--abbrev[=<n>]`, `-n[<n>]`). Writing `?` in the value position now matches **zero or one** token, unlike `*` which requires exactly one:

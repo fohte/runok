@@ -220,6 +220,7 @@ mod tests {
             },
             command_evaluations: vec![crate::audit::CommandEvaluation {
                 command: "git push".to_string(),
+                original_command: None,
                 action: SerializableAction::Deny {
                     message: Some("force push is forbidden".to_string()),
                     fix_suggestion: Some("git push origin main".to_string()),

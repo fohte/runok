@@ -1,6 +1,7 @@
 mod redirect;
 mod splitter;
 mod tokenizer;
+mod var_env;
 
 pub use splitter::{extract_commands, extract_commands_with_metadata, split_top_level_commands};
 pub use tokenizer::{parse_command, tokenize_command};
@@ -97,6 +98,10 @@ pub struct ExtractedCommand {
     /// not reset this — a command in `(while x; do sleep 1; done)`
     /// still sees `"while"`.
     pub loop_kind: String,
+    /// The verbatim source text of this command, before variable
+    /// resolution rewrote `command` to its expanded form. `None` when
+    /// no expansion happened (`command` is already the original text).
+    pub original_command: Option<String>,
 }
 
 /// Join tokens into a shell-safe string by quoting tokens that contain
