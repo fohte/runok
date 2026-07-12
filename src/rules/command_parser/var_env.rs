@@ -9,7 +9,7 @@ use super::tokenizer::dequote_node;
 /// Scoped to one [`super::extract_commands_with_metadata`] call: a fresh
 /// `VarEnv` is created per top-level parse and never persisted across
 /// separate command strings.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(in crate::rules::command_parser) struct VarEnv {
     values: HashMap<String, VarValue>,
 }
@@ -117,14 +117,19 @@ pub(in crate::rules::command_parser) fn poison_bare_name(
 
 /// Whether `node` (a `variable_assignment`'s `value` field, or a piece
 /// of a `concatenation`) is one of the static shapes runok can resolve
-/// without executing anything: a bare word, a raw (single-quoted)
-/// string, a double-quoted string with no interpolation, or a
-/// concatenation of those. Command substitutions, backticks, process
-/// substitutions, arithmetic expansions, and variable expansions all
-/// return `None` (not statically resolvable).
+/// without executing anything: a bare word, a number, a raw
+/// (single-quoted) string, a double-quoted string with no
+/// interpolation, or a concatenation of those. Command substitutions,
+/// backticks, process substitutions, arithmetic expansions, and
+/// variable expansions all return `None` (not statically resolvable).
 fn static_value(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {
         "word" | "raw_string" => dequote_node(node, source),
+        // Base-N number literals (`16#$X`) can embed a dynamic
+        // expansion or command substitution as a child; a plain decimal
+        // or hex literal has no named children at all.
+        "number" if node.named_child_count() == 0 => dequote_node(node, source),
+        "number" => None,
         "string" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {

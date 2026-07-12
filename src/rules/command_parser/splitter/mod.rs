@@ -1384,7 +1384,7 @@ mod tests {
     // dynamic values, reassignment inside a conditional/loop, array
     // subscripts, bare `export`/`unset`, a definition-time function body —
     // is recorded as poisoned, and expansion falls back to the verbatim
-    // `$X` exactly as before this feature existed (`original_command: None`).
+    // `$X` (`original_command: None`).
     // ========================================
 
     fn no_expansion(command: &str, argv: &[&str]) -> ExtractedCommand {
@@ -1400,78 +1400,135 @@ mod tests {
     }
 
     #[rstest]
-    fn variable_resolution_bare_expansion_becomes_two_tokens() {
-        // A literal value containing a space is word-split like bash's
-        // default IFS would: `$X` alone expands to two argv tokens, and
-        // the command name becomes `git` (not the unknown `git status`).
-        let result = extract_commands_with_metadata(r#"X="git status"; $X"#).unwrap();
+    fn variable_resolution_numeric_value_resolves() {
+        // A purely-numeric value parses as a `number` node (distinct
+        // from `word` in tree-sitter-bash), so it needs its own static
+        // check; regression test for that gap.
+        let result = extract_commands_with_metadata("X=1; echo $X").unwrap();
         assert_eq!(
             result,
             vec![ExtractedCommand {
-                command: "git status".to_string(),
+                command: "echo 1".to_string(),
                 env: vec![],
-                argv: vec!["git".to_string(), "status".to_string()],
+                argv: vec!["echo".to_string(), "1".to_string()],
                 redirects: vec![],
                 pipe: PipeInfo::default(),
                 loop_kind: String::new(),
-                original_command: Some("$X".to_string()),
+                original_command: Some("echo $X".to_string()),
             }]
         );
     }
 
     #[rstest]
-    fn variable_resolution_command_name_position() {
-        let result = extract_commands_with_metadata("X=rm; $X -rf /").unwrap();
+    #[case::subshell_reassignment_does_not_leak("X=1; (X=2); echo $X")]
+    #[case::command_substitution_reassignment_does_not_leak("X=1; Y=$(X=2); echo $X")]
+    fn variable_resolution_subshell_scope_is_isolated(#[case] input: &str) {
+        // A subshell / command substitution forks: an assignment inside
+        // it (here, the inner `X=2`, itself a bare assignment that
+        // contributes no `ExtractedCommand` of its own) must never
+        // overwrite the value the parent scope resolves `$X` to
+        // afterward -- `echo $X` must still expand from the outer
+        // `X=1`, not the shadowed `X=2`.
+        let result = extract_commands_with_metadata(input).unwrap();
         assert_eq!(
             result,
             vec![ExtractedCommand {
-                command: "rm -rf /".to_string(),
+                command: "echo 1".to_string(),
                 env: vec![],
-                argv: vec!["rm".to_string(), "-rf".to_string(), "/".to_string()],
+                argv: vec!["echo".to_string(), "1".to_string()],
                 redirects: vec![],
                 pipe: PipeInfo::default(),
                 loop_kind: String::new(),
-                original_command: Some("$X -rf /".to_string()),
+                original_command: Some("echo $X".to_string()),
             }]
         );
     }
 
     #[rstest]
-    fn variable_resolution_flag_value() {
-        // Motivating case: a flag value smuggled through a variable no
-        // longer evades a `deny: 'git push --force*'` rule.
-        let result = extract_commands_with_metadata("F=--force; git push $F").unwrap();
-        assert_eq!(
-            result,
-            vec![ExtractedCommand {
-                command: "git push --force".to_string(),
-                env: vec![],
-                argv: vec!["git".to_string(), "push".to_string(), "--force".to_string()],
-                redirects: vec![],
-                pipe: PipeInfo::default(),
-                loop_kind: String::new(),
-                original_command: Some("git push $F".to_string()),
-            }]
-        );
+    #[case::and_then_reassignment_is_poisoned(
+        "X=1; false && X=2; echo $X",
+        vec![no_expansion("false", &["false"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    #[case::or_then_reassignment_is_poisoned(
+        "X=1; true || X=2; echo $X",
+        vec![no_expansion("true", &["true"]), no_expansion("echo $X", &["echo", "$X"])],
+    )]
+    fn variable_resolution_list_right_hand_side_is_poisoned(
+        #[case] input: &str,
+        #[case] expected: Vec<ExtractedCommand>,
+    ) {
+        // `X=2` on the right of `&&` / `||` may or may not run depending
+        // on the left side's exit status, so it must poison `X` rather
+        // than being trusted as an unconditional Literal -- regardless
+        // of which operand actually executes at runtime.
+        let result = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(result, expected);
     }
 
     #[rstest]
-    fn variable_resolution_quoted_value_stays_one_token() {
-        // `"$X"` is one quoted argument: no IFS splitting, so the whole
-        // command collapses to the single (unknown) command name
-        // `git status`, matching real bash semantics.
-        let result = extract_commands_with_metadata(r#"X="git status"; "$X""#).unwrap();
+    // A literal value containing a space is word-split like bash's
+    // default IFS would: `$X` alone expands to two argv tokens, and the
+    // command name becomes `git` (not the unknown `git status`).
+    #[case::bare_expansion_becomes_two_tokens(
+        r#"X="git status"; $X"#,
+        ExtractedCommand {
+            command: "git status".to_string(),
+            env: vec![],
+            argv: vec!["git".to_string(), "status".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("$X".to_string()),
+        },
+    )]
+    #[case::command_name_position(
+        "X=rm; $X -rf /",
+        ExtractedCommand {
+            command: "rm -rf /".to_string(),
+            env: vec![],
+            argv: vec!["rm".to_string(), "-rf".to_string(), "/".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("$X -rf /".to_string()),
+        },
+    )]
+    // Motivating case: a flag value smuggled through a variable no
+    // longer evades a `deny: 'git push --force*'` rule.
+    #[case::flag_value(
+        "F=--force; git push $F",
+        ExtractedCommand {
+            command: "git push --force".to_string(),
+            env: vec![],
+            argv: vec!["git".to_string(), "push".to_string(), "--force".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some("git push $F".to_string()),
+        },
+    )]
+    // `"$X"` is one quoted argument: no IFS splitting, so the whole
+    // command collapses to the single (unknown) command name `git
+    // status`, matching real bash semantics.
+    #[case::quoted_value_stays_one_token(
+        r#"X="git status"; "$X""#,
+        ExtractedCommand {
+            command: "'git status'".to_string(),
+            env: vec![],
+            argv: vec!["git status".to_string()],
+            redirects: vec![],
+            pipe: PipeInfo::default(),
+            loop_kind: String::new(),
+            original_command: Some(r#""$X""#.to_string()),
+        },
+    )]
+    fn variable_resolution_resolves_static_value(
+        #[case] input: &str,
+        #[case] expected: ExtractedCommand,
+    ) {
         assert_eq!(
-            result,
-            vec![ExtractedCommand {
-                command: "'git status'".to_string(),
-                env: vec![],
-                argv: vec!["git status".to_string()],
-                redirects: vec![],
-                pipe: PipeInfo::default(),
-                loop_kind: String::new(),
-                original_command: Some(r#""$X""#.to_string()),
-            }]
+            extract_commands_with_metadata(input).unwrap(),
+            vec![expected]
         );
     }
 

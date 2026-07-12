@@ -24,6 +24,60 @@ fn flag_value_via_variable_is_still_denied(empty_context: EvalContext) {
 }
 
 // ========================================
+// A reassignment inside a subshell or command substitution must not
+// leak out: it runs in a forked child shell, so the flag smuggled
+// through the variable cannot be masked by wrapping a harmless-looking
+// reassignment in `(...)` / `$(...)`.
+// ========================================
+
+#[rstest]
+#[case::subshell_reassignment("F=--force; (F=--safe); git push $F")]
+#[case::command_substitution_reassignment("F=--force; X=$(F=--safe); git push $F")]
+fn reassignment_inside_forked_scope_does_not_mask_the_outer_value(
+    #[case] command: &str,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'git push --force*'
+          - allow: 'git push *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    assert_deny(&result.action);
+}
+
+// ========================================
+// A reassignment on the right of `&&` / `||` may or may not run
+// depending on the left side's exit status, so it must not be trusted
+// as an unconditional value: it falls back to the pre-existing
+// verbatim-token behavior, exactly like an `if`/`while` body would.
+// ========================================
+
+#[rstest]
+#[case::and_guarded_reassignment("F=--force; false && F=--safe; git push $F")]
+#[case::or_guarded_reassignment("F=--force; true || F=--safe; git push $F")]
+fn conditional_list_reassignment_falls_back_to_defaults_action(
+    #[case] command: &str,
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'git push --force*'
+          - allow: 'git push *'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+    // `$F` stays unresolved (`git push $F` matches neither rule
+    // pattern), so the branch falls through to `defaults.action`
+    // (unset here -> the safe `Ask` default) -- never to the `allow`
+    // rule, which would mean the reassignment was wrongly trusted.
+    assert_ask(&result.action);
+}
+
+// ========================================
 // Motivating case: a fully static command hidden behind a variable is
 // evaluated by its resolved value instead of falling through to the
 // unknown-command default.
@@ -75,9 +129,9 @@ fn quoted_whole_value_is_not_the_two_word_command(empty_context: EvalContext) {
 }
 
 // ========================================
-// Anything not statically resolvable falls back to the pre-existing
-// verbatim-token behavior: an unknown `$X` resolves through
-// `defaults.action`, exactly as if this feature did not exist.
+// Anything not statically resolvable leaves `$X` as a literal,
+// unresolved token, so it resolves through `defaults.action` like any
+// other unknown command.
 // ========================================
 
 #[rstest]

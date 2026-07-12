@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use runok::adapter::exec_adapter::ExecAdapter;
 use runok::adapter::{self, RunOptions};
-use runok::audit::{AuditEntry, EvalType};
+use runok::audit::{AuditEntry, CommandEvaluation, EvalType};
 use runok::config::parse_config;
 use runok::exec::ExecError;
 use runok::exec::command_executor::{CommandExecutor, CommandInput, ExecMode, SandboxPolicy};
@@ -418,7 +418,6 @@ fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir)
         indoc! {"
             rules:
               - deny: 'git push --force*'
-              - allow: 'git push *'
             audit:
               path: '{}'
         "},
@@ -436,16 +435,28 @@ fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir)
 
     let entries = read_audit_entries(audit_dir.path());
     assert_eq!(entries.len(), 1);
-
-    let evals = &entries[0].command_evaluations;
-    assert_eq!(evals.len(), 1);
-    let primary = &evals[0];
-    assert_eq!(primary.command, "git push --force");
-    assert_eq!(primary.original_command.as_deref(), Some("git push $F"));
-    assert!(matches!(
-        primary.action,
-        runok::audit::SerializableAction::Deny { .. }
-    ));
+    assert_eq!(
+        entries[0].command_evaluations,
+        vec![CommandEvaluation {
+            command: "git push --force".to_owned(),
+            original_command: Some("git push $F".to_owned()),
+            action: runok::audit::SerializableAction::Deny {
+                message: None,
+                fix_suggestion: None,
+            },
+            matched_rules: vec![runok::audit::SerializableRuleMatch {
+                action_kind: "deny".to_owned(),
+                pattern: "git push --force*".to_owned(),
+                matched_tokens: vec![],
+            }],
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec!["git".to_owned(), "push".to_owned(), "--force".to_owned()],
+            redirects: vec![],
+            pipe: runok::audit::SerializablePipe::default(),
+            alias_chain: vec![],
+        }]
+    );
 }
 
 #[rstest]
