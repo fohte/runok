@@ -267,5 +267,12 @@ pub(super) fn match_engine<'a>(
                 flag_group_captures,
             )
         }
+        // `PatternToken::OptionalValue` only appears inside a
+        // `FlagWithValue.value` slot -- the parser rejects it everywhere
+        // else (see `build_pattern_tokens`), so it is never a top-level
+        // pattern token here.
+        PatternToken::OptionalValue => {
+            unreachable!("OptionalValue cannot appear as a top-level pattern token")
+        }
     }
 }

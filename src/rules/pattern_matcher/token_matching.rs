@@ -144,6 +144,10 @@ pub(crate) fn match_single_token(
         PatternToken::Literal(s) => literal_matches(s, cmd_token),
         PatternToken::Alternation(alts) => alts.iter().any(|a| literal_matches(a, cmd_token)),
         PatternToken::Wildcard => true,
+        // Reached only when a token is actually present (e.g. the `=`-joined
+        // or fused-short-flag value part); zero-value handling for `?` lives
+        // in the FlagWithValue/FlagGroupRef match arms, not here.
+        PatternToken::OptionalValue => true,
         PatternToken::Negation(inner) => !match_single_token(inner, cmd_token, definitions),
         PatternToken::PathRef(name) => {
             let paths = resolve_paths(name, definitions);
