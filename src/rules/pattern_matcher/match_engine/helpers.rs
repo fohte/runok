@@ -24,6 +24,12 @@ pub(super) fn collect_value_flag_aliases<'a>(
 ) {
     for token in tokens {
         match token {
+            // `?`-valued flags never consume a space-separated following
+            // token as their value (see `match_flag_with_optional_value`),
+            // so they must not be registered here -- doing so would make
+            // the positional-argument finder wrongly skip the next token.
+            PatternToken::FlagWithValue { value, .. }
+                if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
             PatternToken::FlagWithValue {
                 aliases: flag_aliases,
                 ..
@@ -37,11 +43,15 @@ pub(super) fn collect_value_flag_aliases<'a>(
                     .parsed_flag_groups
                     .as_ref()
                     .and_then(|g| g.get(name))
-                    && parsed.value_pattern.is_some()
+                    && parsed
+                        .value_pattern
+                        .as_ref()
+                        .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
                 {
-                    // Only register value-taking flags (those with a value
-                    // pattern) so the positional-argument finder skips their
-                    // values correctly.
+                    // Only register value-taking flags (those with a
+                    // space-separated value pattern) so the
+                    // positional-argument finder skips their values
+                    // correctly.
                     for a in &parsed.aliases {
                         aliases.insert(a.as_str());
                     }

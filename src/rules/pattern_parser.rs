@@ -71,6 +71,14 @@ pub enum PatternToken {
     Optional(Vec<PatternToken>),
     /// Wildcard: matches zero or more arbitrary tokens
     Wildcard,
+    /// Optional flag value (e.g. `--abbrev ?`): as a `FlagWithValue`'s
+    /// `value`, matches zero or one arbitrary token. Mirrors the GNU
+    /// `getopt_long` convention for optional-argument flags: an explicit
+    /// value is only recognized when attached via `=` (long flags) or fused
+    /// (short flags, e.g. `-n3`) -- a space-separated following token is
+    /// never consumed as the value, since real CLIs treat it as a separate
+    /// argument (e.g. `git branch --abbrev 8` creates a branch named `8`).
+    OptionalValue,
     /// Path variable reference (e.g., <path:sensitive>)
     PathRef(String),
     /// Typed variable reference (e.g., <var:instance-ids>)
@@ -205,6 +213,12 @@ fn build_pattern_tokens(
                 result.push(PatternToken::Wildcard);
             }
 
+            LexToken::OptionalValue => {
+                return Err(PatternParseError::InvalidSyntax(
+                    "`?` can only appear as a flag's value (e.g. `--flag ?`)".into(),
+                ));
+            }
+
             LexToken::Literal(s) if is_flag(s) => {
                 // A bare flag (e.g. `-X`) is treated like a single-element
                 // alternation so that flag-with-value and order-independent
@@ -334,6 +348,7 @@ fn build_pattern_tokens(
 fn lex_to_pattern_value(token: &LexToken) -> Result<PatternToken, super::PatternParseError> {
     match token {
         LexToken::Wildcard => Ok(PatternToken::Wildcard),
+        LexToken::OptionalValue => Ok(PatternToken::OptionalValue),
         LexToken::Literal(s) | LexToken::QuotedLiteral(s) => Ok(PatternToken::Literal(s.clone())),
         LexToken::Negation(s) => Ok(PatternToken::Negation(Box::new(PatternToken::Literal(
             s.clone(),
@@ -405,6 +420,9 @@ fn parse_placeholder(content: &str) -> Result<PatternToken, super::PatternParseE
 /// FlagWithValue, while allowing `-X|--request * *` to parse the first `*` as a value.
 fn should_consume_as_value(next: &LexToken, has_more_after: bool, inside_group: bool) -> bool {
     match next {
+        // `?` has no meaning outside of a flag's value slot, so it is
+        // always consumed as the value when it directly follows a flag.
+        LexToken::OptionalValue => true,
         LexToken::OpenBracket | LexToken::CloseBracket => false,
         // When `[` is used as a literal command name, the lexer emits `]` as
         // `Literal("]")` rather than `CloseBracket`.  Prevent flags from
@@ -643,6 +661,43 @@ mod tests {
         #[case] expected_tokens: Vec<PatternToken>,
     ) {
         assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::long_flag("git branch --abbrev ?", "git", vec![
+        PatternToken::Literal("branch".into()),
+        PatternToken::FlagWithValue {
+            aliases: vec!["--abbrev".into()],
+            value: Box::new(PatternToken::OptionalValue),
+        },
+    ])]
+    #[case::alternation_flag("aws -X|--method ?", "aws", vec![
+        PatternToken::FlagWithValue {
+            aliases: vec!["-X".into(), "--method".into()],
+            value: Box::new(PatternToken::OptionalValue),
+        },
+    ])]
+    #[case::inside_optional_group("git branch [--abbrev ?]", "git", vec![
+        PatternToken::Literal("branch".into()),
+        PatternToken::Optional(vec![PatternToken::FlagWithValue {
+            aliases: vec!["--abbrev".into()],
+            value: Box::new(PatternToken::OptionalValue),
+        }]),
+    ])]
+    fn parse_optional_flag_value(
+        #[case] input: &str,
+        #[case] expected_command: &str,
+        #[case] expected_tokens: Vec<PatternToken>,
+    ) {
+        assert_parse(input, expected_command, expected_tokens);
+    }
+
+    #[rstest]
+    #[case::standalone("git ?")]
+    #[case::after_non_flag_literal("git status ?")]
+    fn parse_optional_value_outside_flag_slot_is_error(#[case] input: &str) {
+        let err = parse(input).expect_err(&format!("expected error for: {input:?}"));
+        assert_err_message_contains(&err, "can only appear as a flag's value");
     }
 
     #[rstest]
@@ -1133,6 +1188,13 @@ mod tests {
         ParsedFlagGroup {
             aliases: vec!["--force".into()],
             value_pattern: None,
+        },
+    )]
+    #[case::optional_value(
+        "--abbrev ?",
+        ParsedFlagGroup {
+            aliases: vec!["--abbrev".into()],
+            value_pattern: Some(PatternToken::OptionalValue),
         },
     )]
     fn test_parse_flag_group_definition(#[case] input: &str, #[case] expected: ParsedFlagGroup) {

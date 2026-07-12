@@ -92,7 +92,10 @@ fn find_disallowed_placeholder_in_tokens(
                     return Some(found);
                 }
             }
-            PatternToken::Literal(_) | PatternToken::Alternation(_) | PatternToken::Wildcard => {}
+            PatternToken::Literal(_)
+            | PatternToken::Alternation(_)
+            | PatternToken::Wildcard
+            | PatternToken::OptionalValue => {}
         }
     }
     None

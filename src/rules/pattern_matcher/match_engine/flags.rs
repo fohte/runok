@@ -58,6 +58,41 @@ pub(super) fn match_flag_group_ref<'a>(
     let mut captured_values: Vec<String> = Vec::new();
 
     match &parsed.value_pattern {
+        Some(PatternToken::OptionalValue) => {
+            // Optional-value flag: mirrors GNU `getopt_long` -- a value is
+            // only recognized when attached via `=` or fused, never as a
+            // space-separated following token (see
+            // `match_flag_with_optional_value` for the rationale).
+            for (i, &token) in cmd_tokens.iter().enumerate() {
+                // Case 1: `=`-joined flag and value (e.g. `--field=value`)
+                if let Some((flag_part, value_part)) = split_flag_equals(token)
+                    && aliases.iter().any(|a| a.as_str() == flag_part)
+                {
+                    if matched_indices.contains(&i) {
+                        continue;
+                    }
+                    matched_indices.push(i);
+                    captured_values.push(value_part.to_string());
+                    continue;
+                }
+
+                // Case 2: fused short flag and value (e.g. `-fvalue`)
+                if let Some((_flag_part, value_part)) = split_short_flag_value(token, aliases) {
+                    if matched_indices.contains(&i) {
+                        continue;
+                    }
+                    matched_indices.push(i);
+                    captured_values.push(value_part.to_string());
+                    continue;
+                }
+
+                // Case 3: bare flag, value omitted
+                if aliases.iter().any(|a| a.as_str() == token) && !matched_indices.contains(&i) {
+                    matched_indices.push(i);
+                    captured_values.push(String::new());
+                }
+            }
+        }
         Some(value) => {
             // Value flag: capture flag + value pairs
             for i in 0..cmd_tokens.len() {
@@ -174,6 +209,20 @@ pub(super) fn match_flag_with_value<'a>(
     var_captures: &RefCell<HashMap<String, String>>,
     flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
 ) -> Result<bool, RuleError> {
+    if matches!(value, PatternToken::OptionalValue) {
+        return match_flag_with_optional_value(
+            aliases,
+            rest,
+            cmd_tokens,
+            definitions,
+            steps,
+            captures,
+            extract,
+            after_double_dash,
+            var_captures,
+            flag_group_captures,
+        );
+    }
     for i in 0..cmd_tokens.len() {
         // Case 1: space-separated flag and value (e.g. `--sort value`)
         if aliases.iter().any(|a| a.as_str() == cmd_tokens[i])
@@ -245,6 +294,105 @@ pub(super) fn match_flag_with_value<'a>(
                 &mut captures,
                 &mut extract,
                 capture_val,
+                after_double_dash,
+                var_captures,
+                flag_group_captures,
+            )? {
+                return Ok(true);
+            }
+            after_double_dash.set(saved_dd);
+            *var_captures.borrow_mut() = saved_vc;
+        }
+    }
+    Ok(false)
+}
+
+/// Match `FlagWithValue` when `value` is `PatternToken::OptionalValue`: the
+/// flag's value is zero or one token. Mirrors the GNU `getopt_long`
+/// convention for optional-argument options -- an explicit value is only
+/// recognized when attached via `=` (long flags) or fused (short flags,
+/// e.g. `-n3`). A space-separated following token is never consumed as the
+/// value, since real CLIs treat it as a separate positional argument (e.g.
+/// `git branch --abbrev 8` creates a branch named `8` rather than setting
+/// `--abbrev`'s value to `8`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors match_engine signature for this arm"
+)]
+fn match_flag_with_optional_value<'a>(
+    aliases: &[String],
+    rest: &[PatternToken],
+    cmd_tokens: &[&'a str],
+    definitions: &Definitions,
+    steps: &Cell<usize>,
+    mut captures: Option<&mut Vec<&'a str>>,
+    mut extract: Option<(&mut Vec<&'a str>, &mut Vec<Vec<&'a str>>)>,
+    after_double_dash: &Cell<bool>,
+    var_captures: &RefCell<HashMap<String, String>>,
+    flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
+) -> Result<bool, RuleError> {
+    for i in 0..cmd_tokens.len() {
+        // Case 1: `=`-joined flag and value (e.g. `--abbrev=8`)
+        if let Some((flag_part, value_part)) = split_flag_equals(cmd_tokens[i])
+            && aliases.iter().any(|a| a.as_str() == flag_part)
+        {
+            let remaining = remove_indices(cmd_tokens, &[i]);
+            let saved_dd = after_double_dash.get();
+            let saved_vc = var_captures.borrow().clone();
+            if try_recurse_flag_value(
+                rest,
+                &remaining,
+                definitions,
+                steps,
+                &mut captures,
+                &mut extract,
+                Some(value_part),
+                after_double_dash,
+                var_captures,
+                flag_group_captures,
+            )? {
+                return Ok(true);
+            }
+            after_double_dash.set(saved_dd);
+            *var_captures.borrow_mut() = saved_vc;
+        }
+
+        // Case 2: fused short flag and value (e.g. `-n3`)
+        if let Some((_flag_part, value_part)) = split_short_flag_value(cmd_tokens[i], aliases) {
+            let remaining = remove_indices(cmd_tokens, &[i]);
+            let saved_dd = after_double_dash.get();
+            let saved_vc = var_captures.borrow().clone();
+            if try_recurse_flag_value(
+                rest,
+                &remaining,
+                definitions,
+                steps,
+                &mut captures,
+                &mut extract,
+                Some(value_part),
+                after_double_dash,
+                var_captures,
+                flag_group_captures,
+            )? {
+                return Ok(true);
+            }
+            after_double_dash.set(saved_dd);
+            *var_captures.borrow_mut() = saved_vc;
+        }
+
+        // Case 3: bare flag, value omitted (e.g. `--abbrev`)
+        if aliases.iter().any(|a| a.as_str() == cmd_tokens[i]) {
+            let remaining = remove_indices(cmd_tokens, &[i]);
+            let saved_dd = after_double_dash.get();
+            let saved_vc = var_captures.borrow().clone();
+            if try_recurse_flag_value(
+                rest,
+                &remaining,
+                definitions,
+                steps,
+                &mut captures,
+                &mut extract,
+                None,
                 after_double_dash,
                 var_captures,
                 flag_group_captures,

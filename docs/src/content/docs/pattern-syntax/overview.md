@@ -11,19 +11,20 @@ Patterns are parsed exactly as written, with no hidden rewriting or implicit tra
 
 ## Syntax Elements
 
-| Syntax                                                                        | Example                                      | Description                                                  |
-| ----------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------ |
-| Literal                                                                       | `git status`                                 | Exact token match                                            |
-| [Wildcard](/pattern-syntax/wildcards/)                                        | `git *`                                      | Zero or more tokens                                          |
-| [Glob](/pattern-syntax/wildcards/#glob-patterns)                              | `list-*`, `*.txt`                            | `*` inside a literal matches zero or more characters         |
-| [Alternation](/pattern-syntax/alternation/)                                   | `-X\|--request`, `main\|master`              | Pipe-separated alternatives                                  |
-| [Negation](/pattern-syntax/alternation/#negation)                             | `!GET`, `!describe\|get`                     | Matches anything except the specified value(s)               |
-| [Optional group](/pattern-syntax/optional-groups/)                            | `[-f]`, `[-X POST]`                          | Matches with or without the group                            |
-| [Flag with value](/pattern-syntax/matching-behavior/#flag-schema-inference)   | `-X\|--request POST`                         | A flag-value pair matched in any order                       |
-| [Placeholder](/pattern-syntax/placeholders/)                                  | `<cmd>`, `<opts>`, `<path:...>`, `<var:...>` | Special tokens in `<...>` with various behaviors (see below) |
-| Backslash escape                                                              | `\;`, `\*`                                   | Literal match after removing the backslash                   |
-| Quoted literal                                                                | `"hello world"`, `'hello'`                   | Grouping only; `*` is still a glob, use `\*` for literal `*` |
-| [Multi-word alternation](/pattern-syntax/alternation/#multi-word-alternation) | `"npx prettier"\|prettier`                   | Alternatives that include multi-word commands                |
+| Syntax                                                                         | Example                                      | Description                                                  |
+| ------------------------------------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------ |
+| Literal                                                                        | `git status`                                 | Exact token match                                            |
+| [Wildcard](/pattern-syntax/wildcards/)                                         | `git *`                                      | Zero or more tokens                                          |
+| [Glob](/pattern-syntax/wildcards/#glob-patterns)                               | `list-*`, `*.txt`                            | `*` inside a literal matches zero or more characters         |
+| [Alternation](/pattern-syntax/alternation/)                                    | `-X\|--request`, `main\|master`              | Pipe-separated alternatives                                  |
+| [Negation](/pattern-syntax/alternation/#negation)                              | `!GET`, `!describe\|get`                     | Matches anything except the specified value(s)               |
+| [Optional group](/pattern-syntax/optional-groups/)                             | `[-f]`, `[-X POST]`                          | Matches with or without the group                            |
+| [Flag with value](/pattern-syntax/matching-behavior/#flag-schema-inference)    | `-X\|--request POST`                         | A flag-value pair matched in any order                       |
+| [Optional flag value](/pattern-syntax/matching-behavior/#optional-flag-values) | `--abbrev ?`                                 | Flag required, value is zero or one token                    |
+| [Placeholder](/pattern-syntax/placeholders/)                                   | `<cmd>`, `<opts>`, `<path:...>`, `<var:...>` | Special tokens in `<...>` with various behaviors (see below) |
+| Backslash escape                                                               | `\;`, `\*`                                   | Literal match after removing the backslash                   |
+| Quoted literal                                                                 | `"hello world"`, `'hello'`                   | Grouping only; `*` is still a glob, use `\*` for literal `*` |
+| [Multi-word alternation](/pattern-syntax/alternation/#multi-word-alternation)  | `"npx prettier"\|prettier`                   | Alternatives that include multi-word commands                |
 
 ### Placeholders
 

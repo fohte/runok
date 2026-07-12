@@ -239,6 +239,8 @@ mod tests {
     ) {
         for token in tokens {
             match token {
+                PatternToken::FlagWithValue { value, .. }
+                    if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
                 PatternToken::FlagWithValue { aliases, .. } => {
                     for alias in aliases {
                         value_flags.insert(alias.clone());
@@ -249,7 +251,10 @@ mod tests {
                         .parsed_flag_groups
                         .as_ref()
                         .and_then(|g| g.get(name))
-                        && parsed.value_pattern.is_some()
+                        && parsed
+                            .value_pattern
+                            .as_ref()
+                            .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
                     {
                         for alias in &parsed.aliases {
                             value_flags.insert(alias.clone());
@@ -477,6 +482,89 @@ mod tests {
     ) {
         assert_eq!(
             check_match(pattern_str, command_str, &empty_defs()),
+            expected
+        );
+    }
+
+    // ========================================
+    // Optional flag value (`?`) matching
+    // ========================================
+
+    #[rstest]
+    // Bare flag: value omitted entirely.
+    #[case::bare_flag("git branch --abbrev ?", "git branch --abbrev", true)]
+    // `=`-joined and fused-short forms carry an explicit value.
+    #[case::equals_joined("git branch --abbrev ?", "git branch --abbrev=8", true)]
+    #[case::fused_short("git tag -n ?", "git tag -n3", true)]
+    #[case::equals_short("git tag -n ?", "git tag -n=3", true)]
+    // Flag itself is required outside of an optional group.
+    #[case::flag_missing("git branch --abbrev ?", "git branch", false)]
+    // A space-separated following token is never consumed as the value
+    // (mirrors GNU getopt_long's optional-argument convention) -- with no
+    // trailing wildcard to absorb it, the leftover token fails the match.
+    #[case::space_separated_not_consumed("git branch --abbrev ?", "git branch --abbrev 8", false)]
+    #[case::space_separated_absorbed_by_wildcard(
+        "git branch --abbrev ? *",
+        "git branch --abbrev 8",
+        true
+    )]
+    // Alternation aliases work the same as a single flag literal.
+    #[case::alternation_bare("curl -X|--method ?", "curl --method", true)]
+    #[case::alternation_equals("curl -X|--method ?", "curl --method=GET", true)]
+    fn optional_value_flag_matching(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    #[rstest]
+    // Wrapping in `[...]` additionally allows the flag to be absent entirely.
+    #[case::flag_absent("git branch [--abbrev ?] *", "git branch", true)]
+    #[case::flag_bare("git branch [--abbrev ?] *", "git branch --abbrev", true)]
+    #[case::flag_equals("git branch [--abbrev ?] *", "git branch --abbrev=8", true)]
+    #[case::flag_space_separated_value_becomes_positional(
+        "git branch [--abbrev ?] *",
+        "git branch --abbrev 8",
+        true
+    )]
+    fn optional_value_flag_inside_optional_group(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
+        );
+    }
+
+    #[rstest]
+    #[case::bare_flag_no_capture("git branch --abbrev ?", "git branch --abbrev", Some(vec![]))]
+    #[case::equals_joined_captures_value(
+        "git branch --abbrev ?",
+        "git branch --abbrev=8",
+        Some(vec!["8".to_string()])
+    )]
+    #[case::fused_short_captures_value(
+        "git tag -n ?",
+        "git tag -n3",
+        Some(vec!["3".to_string()])
+    )]
+    fn optional_value_flag_captures(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: Option<Vec<String>>,
+        empty_defs: Definitions,
+    ) {
+        assert_eq!(
+            check_captures(pattern_str, command_str, &empty_defs),
             expected
         );
     }

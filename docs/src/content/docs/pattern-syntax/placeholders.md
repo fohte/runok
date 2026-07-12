@@ -306,7 +306,11 @@ definitions:
     verbose: '-v|--verbose'
     # Value-restricted flag: only matches specific values
     method: '-X|--method GET|HEAD|OPTIONS'
+    # Optional value: matches with or without a value (see below)
+    abbrev: '--abbrev ?'
 ```
+
+The value pattern may be `?` instead of `*`, meaning the value is optional -- see [Optional Flag Values](/pattern-syntax/matching-behavior/#optional-flag-values) for the matching rules.
 
 ### Using Flag Groups
 

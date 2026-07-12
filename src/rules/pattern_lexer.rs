@@ -17,6 +17,10 @@ pub enum LexToken {
     Alternation(Vec<String>),
     /// The wildcard token `*`
     Wildcard,
+    /// The optional-value token `?`, used as a flag's value to mean "zero or
+    /// one token" (e.g. `--abbrev ?` matches both `--abbrev` and
+    /// `--abbrev=8`).
+    OptionalValue,
     /// A negated value (e.g. "!GET" -> Negation("GET"), "!a|b" -> NegationAlternation)
     Negation(String),
     /// A negated alternation (e.g. "!describe|get|list-*")
@@ -295,6 +299,8 @@ fn is_word_boundary(c: char) -> bool {
 fn classify_word(word: &str) -> Result<LexToken, PatternParseError> {
     if word == "*" {
         Ok(LexToken::Wildcard)
+    } else if word == "?" {
+        Ok(LexToken::OptionalValue)
     } else if word.contains('|') {
         let parts = validate_alternation_parts(word)?;
         Ok(LexToken::Alternation(parts))
@@ -457,6 +463,25 @@ mod tests {
         LexToken::Wildcard,
     ])]
     fn tokenize_wildcard(#[case] input: &str, #[case] expected: Vec<LexToken>) {
+        assert_eq!(tokenize(input).unwrap(), expected);
+    }
+
+    // === Optional value marker (`?`) ===
+
+    #[rstest]
+    #[case("--abbrev ?", vec![
+        LexToken::Literal("--abbrev".into()),
+        LexToken::OptionalValue,
+    ])]
+    #[case("git branch [--abbrev ?]", vec![
+        LexToken::Literal("git".into()),
+        LexToken::Literal("branch".into()),
+        LexToken::OpenBracket,
+        LexToken::Literal("--abbrev".into()),
+        LexToken::OptionalValue,
+        LexToken::CloseBracket,
+    ])]
+    fn tokenize_optional_value(#[case] input: &str, #[case] expected: Vec<LexToken>) {
         assert_eq!(tokenize(input).unwrap(), expected);
     }
 

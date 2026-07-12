@@ -26,6 +26,13 @@ fn collect_value_flags(
 ) {
     for token in tokens {
         match token {
+            // `?`-valued flags never consume a space-separated following
+            // token as their value (see `match_flag_with_optional_value`),
+            // so the command parser must treat them as boolean flags --
+            // otherwise `git branch --abbrev 8` would wrongly assign `8` to
+            // `--abbrev` instead of leaving it as a positional argument.
+            PatternToken::FlagWithValue { value, .. }
+                if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
             PatternToken::FlagWithValue { aliases, .. } => {
                 for alias in aliases {
                     value_flags.insert(alias.clone());
@@ -36,11 +43,15 @@ fn collect_value_flags(
                     .parsed_flag_groups
                     .as_ref()
                     .and_then(|g| g.get(name))
-                    && parsed.value_pattern.is_some()
+                    && parsed
+                        .value_pattern
+                        .as_ref()
+                        .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
                 {
-                    // Only add aliases for value-taking flags (those with
-                    // a value pattern). Bool flags do not consume the next
-                    // token, so they must not be registered as value flags.
+                    // Only add aliases for value-taking flags (those with a
+                    // space-separated value pattern). Bool flags and
+                    // `?`-valued flags do not consume the next token, so
+                    // they must not be registered as value flags.
                     for alias in &parsed.aliases {
                         value_flags.insert(alias.clone());
                     }
@@ -137,5 +148,47 @@ pub(super) fn build_expr_context(
         loop_kind: loop_kind.to_string(),
         home: crate::config::dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
         cwd: eval_context.cwd.to_string_lossy().into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::pattern_parser::parse as parse_pattern;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::optional_value_flag_excluded("git branch --abbrev ?", &[])]
+    #[case::wildcard_value_flag_included("git branch --sort committerdate", &["--sort"])]
+    fn build_flag_schema_excludes_optional_value_flags(
+        #[case] pattern_str: &str,
+        #[case] expected: &[&str],
+    ) {
+        let pattern = parse_pattern(pattern_str).unwrap();
+        let schema = build_flag_schema(&pattern, &Definitions::default());
+        let expected: HashSet<String> = expected.iter().map(|s| s.to_string()).collect();
+        assert_eq!(schema.value_flags, expected);
+    }
+
+    #[rstest]
+    #[case::optional_value_group_excluded("-n|--number ?", &[])]
+    #[case::wildcard_group_included("-f|--field *", &["-f", "--field"])]
+    fn build_flag_schema_excludes_optional_value_flag_groups(
+        #[case] group_definition: &str,
+        #[case] expected: &[&str],
+    ) {
+        let pattern = parse_pattern("git tag <flag:count>").unwrap();
+        let mut defs = Definitions {
+            flag_groups: Some(HashMap::from([(
+                "count".to_string(),
+                group_definition.to_string(),
+            )])),
+            ..Definitions::default()
+        };
+        defs.resolve_flag_groups();
+
+        let schema = build_flag_schema(&pattern, &defs);
+        let expected: HashSet<String> = expected.iter().map(|s| s.to_string()).collect();
+        assert_eq!(schema.value_flags, expected);
     }
 }

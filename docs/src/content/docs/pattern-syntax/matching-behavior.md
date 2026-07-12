@@ -113,6 +113,39 @@ Flag-value patterns also match fused short flags, where the value is directly at
 
 Fused splitting only applies to short flags (single `-` followed by a single ASCII character). It is only attempted when the pattern declares a `FlagWithValue` for that flag (e.g. `-n *`), so combined boolean flags like `-rf` are not falsely split.
 
+### Optional Flag Values
+
+Some flags accept a value but also work fine without one (e.g. git's `--abbrev[=<n>]` or `-n[<n>]`). Writing `?` in the value position matches **zero or one** token, unlike `*` which requires a value:
+
+```yaml
+- allow: 'git branch --abbrev ?'
+```
+
+| Command                 | Result         | Reason                            |
+| ----------------------- | -------------- | --------------------------------- |
+| `git branch --abbrev`   | Matches        | Value omitted                     |
+| `git branch --abbrev=8` | Matches        | `=`-joined value                  |
+| `git branch`            | Does not match | The flag itself is still required |
+| `git branch --abbrev 8` | Does not match | See below                         |
+
+Unlike `*`, a `?`-valued flag never consumes a **space-separated** following token as its value -- only `=`-joined (long flags) or fused (short flags, e.g. `-n3`) forms count as an explicit value. This mirrors the GNU `getopt_long` convention for optional-argument options, and matches real CLI behavior: `git branch --abbrev 8` actually creates a branch named `8` rather than setting `--abbrev`'s value to `8`, because git never treats a following argv token as an optional argument's value. If a following token should still be allowed as a separate positional argument, add a trailing wildcard:
+
+```yaml
+- allow: 'git branch --abbrev ? *'
+```
+
+| Command                 | Result                                                         |
+| ----------------------- | -------------------------------------------------------------- |
+| `git branch --abbrev 8` | Matches (`8` is a positional argument, not `--abbrev`'s value) |
+
+Combine `?` with an [optional group](/pattern-syntax/optional-groups/) to also allow the flag to be absent entirely:
+
+```yaml
+- allow: 'git branch [--abbrev ?] *'
+```
+
+`?` is also supported as the value pattern in a [`<flag:name>` group definition](/pattern-syntax/placeholders/#flag-groups-flagname).
+
 ### Flag-only Negation
 
 Negation patterns where all alternatives start with `-` also use order-independent matching. The matcher scans the entire command for any token matching the negated pattern and rejects the match if found. Unlike positional negation, flag-only negation does **not** consume a positional token — it only asserts that the forbidden flag is absent. This means it also passes when there are no command tokens (the flag is trivially absent):
