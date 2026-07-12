@@ -70,7 +70,7 @@ The following are recorded as unresolvable and left as the literal `$X` / `${X}`
 - A `for` loop's own iteration variable, since its value changes every iteration (`for i in a b; do echo $i; done` never resolves `$i`).
 - An array-element assignment (`arr[0]=x`), and a bare `export`/`declare`/`unset` with no value (`X=1; export X; echo $X` leaves `$X` unresolved -- `export X` alone doesn't reassign it, but its current value isn't statically known either).
 - An expansion with an operator, such as `${X:-default}` or `${X#pattern}`.
-- Anything inside a function body at definition time (`f() { local X=1; }; echo $X` leaves the outer `$X` unresolved) -- the body is only evaluated when the function is called, which runok does not yet resolve.
+- Anything inside a function body **at definition time** (`f() { local X=1; }; echo $X` leaves the outer `$X` unresolved) -- the body's variables are only resolved when the function is actually [called](#function-call-resolution), using the variables statically known at the call site.
 
 ### Audit log
 
@@ -88,6 +88,46 @@ When variable resolution rewrites a command, the audit log's `command_evaluation
 ```
 
 See [Audit Log JSON Schema](/cli/audit-log-schema/#original_command) for the full field reference.
+
+## Function call resolution
+
+A shell function's **body** (`f() { ... }`) is always extracted and evaluated unconditionally at definition time -- see [Decomposition](#decomposition) above -- regardless of whether the function is ever called. This is a safety backstop for cases runok cannot see statically, e.g. a persistent shell (like Claude Code's) where a function defined in one tool call is invoked in a later one.
+
+A **call** to that function, on the other hand, used to be matched as an ordinary, unknown command: `f() { git push; }; f` evaluated the call `f` against the configured rules, found no match, and fell through to `defaults.action` on every call -- even when the body itself would always evaluate to `allow`.
+
+runok now detects a call to a function defined earlier in the same command string, and evaluates the call by re-evaluating the body with the call's own arguments bound to `$1`..`$N` / `$@` / `$*` / `$#`, plus the script's statically-resolved variables as of the call site (the same resolution described in [Variable resolution](#variable-resolution) above).
+
+```yaml
+rules:
+  - allow: 'git push'
+  - deny: 'git push --force*'
+```
+
+For the command `f() { git push $1; }; f --force`:
+
+1. `f`'s body is extracted once, unconditionally, at definition time: `git push $1` (`$1` stays literal -- see [What does not resolve](#what-does-not-resolve) above).
+2. The call `f --force` is recognized as a call to `f`, defined earlier in the same command string.
+3. The body is re-evaluated with `$1` bound to `--force`: `git push --force`.
+4. Final result: **deny** -- the flag can no longer evade the rule by being smuggled through a function call's own argument, the same way [variable resolution](#variable-resolution) closes the equivalent gap for a plain `$X` reference.
+
+### What calls resolve
+
+- A call whose command name matches a function `name() { ... }` defined earlier in the same command string (program order matters: `f; f() { ... }` does not resolve `f`, matching real bash's "command not found").
+- The call's own arguments, bound to `$1`..`$N` in the body. `$@` and `$*` are both bound to every argument space-joined (matching how an unquoted `$@` / `$*` is word-split the same way any other multi-word value is -- see [What resolves](#what-resolves) above); `$#` is the argument count.
+- A call inside the resolved body to another function defined earlier in the script (`g() { git push; }; f() { g; }; f` resolves both `f` and the nested `g`).
+- Redirects and the enclosing loop kind at the call site (`f() { git push; }; f > /path` attaches the redirect to the body's `git push`, and a `when` clause referencing `redirects` sees it).
+- Multiple definitions of the same name (e.g. one per branch of an `if`): every candidate body is evaluated, and the [strictest result](#strictest-wins) wins.
+- The function's own body is still evaluated unconditionally at definition time, independent of any call -- both evaluations are merged into the final result, so whichever is stricter always wins.
+
+### What calls do not resolve
+
+- A call before its function is defined (`f; f() { git push; }` leaves the first `f` an unknown command).
+- Self-recursion or mutual recursion (`f() { f; }; f`, or `f() { g; }; g() { f; }; f`): resolution stops the moment a function name reappears on the in-progress call stack, and falls back to `defaults.action` for that call instead of looping forever or erroring.
+- A call chain deeper than the shared [wrapper recursion depth limit](/rule-evaluation/wrapper-recursion/#recursion-depth-limit) (10).
+- A function defined in a separate tool call that this command string does not itself contain -- only definitions appearing earlier in the _same_ command string are visible. (The unconditional definition-time evaluation of the body is the safety backstop for exactly this case.)
+- A body that fails to re-parse when re-evaluated with the call's arguments substituted in -- resolution is skipped for that candidate body, falling back to `defaults.action` the same way an unresolved call does.
+
+None of these ever produce an error: a call that cannot be resolved is simply evaluated as an ordinary, unknown command, the same as before this feature existed.
 
 ## Strictest wins
 

@@ -8,9 +8,16 @@ use super::tokenizer::dequote_node;
 ///
 /// Scoped to one [`super::extract_commands_with_metadata`] call: a fresh
 /// `VarEnv` is created per top-level parse and never persisted across
-/// separate command strings.
-#[derive(Debug, Default, Clone)]
-pub(in crate::rules::command_parser) struct VarEnv {
+/// separate command strings -- except when a snapshot is captured for a
+/// resolved function call (see [`crate::rules::command_parser::FunctionCallInfo`]),
+/// which seeds a fresh re-extraction of the called function's body.
+///
+/// `pub(crate)` (rather than the narrower `pub(in
+/// crate::rules::command_parser)` most of this module uses) because
+/// `rule_engine` needs to name the type and clone/bind a snapshot when
+/// resolving a function call.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct VarEnv {
     values: HashMap<String, VarValue>,
 }
 
@@ -42,6 +49,27 @@ impl VarEnv {
 
     pub(in crate::rules::command_parser) fn poison(&mut self, name: String) {
         self.values.insert(name, VarValue::Poisoned);
+    }
+
+    /// Bind `$1`..`$N`, `$@`, `$*`, and `$#` to `args`, so a function
+    /// body re-extracted with this environment resolves its positional
+    /// parameters the same way `$X` resolves a regular variable.
+    ///
+    /// `$@` and `$*` are both bound to `args` space-joined: this matches
+    /// how an *unquoted* `$@` / `$*` is word-split identically by
+    /// [`super::tokenizer::expand_argument_tokens`], and is the same
+    /// simplification already applied to any other multi-word
+    /// [`VarValue::Literal`] (see the module docs on `X="git status"; $X`).
+    /// A *quoted* `"$@"` loses its per-argument word boundaries under this
+    /// simplification -- an accepted limitation, not a distinct bug.
+    pub(crate) fn bind_positional_params(&mut self, args: &[String]) {
+        for (i, arg) in args.iter().enumerate() {
+            self.set_literal((i + 1).to_string(), arg.clone());
+        }
+        let joined = args.join(" ");
+        self.set_literal("@".to_string(), joined.clone());
+        self.set_literal("*".to_string(), joined);
+        self.set_literal("#".to_string(), args.len().to_string());
     }
 }
 

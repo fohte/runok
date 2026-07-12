@@ -1,3 +1,4 @@
+use crate::rules::command_parser::function_table::FunctionTable;
 use crate::rules::command_parser::redirect::{
     collect_substitutions_recursive, extract_env_assignment, extract_redirect_info,
     is_quoted_heredoc,
@@ -5,7 +6,7 @@ use crate::rules::command_parser::redirect::{
 use crate::rules::command_parser::tokenizer::{dequote_node, expand_argument_tokens};
 use crate::rules::command_parser::var_env::{VarEnv, poison_bare_name, record_variable_assignment};
 use crate::rules::command_parser::{
-    EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo, shell_quote_join,
+    EnvAssignment, ExtractedCommand, FunctionCallInfo, PipeInfo, RedirectInfo, shell_quote_join,
 };
 
 use super::collect_commands;
@@ -17,7 +18,7 @@ use super::collect_commands;
 /// command_substitution / subshell nodes, and emit the remaining text.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_command(
     node: tree_sitter::Node,
@@ -27,6 +28,7 @@ pub(super) fn handle_command(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     let mut cmd_redirects = redirects.to_vec();
@@ -51,7 +53,14 @@ pub(super) fn handle_command(
             // bash, so skip body recursion to avoid scanning
             // user prose as if it were shell syntax.
             if !(child.kind() == "heredoc_redirect" && is_quoted_heredoc(child, source)) {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
         } else {
             match child.kind() {
@@ -74,6 +83,7 @@ pub(super) fn handle_command(
                         &[],
                         loop_kind,
                         var_env,
+                        function_table,
                         poison,
                     );
                     if let Some(token) = dequote_node(child, source) {
@@ -84,7 +94,14 @@ pub(super) fn handle_command(
                     if let Some(assignment) = extract_env_assignment(child, source) {
                         env.push(assignment);
                     }
-                    collect_substitutions_recursive(child, source, commands, var_env, poison);
+                    collect_substitutions_recursive(
+                        child,
+                        source,
+                        commands,
+                        var_env,
+                        function_table,
+                        poison,
+                    );
                 }
                 // Recurse into other child nodes (e.g. string,
                 // concatenation) to find nested command_substitution
@@ -93,7 +110,14 @@ pub(super) fn handle_command(
                 // carries against `var_env`, which may expand it
                 // into zero, one, or several argv tokens.
                 _ => {
-                    collect_substitutions_recursive(child, source, commands, var_env, poison);
+                    collect_substitutions_recursive(
+                        child,
+                        source,
+                        commands,
+                        var_env,
+                        function_table,
+                        poison,
+                    );
                     if let Some((tokens, changed)) = expand_argument_tokens(child, source, var_env)
                     {
                         if changed {
@@ -138,6 +162,22 @@ pub(super) fn handle_command(
         (raw_text.to_string(), None)
     };
     if !text.is_empty() {
+        // A call to a function defined earlier in the same command
+        // string: annotate with everything `rule_engine` needs to
+        // re-extract the body with its positional parameters bound
+        // (see `FunctionCallInfo`). `argv[0]` is already the resolved
+        // command name (post variable-expansion), so `FOO=bar f` and
+        // `$CMD` (when `CMD` resolves statically) are recognized too.
+        let function_call = argv
+            .first()
+            .and_then(|name| function_table.lookup(name))
+            .map(|bodies| FunctionCallInfo {
+                function_name: argv[0].clone(),
+                bodies: bodies.to_vec(),
+                call_args: argv[1..].to_vec(),
+                var_env: var_env.clone(),
+                function_table: function_table.clone(),
+            });
         commands.push(ExtractedCommand {
             command: text,
             env,
@@ -146,6 +186,7 @@ pub(super) fn handle_command(
             pipe: pipe_info.clone(),
             loop_kind: loop_kind.to_string(),
             original_command,
+            function_call,
         });
     }
 }
@@ -163,7 +204,7 @@ pub(super) fn handle_command(
 /// known.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_declaration_or_unset(
     node: tree_sitter::Node,
@@ -173,6 +214,7 @@ pub(super) fn handle_declaration_or_unset(
     pipe_info: &PipeInfo,
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     let mut argv: Vec<String> = Vec::new();
@@ -200,17 +242,38 @@ pub(super) fn handle_declaration_or_unset(
                     argv.push(text.to_string());
                 }
                 record_variable_assignment(child, source, var_env, poison);
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
             "variable_name" => {
                 poison_bare_name(child, source, var_env);
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
                 if let Some(token) = dequote_node(child, source) {
                     argv.push(token);
                 }
             }
             _ => {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
                 if let Some(token) = dequote_node(child, source) {
                     argv.push(token);
                 }
@@ -228,6 +291,7 @@ pub(super) fn handle_declaration_or_unset(
             pipe: pipe_info.clone(),
             loop_kind: loop_kind.to_string(),
             original_command: None,
+            function_call: None,
         });
     }
 }

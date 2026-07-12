@@ -1,3 +1,4 @@
+use super::function_table::FunctionTable;
 use super::splitter::collect_commands;
 use super::tokenizer::dequote_node;
 use super::var_env::VarEnv;
@@ -278,6 +279,7 @@ pub(super) fn collect_heredoc_redirect_substitutions(
     source: &[u8],
     commands: &mut Vec<ExtractedCommand>,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     for i in 0..heredoc.child_count() {
@@ -294,7 +296,7 @@ pub(super) fn collect_heredoc_redirect_substitutions(
         if heredoc.field_name_for_child(i as u32) == Some("right") {
             continue;
         }
-        collect_substitutions_recursive(child, source, commands, var_env, poison);
+        collect_substitutions_recursive(child, source, commands, var_env, function_table, poison);
     }
 }
 
@@ -337,6 +339,7 @@ pub(super) fn collect_substitutions_recursive(
     source: &[u8],
     commands: &mut Vec<ExtractedCommand>,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     let mut cursor = node.walk();
@@ -355,11 +358,19 @@ pub(super) fn collect_substitutions_recursive(
                     &[],
                     "",
                     var_env,
+                    function_table,
                     poison,
                 );
             }
             _ => {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
         }
     }

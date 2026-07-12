@@ -25,6 +25,20 @@ When a command is rewritten this way, the audit log records both the resolved te
 
 **What changes for existing rules?** A rule that matches literal `$X` text (e.g. `allow: 'echo $X'`, intending to match the variable reference itself rather than its value) now sees the resolved value instead, when that value is statically known. This is unlikely in practice -- patterns are normally written against a command's real arguments, not its unexpanded source -- but if a rule specifically depended on `$X` staying unresolved, it should be rewritten against the values the variable can actually take, since those are now what reaches rule evaluation.
 
+### Function call resolution closes a deny-bypass gap for shell functions (TODO(pr-link))
+
+A shell function's **body** was always evaluated unconditionally at definition time, as a safety backstop, but a **call** to that function (`f() { git push; }; f`) was matched as an ordinary, unknown command -- resolving to `defaults.action` (usually `ask`) on every call, and never seeing the arguments the call itself passed in:
+
+```yaml
+rules:
+  - allow: 'git push'
+  - deny: 'git push --force*'
+```
+
+`f() { git push $1; }; f --force` used to slip past the deny rule: definition-time evaluation only ever sees the literal, unexpanded `git push $1`. runok now detects a call to a function defined earlier in the same command string, and evaluates the call by substituting the call's own arguments for `$1`..`$N` / `$@` / `$*` / `$#` in the body, then evaluating the body itself -- so `f --force` above is now correctly denied. A call to a fully allow-able function (`f() { git push; }; f`) now resolves to `allow` too, instead of `ask` on every call.
+
+The function's body is still evaluated unconditionally at definition time regardless of whether it is ever called -- this remains the safety backstop for cases where the function was defined in a previous tool invocation that runok cannot see. See [Rule Evaluation -- Function call resolution](/rule-evaluation/compound-commands/#function-call-resolution) for the full list of what resolves, what does not, and the audit log fields involved.
+
 ### Breaking: `?` in a flag's value position now means "optional value" ([#471](https://github.com/fohte/runok/pull/471))
 
 Some flags accept a value but also work without one (e.g. git's `--abbrev[=<n>]`, `-n[<n>]`). Writing `?` in the value position now matches **zero or one** token, unlike `*` which requires exactly one:

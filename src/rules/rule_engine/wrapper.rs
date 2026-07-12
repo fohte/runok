@@ -23,6 +23,7 @@ pub(super) fn try_unwrap_wrapper(
     definitions: &Definitions,
     depth: usize,
     loop_kind: &str,
+    call_stack: &[String],
 ) -> Result<Option<EvalResult>, RuleError> {
     let wrappers = match definitions.wrappers.as_ref() {
         Some(w) if !w.is_empty() => w,
@@ -79,6 +80,8 @@ pub(super) fn try_unwrap_wrapper(
                     &[],
                     &PipeInfo::default(),
                     loop_kind,
+                    None,
+                    call_stack,
                 )?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),

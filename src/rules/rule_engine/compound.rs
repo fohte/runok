@@ -32,6 +32,7 @@ pub fn evaluate_compound(
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
             original_command: None,
+            function_call: None,
         }]
     });
 
@@ -53,6 +54,8 @@ pub fn evaluate_compound(
             &ext_cmd.redirects,
             &ext_cmd.pipe,
             &ext_cmd.loop_kind,
+            ext_cmd.function_call.as_ref(),
+            &[],
         )?;
 
         if let Some(ref name) = result.sandbox_preset {
