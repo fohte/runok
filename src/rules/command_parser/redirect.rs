@@ -1,5 +1,6 @@
 use super::splitter::collect_commands;
 use super::tokenizer::dequote_node;
+use super::var_env::VarEnv;
 use super::{EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo};
 
 /// Inspect a `while_statement` node and return `"until"` if the leading
@@ -276,6 +277,8 @@ pub(super) fn collect_heredoc_redirect_substitutions(
     heredoc: tree_sitter::Node,
     source: &[u8],
     commands: &mut Vec<ExtractedCommand>,
+    var_env: &mut VarEnv,
+    poison: bool,
 ) {
     for i in 0..heredoc.child_count() {
         let Some(child) = heredoc.child(i as u32) else {
@@ -291,7 +294,7 @@ pub(super) fn collect_heredoc_redirect_substitutions(
         if heredoc.field_name_for_child(i as u32) == Some("right") {
             continue;
         }
-        collect_substitutions_recursive(child, source, commands);
+        collect_substitutions_recursive(child, source, commands, var_env, poison);
     }
 }
 
@@ -325,10 +328,16 @@ pub(super) fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source:
 /// `process_substitution` nodes, then hand them off to `collect_commands`.
 /// Used by `variable_assignment` to reach substitutions nested inside
 /// `string` nodes (e.g. `X="$(cmd)"`).
+///
+/// `poison` is threaded through unchanged: a substitution reached this
+/// way runs exactly once, whenever the caller's node is reached, so it
+/// shares the caller's conditional/unconditional state.
 pub(super) fn collect_substitutions_recursive(
     node: tree_sitter::Node,
     source: &[u8],
     commands: &mut Vec<ExtractedCommand>,
+    var_env: &mut VarEnv,
+    poison: bool,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -338,10 +347,19 @@ pub(super) fn collect_substitutions_recursive(
             // assignments — all of which run outside any enclosing
             // loop body, so loop_kind resets to "".
             "command_substitution" | "process_substitution" => {
-                collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                collect_commands(
+                    child,
+                    source,
+                    commands,
+                    &PipeInfo::default(),
+                    &[],
+                    "",
+                    var_env,
+                    poison,
+                );
             }
             _ => {
-                collect_substitutions_recursive(child, source, commands);
+                collect_substitutions_recursive(child, source, commands, var_env, poison);
             }
         }
     }

@@ -2,8 +2,11 @@ use crate::rules::command_parser::redirect::{
     collect_heredoc_redirect_substitutions, collect_substitutions_recursive, detect_while_or_until,
     extract_env_assignment, extract_redirect_info, find_heredoc_continuation, is_quoted_heredoc,
 };
-use crate::rules::command_parser::tokenizer::dequote_node;
-use crate::rules::command_parser::{EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo};
+use crate::rules::command_parser::tokenizer::{dequote_node, expand_argument_tokens};
+use crate::rules::command_parser::var_env::{VarEnv, poison_bare_name, record_variable_assignment};
+use crate::rules::command_parser::{
+    EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo, shell_quote_join,
+};
 
 /// Recursively walk the tree-sitter AST and collect individual command strings.
 ///
@@ -16,6 +19,15 @@ use crate::rules::command_parser::{EnvAssignment, ExtractedCommand, PipeInfo, Re
 /// `loop_kind` carries the kind of shell loop (`"while"`, `"until"`, `"for"`,
 /// or `""`) that immediately encloses the current node. Nested loops surface
 /// the nearest enclosing kind. Subshells propagate the kind unchanged.
+/// `var_env` tracks statically-resolvable variable assignments seen so far in
+/// this walk. `poison` is `true` when the current node sits inside a
+/// conditional or loop body (an `if`/`case`/`for`/`while`/`until` body), where
+/// an assignment may run zero, one, or many times, so it must be recorded as
+/// unresolvable rather than by its own static-ness.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+)]
 pub(in crate::rules::command_parser) fn collect_commands(
     node: tree_sitter::Node,
     source: &[u8],
@@ -23,6 +35,8 @@ pub(in crate::rules::command_parser) fn collect_commands(
     pipe_info: &PipeInfo,
     redirects: &[RedirectInfo],
     loop_kind: &str,
+    var_env: &mut VarEnv,
+    poison: bool,
 ) {
     match node.kind() {
         // Transparent containers (except pipeline): recurse into all named children.
@@ -33,26 +47,70 @@ pub(in crate::rules::command_parser) fn collect_commands(
         | "subshell"
         | "do_group"
         | "compound_statement"
-        | "else_clause"
         | "command_substitution"
         | "process_substitution"
-        | "if_statement"
-        | "elif_clause"
         | "negated_command" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                collect_commands(
+                    child, source, commands, pipe_info, redirects, loop_kind, var_env, poison,
+                );
+            }
+        }
+        // if_statement: the `condition` field runs unconditionally exactly
+        // once whenever the if_statement itself is reached, so it keeps
+        // whatever poison state the caller passed in. Everything else
+        // (the then-body, `elif_clause`s, `else_clause`) only runs
+        // conditionally, so it is always poisoned regardless of the
+        // caller's state.
+        "if_statement" => {
+            for i in 0..node.child_count() {
+                let Some(child) = node.child(i as u32) else {
+                    continue;
+                };
+                if !child.is_named() {
+                    continue;
+                }
+                let is_condition = node.field_name_for_child(i as u32) == Some("condition");
+                let child_poison = if is_condition { poison } else { true };
+                collect_commands(
+                    child,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    child_poison,
+                );
+            }
+        }
+        // elif_clause / else_clause: unlike if_statement's own condition,
+        // an elif's condition only runs if every preceding
+        // condition was false, and an else body only runs if every
+        // condition was false — both are always conditional, so force
+        // poison regardless of the caller's state.
+        "elif_clause" | "else_clause" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_commands(
+                    child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+                );
             }
         }
         // while_statement covers both `while` and `until` in tree-sitter-bash.
         // The leading anonymous token (`while` or `until`) distinguishes them;
         // it sets `loop_kind` for the condition, body, and any nested commands.
         // A nested loop further down overrides this (nearest parent wins).
+        // The condition may re-run every iteration and the body may run zero,
+        // one, or many times, so both are always poisoned.
         "while_statement" => {
             let kind = detect_while_or_until(node, source);
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                collect_commands(child, source, commands, pipe_info, redirects, kind);
+                collect_commands(
+                    child, source, commands, pipe_info, redirects, kind, var_env, true,
+                );
             }
         }
         // pipeline: compute pipe position for each child command.
@@ -67,7 +125,16 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     stdin: pipe_info.stdin || i > 0,
                     stdout: pipe_info.stdout || i < len - 1,
                 };
-                collect_commands(*child, source, commands, &child_pipe, redirects, loop_kind);
+                collect_commands(
+                    *child,
+                    source,
+                    commands,
+                    &child_pipe,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    poison,
+                );
             }
         }
         // for_statement: recurse into body (do_group) for loop-body commands,
@@ -76,18 +143,42 @@ pub(in crate::rules::command_parser) fn collect_commands(
         // substitutions run once before the loop body, so they keep
         // `loop_kind = ""` whether the substitution is bare (`$(cmd)`) or
         // quoted (`"$(cmd)"`).
+        //
+        // The loop variable itself is always poisoned: even when the
+        // for_statement runs unconditionally, its value changes every
+        // iteration, so no single static value describes it. The loop
+        // body always runs poisoned (it may execute zero, one, or many
+        // times); the value list runs exactly once whenever the
+        // for_statement is reached, so it keeps the caller's poison state.
         "for_statement" => {
+            if let Some(var_node) = node.child_by_field_name("variable")
+                && let Some(bytes) = source.get(var_node.start_byte()..var_node.end_byte())
+                && let Ok(name) = std::str::from_utf8(bytes)
+            {
+                var_env.poison(name.to_string());
+            }
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "do_group" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, "for");
+                        collect_commands(
+                            child, source, commands, pipe_info, redirects, "for", var_env, true,
+                        );
                     }
                     "command_substitution" | "process_substitution" => {
-                        collect_commands(child, source, commands, &PipeInfo::default(), &[], "");
+                        collect_commands(
+                            child,
+                            source,
+                            commands,
+                            &PipeInfo::default(),
+                            &[],
+                            "",
+                            var_env,
+                            poison,
+                        );
                     }
                     _ => {
-                        collect_substitutions_recursive(child, source, commands);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
                     }
                 }
             }
@@ -95,19 +186,27 @@ pub(in crate::rules::command_parser) fn collect_commands(
         // case_statement: recurse into each case_item, and search the match
         // value for nested command substitutions (e.g. `case $(cmd) in ...`).
         // The match value uses field name "value" and may be a
-        // command_substitution node directly.
+        // command_substitution node directly. Each case_item body is
+        // conditional (only the matching branch runs), so it is always
+        // poisoned; the match value runs exactly once whenever the
+        // case_statement is reached, so it keeps the caller's poison state.
         "case_statement" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 match child.kind() {
                     "case_item" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                        collect_commands(
+                            child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+                        );
                     }
                     "command_substitution" => {
-                        collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                        collect_commands(
+                            child, source, commands, pipe_info, redirects, loop_kind, var_env,
+                            poison,
+                        );
                     }
                     _ => {
-                        collect_substitutions_recursive(child, source, commands);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
                     }
                 }
             }
@@ -123,9 +222,11 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     continue;
                 }
                 if node.field_name_for_child(i as u32) == Some("value") {
-                    collect_substitutions_recursive(child, source, commands);
+                    collect_substitutions_recursive(child, source, commands, var_env, poison);
                 } else {
-                    collect_commands(child, source, commands, pipe_info, redirects, loop_kind);
+                    collect_commands(
+                        child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+                    );
                 }
             }
         }
@@ -158,7 +259,16 @@ pub(in crate::rules::command_parser) fn collect_commands(
                 // No swallowed continuation: behave like a plain
                 // redirected statement.
                 (None, Some(body)) => {
-                    collect_commands(body, source, commands, pipe_info, &all_redirects, loop_kind);
+                    collect_commands(
+                        body,
+                        source,
+                        commands,
+                        pipe_info,
+                        &all_redirects,
+                        loop_kind,
+                        var_env,
+                        poison,
+                    );
                 }
                 // Swallowed continuation: synthesize the outer
                 // pipeline `[body, *pipe_stages]` and emit each stage
@@ -194,6 +304,8 @@ pub(in crate::rules::command_parser) fn collect_commands(
                             &stage_pipe,
                             stage_redirects,
                             loop_kind,
+                            var_env,
+                            poison,
                         );
                     }
                     let arm_pipe = PipeInfo {
@@ -201,7 +313,10 @@ pub(in crate::rules::command_parser) fn collect_commands(
                         stdout: pipe_info.stdout,
                     };
                     for arm in &continuation.list_arms {
-                        collect_commands(*arm, source, commands, &arm_pipe, redirects, loop_kind);
+                        collect_commands(
+                            *arm, source, commands, &arm_pipe, redirects, loop_kind, var_env,
+                            poison,
+                        );
                     }
                 }
                 // body field missing — defensive only; tree-sitter
@@ -227,9 +342,11 @@ pub(in crate::rules::command_parser) fn collect_commands(
                         continue;
                     }
                     if child.kind() == "heredoc_redirect" {
-                        collect_heredoc_redirect_substitutions(child, source, commands);
+                        collect_heredoc_redirect_substitutions(
+                            child, source, commands, var_env, poison,
+                        );
                     } else {
-                        collect_substitutions_recursive(child, source, commands);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
                     }
                 }
             }
@@ -239,14 +356,24 @@ pub(in crate::rules::command_parser) fn collect_commands(
         // variable_assignment: transparent container — skip the assignment itself
         // and recursively find command_substitution / process_substitution nodes
         // anywhere in the subtree (they may be nested inside string nodes when
-        // the value is quoted, e.g. X="$(cmd)").
+        // the value is quoted, e.g. X="$(cmd)"). Also record the assignment
+        // into `var_env` so a later `$X` in the same command string can
+        // resolve to a statically known value.
         "variable_assignment" => {
-            collect_substitutions_recursive(node, source, commands);
+            record_variable_assignment(node, source, var_env, poison);
+            collect_substitutions_recursive(node, source, commands, var_env, poison);
         }
-        // function_definition: recurse into body
+        // function_definition: recurse into body. The body is not executed
+        // at definition time, so it must not read or write the enclosing
+        // `var_env` — a fresh, throwaway one keeps every expansion inside
+        // verbatim (as before this feature existed) without leaking any
+        // `local`/assignment the body makes back out to the caller.
         "function_definition" => {
             if let Some(body) = node.child_by_field_name("body") {
-                collect_commands(body, source, commands, pipe_info, redirects, loop_kind);
+                let mut inert = VarEnv::new();
+                collect_commands(
+                    body, source, commands, pipe_info, redirects, loop_kind, &mut inert, poison,
+                );
             }
         }
         // command node: strip leading variable_assignment children
@@ -258,6 +385,7 @@ pub(in crate::rules::command_parser) fn collect_commands(
             let mut cmd_redirects = redirects.to_vec();
             let mut env: Vec<EnvAssignment> = Vec::new();
             let mut argv: Vec<String> = Vec::new();
+            let mut expanded_any = false;
             for i in 0..node.child_count() {
                 let Some(child) = node.child(i as u32) else {
                     continue;
@@ -276,7 +404,7 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     // bash, so skip body recursion to avoid scanning
                     // user prose as if it were shell syntax.
                     if !(child.kind() == "heredoc_redirect" && is_quoted_heredoc(child, source)) {
-                        collect_substitutions_recursive(child, source, commands);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
                     }
                 } else {
                     match child.kind() {
@@ -298,6 +426,8 @@ pub(in crate::rules::command_parser) fn collect_commands(
                                 &PipeInfo::default(),
                                 &[],
                                 loop_kind,
+                                var_env,
+                                poison,
                             );
                             if let Some(token) = dequote_node(child, source) {
                                 argv.push(token);
@@ -307,15 +437,27 @@ pub(in crate::rules::command_parser) fn collect_commands(
                             if let Some(assignment) = extract_env_assignment(child, source) {
                                 env.push(assignment);
                             }
-                            collect_substitutions_recursive(child, source, commands);
+                            collect_substitutions_recursive(
+                                child, source, commands, var_env, poison,
+                            );
                         }
                         // Recurse into other child nodes (e.g. string,
                         // concatenation) to find nested command_substitution
                         // nodes (e.g. `curl -u "user:$(secret_cmd)" url`). gitleaks:allow
+                        // Also resolve any bare `$X` / `${X}` this child
+                        // carries against `var_env`, which may expand it
+                        // into zero, one, or several argv tokens.
                         _ => {
-                            collect_substitutions_recursive(child, source, commands);
-                            if let Some(token) = dequote_node(child, source) {
-                                argv.push(token);
+                            collect_substitutions_recursive(
+                                child, source, commands, var_env, poison,
+                            );
+                            if let Some((tokens, changed)) =
+                                expand_argument_tokens(child, source, var_env)
+                            {
+                                if changed {
+                                    expanded_any = true;
+                                }
+                                argv.extend(tokens);
                             }
                         }
                     }
@@ -340,16 +482,28 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     std::str::from_utf8(text).ok()
                 })
                 .collect();
-            let text = parts.join(" ");
-            let text = text.trim();
+            let raw_text = parts.join(" ");
+            let raw_text = raw_text.trim();
+            // Only rebuild the command text from the (possibly expanded)
+            // argv when an expansion actually happened, so a command with
+            // no resolvable variables is emitted byte-for-byte as before.
+            let (text, original_command) = if expanded_any {
+                match shell_quote_join(&argv) {
+                    Ok(rebuilt) => (rebuilt, Some(raw_text.to_string())),
+                    Err(_) => (raw_text.to_string(), None),
+                }
+            } else {
+                (raw_text.to_string(), None)
+            };
             if !text.is_empty() {
                 commands.push(ExtractedCommand {
-                    command: text.to_string(),
+                    command: text,
                     env,
                     argv,
                     redirects: cmd_redirects,
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    original_command,
                 });
             }
         }
@@ -361,7 +515,10 @@ pub(in crate::rules::command_parser) fn collect_commands(
         // field children, so the structure is simpler than `command`:
         // emit the keyword + each argument (variable_assignment kept
         // verbatim as `KEY=VALUE`) as argv, and the source text as
-        // the command string.
+        // the command string. A `variable_assignment` argument is
+        // recorded into `var_env` like a top-level assignment; a bare
+        // name (`export FOO`, `unset FOO`) is always poisoned since its
+        // current/former value is not statically known.
         "declaration_command" | "unset_command" => {
             let mut argv: Vec<String> = Vec::new();
             for i in 0..node.child_count() {
@@ -387,10 +544,18 @@ pub(in crate::rules::command_parser) fn collect_commands(
                         {
                             argv.push(text.to_string());
                         }
-                        collect_substitutions_recursive(child, source, commands);
+                        record_variable_assignment(child, source, var_env, poison);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
+                    }
+                    "variable_name" => {
+                        poison_bare_name(child, source, var_env);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
+                        if let Some(token) = dequote_node(child, source) {
+                            argv.push(token);
+                        }
                     }
                     _ => {
-                        collect_substitutions_recursive(child, source, commands);
+                        collect_substitutions_recursive(child, source, commands, var_env, poison);
                         if let Some(token) = dequote_node(child, source) {
                             argv.push(token);
                         }
@@ -407,13 +572,14 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    original_command: None,
                 });
             }
         }
         // Leaf command nodes — extract the source text, and recurse into
         // all child nodes to find nested command substitutions.
         _ => {
-            collect_substitutions_recursive(node, source, commands);
+            collect_substitutions_recursive(node, source, commands, var_env, poison);
             let text = &source[node.start_byte()..node.end_byte()];
             let text = std::str::from_utf8(text).unwrap_or("").trim();
             if !text.is_empty() {
@@ -424,6 +590,7 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     redirects: redirects.to_vec(),
                     pipe: pipe_info.clone(),
                     loop_kind: loop_kind.to_string(),
+                    original_command: None,
                 });
             }
         }

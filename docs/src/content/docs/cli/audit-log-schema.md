@@ -338,10 +338,17 @@ One entry per shell command extracted from the input. Higher-level shaping (reso
 
 ### `command`
 
-The branch command as runok extracted it, with redirects stripped but the inline env prefix kept. For `eval_type: "primary"` entries this is identical to the top-level [`command`](#command).
+The branch command as runok extracted it, with redirects stripped but the inline env prefix kept. This is the text rule evaluation actually used, so when [variable resolution](/rule-evaluation/compound-commands/#variable-resolution) rewrote a `$X` / `${X}` reference to its statically known value, this is the **expanded** text -- see `original_command` for the verbatim source. For `eval_type: "primary"` entries this is identical to the top-level [`command`](#command).
 
 **Type:** `str`\
 **Always present:** Yes
+
+### `original_command`
+
+The verbatim source text of this branch, before [variable resolution](/rule-evaluation/compound-commands/#variable-resolution) rewrote `command` to its expanded form.
+
+**Type:** `str`\
+**Omitted when nothing was resolved** (`command` already is the original text).
 
 ### `action`
 

@@ -92,6 +92,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
             subs.into_iter()
                 .map(|s| CommandEvaluation {
                     command: s.command,
+                    original_command: None,
                     action: s.action,
                     matched_rules: s.matched_rules,
                     eval_type: parse_legacy_eval_type(&s.eval_type),
@@ -107,6 +108,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
             // record from the top-level command + matched_rules.
             vec![CommandEvaluation {
                 command: raw.command.clone(),
+                original_command: None,
                 action: raw.action.clone(),
                 matched_rules: raw.matched_rules.unwrap_or_default(),
                 eval_type: EvalType::Primary,
@@ -251,7 +253,15 @@ pub enum EvalType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommandEvaluation {
     /// The branch command string (redirects stripped, env prefix kept).
+    /// When variable resolution rewrote this branch, this is the
+    /// **expanded** text used for rule evaluation; see `original_command`
+    /// for the verbatim source.
     pub command: String,
+    /// The verbatim source text of this branch before variable
+    /// resolution rewrote `command` to its expanded form. `None` when no
+    /// expansion happened (`command` already is the original text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_command: Option<String>,
     /// Evaluation result for this branch.
     pub action: SerializableAction,
     /// Rules that matched for this branch.
@@ -471,6 +481,7 @@ mod tests {
     fn sample_primary_evaluation() -> CommandEvaluation {
         CommandEvaluation {
             command: "git push -f origin main".to_owned(),
+            original_command: None,
             action: SerializableAction::Deny {
                 message: Some("force push is forbidden".to_owned()),
                 fix_suggestion: Some("git push origin main".to_owned()),
@@ -531,6 +542,7 @@ mod tests {
         command_evaluations: vec![
             CommandEvaluation {
                 command: "echo hello".to_owned(),
+                original_command: None,
                 action: SerializableAction::Allow,
                 matched_rules: vec![],
                 eval_type: EvalType::Compound,
@@ -542,6 +554,7 @@ mod tests {
             },
             CommandEvaluation {
                 command: "rm -rf /".to_owned(),
+                original_command: None,
                 action: SerializableAction::Deny {
                     message: None,
                     fix_suggestion: None,
@@ -654,6 +667,7 @@ mod tests {
             metadata: AuditMetadata::default(),
             command_evaluations: vec![CommandEvaluation {
                 command: "echo hi".to_owned(),
+                original_command: None,
                 action: SerializableAction::Allow,
                 matched_rules: vec![],
                 eval_type: EvalType::Primary,
@@ -677,6 +691,7 @@ mod tests {
     #[case::primary_minimal(
         CommandEvaluation {
             command: "echo hi".to_owned(),
+            original_command: None,
             action: SerializableAction::Allow,
             matched_rules: vec![],
             eval_type: EvalType::Primary,
@@ -691,6 +706,7 @@ mod tests {
     #[case::env_argv_redirects_pipe(
         CommandEvaluation {
             command: "FOO=x echo hi > /tmp/log".to_owned(),
+            original_command: None,
             action: SerializableAction::Allow,
             matched_rules: vec![],
             eval_type: EvalType::Compound,

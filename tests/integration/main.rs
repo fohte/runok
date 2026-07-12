@@ -14,6 +14,7 @@ mod remote_preset_with_path;
 mod required_runok_version;
 mod var_pattern_evaluation;
 mod var_ref_evaluation;
+mod variable_resolution;
 mod when_clause_rules;
 mod wrapper_recursive_evaluation;
 

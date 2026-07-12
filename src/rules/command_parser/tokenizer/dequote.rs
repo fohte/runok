@@ -147,7 +147,7 @@ fn decode_unquoted_escapes(text: &str) -> String {
 /// - `\\`, `\"`, `\$`, `` \` `` reduce to the second character.
 /// - `\<newline>` is a line continuation and disappears.
 /// - Any other `\<c>` keeps the backslash, matching `bash`.
-fn decode_double_quote_escapes(text: &str) -> String {
+pub(super) fn decode_double_quote_escapes(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {

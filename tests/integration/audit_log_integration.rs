@@ -412,6 +412,59 @@ fn comment_only_input_yields_empty_command_evaluations(audit_dir: TempDir) {
 }
 
 #[rstest]
+fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            rules:
+              - deny: 'git push --force*'
+              - allow: 'git push *'
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["F=--force; git push $F".into()],
+        None,
+        Box::new(MockExecutor::new(3)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 1);
+    let primary = &evals[0];
+    assert_eq!(primary.command, "git push --force");
+    assert_eq!(primary.original_command.as_deref(), Some("git push $F"));
+    assert!(matches!(
+        primary.action,
+        runok::audit::SerializableAction::Deny { .. }
+    ));
+}
+
+#[rstest]
+fn audit_log_omits_original_command_when_nothing_expanded(
+    allow_echo_audit_config: AuditTestConfig,
+) {
+    let endpoint = echo_hello_endpoint();
+    let options = RunOptions::default();
+
+    adapter::run_with_options(&endpoint, &allow_echo_audit_config.config, &options);
+
+    let entries = read_audit_entries(allow_echo_audit_config.audit_dir.path());
+    assert_eq!(entries.len(), 1);
+    let evals = &entries[0].command_evaluations;
+    assert_eq!(evals.len(), 1);
+    assert_eq!(evals[0].original_command, None);
+}
+
+#[rstest]
 fn audit_log_records_default_action(audit_dir: TempDir) {
     let audit_path = audit_dir.path().to_string_lossy().to_string();
     let config = parse_config(&format!(

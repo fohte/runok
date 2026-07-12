@@ -38,6 +38,9 @@ pub struct ActionResult {
 #[derive(Debug)]
 pub struct CommandEvalResult {
     pub command: String,
+    /// Verbatim source text before variable resolution rewrote `command`
+    /// to its expanded form. `None` when no expansion happened.
+    pub original_command: Option<String>,
     pub action: Action,
     pub matched_rules: Vec<RuleMatchInfo>,
     pub eval_type: EvalType,
@@ -173,6 +176,7 @@ fn write_audit_log(
         .iter()
         .map(|e| CommandEvaluation {
             command: e.command.clone(),
+            original_command: e.original_command.clone(),
             action: SerializableAction::from(e.action.clone()),
             matched_rules: e
                 .matched_rules
@@ -245,6 +249,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             redirects: vec![],
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
+            original_command: None,
         }]
     });
     let commands: Vec<String> = extracted_commands
@@ -301,6 +306,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                         let (env, argv, redirects, pipe) = parse_fields_from_extracted(ec);
                         CommandEvalResult {
                             command: ec.command.clone(),
+                            original_command: ec.original_command.clone(),
                             action: result.action,
                             matched_rules: result.matched_rules,
                             eval_type: EvalType::Compound,
@@ -360,8 +366,10 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 let (env, argv, redir_fields, pipe_field) = first_extracted
                     .map(parse_fields_from_extracted)
                     .unwrap_or_default();
+                let original_command = first_extracted.and_then(|ec| ec.original_command.clone());
                 let evaluations = vec![CommandEvalResult {
                     command: effective_command.to_owned(),
+                    original_command,
                     action: result.action.clone(),
                     matched_rules: result.matched_rules,
                     eval_type: EvalType::Primary,

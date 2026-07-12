@@ -1,7 +1,9 @@
 mod dequote;
+mod expand;
 mod extract;
 
 pub(super) use dequote::dequote_node;
+pub(super) use expand::expand_argument_tokens;
 use extract::{tokens_from_command, tokens_from_declaration_command, tokens_from_test_command};
 
 use std::collections::HashMap;
