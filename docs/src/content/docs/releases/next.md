@@ -8,7 +8,7 @@ This page tracks changes that will be included in the next release. It is update
 
 ## Highlights
 
-### Static variable resolution closes a deny-bypass gap (TODO(pr-link))
+### Static variable resolution closes a deny-bypass gap ([#473](https://github.com/fohte/runok/pull/473))
 
 runok previously matched shell variables (`$X`, `${X}`) as literal, unresolved tokens. This meant a `deny` rule written against a flag's literal text could be bypassed by smuggling the flag through a variable:
 
