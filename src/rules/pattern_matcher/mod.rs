@@ -239,8 +239,7 @@ mod tests {
     ) {
         for token in tokens {
             match token {
-                PatternToken::FlagWithValue { value, .. }
-                    if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
+                PatternToken::FlagWithValue { value, .. } if value.is_optional_value() => {}
                 PatternToken::FlagWithValue { aliases, .. } => {
                     for alias in aliases {
                         value_flags.insert(alias.clone());
@@ -254,7 +253,7 @@ mod tests {
                         && parsed
                             .value_pattern
                             .as_ref()
-                            .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
+                            .is_some_and(|v| !v.is_optional_value())
                     {
                         for alias in &parsed.aliases {
                             value_flags.insert(alias.clone());
@@ -566,6 +565,24 @@ mod tests {
         assert_eq!(
             check_captures(pattern_str, command_str, &empty_defs),
             expected
+        );
+    }
+
+    #[rstest]
+    // `\?` escapes the `?` marker back to a literal token, mirroring `\*`
+    // for the wildcard -- necessary since a bare `?` now means "optional
+    // value" rather than the literal string "?".
+    #[case::escaped_literal_matches(r"cmd --mode \?", "cmd --mode ?", true)]
+    #[case::escaped_literal_rejects_other_value(r"cmd --mode \?", "cmd --mode help", false)]
+    fn escaped_question_mark_is_literal_not_optional_value(
+        #[case] pattern_str: &str,
+        #[case] command_str: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            check_match(pattern_str, command_str, &empty_defs()),
+            expected,
+            "pattern {pattern_str:?} vs command {command_str:?}",
         );
     }
 

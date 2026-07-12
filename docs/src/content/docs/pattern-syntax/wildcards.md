@@ -82,7 +82,7 @@ Glob expansion also applies to the **command name** (the first token) and to alt
 ```
 
 :::note
-Only `*` is supported for glob matching. Other glob characters like `?` or `[...]` are treated as literal characters _inside a token_. A standalone `?` token (surrounded by spaces) is different: in a flag's value position it means [optional value](/pattern-syntax/matching-behavior/#optional-flag-values), not a glob.
+Only `*` is supported for glob matching. Other glob characters like `?` or `[...]` are treated as literal characters _inside a token_. A standalone `?` token (surrounded by spaces) is different: directly after a flag it means [optional value](/pattern-syntax/matching-behavior/#optional-flag-values), not a glob; anywhere else it is a config load error, not a literal match.
 :::
 
 ### Escaping `*` with Backslash

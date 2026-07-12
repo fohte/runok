@@ -209,7 +209,7 @@ pub(super) fn match_flag_with_value<'a>(
     var_captures: &RefCell<HashMap<String, String>>,
     flag_group_captures: &RefCell<HashMap<String, Vec<String>>>,
 ) -> Result<bool, RuleError> {
-    if matches!(value, PatternToken::OptionalValue) {
+    if value.is_optional_value() {
         return match_flag_with_optional_value(
             aliases,
             rest,

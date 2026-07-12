@@ -28,8 +28,7 @@ pub(super) fn collect_value_flag_aliases<'a>(
             // token as their value (see `match_flag_with_optional_value`),
             // so they must not be registered here -- doing so would make
             // the positional-argument finder wrongly skip the next token.
-            PatternToken::FlagWithValue { value, .. }
-                if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
+            PatternToken::FlagWithValue { value, .. } if value.is_optional_value() => {}
             PatternToken::FlagWithValue {
                 aliases: flag_aliases,
                 ..
@@ -46,7 +45,7 @@ pub(super) fn collect_value_flag_aliases<'a>(
                     && parsed
                         .value_pattern
                         .as_ref()
-                        .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
+                        .is_some_and(|v| !v.is_optional_value())
                 {
                     // Only register value-taking flags (those with a
                     // space-separated value pattern) so the

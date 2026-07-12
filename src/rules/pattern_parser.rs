@@ -94,6 +94,17 @@ pub enum PatternToken {
     Vars,
 }
 
+impl PatternToken {
+    /// `true` for `PatternToken::OptionalValue` (`?`). Used by callers that
+    /// collect "this flag consumes a following command token as its value"
+    /// alias sets (e.g. `collect_value_flag_aliases`, `collect_value_flags`)
+    /// to exclude `?`-valued flags, which never consume a space-separated
+    /// following token (see `match_flag_with_optional_value`).
+    pub(crate) fn is_optional_value(&self) -> bool {
+        matches!(self, PatternToken::OptionalValue)
+    }
+}
+
 /// Parse a pattern string into a Pattern struct.
 ///
 /// The first whitespace-delimited token becomes the command name.

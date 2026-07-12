@@ -18,6 +18,8 @@ Some flags accept a value but also work without one (e.g. git's `--abbrev[=<n>]`
 
 `--abbrev` and `--abbrev=8` both match. Like real optional-argument flags (GNU `getopt_long` convention), a space-separated following token is never consumed as the value -- `git branch --abbrev 8` actually creates a branch named `8` in real git, so runok does not treat `8` as `--abbrev`'s value either. `?` is also supported as the value pattern in `<flag:name>` group definitions.
 
+A bare `?` now has this special meaning directly after a flag, so a pattern that needs to match the literal string `?` as a flag's value must escape it as `\?`, the same way `\*` escapes a literal `*`.
+
 See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavior/#optional-flag-values) for details.
 
 ### Track ask approvals in the audit log ([#468](https://github.com/fohte/runok/pull/468))

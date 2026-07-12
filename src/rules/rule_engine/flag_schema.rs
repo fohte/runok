@@ -31,8 +31,7 @@ fn collect_value_flags(
             // so the command parser must treat them as boolean flags --
             // otherwise `git branch --abbrev 8` would wrongly assign `8` to
             // `--abbrev` instead of leaving it as a positional argument.
-            PatternToken::FlagWithValue { value, .. }
-                if matches!(value.as_ref(), PatternToken::OptionalValue) => {}
+            PatternToken::FlagWithValue { value, .. } if value.is_optional_value() => {}
             PatternToken::FlagWithValue { aliases, .. } => {
                 for alias in aliases {
                     value_flags.insert(alias.clone());
@@ -46,7 +45,7 @@ fn collect_value_flags(
                     && parsed
                         .value_pattern
                         .as_ref()
-                        .is_some_and(|v| !matches!(v, PatternToken::OptionalValue))
+                        .is_some_and(|v| !v.is_optional_value())
                 {
                     // Only add aliases for value-taking flags (those with a
                     // space-separated value pattern). Bool flags and

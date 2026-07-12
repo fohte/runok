@@ -121,12 +121,12 @@ Some flags accept a value but also work fine without one (e.g. git's `--abbrev[=
 - allow: 'git branch --abbrev ?'
 ```
 
-| Command                 | Result         | Reason                            |
-| ----------------------- | -------------- | --------------------------------- |
-| `git branch --abbrev`   | Matches        | Value omitted                     |
-| `git branch --abbrev=8` | Matches        | `=`-joined value                  |
-| `git branch`            | Does not match | The flag itself is still required |
-| `git branch --abbrev 8` | Does not match | See below                         |
+| Command                 | Result         | Reason                                                  |
+| ----------------------- | -------------- | ------------------------------------------------------- |
+| `git branch --abbrev`   | Matches        | Value omitted                                           |
+| `git branch --abbrev=8` | Matches        | `=`-joined value                                        |
+| `git branch`            | Does not match | The flag itself is still required                       |
+| `git branch --abbrev 8` | Does not match | `8` is left over -- see below for why it isn't consumed |
 
 Unlike `*`, a `?`-valued flag never consumes a **space-separated** following token as its value -- only `=`-joined (long flags) or fused (short flags, e.g. `-n3`) forms count as an explicit value. This mirrors the GNU `getopt_long` convention for optional-argument options, and matches real CLI behavior: `git branch --abbrev 8` actually creates a branch named `8` rather than setting `--abbrev`'s value to `8`, because git never treats a following argv token as an optional argument's value. If a following token should still be allowed as a separate positional argument, add a trailing wildcard:
 
@@ -145,6 +145,20 @@ Combine `?` with an [optional group](/pattern-syntax/optional-groups/) to also a
 ```
 
 `?` is also supported as the value pattern in a [`<flag:name>` group definition](/pattern-syntax/placeholders/#flag-groups-flagname).
+
+`?` only has this meaning directly after a flag. Writing a standalone `?` anywhere else in a pattern (not immediately following a flag) is a **config load error**, not a silent non-match:
+
+```yaml
+- allow: 'git status ?'
+# Error: `?` can only appear as a flag's value (e.g. `--flag ?`)
+```
+
+Because a bare `?` now has special meaning, a pattern that needs to match the **literal** string `?` as a flag's value must escape it with a backslash, the same way `\*` escapes a literal `*`:
+
+```yaml
+- allow: 'command --mode \?'
+# Matches: command --mode ?
+```
 
 ### Flag-only Negation
 

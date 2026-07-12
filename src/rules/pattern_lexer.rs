@@ -485,6 +485,20 @@ mod tests {
         assert_eq!(tokenize(input).unwrap(), expected);
     }
 
+    #[test]
+    fn tokenize_escaped_optional_value_is_literal() {
+        // `\?` escapes the `?` marker back to a literal token, mirroring
+        // `\*` for the wildcard.
+        let result = tokenize(r"--mode \?").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                LexToken::Literal("--mode".into()),
+                LexToken::Literal(r"\?".into()),
+            ]
+        );
+    }
+
     // === Negation ===
 
     #[rstest]

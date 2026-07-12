@@ -93,9 +93,7 @@ fn optional_flag_value_on_short_flag(
 // ========================================
 
 #[rstest]
-fn optional_flag_value_in_flag_group_captures_bare_and_valued_occurrences(
-    empty_context: EvalContext,
-) {
+fn optional_flag_value_in_flag_group_captures_equals_joined_value(empty_context: EvalContext) {
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
