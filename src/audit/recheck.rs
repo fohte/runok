@@ -150,14 +150,19 @@ fn get_cached_config<'a>(
     loader: &DefaultConfigLoader,
     config_cache: &'a mut HashMap<String, Result<Config, String>>,
 ) -> Result<&'a Config, String> {
+    // `contains_key` before inserting avoids allocating `cwd.to_owned()` on
+    // every cache hit, unlike `entry()`, which allocates the key eagerly
+    // even when it turns out to already be present.
+    if !config_cache.contains_key(cwd) {
+        let source = ConfigSource::from_flag(None, Path::new(cwd));
+        let result = loader
+            .load(&source)
+            .map_err(|e| format!("failed to load config: {e}"));
+        config_cache.insert(cwd.to_owned(), result);
+    }
     config_cache
-        .entry(cwd.to_owned())
-        .or_insert_with(|| {
-            let source = ConfigSource::from_flag(None, Path::new(cwd));
-            loader
-                .load(&source)
-                .map_err(|e| format!("failed to load config: {e}"))
-        })
+        .get(cwd)
+        .unwrap_or_else(|| unreachable!("cwd was just inserted above"))
         .as_ref()
         .map_err(Clone::clone)
 }
