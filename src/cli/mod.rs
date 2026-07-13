@@ -1,8 +1,10 @@
+mod hook_route;
 mod route;
 mod validate;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+pub use hook_route::{HookRoute, route_hook};
 pub use route::{CheckRoute, route_check};
 pub use validate::{find_subcommand, validate_no_unknown_flags};
 
@@ -24,6 +26,8 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// Handle Claude Code (and future agent) hook events from stdin
+    Hook(HookArgs),
     /// View audit log entries
     Audit(AuditArgs),
     /// Run tests defined in the config to verify rules
@@ -136,6 +140,18 @@ pub struct CheckArgs {
 
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct HookArgs {
+    /// Input format: "claude-code-hook" (default; reserved for future agent integrations)
+    #[arg(long)]
+    pub input_format: Option<String>,
+
+    /// Output detailed rule matching information to stderr
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct AuditArgs {
     /// Filter by action kind (allow, deny, ask)
     #[arg(long)]
@@ -214,6 +230,18 @@ mod tests {
     #[case::check_with_verbose(
         &["runok", "check", "--verbose", "--", "git", "status"],
         Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
+    )]
+    #[case::hook_default(
+        &["runok", "hook"],
+        Commands::Hook(HookArgs { input_format: None, verbose: false }),
+    )]
+    #[case::hook_with_input_format(
+        &["runok", "hook", "--input-format", "claude-code-hook"],
+        Commands::Hook(HookArgs { input_format: Some("claude-code-hook".into()), verbose: false }),
+    )]
+    #[case::hook_with_verbose(
+        &["runok", "hook", "--verbose"],
+        Commands::Hook(HookArgs { input_format: None, verbose: true }),
     )]
     #[case::audit_default(
         &["runok", "audit"],

@@ -5,7 +5,11 @@ sidebar:
   order: 2
 ---
 
-`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command. Useful for previewing what runok would do, or for integrating with external tools like [Claude Code hooks](/getting-started/claude-code/).
+`runok check` evaluates a command against your runok rules and reports the decision — without actually running the command. Useful for previewing what runok would do, for CI, or for scripting.
+
+:::note[Looking for the Claude Code hook integration?]
+Use [`runok hook`](/cli/hook/) instead. `check --input-format claude-code-hook` still works for backward compatibility, but it's deprecated in favor of a dedicated command — see [Migrating from `runok check --input-format claude-code-hook`](/cli/hook/#migrating-from-runok-check---input-format-claude-code-hook).
+:::
 
 ## Usage
 
@@ -15,11 +19,9 @@ runok check [options] -- <command> [arguments...]
 
 Any unrecognized flag before `--` is rejected with an error to prevent typos from being silently absorbed into the command arguments.
 
-When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for Claude Code hooks, `command` for generic checks), and anything else is treated as plaintext shell input.
+When no command arguments are given, runok reads from stdin instead. The input format is auto-detected: JSON objects are parsed by field (`tool_name` for the deprecated Claude Code hook mode, `command` for generic checks), and anything else is treated as plaintext shell input.
 
 Plaintext stdin is split into individual commands at top-level shell statement boundaries (newlines, `;`, and `&` between top-level statements). Constructs that legitimately span multiple lines — HEREDOCs, multi-line quoted strings, and `\` line continuations — are kept together as a single command. Compound commands joined by `&&`, `||`, or `|` also stay together (the rule engine splits those further internally). Stdin that cannot be parsed as shell exits with `stdin parse error`.
-
-Use `--input-format claude-code-hook` to force Claude Code hook parsing.
 
 ## Flags
 
@@ -29,7 +31,7 @@ See [Global Flags](/cli/overview/#global-flags).
 
 ### `--input-format <format>`
 
-Input format for stdin. Currently supports `claude-code-hook`. When omitted, the format is auto-detected from the stdin content. Has no effect when command arguments are provided.
+Input format for stdin. Currently supports `claude-code-hook` (deprecated, use [`runok hook`](/cli/hook/) instead). When omitted, the format is auto-detected from the stdin content. Has no effect when command arguments are provided.
 
 ### `--output-format <format>` [default: `text`]
 
@@ -93,7 +95,7 @@ echo '{"command":"git push"}' | runok check
 # allow
 ```
 
-Force Claude Code hook format:
+Force the deprecated Claude Code hook format (use [`runok hook`](/cli/hook/) for new setups):
 
 ```sh
 cat hook-input.json | runok check --input-format claude-code-hook
@@ -111,21 +113,10 @@ The exit code reflects whether the check itself succeeded, not the permission de
 
 When checking multiple commands (multi-line stdin), the exit code is the highest value across all evaluations.
 
-### Hook mode (`--input-format claude-code-hook`)
+### Hook mode (`--input-format claude-code-hook`) [deprecated]
 
-The hook input's `hook_event_name` field selects what runok does:
+`--input-format claude-code-hook` shares [`runok hook`](/cli/hook/#event-dispatch)'s `PreToolUse`/`PostToolUse` dispatch, response format, and non-blocking (`exit 1` instead of `2`) error handling — see that page for the full reference. One difference remains for backward compatibility: this mode predates the "any other event is a no-op" behavior `runok hook` added, so a `hook_event_name` other than `PreToolUse`/`PostToolUse` still falls through to rule evaluation here instead of being ignored.
 
-- **`PreToolUse`** (or absent): evaluate the command against the rules and print the permission decision, as described above.
-- **`PostToolUse`**: no rule evaluation. runok records an `ask_resolution` record in the audit log when the tool call corresponds to an `ask` decision it made at PreToolUse time (i.e. the user approved the permission dialog). Nothing is written to stdout, and once the event is dispatched the exit code is always `0` — the command has already run, so failures must not disturb the session. The hook-mode failures listed below (config load errors, input parse errors) happen before the event is dispatched and exit `1` as usual. See [tracking ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
+It's kept working for existing `settings.json` registrations, but new setups should use `runok hook` directly; `check` is documented above as a read-only evaluation command, which the `PostToolUse` audit write contradicts.
 
-In hook mode, the following runok-side failures exit with code `1` instead of `2`:
-
-- Config load errors (YAML syntax errors, etc.)
-- Rule pattern parse errors caught during evaluation
-- Unknown-flag errors for `runok check`
-- Stdin JSON parse errors
-- `HookInput` schema mismatches (e.g. when Claude Code adds a new required field)
-
-Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
-
-Direct CLI usage (without `--input-format claude-code-hook`) is unchanged and still exits `2` on errors.
+Direct CLI usage (without `--input-format claude-code-hook`) is unaffected and still exits `2` on errors.

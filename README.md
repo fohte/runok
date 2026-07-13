@@ -176,7 +176,7 @@ And add runok as a PreToolUse hook in `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "runok check --input-format claude-code-hook"
+            "command": "runok hook"
           }
         ]
       }

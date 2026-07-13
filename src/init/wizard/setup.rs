@@ -4,8 +4,8 @@ use super::super::error::InitError;
 use super::super::prompt::Prompter;
 use super::super::{claude_code, config_gen};
 use super::preview::{
-    normalize_json, preview_register_hook, preview_register_post_tool_use_hook,
-    preview_remove_permissions, print_diff,
+    normalize_json, preview_migrate_hook, preview_register_hook,
+    preview_register_post_tool_use_hook, preview_remove_permissions, print_diff,
 };
 
 /// Result of setting up a single scope.
@@ -13,6 +13,7 @@ pub(super) struct ScopeResult {
     pub config_path: Option<PathBuf>,
     pub hook_registered: bool,
     pub post_hook_registered: bool,
+    pub hook_migrated: bool,
     pub converted_rules: Option<String>,
     pub permissions_removed: bool,
     /// Number of other PreToolUse entries that also match Bash.
@@ -46,6 +47,7 @@ pub(super) fn setup_scope(
     let mut detected_claude_config = false;
     let mut has_rules = false;
     let mut has_hook_change = false;
+    let mut has_hook_migration = false;
     let mut wants_post_hook = false;
     let mut should_write_config = false;
     let mut detected_conflict_count: usize = 0;
@@ -61,6 +63,16 @@ pub(super) fn setup_scope(
             String::new()
         };
 
+        // Rewrite legacy `runok check --input-format claude-code-hook`
+        // entries to the current `runok hook` command before evaluating
+        // what else needs to change, so the hook-registration checks below
+        // see the migrated entry instead of proposing a duplicate.
+        let migrated_content = preview_migrate_hook(&original_content)?;
+        has_hook_migration = migrated_content.is_some();
+        let base_content = migrated_content
+            .clone()
+            .unwrap_or_else(|| original_content.clone());
+
         // Determine what changes are available
         let (allow, deny) = claude_code::read_permissions(cd)?;
         let has_permissions = !allow.is_empty() || !deny.is_empty();
@@ -73,24 +85,37 @@ pub(super) fn setup_scope(
 
         // Check if hook registration would change anything
         let would_add_hook = if hook_policy == HookPolicy::Register {
-            preview_register_hook(&original_content)?.is_some()
+            preview_register_hook(&base_content)?.is_some()
         } else {
             false
         };
         let would_add_post_hook = if hook_policy == HookPolicy::Register {
-            preview_register_post_tool_use_hook(&original_content)?.is_some()
+            preview_register_post_tool_use_hook(&base_content)?.is_some()
         } else {
             false
         };
 
         // Only show "Detected" and ask migration if there's something to do
-        if has_migratable_rules || would_add_hook || would_add_post_hook {
+        if has_migratable_rules || would_add_hook || would_add_post_hook || has_hook_migration {
             detected_claude_config = true;
             let settings_path_display = settings_path.display();
             eprintln!(
                 "\x1b[1mDetected Claude Code configuration in {settings_path_display}\x1b[0m"
             );
             eprintln!();
+
+            if has_hook_migration {
+                eprintln!("\x1b[1mUpdate runok hook command in {settings_path_display}\x1b[0m");
+                eprintln!();
+                if let Some(ref migrated) = migrated_content {
+                    print_diff(
+                        &settings_path_display.to_string(),
+                        &original_content,
+                        migrated,
+                    );
+                }
+                eprintln!();
+            }
 
             // Ask whether to migrate Bash permissions
             if has_migratable_rules {
@@ -116,9 +141,9 @@ pub(super) fn setup_scope(
 
             // Build the preview
             let after_permissions = if has_rules {
-                preview_remove_permissions(&original_content)?
+                preview_remove_permissions(&base_content)?
             } else {
-                original_content.clone()
+                base_content.clone()
             };
 
             if hook_policy == HookPolicy::Register {
@@ -135,7 +160,7 @@ pub(super) fn setup_scope(
                 eprintln!();
                 print_diff(
                     &settings_path_display.to_string(),
-                    &original_content,
+                    &base_content,
                     &after_permissions,
                 );
                 eprintln!();
@@ -238,7 +263,18 @@ pub(super) fn setup_scope(
         detected_conflict_count
     };
 
-    // Apply changes only when the user approved the batch
+    // Apply changes only when the user approved the batch. Migration runs
+    // before registration so that register_hook/register_post_tool_use_hook
+    // see the rewritten entry on disk and don't add a duplicate.
+    let hook_migrated = if approved && has_hook_migration {
+        claude_dir
+            .map(claude_code::migrate_hook)
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     let permissions_removed = if approved && has_rules {
         claude_dir
             .map(claude_code::remove_permissions)
@@ -300,6 +336,7 @@ pub(super) fn setup_scope(
         config_path,
         hook_registered,
         post_hook_registered,
+        hook_migrated,
         converted_rules,
         permissions_removed,
         conflicting_hook_count,

@@ -63,6 +63,20 @@ pub struct ClaudeCodeHookAdapter {
     input: HookInput,
 }
 
+/// Which flow a hook input should be routed through, based on
+/// `hook_event_name`.
+#[derive(Debug, PartialEq)]
+pub enum HookEventKind {
+    /// Rule evaluation + permissionDecision response. An absent
+    /// `hook_event_name` (hand-crafted/minimal input) is also treated as
+    /// PreToolUse for backward compatibility.
+    PreToolUse,
+    /// Ask-resolution recording only.
+    PostToolUse,
+    /// Any other (e.g. future) Claude Code hook event: nothing to do.
+    Unknown,
+}
+
 /// Build a combined reason string from a `DenyResponse`, including
 /// the matched rule, optional message, and optional fix suggestion.
 fn build_deny_reason(deny: &DenyResponse) -> String {
@@ -85,10 +99,19 @@ impl ClaudeCodeHookAdapter {
         Self { input }
     }
 
+    /// Which flow this input should be routed through.
+    pub fn event_kind(&self) -> HookEventKind {
+        match self.input.hook_event_name.as_deref() {
+            None | Some("PreToolUse") => HookEventKind::PreToolUse,
+            Some("PostToolUse") => HookEventKind::PostToolUse,
+            Some(_) => HookEventKind::Unknown,
+        }
+    }
+
     /// Whether the input is a PostToolUse event, which is handled by
     /// [`Self::handle_post_tool_use`] instead of the rule-evaluation flow.
     pub fn is_post_tool_use(&self) -> bool {
-        self.input.hook_event_name.as_deref() == Some("PostToolUse")
+        self.event_kind() == HookEventKind::PostToolUse
     }
 
     /// Handle a PostToolUse hook invocation: when this tool call corresponds
@@ -703,6 +726,21 @@ mod tests {
         input.hook_event_name = hook_event_name.map(str::to_string);
         let adapter = ClaudeCodeHookAdapter::new(input);
         assert_eq!(adapter.is_post_tool_use(), expected);
+    }
+
+    #[rstest]
+    #[case::pre_tool_use(Some("PreToolUse"), HookEventKind::PreToolUse)]
+    #[case::absent(None, HookEventKind::PreToolUse)]
+    #[case::post_tool_use(Some("PostToolUse"), HookEventKind::PostToolUse)]
+    #[case::future_event(Some("SessionStart"), HookEventKind::Unknown)]
+    fn event_kind_maps_event_name(
+        #[case] hook_event_name: Option<&str>,
+        #[case] expected: HookEventKind,
+    ) {
+        let mut input = make_hook_input("Bash", bash_tool_input("git status"));
+        input.hook_event_name = hook_event_name.map(str::to_string);
+        let adapter = ClaudeCodeHookAdapter::new(input);
+        assert_eq!(adapter.event_kind(), expected);
     }
 
     #[rstest]

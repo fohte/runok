@@ -2,7 +2,7 @@
 title: runok exec
 description: Execute a command with permission checks and optional sandboxing.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 `runok exec` evaluates a command against your runok rules and, if allowed, executes it — [optionally within a sandbox](/sandbox/overview/). If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.

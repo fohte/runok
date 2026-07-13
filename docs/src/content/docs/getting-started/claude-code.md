@@ -39,7 +39,7 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
         "hooks": [
           {
             "type": "command",
-            "command": "runok check --input-format claude-code-hook"
+            "command": "runok hook"
           }
         ]
       }
@@ -51,7 +51,7 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
 ### What each field means
 
 - **`"matcher": "Bash"`** -- Only triggers the hook for Bash tool calls. Other tools (file edits, web searches, etc.) are not affected.
-- **`"hooks"`** -- The command(s) to run. Claude Code pipes the tool invocation as JSON to stdin. `runok check --input-format claude-code-hook` parses this JSON format and returns the evaluation result.
+- **`"hooks"`** -- The command(s) to run. Claude Code pipes the tool invocation as JSON to stdin. [`runok hook`](/cli/hook/) parses this JSON format and returns the evaluation result.
 
 :::caution[Avoid multiple Bash-matching hooks]
 If your `PreToolUse` array contains other entries that also match `Bash` (entries with `"matcher": "Bash"` or no `matcher` field), runok's sandbox may not work. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), commands that should be sandboxed could run without any restrictions.
@@ -69,7 +69,7 @@ input="$(cat)"
 echo "$input" | other-hook >/dev/null
 
 # Run runok (its stdout becomes the hook response)
-echo "$input" | runok check --input-format claude-code-hook
+echo "$input" | runok hook
 ```
 
 Then register the single wrapper script in `settings.json`:
@@ -117,7 +117,7 @@ By default, the audit log records that runok answered `ask` for a command, but n
         "hooks": [
           {
             "type": "command",
-            "command": "runok check --input-format claude-code-hook"
+            "command": "runok hook"
           }
         ]
       }
@@ -126,7 +126,7 @@ By default, the audit log records that runok answered `ask` for a command, but n
 }
 ```
 
-The PostToolUse invocation never blocks or modifies the session: it writes no stdout, exits `0` apart from the [non-blocking hook-mode failures](/cli/check/#hook-mode---input-format-claude-code-hook) that exit `1`, and only appends a record when the tool call matches an unresolved `ask` decision.
+The PostToolUse invocation never blocks or modifies the session: it writes no stdout, exits `0` apart from the [non-blocking failures](/cli/hook/#exit-codes) that exit `1`, and only appends a record when the tool call matches an unresolved `ask` decision.
 
 :::note[Denials are not recorded]
 Claude Code fires no hook after you deny a permission dialog, so only approvals can be recorded. An `ask` entry without a resolution means "denied or not yet decided".
@@ -179,7 +179,7 @@ The `.claude/settings.json` file can be placed at different scopes:
 
 For team-wide enforcement, commit `.claude/settings.json` alongside your `runok.yml` in the project repository.
 
-See [`runok check`](/cli/check/) for full command reference.
+See [`runok hook`](/cli/hook/) for full command reference.
 
 ## Claude Code plugin
 

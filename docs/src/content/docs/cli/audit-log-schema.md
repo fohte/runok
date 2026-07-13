@@ -2,7 +2,7 @@
 title: Audit Log JSON Schema
 description: Field reference for runok audit --json output.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 This page is the field-by-field reference for the JSON objects produced by [`runok audit --json`](/cli/audit/#--json) (one object per line, JSONL). Use it to write `jq` queries against audit logs without reading the runok source.

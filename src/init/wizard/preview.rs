@@ -27,6 +27,23 @@ pub(super) fn preview_remove_permissions(content: &str) -> Result<String, InitEr
     Ok(serde_json::to_string_pretty(&root)?)
 }
 
+/// Simulate rewriting legacy `runok check --input-format claude-code-hook`
+/// entries (both PreToolUse and PostToolUse) to the current `runok hook`
+/// command. Returns `None` if there is nothing to migrate.
+pub(super) fn preview_migrate_hook(content: &str) -> Result<Option<String>, InitError> {
+    if content.is_empty() {
+        return Ok(None);
+    }
+    let mut root: serde_json::Value = serde_json::from_str(content)?;
+    let pre_changed = claude_code::migrate_legacy_entries_for_event(&mut root, "PreToolUse");
+    let post_changed = claude_code::migrate_legacy_entries_for_event(&mut root, "PostToolUse");
+    if pre_changed || post_changed {
+        Ok(Some(serde_json::to_string_pretty(&root)?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Simulate registering the PreToolUse hook in settings.json content and
 /// return the result. Returns `None` if the hook is already registered.
 pub(super) fn preview_register_hook(content: &str) -> Result<Option<String>, InitError> {
@@ -206,6 +223,70 @@ mod tests {
     }
 
     #[rstest]
+    fn preview_migrate_hook_rewrites_legacy_command() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "runok check --input-format claude-code-hook"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_migrate_hook(input).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["hooks"]["PreToolUse"],
+            serde_json::json!([
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "runok hook"
+                        }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[rstest]
+    fn preview_migrate_hook_returns_none_when_already_current() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "runok hook"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_migrate_hook(input).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
+    fn preview_migrate_hook_empty_input_returns_none() {
+        let result = preview_migrate_hook("").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
     fn preview_register_hook_adds_hook_entry() {
         let input = indoc! {r#"
             {
@@ -221,7 +302,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
+                            "command": "runok hook"
                         }
                     ]
                 }
@@ -240,7 +321,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "command": "runok hook"
                       }
                     ]
                   }
@@ -259,7 +340,7 @@ mod tests {
                     "PreToolUse": [
                         {
                             "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
+                            "command": "runok hook"
                         }
                     ]
                 }
@@ -275,7 +356,7 @@ mod tests {
             {
                 "hooks": {
                     "PreToolUse": [
-                        "runok check --input-format claude-code-hook"
+                        "runok hook"
                     ]
                 }
             }
@@ -297,7 +378,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "command": "runok hook"
                       }
                     ]
                   }
@@ -314,7 +395,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
+                            "command": "runok hook"
                         }
                     ]
                 }
@@ -333,7 +414,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "command": "runok hook"
                       }
                     ]
                   }
@@ -358,7 +439,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
+                                    "command": "runok hook"
                                 }
                             ]
                         }
