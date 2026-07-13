@@ -152,7 +152,11 @@ fn get_cached_config<'a>(
 ) -> Result<&'a Config, String> {
     // `contains_key` before inserting avoids allocating `cwd.to_owned()` on
     // every cache hit, unlike `entry()`, which allocates the key eagerly
-    // even when it turns out to already be present.
+    // even when it turns out to already be present. An early `get`-based
+    // return would drop the extra lookup on a hit too, but the borrow it
+    // returns is tied to the same `'a` as the later `insert()`'s mutable
+    // borrow, so the borrow checker rejects it even though the two
+    // branches are mutually exclusive at runtime.
     if !config_cache.contains_key(cwd) {
         let source = ConfigSource::from_flag(None, Path::new(cwd));
         let result = loader
@@ -160,11 +164,7 @@ fn get_cached_config<'a>(
             .map_err(|e| format!("failed to load config: {e}"));
         config_cache.insert(cwd.to_owned(), result);
     }
-    config_cache
-        .get(cwd)
-        .unwrap_or_else(|| unreachable!("cwd was just inserted above"))
-        .as_ref()
-        .map_err(Clone::clone)
+    config_cache[cwd].as_ref().map_err(Clone::clone)
 }
 
 #[cfg(test)]
