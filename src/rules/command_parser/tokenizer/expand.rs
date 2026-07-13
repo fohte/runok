@@ -100,6 +100,12 @@ fn expansion_var_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
 /// tracked outside of function-call resolution). Every other special
 /// variable (`$?`, `$!`, `$$`, `$-`, `$_`) is genuinely dynamic and must
 /// never resolve.
+///
+/// `$1`..`$N` do not need handling here: tree-sitter-bash's grammar
+/// aliases the `\w+` token class (which includes digits) to
+/// `variable_name`, so a numeric positional parameter already reaches
+/// the `"variable_name"` arm above. `special_variable_name` is a fixed
+/// literal set (`* @ ? ! # - $ _`) that never contains a digit.
 fn resolvable_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {
         "variable_name" => node_text(node, source),
