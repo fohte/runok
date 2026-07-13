@@ -1,23 +1,29 @@
 use crate::config::{ActionKind, Config, Definitions, RuleEntry};
 use crate::rules::RuleError;
 use crate::rules::alias_expander::expand_rule_pattern;
-use crate::rules::command_parser::{PipeInfo, RedirectInfo, parse_command};
+use crate::rules::command_parser::{FunctionCallInfo, PipeInfo, RedirectInfo, parse_command};
 use crate::rules::expr_evaluator::evaluate;
 use crate::rules::pattern_matcher::matches_with_captures;
 use crate::rules::pattern_parser::parse_multi;
 
 use super::compound::{default_action, merge_results};
 use super::flag_schema::{build_expr_context, build_flag_schema};
+use super::function::try_unwrap_function_call;
 use super::wrapper::try_unwrap_wrapper;
 use super::{Action, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
 
-/// Evaluate a single (non-compound) command against rules and wrappers.
+/// Evaluate a single (non-compound) command against rules, function
+/// calls, and wrappers.
 ///
 /// This contains the core rule-matching and wrapper-unwrapping logic,
 /// separated from `evaluate_command_inner` so the compound guard can
 /// call it directly when it needs to evaluate the original command as
 /// a simple command (e.g. after filtering out self-referencing sub-commands
 /// from command substitutions).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+)]
 pub(super) fn evaluate_simple_command(
     config: &Config,
     command: &str,
@@ -26,7 +32,23 @@ pub(super) fn evaluate_simple_command(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    function_call: Option<&FunctionCallInfo>,
+    call_stack: &[String],
 ) -> Result<EvalResult, RuleError> {
+    // A resolved function call takes priority over rule matching against
+    // the bare call name (e.g. `f`): the call is what actually runs, and
+    // rules are almost never written to match a user-defined function
+    // name. `Ok(None)` (unresolved -- a cycle, `MAX_WRAPPER_DEPTH`
+    // exceeded, or a body that failed to parse) falls through to treat
+    // `command` as an ordinary, unknown command instead.
+    if let Some(call_info) = function_call
+        && let Some(result) = try_unwrap_function_call(
+            config, context, call_info, depth, redirects, pipe, loop_kind, call_stack,
+        )?
+    {
+        return Ok(result);
+    }
+
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
@@ -102,8 +124,15 @@ pub(super) fn evaluate_simple_command(
         }
     }
 
-    let wrapper_result =
-        try_unwrap_wrapper(config, command, context, definitions, depth, loop_kind)?;
+    let wrapper_result = try_unwrap_wrapper(
+        config,
+        command,
+        context,
+        definitions,
+        depth,
+        loop_kind,
+        call_stack,
+    )?;
 
     if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {

@@ -1,6 +1,6 @@
 use crate::rules::command_parser::var_env::{VarEnv, VarValue};
 
-use super::dequote::{dequote_node, dequote_node_with};
+use super::dequote::{dequote_node, dequote_node_with, node_text};
 
 /// Resolve one child of a `command` node (the command name or an
 /// argument position) into zero or more tokens, applying variable
@@ -62,16 +62,14 @@ pub(in crate::rules::command_parser) fn resolve_literal(
 /// `expansion` (`${X}`) node. Returns `None` for anything that isn't a
 /// plain variable reference: `expansion` nodes with an `operator` field
 /// (`${X:-default}`, `${X#pattern}`, ...), or a referenced name that
-/// isn't a plain `variable_name` (special variables like `$?` / `$@`,
-/// array subscripts).
+/// isn't a plain `variable_name` or one of the positional-parameter
+/// special variables `$@` / `$*` / `$#` (other special variables like
+/// `$?` / `$!` / `$$`, and array subscripts, are excluded).
 fn expansion_var_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {
         "simple_expansion" => {
             let name_node = node.named_child(0)?;
-            if name_node.kind() != "variable_name" {
-                return None;
-            }
-            node_text(name_node, source)
+            resolvable_name(name_node, source)
         }
         "expansion" => {
             let mut name_node = None;
@@ -87,17 +85,34 @@ fn expansion_var_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                     name_node = Some(child);
                 }
             }
-            let name_node = name_node?;
-            if name_node.kind() != "variable_name" {
-                return None;
-            }
-            node_text(name_node, source)
+            resolvable_name(name_node?, source)
         }
         _ => None,
     }
 }
 
-fn node_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let bytes = source.get(node.start_byte()..node.end_byte())?;
-    Some(std::str::from_utf8(bytes).ok()?.to_string())
+/// Whether `node` names a variable this module can resolve: an ordinary
+/// `variable_name`, or a `special_variable_name` spelling one of the
+/// positional-parameter forms `@` / `*` / `#`
+/// ([`VarEnv::bind_positional_params`] is the only place that ever
+/// populates those three keys, so this stays
+/// a no-op for a plain script's `$@` / `$*` / `$#`, which are never
+/// tracked outside of function-call resolution). Every other special
+/// variable (`$?`, `$!`, `$$`, `$-`, `$_`) is genuinely dynamic and must
+/// never resolve.
+///
+/// `$1`..`$N` do not need handling here: tree-sitter-bash's grammar
+/// aliases the `\w+` token class (which includes digits) to
+/// `variable_name`, so a numeric positional parameter already reaches
+/// the `"variable_name"` arm above. `special_variable_name` is a fixed
+/// literal set (`* @ ? ! # - $ _`) that never contains a digit.
+fn resolvable_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "variable_name" => node_text(node, source),
+        "special_variable_name" => {
+            let text = node_text(node, source)?;
+            matches!(text.as_str(), "@" | "*" | "#").then_some(text)
+        }
+        _ => None,
+    }
 }

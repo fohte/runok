@@ -1,12 +1,17 @@
+mod function_table;
 mod redirect;
 mod splitter;
 mod tokenizer;
 mod var_env;
 
+pub(crate) use splitter::resolve_function_call_body;
 pub use splitter::{extract_commands, extract_commands_with_metadata, split_top_level_commands};
 pub use tokenizer::{parse_command, tokenize_command};
 
 use std::collections::{HashMap, HashSet};
+
+use function_table::FunctionTable;
+use var_env::VarEnv;
 
 /// Schema describing which flags take values vs. are boolean-only.
 ///
@@ -71,6 +76,36 @@ pub struct EnvAssignment {
     pub value: Option<String>,
 }
 
+/// Information attached to an [`ExtractedCommand`] whose command name
+/// matches a function (`name() { ... }`) defined earlier in the same
+/// command string. Carries everything [`crate::rules::rule_engine`]
+/// needs to re-extract the function's body with its positional
+/// parameters bound, without re-parsing the whole original script.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionCallInfo {
+    /// The called function's name.
+    pub function_name: String,
+    /// The verbatim body text of every `function_name() { ... }`
+    /// definition recorded before this call, in definition order. More
+    /// than one entry means the name was (re)defined multiple times
+    /// (e.g. once per branch of an `if`); every body is evaluated and
+    /// merged worst-case.
+    pub bodies: Vec<String>,
+    /// The call's own argument tokens (env prefix and redirects
+    /// excluded), with shell quoting and variable expansion already
+    /// resolved -- the values `$1`..`$N` / `$@` / `$*` / `$#` bind to
+    /// when a body is re-extracted.
+    pub call_args: Vec<String>,
+    /// Snapshot of statically-resolved script variables as of the call
+    /// site, used as the starting environment when re-extracting a body
+    /// (merged with the positional parameter bindings).
+    pub(in crate::rules::command_parser) var_env: VarEnv,
+    /// Snapshot of the function table as of the call site, so a call
+    /// inside the body to a function defined earlier in the script also
+    /// resolves.
+    pub(in crate::rules::command_parser) function_table: FunctionTable,
+}
+
 /// A command extracted from a compound shell expression, with metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedCommand {
@@ -102,6 +137,11 @@ pub struct ExtractedCommand {
     /// resolution rewrote `command` to its expanded form. `None` when
     /// no expansion happened (`command` is already the original text).
     pub original_command: Option<String>,
+    /// Set when this command's name matches a function defined earlier
+    /// in the same command string. `rule_engine` uses this to resolve
+    /// the call to its body instead of matching rules against the bare
+    /// function name.
+    pub function_call: Option<FunctionCallInfo>,
 }
 
 /// Join tokens into a shell-safe string by quoting tokens that contain

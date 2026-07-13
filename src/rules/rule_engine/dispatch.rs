@@ -1,16 +1,21 @@
 use crate::config::Config;
 use crate::rules::RuleError;
 use crate::rules::command_parser::{
-    ExtractedCommand, PipeInfo, RedirectInfo, extract_commands_with_metadata,
+    ExtractedCommand, FunctionCallInfo, PipeInfo, RedirectInfo, extract_commands_with_metadata,
 };
 
 use super::compound::{default_action, merge_results, normalize_whitespace};
 use super::simple_eval::evaluate_simple_command;
 use super::{EvalContext, EvalResult};
 
-/// Maximum recursion depth for wrapper command evaluation.
-const MAX_WRAPPER_DEPTH: usize = 10;
+/// Maximum recursion depth shared by wrapper-command unwrapping and
+/// function-call resolution.
+pub(super) const MAX_WRAPPER_DEPTH: usize = 10;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+)]
 pub(super) fn evaluate_command_inner(
     config: &Config,
     command: &str,
@@ -19,6 +24,8 @@ pub(super) fn evaluate_command_inner(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    function_call: Option<&FunctionCallInfo>,
+    call_stack: &[String],
 ) -> Result<EvalResult, RuleError> {
     if depth > MAX_WRAPPER_DEPTH {
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
@@ -61,6 +68,8 @@ pub(super) fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    sub.function_call.as_ref(),
+                    call_stack,
                 )?;
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
@@ -85,6 +94,8 @@ pub(super) fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    sub.function_call.as_ref(),
+                    call_stack,
                 )?;
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
@@ -99,7 +110,15 @@ pub(super) fn evaluate_command_inner(
                 // Evaluate the original command as a simple command (skip the
                 // compound guard by calling the remaining logic directly).
                 let simple_result = evaluate_simple_command(
-                    config, command, context, depth, redirects, pipe, loop_kind,
+                    config,
+                    command,
+                    context,
+                    depth,
+                    redirects,
+                    pipe,
+                    loop_kind,
+                    function_call,
+                    call_stack,
                 )?;
                 return Ok(merge_results(nested_result, simple_result));
             }
@@ -108,7 +127,17 @@ pub(super) fn evaluate_command_inner(
         // simple-command evaluation.
     }
 
-    evaluate_simple_command(config, command, context, depth, redirects, pipe, loop_kind)
+    evaluate_simple_command(
+        config,
+        command,
+        context,
+        depth,
+        redirects,
+        pipe,
+        loop_kind,
+        function_call,
+        call_stack,
+    )
 }
 
 #[cfg(test)]

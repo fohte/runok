@@ -1,3 +1,4 @@
+use crate::rules::command_parser::function_table::FunctionTable;
 use crate::rules::command_parser::redirect::{
     collect_substitutions_recursive, detect_while_or_until,
 };
@@ -13,7 +14,7 @@ use super::collect_commands;
 /// it is always poisoned regardless of the caller's state.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_if_statement(
     node: tree_sitter::Node,
@@ -23,6 +24,7 @@ pub(super) fn handle_if_statement(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     for i in 0..node.child_count() {
@@ -42,6 +44,7 @@ pub(super) fn handle_if_statement(
             redirects,
             loop_kind,
             var_env,
+            function_table,
             child_poison,
         );
     }
@@ -52,6 +55,10 @@ pub(super) fn handle_if_statement(
 /// and an else body only runs if every condition was false — both are
 /// always conditional, so force poison regardless of the caller's
 /// state.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+)]
 pub(super) fn handle_elif_or_else(
     node: tree_sitter::Node,
     source: &[u8],
@@ -60,11 +67,20 @@ pub(super) fn handle_elif_or_else(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         collect_commands(
-            child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+            child,
+            source,
+            commands,
+            pipe_info,
+            redirects,
+            loop_kind,
+            var_env,
+            function_table,
+            true,
         );
     }
 }
@@ -82,12 +98,21 @@ pub(super) fn handle_while_statement(
     pipe_info: &PipeInfo,
     redirects: &[RedirectInfo],
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
 ) {
     let kind = detect_while_or_until(node, source);
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         collect_commands(
-            child, source, commands, pipe_info, redirects, kind, var_env, true,
+            child,
+            source,
+            commands,
+            pipe_info,
+            redirects,
+            kind,
+            var_env,
+            function_table,
+            true,
         );
     }
 }
@@ -105,6 +130,10 @@ pub(super) fn handle_while_statement(
 /// always runs poisoned (it may execute zero, one, or many times); the
 /// value list runs exactly once whenever the for_statement is reached,
 /// so it keeps the caller's poison state.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+)]
 pub(super) fn handle_for_statement(
     node: tree_sitter::Node,
     source: &[u8],
@@ -112,6 +141,7 @@ pub(super) fn handle_for_statement(
     pipe_info: &PipeInfo,
     redirects: &[RedirectInfo],
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     if let Some(var_node) = node.child_by_field_name("variable")
@@ -125,7 +155,15 @@ pub(super) fn handle_for_statement(
         match child.kind() {
             "do_group" => {
                 collect_commands(
-                    child, source, commands, pipe_info, redirects, "for", var_env, true,
+                    child,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    "for",
+                    var_env,
+                    function_table,
+                    true,
                 );
             }
             "command_substitution" | "process_substitution" => {
@@ -137,11 +175,19 @@ pub(super) fn handle_for_statement(
                     &[],
                     "",
                     var_env,
+                    function_table,
                     poison,
                 );
             }
             _ => {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
         }
     }
@@ -156,7 +202,7 @@ pub(super) fn handle_for_statement(
 /// case_statement is reached, so it keeps the caller's poison state.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_case_statement(
     node: tree_sitter::Node,
@@ -166,6 +212,7 @@ pub(super) fn handle_case_statement(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     let mut cursor = node.walk();
@@ -173,16 +220,39 @@ pub(super) fn handle_case_statement(
         match child.kind() {
             "case_item" => {
                 collect_commands(
-                    child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+                    child,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    function_table,
+                    true,
                 );
             }
             "command_substitution" => {
                 collect_commands(
-                    child, source, commands, pipe_info, redirects, loop_kind, var_env, poison,
+                    child,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    function_table,
+                    poison,
                 );
             }
             _ => {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
         }
     }
@@ -192,7 +262,7 @@ pub(super) fn handle_case_statement(
 /// for nested command substitutions (e.g. `case $x in "$(cmd)") ...`).
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_case_item(
     node: tree_sitter::Node,
@@ -202,6 +272,7 @@ pub(super) fn handle_case_item(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     for i in 0..node.child_count() {
@@ -212,10 +283,25 @@ pub(super) fn handle_case_item(
             continue;
         }
         if node.field_name_for_child(i as u32) == Some("value") {
-            collect_substitutions_recursive(child, source, commands, var_env, poison);
+            collect_substitutions_recursive(
+                child,
+                source,
+                commands,
+                var_env,
+                function_table,
+                poison,
+            );
         } else {
             collect_commands(
-                child, source, commands, pipe_info, redirects, loop_kind, var_env, true,
+                child,
+                source,
+                commands,
+                pipe_info,
+                redirects,
+                loop_kind,
+                var_env,
+                function_table,
+                true,
             );
         }
     }

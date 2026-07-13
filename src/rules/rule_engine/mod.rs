@@ -3,11 +3,14 @@ use std::path::PathBuf;
 
 use crate::config::{ActionKind, Config, MergedSandboxPolicy};
 use crate::rules::RuleError;
-use crate::rules::command_parser::{PipeInfo, RedirectInfo, extract_commands_with_metadata};
+use crate::rules::command_parser::{
+    FunctionCallInfo, PipeInfo, RedirectInfo, extract_commands_with_metadata,
+};
 
 mod compound;
 mod dispatch;
 mod flag_schema;
+mod function;
 mod simple_eval;
 mod wrapper;
 
@@ -118,12 +121,25 @@ pub fn evaluate_command(
             &first.redirects,
             &first.pipe,
             &first.loop_kind,
+            first.function_call.as_ref(),
+            &[],
         );
     }
-    evaluate_command_inner(config, command, context, 0, &[], &PipeInfo::default(), "")
+    evaluate_command_inner(
+        config,
+        command,
+        context,
+        0,
+        &[],
+        &PipeInfo::default(),
+        "",
+        None,
+        &[],
+    )
 }
 
-/// Like `evaluate_command`, but with pre-extracted redirect and pipe metadata.
+/// Like `evaluate_command`, but with pre-extracted redirect, pipe, and
+/// function-call metadata.
 ///
 /// Use this when the caller has already parsed the original command for
 /// redirect/pipe information (e.g., the adapter extracts metadata from the
@@ -135,8 +151,19 @@ pub fn evaluate_command_with_metadata(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    function_call: Option<&FunctionCallInfo>,
 ) -> Result<EvalResult, RuleError> {
-    evaluate_command_inner(config, command, context, 0, redirects, pipe, loop_kind)
+    evaluate_command_inner(
+        config,
+        command,
+        context,
+        0,
+        redirects,
+        pipe,
+        loop_kind,
+        function_call,
+        &[],
+    )
 }
 
 /// Shared test fixtures used by `compound::tests`, `dispatch::tests`,

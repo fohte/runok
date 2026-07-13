@@ -1,3 +1,4 @@
+use crate::rules::command_parser::function_table::FunctionTable;
 use crate::rules::command_parser::redirect::{
     collect_heredoc_redirect_substitutions, collect_substitutions_recursive, extract_redirect_info,
     find_heredoc_continuation, is_quoted_heredoc,
@@ -13,7 +14,7 @@ use super::collect_commands;
 /// commands (e.g. process substitutions: `cmd > >(nested_cmd)`).
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
+    reason = "each parameter carries independent AST-walk context (pipe/redirect/loop position, var/function tracking); grouping them into a struct would obscure the per-recursion-site overrides this function relies on"
 )]
 pub(super) fn handle_redirected_statement(
     node: tree_sitter::Node,
@@ -23,6 +24,7 @@ pub(super) fn handle_redirected_statement(
     redirects: &[RedirectInfo],
     loop_kind: &str,
     var_env: &mut VarEnv,
+    function_table: &mut FunctionTable,
     poison: bool,
 ) {
     let mut all_redirects = redirects.to_vec();
@@ -57,6 +59,7 @@ pub(super) fn handle_redirected_statement(
                 &all_redirects,
                 loop_kind,
                 var_env,
+                function_table,
                 poison,
             );
         }
@@ -95,6 +98,7 @@ pub(super) fn handle_redirected_statement(
                     stage_redirects,
                     loop_kind,
                     var_env,
+                    function_table,
                     poison,
                 );
             }
@@ -108,7 +112,15 @@ pub(super) fn handle_redirected_statement(
             // run if the pipeline's exit status permits it.
             for arm in &continuation.list_arms {
                 collect_commands(
-                    *arm, source, commands, &arm_pipe, redirects, loop_kind, var_env, true,
+                    *arm,
+                    source,
+                    commands,
+                    &arm_pipe,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    function_table,
+                    true,
                 );
             }
         }
@@ -135,9 +147,23 @@ pub(super) fn handle_redirected_statement(
                 continue;
             }
             if child.kind() == "heredoc_redirect" {
-                collect_heredoc_redirect_substitutions(child, source, commands, var_env, poison);
+                collect_heredoc_redirect_substitutions(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             } else {
-                collect_substitutions_recursive(child, source, commands, var_env, poison);
+                collect_substitutions_recursive(
+                    child,
+                    source,
+                    commands,
+                    var_env,
+                    function_table,
+                    poison,
+                );
             }
         }
     }

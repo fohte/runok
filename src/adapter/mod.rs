@@ -250,6 +250,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             pipe: PipeInfo::default(),
             loop_kind: String::new(),
             original_command: None,
+            function_call: None,
         }]
     });
     let commands: Vec<String> = extracted_commands
@@ -347,6 +348,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         let loop_kind = first_extracted
             .map(|ec| ec.loop_kind.as_str())
             .unwrap_or("");
+        let function_call = first_extracted.and_then(|ec| ec.function_call.as_ref());
         match evaluate_command_with_metadata(
             config,
             effective_command,
@@ -354,6 +356,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             redirects,
             pipe,
             loop_kind,
+            function_call,
         ) {
             Ok(result) => {
                 if options.verbose {

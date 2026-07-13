@@ -5,6 +5,7 @@ mod config_to_rule_evaluation;
 mod extends_resolution;
 mod flag_group_evaluation;
 mod flag_optional_value;
+mod function_call_resolution;
 mod init_wizard;
 mod migrate_config;
 mod optional_notation_and_path_ref;
