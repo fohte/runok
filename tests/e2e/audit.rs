@@ -434,11 +434,11 @@ fn exec_compound_command_audit_log(exec_audit_env: AuditTestEnv) {
 // Ask resolution (PostToolUse) E2E
 // ========================================
 
-fn hook_json_for_event(event: &str, command: &str, tool_use_id: &str) -> String {
+fn hook_json_at_cwd(event: &str, command: &str, tool_use_id: &str, cwd: &str) -> String {
     serde_json::json!({
         "session_id": "sess-e2e",
         "transcript_path": "/tmp/transcript",
-        "cwd": "/tmp",
+        "cwd": cwd,
         "permission_mode": "default",
         "hook_event_name": event,
         "tool_name": "Bash",
@@ -446,6 +446,10 @@ fn hook_json_for_event(event: &str, command: &str, tool_use_id: &str) -> String 
         "tool_use_id": tool_use_id
     })
     .to_string()
+}
+
+fn hook_json_for_event(event: &str, command: &str, tool_use_id: &str) -> String {
+    hook_json_at_cwd(event, command, tool_use_id, "/tmp")
 }
 
 #[fixture]
@@ -457,12 +461,24 @@ fn ask_terraform_env() -> AuditTestEnv {
     "})
 }
 
-fn run_hook(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str) {
+fn run_hook_at_cwd(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str, cwd: &str) {
     env.command()
         .args(["check", "--input-format", "claude-code-hook"])
-        .write_stdin(hook_json_for_event(event, command, tool_use_id))
+        .write_stdin(hook_json_at_cwd(event, command, tool_use_id, cwd))
         .assert()
         .code(0);
+}
+
+fn run_hook(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str) {
+    run_hook_at_cwd(env, event, command, tool_use_id, "/tmp");
+}
+
+/// Like `run_hook`, but records `metadata.cwd` as the test env's own project
+/// directory instead of the hardcoded `/tmp` -- needed for `--recheck`
+/// tests, which load config from the entry's recorded cwd.
+fn run_hook_at_project_cwd(env: &AuditTestEnv, event: &str, command: &str, tool_use_id: &str) {
+    let cwd = env.env.cwd.to_string_lossy().into_owned();
+    run_hook_at_cwd(env, event, command, tool_use_id, &cwd);
 }
 
 /// Normalize the dynamic timestamp so the whole record can be asserted
@@ -473,8 +489,9 @@ fn normalize_timestamp(mut record: serde_json::Value) -> serde_json::Value {
 }
 
 /// The ask decision entry written by the PreToolUse hook for
-/// `terraform apply` in [`ask_terraform_env`], timestamp normalized.
-fn expected_ask_entry() -> serde_json::Value {
+/// `terraform apply` in [`ask_terraform_env`] at the given `cwd`, timestamp
+/// normalized.
+fn expected_ask_entry_at_cwd(cwd: &str) -> serde_json::Value {
     serde_json::json!({
         "timestamp": "TIMESTAMP",
         "command": "terraform apply",
@@ -484,7 +501,7 @@ fn expected_ask_entry() -> serde_json::Value {
         "metadata": {
             "endpoint_type": "hook",
             "session_id": "sess-e2e",
-            "cwd": "/tmp",
+            "cwd": cwd,
             "tool_name": "Bash",
             "hook_event_name": "PreToolUse",
             "tool_use_id": "toolu_e2e"
@@ -505,6 +522,12 @@ fn expected_ask_entry() -> serde_json::Value {
             }
         ]
     })
+}
+
+/// [`expected_ask_entry_at_cwd`] for the hardcoded `/tmp` cwd `run_hook`
+/// records.
+fn expected_ask_entry() -> serde_json::Value {
+    expected_ask_entry_at_cwd("/tmp")
 }
 
 /// The ask_resolution record written by the PostToolUse hook for the
@@ -593,6 +616,28 @@ fn audit_text_marks_approved_ask(ask_terraform_env: AuditTestEnv) {
     assert_eq!(columns[1..], ["ask ✓", "terraform apply"]);
 }
 
+/// `expected_ask_entry_at_cwd()` reflects the entry as written to disk;
+/// `--json` output additionally carries the `approved` / `recheck`
+/// annotations, which are not part of the persisted schema.
+fn with_json_annotations(
+    mut entry: serde_json::Value,
+    approved: bool,
+    recheck: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let obj = entry
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("entry must be an object"));
+    obj.insert("approved".to_owned(), serde_json::json!(approved));
+    if let Some(recheck) = recheck {
+        obj.insert("recheck".to_owned(), recheck);
+    }
+    entry
+}
+
+fn expected_ask_entry_with_approved(approved: bool) -> serde_json::Value {
+    with_json_annotations(expected_ask_entry(), approved, None)
+}
+
 #[rstest]
 fn audit_json_outputs_decision_entry_and_resolution(ask_terraform_env: AuditTestEnv) {
     record_approved_ask(&ask_terraform_env);
@@ -606,7 +651,13 @@ fn audit_json_outputs_decision_entry_and_resolution(ask_terraform_env: AuditTest
         .into_iter()
         .map(normalize_timestamp)
         .collect();
-    assert_eq!(records, vec![expected_ask_entry(), expected_resolution()]);
+    assert_eq!(
+        records,
+        vec![
+            expected_ask_entry_with_approved(true),
+            expected_resolution()
+        ],
+    );
 }
 
 #[rstest]
@@ -625,6 +676,188 @@ fn audit_json_limit_bounds_the_merged_stream(ask_terraform_env: AuditTestEnv) {
         .map(normalize_timestamp)
         .collect();
     assert_eq!(records, vec![expected_resolution()]);
+}
+
+// ========================================
+// --recheck annotation
+// ========================================
+
+/// Overwrite the project `runok.yml`, simulating the user editing rules
+/// after audit entries were already recorded under the old config.
+fn rewrite_project_config(env: &AuditTestEnv, yaml: &str) {
+    fs::write(env.env.cwd.join("runok.yml"), yaml)
+        .unwrap_or_else(|e| panic!("failed to rewrite project config: {e}"));
+}
+
+#[rstest]
+#[case::rule_added(
+    indoc! {"
+        rules:
+          - allow: 'terraform *'
+    "},
+    serde_json::json!({
+        "action": {"type": "allow"},
+        "command_evaluations": [
+            {
+                "command": "terraform apply",
+                "action": {"type": "allow"},
+                "matched_rules": [
+                    {
+                        "action_kind": "allow",
+                        "pattern": "terraform *",
+                        "matched_tokens": ["apply"]
+                    }
+                ]
+            }
+        ]
+    }),
+)]
+#[case::ask_rule_removed(
+    // The explicit `ask` rule is gone; the command now resolves to `ask`
+    // purely via the `defaults.action` fallback (no matched rule).
+    "",
+    serde_json::json!({
+        "action": {"type": "ask", "detail": {"message": null}},
+        "command_evaluations": [
+            {
+                "command": "terraform apply",
+                "action": {"type": "ask", "detail": {"message": null}}
+            }
+        ]
+    }),
+)]
+fn audit_recheck_reflects_current_config(
+    ask_terraform_env: AuditTestEnv,
+    #[case] updated_config_yaml: &str,
+    #[case] expected_recheck: serde_json::Value,
+) {
+    // Recorded as `ask` under the original config (`ask: 'terraform *'`).
+    run_hook_at_project_cwd(
+        &ask_terraform_env,
+        "PreToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+
+    // The user has since changed the config.
+    rewrite_project_config(&ask_terraform_env, updated_config_yaml);
+
+    let assert = ask_terraform_env
+        .command()
+        .args(["audit", "--recheck", "--json"])
+        .assert()
+        .code(0);
+    let records: Vec<serde_json::Value> = parse_json_stdout(&assert)
+        .into_iter()
+        .map(normalize_timestamp)
+        .collect();
+
+    let cwd = ask_terraform_env.env.cwd.to_string_lossy().into_owned();
+    assert_eq!(
+        records,
+        // The recorded snapshot (`action`, `command_evaluations`) is
+        // untouched by --recheck; only `recheck` reflects the new config.
+        vec![with_json_annotations(
+            expected_ask_entry_at_cwd(&cwd),
+            false,
+            Some(expected_recheck),
+        )],
+    );
+}
+
+#[rstest]
+fn audit_recheck_text_mode_adds_now_column(ask_terraform_env: AuditTestEnv) {
+    run_hook_at_project_cwd(
+        &ask_terraform_env,
+        "PreToolUse",
+        "terraform apply",
+        "toolu_e2e",
+    );
+    rewrite_project_config(
+        &ask_terraform_env,
+        indoc! {"
+            rules:
+              - allow: 'terraform *'
+        "},
+    );
+
+    let assert = ask_terraform_env
+        .command()
+        .args(["audit", "--recheck"])
+        .assert()
+        .code(0);
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+
+    let columns: Vec<&str> = stdout.trim().split('\t').collect();
+    assert_eq!(columns[1..], ["ask", "allow", "terraform apply"]);
+}
+
+#[rstest]
+fn audit_json_omits_approved_for_non_ask_entries(exec_audit_env: AuditTestEnv) {
+    exec_audit_env
+        .command()
+        .args(["exec", "--", "echo", "hi"])
+        .assert()
+        .code(0);
+
+    let assert = exec_audit_env
+        .command()
+        .args(["audit", "--json"])
+        .assert()
+        .code(0);
+    let records: Vec<serde_json::Value> = parse_json_stdout(&assert)
+        .into_iter()
+        .map(normalize_timestamp)
+        .collect();
+
+    // No `approved` key at all (not even `false`): a whole-object equality
+    // check catches an accidental `approved` field the same way it would
+    // catch any other unexpected field, unlike a targeted `.get("approved")`
+    // check.
+    //
+    // `std::env::current_dir()` (what the `exec` audit metadata records)
+    // resolves symlinks (e.g. macOS's `/var` -> `/private/var`), so the
+    // expected cwd must be canonicalized the same way.
+    let cwd = exec_audit_env
+        .env
+        .cwd
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("failed to canonicalize cwd: {e}"))
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        records,
+        vec![serde_json::json!({
+            "timestamp": "TIMESTAMP",
+            "command": "echo hi",
+            "action": {"type": "allow"},
+            "sandbox_preset": null,
+            "default_action": null,
+            "metadata": {
+                "endpoint_type": "exec",
+                "session_id": null,
+                "cwd": cwd,
+                "tool_name": null,
+                "hook_event_name": null,
+                "tool_use_id": null
+            },
+            "command_evaluations": [
+                {
+                    "command": "echo hi",
+                    "action": {"type": "allow"},
+                    "matched_rules": [
+                        {
+                            "action_kind": "allow",
+                            "pattern": "echo *",
+                            "matched_tokens": ["hi"]
+                        }
+                    ],
+                    "eval_type": "primary",
+                    "argv": ["echo", "hi"]
+                }
+            ]
+        })],
+    );
 }
 
 // ========================================

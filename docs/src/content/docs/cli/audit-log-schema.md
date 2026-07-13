@@ -126,6 +126,20 @@ See [CommandEvaluation Object](#commandevaluation-object) for the shape of each 
 **Type:** [`list[CommandEvaluation]`](#commandevaluation-object)\
 **Always present:** Yes (may be empty)
 
+### `approved`
+
+Whether the ask was approved in the agent's permission dialog, joined the same way as the `ask ✓` marker in text mode (see [Ask Resolution Record](#ask-resolution-record)). Not part of the on-disk audit-log schema -- computed only for this command's output.
+
+**Type:** `bool`\
+**Present when:** `action.type` is `"ask"`. Omitted for every other entry.
+
+### `recheck`
+
+The entry's `command`, re-evaluated against the config currently in effect (as opposed to [`action`](#action) / [`command_evaluations`](#command_evaluations), which are a snapshot from when the entry was decided). Not part of the on-disk audit-log schema -- computed only for `runok audit --recheck` output. See [Recheck Object](#recheck-object).
+
+**Type:** [`Recheck`](#recheck-object)\
+**Present when:** the `--recheck` flag was passed. Omitted otherwise.
+
 ## Action Object
 
 Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow`, and present (with type-specific keys) for `deny` and `ask`.
@@ -543,6 +557,95 @@ Explicit file descriptor when the redirect specifies one (e.g. `2` in `2>file`).
 
 **Type:** `bool`\
 **Always present:** Yes
+
+## Recheck Object
+
+Present only in [`runok audit --recheck`](/cli/audit/#--recheck) output, as the top-level [`recheck`](#recheck) field. Serialises as one of two shapes, distinguishable by which keys are present -- there is no `type`/`status` discriminator field.
+
+On success:
+
+```json
+{
+  "action": { "type": "allow" },
+  "command_evaluations": [
+    {
+      "command": "terraform apply",
+      "action": { "type": "allow" },
+      "matched_rules": [
+        {
+          "action_kind": "allow",
+          "pattern": "terraform *",
+          "matched_tokens": ["apply"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+On failure (the entry has no recorded `metadata.cwd`, its config failed to load, or re-evaluation itself errored -- see [`--recheck`](/cli/audit/#--recheck)):
+
+```json
+{ "error": "failed to load config: ..." }
+```
+
+### `action`
+
+The current evaluation result for `command` as a whole, in the same [Action Object](#action-object) shape as the top-level [`action`](#action) field -- consumers can reuse the same parsing code for both.
+
+**Type:** [`Action`](#action-object)\
+**Present when:** re-evaluation succeeded.
+
+### `command_evaluations`
+
+Per-branch re-evaluation results, in the same order as [`command_evaluations`](#command_evaluations). See [RecheckCommandEvaluation Object](#recheckcommandevaluation-object).
+
+**Type:** [`list[RecheckCommandEvaluation]`](#recheckcommandevaluation-object)\
+**Present when:** re-evaluation succeeded.
+
+### `error`
+
+Why the entry could not be re-evaluated.
+
+**Type:** `str`\
+**Present when:** re-evaluation failed.
+
+## RecheckCommandEvaluation Object
+
+```json
+{
+  "command": "terraform apply",
+  "action": { "type": "allow" },
+  "matched_rules": [
+    {
+      "action_kind": "allow",
+      "pattern": "terraform *",
+      "matched_tokens": ["apply"]
+    }
+  ]
+}
+```
+
+### `command`
+
+The branch command, in the same form as [`CommandEvaluation.command`](#command-2).
+
+**Type:** `str`\
+**Always present:** Yes
+
+### `action`
+
+Current re-evaluation result for this branch. See [Action Object](#action-object).
+
+**Type:** [`Action`](#action-object)\
+**Always present:** Yes
+
+### `matched_rules`
+
+Rules that currently match this branch, in the same [RuleMatch Object](#rulematch-object) shape as [`CommandEvaluation.matched_rules`](#matched_rules). A branch with `action.type: "ask"` and this omitted (empty) is resolved for that branch purely via `defaults.action` fallback, not an explicit `ask` rule. The `ask-def` NOW-column label (and the [`--recheck` example](/cli/audit/#--recheck) jq query) combines this with `action.type` across all branches, rather than reading a single branch's `matched_rules` in isolation -- a branch matched by an `allow` rule still has non-empty `matched_rules`, so a compound command escalated to `ask` by a sandbox contradiction (all branches matched an `allow` rule, none matched `ask`) is correctly excluded from `ask-def`.
+
+**Type:** [`list[RuleMatch]`](#rulematch-object)\
+**Omitted when empty.**
 
 ## Related
 
