@@ -25,7 +25,7 @@ When a command is rewritten this way, the audit log records both the resolved te
 
 **What changes for existing rules?** A rule that matches literal `$X` text (e.g. `allow: 'echo $X'`, intending to match the variable reference itself rather than its value) now sees the resolved value instead, when that value is statically known. This is unlikely in practice -- patterns are normally written against a command's real arguments, not its unexpanded source -- but if a rule specifically depended on `$X` staying unresolved, it should be rewritten against the values the variable can actually take, since those are now what reaches rule evaluation.
 
-### Function call resolution closes a deny-bypass gap for shell functions (TODO(pr-link))
+### Function call resolution closes a deny-bypass gap for shell functions ([#475](https://github.com/fohte/runok/pull/475))
 
 A shell function's **body** was always evaluated unconditionally at definition time, as a safety backstop, but a **call** to that function (`f() { git push; }; f`) was matched as an ordinary, unknown command -- resolving to `defaults.action` (usually `ask`) on every call, and never seeing the arguments the call itself passed in:
 
