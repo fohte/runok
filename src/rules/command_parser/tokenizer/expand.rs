@@ -1,6 +1,6 @@
 use crate::rules::command_parser::var_env::{VarEnv, VarValue};
 
-use super::dequote::{dequote_node, dequote_node_with};
+use super::dequote::{dequote_node, dequote_node_with, node_text};
 
 /// Resolve one child of a `command` node (the command name or an
 /// argument position) into zero or more tokens, applying variable
@@ -109,9 +109,4 @@ fn resolvable_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String>
         }
         _ => None,
     }
-}
-
-fn node_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let bytes = source.get(node.start_byte()..node.end_byte())?;
-    Some(std::str::from_utf8(bytes).ok()?.to_string())
 }

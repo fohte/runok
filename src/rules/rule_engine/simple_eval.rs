@@ -43,7 +43,7 @@ pub(super) fn evaluate_simple_command(
     // `command` as an ordinary, unknown command instead.
     if let Some(call_info) = function_call
         && let Some(result) = try_unwrap_function_call(
-            config, context, call_info, depth, redirects, loop_kind, call_stack,
+            config, context, call_info, depth, redirects, pipe, loop_kind, call_stack,
         )?
     {
         return Ok(result);

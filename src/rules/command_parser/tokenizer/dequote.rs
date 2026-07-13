@@ -201,3 +201,16 @@ fn decode_double_quote_escapes(text: &str) -> String {
     }
     out
 }
+
+/// Extract a node's raw source text verbatim, with no quote or escape
+/// processing. Used where a node's kind guarantees no shell quoting
+/// applies (a function name, which the grammar always types as a bare
+/// `word`), or where a snippet is captured to be re-parsed later rather
+/// than tokenized now (a function body, an env-assignment name).
+pub(in crate::rules::command_parser) fn node_text(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> Option<String> {
+    let bytes = source.get(node.start_byte()..node.end_byte())?;
+    Some(std::str::from_utf8(bytes).ok()?.to_string())
+}

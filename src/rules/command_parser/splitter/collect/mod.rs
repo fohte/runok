@@ -11,6 +11,7 @@ use simple_command::{handle_command, handle_declaration_or_unset};
 
 use crate::rules::command_parser::function_table::FunctionTable;
 use crate::rules::command_parser::redirect::collect_substitutions_recursive;
+use crate::rules::command_parser::tokenizer::node_text;
 use crate::rules::command_parser::var_env::{VarEnv, record_variable_assignment};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
@@ -253,27 +254,19 @@ pub(in crate::rules::command_parser) fn collect_commands(
             );
         }
         // function_definition: register the name/body into the *outer*
-        // `function_table` (unconditionally, regardless of `poison` --
-        // over-registering a function that might not actually be defined
-        // at call time is always safe: it just means evaluating code
-        // that, if it never really executes, could not have been
-        // dangerous either) so a later `command` node can be recognized
-        // as a call to it, then recurse into the body. The body is not
-        // executed at definition time, so it must not read or write the
-        // enclosing `var_env` -- a fresh, throwaway one keeps every
-        // expansion inside verbatim without leaking any `local`/
-        // assignment the body makes back out to the caller. Unlike
-        // variable *values*, which one call to `f` cannot assume are the
-        // same on the next call, a function name being defined is a
-        // static, lexical fact once its `function_definition` has been
-        // walked -- so `function_table` uses the same clone-and-discard
-        // scoping as a subshell (reads see every function defined so far
-        // in the *outer* scope, including `f` itself; nested definitions
-        // the body makes are not visible outside it). This lets the
-        // unconditional definition-time pass resolve a call to an
-        // earlier-defined function (`g() { ... }; f() { g; }`) instead of
-        // leaving it as an unknown command that would otherwise drag the
-        // merged result down to `defaults.action`.
+        // `function_table` unconditionally, regardless of `poison`, so a
+        // later `command` node can be recognized as a call to it, then
+        // recurse into the body. The body is not executed at definition
+        // time, so it must not read or write the enclosing `var_env` --
+        // a fresh, throwaway one keeps every expansion inside verbatim
+        // without leaking any `local`/assignment the body makes back out
+        // to the caller. `function_table`, by contrast, uses the same
+        // clone-and-discard scoping as a subshell: reads see every
+        // function defined so far in the *outer* scope, including `f`
+        // itself, but nested definitions the body makes are not visible
+        // outside it -- this lets the unconditional definition-time pass
+        // also resolve a call to an earlier-defined function (`g() {
+        // ... }; f() { g; }`).
         "function_definition" => {
             if let Some(name_node) = node.child_by_field_name("name")
                 && let Some(body) = node.child_by_field_name("body")
@@ -351,9 +344,4 @@ pub(in crate::rules::command_parser) fn collect_commands(
             }
         }
     }
-}
-
-fn node_text(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let bytes = source.get(node.start_byte()..node.end_byte())?;
-    Some(std::str::from_utf8(bytes).ok()?.to_string())
 }

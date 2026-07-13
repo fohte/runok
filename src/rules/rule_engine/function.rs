@@ -1,6 +1,8 @@
 use crate::config::Config;
 use crate::rules::RuleError;
-use crate::rules::command_parser::{FunctionCallInfo, RedirectInfo, extract_commands_with_context};
+use crate::rules::command_parser::{
+    FunctionCallInfo, PipeInfo, RedirectInfo, resolve_function_call_body,
+};
 
 use super::compound::merge_results;
 use super::dispatch::{MAX_WRAPPER_DEPTH, evaluate_command_inner};
@@ -13,16 +15,23 @@ use super::{EvalContext, EvalResult};
 ///
 /// Returns `Ok(None)` when the call cannot be resolved -- a cycle
 /// (`call_info.function_name` is already on `call_stack`), the shared
-/// [`MAX_WRAPPER_DEPTH`] recursion limit would be exceeded, or every
+/// [`MAX_WRAPPER_DEPTH`] recursion limit would be exceeded (checked both
+/// up front and while evaluating the body, since a sub-command inside it
+/// may itself recurse further, e.g. through a wrapper pattern), or every
 /// candidate body fails to re-parse -- so the caller falls back to
 /// treating the call as an ordinary, unknown command instead of
 /// propagating an error.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, the resolved call itself, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+)]
 pub(super) fn try_unwrap_function_call(
     config: &Config,
     context: &EvalContext,
     call_info: &FunctionCallInfo,
     depth: usize,
     redirects: &[RedirectInfo],
+    pipe: &PipeInfo,
     loop_kind: &str,
     call_stack: &[String],
 ) -> Result<Option<EvalResult>, RuleError> {
@@ -33,9 +42,6 @@ pub(super) fn try_unwrap_function_call(
         return Ok(None);
     }
 
-    let mut positional_env = call_info.var_env.clone();
-    positional_env.bind_positional_params(&call_info.call_args);
-
     let mut new_stack = call_stack.to_vec();
     new_stack.push(call_info.function_name.clone());
 
@@ -45,18 +51,14 @@ pub(super) fn try_unwrap_function_call(
         // propagated as an error -- the same "never error, fall back"
         // principle as an unresolved call. If every candidate fails,
         // `merged` stays `None` and the caller falls back too.
-        let Ok(sub_commands) = extract_commands_with_context(
-            body,
-            positional_env.clone(),
-            call_info.function_table.clone(),
-            redirects,
-            loop_kind,
-        ) else {
+        let Ok(sub_commands) =
+            resolve_function_call_body(call_info, body, redirects, pipe, loop_kind)
+        else {
             continue;
         };
 
         for sub in &sub_commands {
-            let sub_result = evaluate_command_inner(
+            let sub_result = match evaluate_command_inner(
                 config,
                 &sub.command,
                 context,
@@ -66,7 +68,19 @@ pub(super) fn try_unwrap_function_call(
                 &sub.loop_kind,
                 sub.function_call.as_ref(),
                 &new_stack,
-            )?;
+            ) {
+                Ok(result) => result,
+                // A sub-command that recurses deeper than the shared
+                // depth budget (e.g. it is itself a wrapper pattern)
+                // must not turn into a hard error -- that would drop
+                // whatever this call's other sub-commands, or sibling
+                // sub-commands elsewhere in the same compound input,
+                // already resolved. Abandon this call's resolution
+                // entirely and let the caller fall back to treating it
+                // as an unknown command instead.
+                Err(RuleError::RecursionDepthExceeded(_)) => return Ok(None),
+                Err(e) => return Err(e),
+            };
             merged = Some(match merged {
                 Some(prev) => merge_results(prev, sub_result),
                 None => sub_result,
@@ -81,7 +95,6 @@ pub(super) fn try_unwrap_function_call(
 mod tests {
     use rstest::rstest;
 
-    use crate::config::{ActionKind, Config, Defaults};
     use crate::rules::rule_engine::{Action, evaluate_command};
 
     use super::super::test_support::{allow_rule, ask_rule, deny_rule, empty_context, make_config};
@@ -107,40 +120,29 @@ mod tests {
     }
 
     #[rstest]
-    fn definition_time_evaluation_still_denies_dangerous_body(empty_context: EvalContext) {
-        // The safety-backstop unconditional definition-time evaluation
-        // must still catch this even though `f` is never called.
+    // The safety-backstop unconditional definition-time evaluation
+    // catches a dangerous body even when `f` is never called, and
+    // call resolution catches it too.
+    #[case::never_called("f() { rm -rf /; }")]
+    #[case::called("f() { rm -rf /; }; f")]
+    fn dangerous_body_is_denied_regardless_of_call(
+        #[case] command: &str,
+        empty_context: EvalContext,
+    ) {
         let config = make_config(vec![deny_rule("rm -rf *")]);
-        let result = evaluate_command(&config, "f() { rm -rf /; }", &empty_context).unwrap();
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
     #[rstest]
-    fn call_resolution_also_denies_dangerous_body(empty_context: EvalContext) {
-        let config = make_config(vec![deny_rule("rm -rf *")]);
-        let result = evaluate_command(&config, "f() { rm -rf /; }; f", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Deny(_)));
-    }
-
-    #[rstest]
-    fn self_recursion_falls_back_to_defaults_action(empty_context: EvalContext) {
-        let config = Config {
-            defaults: Some(Defaults {
-                action: Some(ActionKind::Ask),
-                sandbox: None,
-            }),
-            rules: Some(vec![allow_rule("git push")]),
-            ..Default::default()
-        };
-        let result = evaluate_command(&config, "f() { f; }; f", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Ask(_)));
-    }
-
-    #[rstest]
-    fn mutual_recursion_falls_back_to_defaults_action(empty_context: EvalContext) {
+    #[case::self_recursion("f() { f; }; f")]
+    #[case::mutual_recursion("f() { g; }; g() { f; }; f")]
+    fn recursive_call_falls_back_to_defaults_action(
+        #[case] command: &str,
+        empty_context: EvalContext,
+    ) {
         let config = make_config(vec![allow_rule("git push")]);
-        let result =
-            evaluate_command(&config, "f() { g; }; g() { f; }; f", &empty_context).unwrap();
+        let result = evaluate_command(&config, command, &empty_context).unwrap();
         assert!(matches!(result.action, Action::Ask(_)));
     }
 

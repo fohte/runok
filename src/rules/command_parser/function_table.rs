@@ -8,13 +8,8 @@ use std::collections::HashMap;
 /// [`super::var_env::VarEnv`]: a subshell / command substitution clones
 /// the table for its own scope and discards the clone afterward, so a
 /// function defined inside never leaks back to the parent shell.
-///
-/// `pub(crate)` (rather than the narrower `pub(in
-/// crate::rules::command_parser)` this module's methods use) because
-/// `rule_engine` needs to name the type and clone a snapshot when
-/// resolving a function call.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct FunctionTable {
+pub(in crate::rules::command_parser) struct FunctionTable {
     bodies: HashMap<String, Vec<String>>,
 }
 

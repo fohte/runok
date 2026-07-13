@@ -4,7 +4,7 @@ mod splitter;
 mod tokenizer;
 mod var_env;
 
-pub(crate) use splitter::extract_commands_with_context;
+pub(crate) use splitter::resolve_function_call_body;
 pub use splitter::{extract_commands, extract_commands_with_metadata, split_top_level_commands};
 pub use tokenizer::{parse_command, tokenize_command};
 
@@ -99,11 +99,11 @@ pub struct FunctionCallInfo {
     /// Snapshot of statically-resolved script variables as of the call
     /// site, used as the starting environment when re-extracting a body
     /// (merged with the positional parameter bindings).
-    pub(crate) var_env: VarEnv,
+    pub(in crate::rules::command_parser) var_env: VarEnv,
     /// Snapshot of the function table as of the call site, so a call
     /// inside the body to a function defined earlier in the script also
     /// resolves.
-    pub(crate) function_table: FunctionTable,
+    pub(in crate::rules::command_parser) function_table: FunctionTable,
 }
 
 /// A command extracted from a compound shell expression, with metadata.
