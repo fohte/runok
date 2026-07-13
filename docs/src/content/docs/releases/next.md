@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok hook`: a dedicated command for agent hook integrations (TODO(pr-link))
+### `runok hook`: a dedicated command for agent hook integrations ([#476](https://github.com/fohte/runok/pull/476))
 
 Claude Code integration used to register `runok check --input-format claude-code-hook` for both the `PreToolUse` and `PostToolUse` events. This was misleading: `check` is documented as a read-only evaluation command, but in `PostToolUse` mode it does no evaluation at all -- it only writes an `ask_resolution` record to the audit log.
 
