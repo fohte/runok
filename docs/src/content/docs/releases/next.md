@@ -30,7 +30,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok audit --recheck` re-evaluates entries against the current config (TODO(pr-link))
+### `runok audit --recheck` re-evaluates entries against the current config ([#474](https://github.com/fohte/runok/pull/474))
 
 An audit entry's recorded `action` and `matched_rules` are a snapshot from when the entry was decided -- if rules changed since then, the log alone can't tell you how a command would evaluate today. `--recheck` re-evaluates each displayed entry's `command` against the config currently in effect (loaded from the entry's own `metadata.cwd`) and annotates the output with the result. It's an annotation, not a filter: it never changes which entries are shown, and composes with `--action`, `--since`, `--dir`, and the other filters.
 
