@@ -187,6 +187,19 @@ pub const HOOK_COMMAND: &str = "runok hook";
 /// current command.
 pub const LEGACY_HOOK_COMMAND: &str = "runok check --input-format claude-code-hook";
 
+/// Rewrite a `Value`'s `command` field from `old` to `new` in place, if it
+/// currently equals `old`. Returns `true` if changed.
+fn try_set_command(val: &mut serde_json::Value, old: &str, new: &str) -> bool {
+    if let Some(command_val) = val.get_mut("command")
+        && command_val.as_str() == Some(old)
+    {
+        *command_val = serde_json::Value::String(new.to_string());
+        true
+    } else {
+        false
+    }
+}
+
 /// Rewrite `old_command` to `new_command` in place within a single
 /// PreToolUse/PostToolUse hook entry, across every wire format
 /// [`entry_has_runok_hook`] recognizes. Returns `true` if the entry changed.
@@ -206,27 +219,14 @@ fn rewrite_entry_command(
             if hook.as_str() == Some(old_command) {
                 *hook = serde_json::Value::String(new_command.to_string());
                 changed = true;
-            } else if hook.get("command").and_then(|c| c.as_str()) == Some(old_command)
-                && let Some(obj) = hook.as_object_mut()
-            {
-                obj.insert(
-                    "command".to_string(),
-                    serde_json::Value::String(new_command.to_string()),
-                );
+            } else if try_set_command(hook, old_command, new_command) {
                 changed = true;
             }
         }
         return changed;
     }
 
-    if entry.get("command").and_then(|c| c.as_str()) == Some(old_command)
-        && entry.get("hooks").is_none()
-        && let Some(obj) = entry.as_object_mut()
-    {
-        obj.insert(
-            "command".to_string(),
-            serde_json::Value::String(new_command.to_string()),
-        );
+    if entry.get("hooks").is_none() && try_set_command(entry, old_command, new_command) {
         return true;
     }
 
