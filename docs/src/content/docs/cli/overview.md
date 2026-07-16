@@ -27,7 +27,11 @@ Initialize runok configuration with an interactive setup wizard. Detects existin
 
 ### [`runok check`](/cli/check/)
 
-Evaluate a command against your rules and report the decision — without executing it. Useful for previewing what runok would do, or for integrating with external tools like [Claude Code hooks](/getting-started/claude-code/).
+Evaluate a command against your rules and report the decision — without executing it. Useful for previewing what runok would do, or for scripting.
+
+### [`runok hook`](/cli/hook/)
+
+Handle hook events from Claude Code (and, in the future, other coding agents) on stdin — rule evaluation, hook responses, and audit log writes. Registered as the `PreToolUse`/`PostToolUse` hook command in [Claude Code integration](/getting-started/claude-code/).
 
 ### [`runok exec`](/cli/exec/)
 

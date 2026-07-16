@@ -6,7 +6,10 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{CheckRoute, Cli, Commands, find_subcommand, route_check, validate_no_unknown_flags};
+use cli::{
+    CheckRoute, Cli, Commands, HookRoute, find_subcommand, route_check, route_hook,
+    validate_no_unknown_flags,
+};
 use runok::adapter::{self, RunOptions};
 use runok::config::{ConfigLoader, ConfigSource, DefaultConfigLoader};
 #[cfg(target_os = "linux")]
@@ -71,19 +74,21 @@ fn main() -> ExitCode {
 
     let raw_args: Vec<String> = std::env::args().collect();
 
-    // Validate unknown flags before clap parsing absorbs them into `command` Vec.
+    // Validate unknown flags before clap parsing absorbs them into `command` Vec
+    // (exec/check) or falls through to clap's own exit-2 parse error (hook).
     // Use `find_subcommand` so that global flags (e.g. `-c config.yml`) placed
     // before the subcommand name do not cause the validation to be skipped,
     // and so the subcommand position survives a `-c` value that happens to
     // match the subcommand name (e.g. `runok -c check check ...`).
     if let Some((subcommand_name, subcommand_pos)) = find_subcommand(&raw_args)
-        && matches!(subcommand_name, "exec" | "check")
+        && matches!(subcommand_name, "exec" | "check" | "hook")
         && let Err(e) = validate_no_unknown_flags(&raw_args, subcommand_name, subcommand_pos)
     {
-        // check uses exit code 2 for errors; exec uses 1.
+        // check uses exit code 2 for errors; exec and hook use 1.
         // For `check --input-format claude-code-hook`, downgrade to 1 so a
         // typo in the hook's runok flags does not block every Bash tool call
-        // (Claude Code treats exit 2 from PreToolUse as blocking).
+        // (Claude Code treats exit 2 from PreToolUse as blocking). `hook` is
+        // always in hook mode, so it always downgrades to 1.
         let code: u8 = if subcommand_name == "check" {
             if raw_args_indicate_claude_code_hook(&raw_args) {
                 1
@@ -248,15 +253,17 @@ fn run_command(
 
     // Exit code for config errors depends on the subcommand:
     // exec → 1 (general error), check → 2 (input/internal error).
-    // For `check --input-format claude-code-hook`, return 1 instead of 2 so
-    // that Claude Code treats config errors as a non-blocking hook failure
-    // and falls back to its normal permission flow. Exit 2 from a PreToolUse
-    // hook would otherwise block every Bash tool call until the config is
-    // fixed (https://code.claude.com/docs/en/hooks "Hook Exit Codes").
+    // For `check --input-format claude-code-hook` and `hook`, return 1
+    // instead of 2 so that Claude Code treats config errors as a
+    // non-blocking hook failure and falls back to its normal permission
+    // flow. Exit 2 from a PreToolUse hook would otherwise block every Bash
+    // tool call until the config is fixed
+    // (https://code.claude.com/docs/en/hooks "Hook Exit Codes").
     let config_error_exit_code = match &command {
         Commands::Exec(_) => 1,
         Commands::Check(args) if is_claude_code_hook(args) => 1,
         Commands::Check(_) => 2,
+        Commands::Hook(_) => 1,
         Commands::Audit(_) => unreachable!("handled above"),
         Commands::Test(_) => unreachable!("handled in main()"),
         Commands::Init(_) => unreachable!("handled in main()"),
@@ -326,6 +333,26 @@ fn run_command(
                     // block every Bash tool call until runok catches up.
                     eprintln!("runok: {e}");
                     if is_hook { 1 } else { 2 }
+                }
+            }
+        }
+        Commands::Hook(args) => {
+            let options = RunOptions {
+                verbose: args.verbose,
+            };
+            match route_hook(&args, stdin) {
+                Ok(HookRoute::Single(endpoint)) => {
+                    adapter::run_with_options(endpoint.as_ref(), &config, &options)
+                }
+                Ok(HookRoute::PostToolUseHook(hook_adapter)) => {
+                    hook_adapter.handle_post_tool_use(&config)
+                }
+                Ok(HookRoute::NoOp) => 0,
+                Err(e) => {
+                    // Same reasoning as the Check hook-mode branch above: never
+                    // exit 2, or a malformed input would block every Bash call.
+                    eprintln!("runok: {e}");
+                    1
                 }
             }
         }
@@ -417,6 +444,65 @@ mod tests {
         0
     )]
     fn run_command_check(
+        empty_config_file: (TempDir, PathBuf),
+        #[case] cmd: Commands,
+        #[case] stdin: &[u8],
+        #[case] expected_exit: i32,
+    ) {
+        let (tmp, config_path) = empty_config_file;
+        let exit_code = run_command(cmd, Some(&config_path), tmp.path(), stdin);
+        assert_eq!(exit_code, expected_exit);
+    }
+
+    fn hook_args(agent: Option<&str>) -> Commands {
+        Commands::Hook(cli::HookArgs {
+            agent: agent.map(String::from),
+            verbose: false,
+        })
+    }
+
+    #[rstest]
+    #[case::pre_tool_use(hook_args(Some("claude-code")), indoc! {r#"
+        {
+            "session_id": "s",
+            "transcript_path": "/tmp",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_use_id": "123"
+        }
+    "#}.as_bytes(), 0)]
+    #[case::post_tool_use(hook_args(Some("claude-code")), indoc! {r#"
+        {
+            "session_id": "s",
+            "transcript_path": "/tmp",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push"},
+            "tool_response": {"stdout": "ok"},
+            "tool_use_id": "123"
+        }
+    "#}.as_bytes(), 0)]
+    #[case::unknown_event(hook_args(Some("claude-code")), indoc! {r#"
+        {
+            "session_id": "s",
+            "transcript_path": "/tmp",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_use_id": "123"
+        }
+    "#}.as_bytes(), 0)]
+    #[case::invalid_json(hook_args(Some("claude-code")), "not json".as_bytes(), 1)]
+    #[case::missing_agent(hook_args(None), "{}".as_bytes(), 1)]
+    #[case::unknown_agent(hook_args(Some("other-agent")), "{}".as_bytes(), 1)]
+    fn run_command_hook(
         empty_config_file: (TempDir, PathBuf),
         #[case] cmd: Commands,
         #[case] stdin: &[u8],

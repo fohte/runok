@@ -125,7 +125,7 @@ fn init_user_scope_with_claude_code_integration() {
         "hooks": [
             {
                 "type": "command",
-                "command": "runok check --input-format claude-code-hook"
+                "command": "runok hook --agent claude-code"
             }
         ]
     });

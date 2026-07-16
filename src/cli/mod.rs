@@ -1,8 +1,10 @@
+mod hook_route;
 mod route;
 mod validate;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+pub use hook_route::{HookRoute, route_hook};
 pub use route::{CheckRoute, route_check};
 pub use validate::{find_subcommand, validate_no_unknown_flags};
 
@@ -24,6 +26,8 @@ pub enum Commands {
     Exec(ExecArgs),
     /// Check whether a command would be allowed
     Check(CheckArgs),
+    /// Handle Claude Code (and future agent) hook events from stdin
+    Hook(HookArgs),
     /// View audit log entries
     Audit(AuditArgs),
     /// Run tests defined in the config to verify rules
@@ -136,6 +140,20 @@ pub struct CheckArgs {
 
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct HookArgs {
+    /// Agent to integrate with (required, validated at runtime so a missing
+    /// or unknown value never triggers clap's blocking exit code 2). Valid
+    /// values: "claude-code"
+    #[arg(long)]
+    pub agent: Option<String>,
+
+    /// Output detailed rule matching information to stderr
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+#[derive(clap::Args)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct AuditArgs {
     /// Filter by action kind (allow, deny, ask)
     #[arg(long)]
@@ -214,6 +232,18 @@ mod tests {
     #[case::check_with_verbose(
         &["runok", "check", "--verbose", "--", "git", "status"],
         Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
+    )]
+    #[case::hook_no_agent(
+        &["runok", "hook"],
+        Commands::Hook(HookArgs { agent: None, verbose: false }),
+    )]
+    #[case::hook_with_agent(
+        &["runok", "hook", "--agent", "claude-code"],
+        Commands::Hook(HookArgs { agent: Some("claude-code".into()), verbose: false }),
+    )]
+    #[case::hook_with_verbose(
+        &["runok", "hook", "--verbose"],
+        Commands::Hook(HookArgs { agent: None, verbose: true }),
     )]
     #[case::audit_default(
         &["runok", "audit"],

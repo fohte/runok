@@ -138,12 +138,35 @@ const CHECK_FLAGS: &[FlagDef] = &[
     },
 ];
 
+const HOOK_FLAGS: &[FlagDef] = &[
+    FlagDef {
+        name: "--config",
+        short: Some("-c"),
+        takes_value: true,
+    },
+    FlagDef {
+        name: "--agent",
+        short: None,
+        takes_value: true,
+    },
+    FlagDef {
+        name: "--verbose",
+        short: None,
+        takes_value: false,
+    },
+];
+
 /// Validate that no unknown flags appear before `--` in the raw CLI arguments
-/// for `exec` and `check` subcommands.
+/// for `exec`, `check`, and `hook` subcommands.
 ///
-/// Because `trailing_var_arg = true` + `allow_hyphen_values = true` causes clap
-/// to silently absorb unknown flags into the `command` Vec, we must perform this
-/// check ourselves using the raw process arguments.
+/// For `exec`/`check`, `trailing_var_arg = true` + `allow_hyphen_values = true`
+/// causes clap to silently absorb unknown flags into the `command` Vec, so we
+/// must perform this check ourselves using the raw process arguments. `hook`
+/// has no such Vec, so clap's own parser already rejects unknown flags —
+/// but clap's default parse-error exit code is 2, which callers in hook mode
+/// must never see (Claude Code treats it as a blocking error), so `hook` is
+/// checked here too in order to route the failure through the same
+/// exit-1 downgrade as the other subcommands instead of clap's default.
 pub fn validate_no_unknown_flags(
     raw_args: &[String],
     subcommand: &str,
@@ -152,6 +175,7 @@ pub fn validate_no_unknown_flags(
     let flags = match subcommand {
         "exec" => EXEC_FLAGS,
         "check" => CHECK_FLAGS,
+        "hook" => HOOK_FLAGS,
         _ => return Ok(()),
     };
 
@@ -191,6 +215,9 @@ pub fn validate_no_unknown_flags(
                 tokens.next(); // skip the separate value argument
             }
             FlagMatch::AttachedValue | FlagMatch::Boolean => {}
+            FlagMatch::Unknown if subcommand == "hook" => {
+                return Err(format!("unknown flag '{token}' for 'runok {subcommand}'"));
+            }
             FlagMatch::Unknown => {
                 return Err(format!(
                     "unknown flag '{token}' for 'runok {subcommand}'. \
@@ -243,6 +270,12 @@ mod tests {
     #[case::check_config_fused_short("runok check -cpath/to/config.yml -- ls")]
     #[case::exec_version("runok exec --version")]
     #[case::exec_version_short("runok exec -V")]
+    #[case::hook_no_args("runok hook")]
+    #[case::hook_known_flags("runok hook --agent claude-code --verbose")]
+    #[case::hook_help("runok hook --help")]
+    #[case::hook_help_short("runok hook -h")]
+    #[case::hook_config_long("runok hook --config path/to/config.yml")]
+    #[case::hook_config_short("runok hook -c path/to/config.yml")]
     fn valid_args(#[case] input: &str) {
         let raw = args(input);
         let (subcommand, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
@@ -325,6 +358,24 @@ mod tests {
                  Use '--' to separate runok flags from the command: \
                  runok {subcommand} [OPTIONS] -- <COMMAND>"
             )
+        );
+    }
+
+    // `hook` takes no command positional, so its error message omits the
+    // `-- <COMMAND>` suggestion that exec/check's `invalid_args` case expects.
+    #[rstest]
+    #[case::hook_unknown_flag("runok hook --unknown", "--unknown")]
+    #[case::hook_unknown_short_flag("runok hook -x", "-x")]
+    fn invalid_args_hook(#[case] input: &str, #[case] expected_flag: &str) {
+        let raw = args(input);
+        let (subcommand, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
+            panic!("expected to find a subcommand in: {input}");
+        });
+        let result = validate_no_unknown_flags(&raw, subcommand, sub_pos);
+        let err = result.expect_err(&format!("expected Err for: {input}"));
+        assert_eq!(
+            err,
+            format!("unknown flag '{expected_flag}' for 'runok hook'")
         );
     }
 

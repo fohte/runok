@@ -178,12 +178,109 @@ pub fn detect_conflicting_hooks(pre_tool_use: &[serde_json::Value]) -> Vec<usize
 /// The hook command registered in Claude Code settings for both the
 /// PreToolUse and PostToolUse events. The binary distinguishes the events by
 /// the `hook_event_name` field of the stdin JSON.
-pub const HOOK_COMMAND: &str = "runok check --input-format claude-code-hook";
+pub const HOOK_COMMAND: &str = "runok hook --agent claude-code";
+
+/// The hook command registered before `runok hook` existed. Still
+/// functionally equivalent — `runok check --input-format claude-code-hook`
+/// routes to the same adapter — but `runok init` rewrites entries using it
+/// to [`HOOK_COMMAND`] so re-running init converges settings.json on the
+/// current command.
+pub const LEGACY_HOOK_COMMAND: &str = "runok check --input-format claude-code-hook";
+
+/// Rewrite a `Value`'s `command` field from `old` to `new` in place, if it
+/// currently equals `old`. Returns `true` if changed.
+fn try_set_command(val: &mut serde_json::Value, old: &str, new: &str) -> bool {
+    if let Some(command_val) = val.get_mut("command")
+        && command_val.as_str() == Some(old)
+    {
+        *command_val = serde_json::Value::String(new.to_string());
+        true
+    } else {
+        false
+    }
+}
+
+/// Rewrite `old_command` to `new_command` in place within a single
+/// PreToolUse/PostToolUse hook entry, across every wire format
+/// [`entry_has_runok_hook`] recognizes. Returns `true` if the entry changed.
+fn rewrite_entry_command(
+    entry: &mut serde_json::Value,
+    old_command: &str,
+    new_command: &str,
+) -> bool {
+    if entry.as_str() == Some(old_command) {
+        *entry = serde_json::Value::String(new_command.to_string());
+        return true;
+    }
+
+    if let Some(hooks) = entry.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+        let mut changed = false;
+        for hook in hooks.iter_mut() {
+            if hook.as_str() == Some(old_command) {
+                *hook = serde_json::Value::String(new_command.to_string());
+                changed = true;
+            } else if try_set_command(hook, old_command, new_command) {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    if entry.get("hooks").is_none() && try_set_command(entry, old_command, new_command) {
+        return true;
+    }
+
+    false
+}
+
+/// Rewrite [`LEGACY_HOOK_COMMAND`] entries to [`HOOK_COMMAND`] within
+/// `hooks.<event>` of a settings.json value. Returns `true` if any entry
+/// changed.
+pub fn migrate_legacy_entries_for_event(root: &mut serde_json::Value, event: &str) -> bool {
+    let Some(arr) = root
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut(event))
+        .and_then(|p| p.as_array_mut())
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+    for entry in arr.iter_mut() {
+        if rewrite_entry_command(entry, LEGACY_HOOK_COMMAND, HOOK_COMMAND) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Rewrite legacy hook command entries for both PreToolUse and PostToolUse
+/// to [`HOOK_COMMAND`] in settings.json. Returns `true` if the file was
+/// modified. No-op if settings.json doesn't exist.
+pub fn migrate_hook(claude_dir: &Path) -> Result<bool, InitError> {
+    let path = claude_dir.join("settings.json");
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let mut root: serde_json::Value = serde_json::from_str(&content)?;
+
+    let pre_changed = migrate_legacy_entries_for_event(&mut root, "PreToolUse");
+    let post_changed = migrate_legacy_entries_for_event(&mut root, "PostToolUse");
+
+    if pre_changed || post_changed {
+        let output = serde_json::to_string_pretty(&root)?;
+        std::fs::write(&path, output)?;
+    }
+
+    Ok(pre_changed || post_changed)
+}
 
 /// Register runok hook in Claude Code settings.json.
 ///
 /// Adds a PreToolUse hook entry with `"matcher": "Bash"` that runs
-/// `runok check --input-format claude-code-hook`.
+/// [`HOOK_COMMAND`].
 /// If the hook is already registered, does nothing.
 /// Creates the file if it doesn't exist.
 pub fn register_hook(claude_dir: &Path) -> Result<bool, InitError> {
@@ -527,7 +624,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         }
@@ -547,7 +644,7 @@ mod tests {
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "runok check --input-format claude-code-hook"
+                                "command": "runok hook --agent claude-code"
                             }
                         ]
                     }
@@ -561,7 +658,7 @@ mod tests {
                 "PreToolUse": [
                     {
                         "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "command": "runok hook --agent claude-code"
                     }
                 ]
             }
@@ -571,7 +668,7 @@ mod tests {
         {
             "hooks": {
                 "PreToolUse": [
-                    "runok check --input-format claude-code-hook"
+                    "runok hook --agent claude-code"
                 ]
             }
         }
@@ -583,7 +680,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            "runok check --input-format claude-code-hook"
+                            "runok hook --agent claude-code"
                         ]
                     }
                 ]
@@ -598,6 +695,46 @@ mod tests {
 
         let registered = register_hook(&claude_dir).unwrap();
         assert!(!registered);
+    }
+
+    #[rstest]
+    fn register_hook_does_not_recognize_legacy_command_as_registered() {
+        // register_hook only dedups against HOOK_COMMAND. Rewriting a
+        // pre-existing legacy-command entry is migrate_hook's job (see
+        // wizard::setup_scope, which always migrates before registering).
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            indoc! {r#"
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "runok check --input-format claude-code-hook"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            "#},
+        )
+        .unwrap();
+
+        let registered = register_hook(&claude_dir).unwrap();
+        assert!(registered);
+
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
     }
 
     #[rstest]
@@ -635,7 +772,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok check --input-format claude-code-hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -667,7 +804,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         }
@@ -693,7 +830,7 @@ mod tests {
                                 "hooks": [
                                     {
                                         "type": "command",
-                                        "command": "runok check --input-format claude-code-hook"
+                                        "command": "runok hook --agent claude-code"
                                     }
                                 ]
                             }
@@ -726,7 +863,7 @@ mod tests {
                                 "hooks": [
                                     {
                                         "type": "command",
-                                        "command": "runok check --input-format claude-code-hook"
+                                        "command": "runok hook --agent claude-code"
                                     }
                                 ]
                             }
@@ -749,7 +886,7 @@ mod tests {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "runok check --input-format claude-code-hook"
+                    "command": "runok hook --agent claude-code"
                 }
             ]
         });
@@ -941,7 +1078,7 @@ mod tests {
     #[case::runok_only(
         vec![serde_json::json!({
             "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
         })],
         vec![],
     )]
@@ -969,7 +1106,7 @@ mod tests {
         vec![
             serde_json::json!({
                 "matcher": "Bash",
-                "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+                "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
             }),
             serde_json::json!({
                 "matcher": "Bash",
@@ -983,14 +1120,14 @@ mod tests {
         vec![0],
     )]
     #[case::string_entry_runok(
-        vec![serde_json::json!("runok check --input-format claude-code-hook")],
+        vec![serde_json::json!("runok hook --agent claude-code")],
         vec![],
     )]
     #[case::no_matcher_with_runok_present(
         vec![
             serde_json::json!({
                 "matcher": "Bash",
-                "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
+                "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
             }),
             serde_json::json!({
                 "hooks": [{"type": "command", "command": "linter"}]
@@ -1063,5 +1200,220 @@ mod tests {
     fn test_entry_has_runok_hook(#[case] entry: serde_json::Value, #[case] expected: bool) {
         let command = "runok check --input-format claude-code-hook";
         assert_eq!(entry_has_runok_hook(&entry, command), expected);
+    }
+
+    // --- rewrite_entry_command ---
+
+    #[rstest]
+    #[case::current_format(
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "old-command"}]
+        }),
+        true,
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "new-command"}]
+        }),
+    )]
+    #[case::legacy_format(
+        serde_json::json!({"type": "command", "command": "old-command"}),
+        true,
+        serde_json::json!({"type": "command", "command": "new-command"}),
+    )]
+    #[case::plain_string(
+        serde_json::json!("old-command"),
+        true,
+        serde_json::json!("new-command"),
+    )]
+    #[case::string_hooks_in_object(
+        serde_json::json!({"matcher": "Bash", "hooks": ["old-command"]}),
+        true,
+        serde_json::json!({"matcher": "Bash", "hooks": ["new-command"]}),
+    )]
+    #[case::no_match(
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        }),
+        false,
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "other-tool"}]
+        }),
+    )]
+    fn test_rewrite_entry_command(
+        #[case] mut entry: serde_json::Value,
+        #[case] expected_changed: bool,
+        #[case] expected_entry: serde_json::Value,
+    ) {
+        let changed = rewrite_entry_command(&mut entry, "old-command", "new-command");
+        assert_eq!(changed, expected_changed);
+        assert_eq!(entry, expected_entry);
+    }
+
+    // --- migrate_hook ---
+
+    #[rstest]
+    fn migrate_hook_rewrites_legacy_entries_for_both_events() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            indoc! {r#"
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "runok check --input-format claude-code-hook"
+                                    }
+                                ]
+                            }
+                        ],
+                        "PostToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "runok check --input-format claude-code-hook"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            "#},
+        )
+        .unwrap();
+
+        let migrated = migrate_hook(&claude_dir).unwrap();
+        assert!(migrated);
+
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        let runok_hook_entry = serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
+        });
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [runok_hook_entry.clone()],
+                    "PostToolUse": [runok_hook_entry]
+                }
+            })
+        );
+    }
+
+    #[rstest]
+    fn migrate_hook_preserves_other_pre_tool_use_entries() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            indoc! {r#"
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "runok check --input-format claude-code-hook"
+                                    }
+                                ]
+                            },
+                            {
+                                "hooks": [{"type": "command", "command": "other-tool"}]
+                            }
+                        ]
+                    }
+                }
+            "#},
+        )
+        .unwrap();
+
+        let migrated = migrate_hook(&claude_dir).unwrap();
+        assert!(migrated);
+
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
+                        },
+                        {
+                            "hooks": [{"type": "command", "command": "other-tool"}]
+                        }
+                    ]
+                }
+            })
+        );
+    }
+
+    #[rstest]
+    fn migrate_hook_noop_when_already_current() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings = indoc! {r#"
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
+                        }
+                    ]
+                }
+            }
+        "#};
+        std::fs::write(claude_dir.join("settings.json"), settings).unwrap();
+
+        let migrated = migrate_hook(&claude_dir).unwrap();
+        assert!(!migrated);
+        assert_eq!(
+            std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+            settings
+        );
+    }
+
+    #[rstest]
+    fn migrate_hook_noop_when_no_hooks_key() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(claude_dir.join("settings.json"), "{}").unwrap();
+
+        let migrated = migrate_hook(&claude_dir).unwrap();
+        assert!(!migrated);
+    }
+
+    #[rstest]
+    fn migrate_hook_noop_when_no_settings_file() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        let migrated = migrate_hook(&claude_dir).unwrap();
+        assert!(!migrated);
     }
 }
