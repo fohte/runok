@@ -1,8 +1,38 @@
+use super::MigrateError;
+use super::migration::{Migration, MigrationTarget};
+
+/// Converts legacy sandbox fs config (`writable`/`deny`) to the new format
+/// (`write: { allow: [...], deny: [...] }`).
+pub struct SandboxFsMigration;
+
+impl Migration for SandboxFsMigration {
+    fn id(&self) -> &'static str {
+        "sandbox-fs"
+    }
+
+    fn description(&self) -> &'static str {
+        "Convert legacy sandbox fs config (`writable`/`deny`) to `write: { allow, deny }`"
+    }
+
+    fn target(&self) -> MigrationTarget {
+        MigrationTarget::ConfigChain
+    }
+
+    fn migrate(&self, content: &str) -> Result<Option<String>, MigrateError> {
+        let migrated = migrate_sandbox_fs(content);
+        Ok(if migrated == content {
+            None
+        } else {
+            Some(migrated)
+        })
+    }
+}
+
 /// Migrate legacy sandbox fs config (`writable`/`deny`) to the new format
 /// (`write: { allow: [...], deny: [...] }`).
 ///
 /// Operates on YAML text line-by-line to preserve comments and formatting.
-pub fn migrate_sandbox_fs(input: &str) -> String {
+fn migrate_sandbox_fs(input: &str) -> String {
     let lines: Vec<&str> = input.lines().collect();
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
     let mut i = 0;

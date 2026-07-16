@@ -1,3 +1,5 @@
+mod migration;
+mod registry;
 mod sandbox_fs;
 
 use std::collections::HashSet;
@@ -9,29 +11,25 @@ use crate::config::preset_remote::{PresetReference, parse_preset_reference};
 use crate::config::{DefaultConfigLoader, parse_config};
 use crate::init::prompt::{AutoYesPrompter, DialoguerPrompter, Prompter};
 
+use migration::{Migration, MigrationTarget};
+
 /// Run migration on all discovered config files (or a specific file if given).
 ///
 /// When `yes` is false, shows a diff preview and asks for confirmation before
 /// writing changes. When `yes` is true, applies changes without prompting.
 pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
-    let root_paths = match config_path {
-        Some(p) => vec![p.to_path_buf()],
-        None => {
-            let cwd = std::env::current_dir().map_err(MigrateError::Io)?;
-            DefaultConfigLoader::new().find_config_paths(&cwd)
-        }
-    };
+    let migrations = registry::all();
+    let config_chain_migrations: Vec<&dyn Migration> = migrations
+        .iter()
+        .filter(|m| m.target() == MigrationTarget::ConfigChain)
+        .map(|m| m.as_ref())
+        .collect();
 
-    if root_paths.is_empty() {
+    let paths = collect_config_chain_paths(config_path)?;
+
+    if paths.is_empty() {
         eprintln!("runok: no config files found");
         return Ok(());
-    }
-
-    // Collect all paths including local extends targets
-    let mut paths = Vec::new();
-    let mut seen = HashSet::new();
-    for path in &root_paths {
-        collect_with_local_extends(path, &mut paths, &mut seen);
     }
 
     let prompter: Box<dyn Prompter> = if yes {
@@ -50,29 +48,40 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
                 continue;
             }
         };
-        let migrated = sandbox_fs::migrate_sandbox_fs(&original);
 
-        if migrated == original {
-            continue;
+        let path_display = path.display().to_string();
+        let mut content = original.clone();
+        let mut changed = false;
+
+        for migration in &config_chain_migrations {
+            let Some(proposed) = migration.migrate(&content)? else {
+                continue;
+            };
+
+            eprintln!(
+                "\x1b[1mMigrate {path_display} ({})\x1b[0m",
+                migration.description()
+            );
+            eprintln!();
+            print_diff(&path_display, &content, &proposed);
+            eprintln!();
+
+            let approved = prompter
+                .confirm("Apply these changes?", true)
+                .map_err(|e| MigrateError::Io(std::io::Error::other(e)))?;
+
+            if approved {
+                content = proposed;
+                changed = true;
+            } else {
+                eprintln!("skipped: {} ({})", path.display(), migration.id());
+            }
         }
 
-        // Show diff preview
-        let path_display = path.display().to_string();
-        eprintln!("\x1b[1mMigrate {path_display}\x1b[0m");
-        eprintln!();
-        print_diff(&path_display, &original, &migrated);
-        eprintln!();
-
-        let approved = prompter
-            .confirm("Apply these changes?", true)
-            .map_err(|e| MigrateError::Io(std::io::Error::other(e)))?;
-
-        if approved {
-            std::fs::write(path, &migrated).map_err(MigrateError::Io)?;
+        if changed {
+            std::fs::write(path, &content).map_err(MigrateError::Io)?;
             eprintln!("migrated: {}", path.display());
             migrated_count += 1;
-        } else {
-            eprintln!("skipped: {}", path.display());
         }
     }
 
@@ -86,6 +95,25 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
     }
 
     Ok(())
+}
+
+/// Collect the config chain rooted at `config_path` (or all discovered
+/// config files when `None`), following local `extends` targets.
+fn collect_config_chain_paths(config_path: Option<&Path>) -> Result<Vec<PathBuf>, MigrateError> {
+    let root_paths = match config_path {
+        Some(p) => vec![p.to_path_buf()],
+        None => {
+            let cwd = std::env::current_dir().map_err(MigrateError::Io)?;
+            DefaultConfigLoader::new().find_config_paths(&cwd)
+        }
+    };
+
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for path in &root_paths {
+        collect_with_local_extends(path, &mut paths, &mut seen);
+    }
+    Ok(paths)
 }
 
 /// Collect a config file path and recursively collect local extends targets.
