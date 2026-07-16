@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok migrate` escapes bare `?` left over from the optional-value marker change (TODO(pr-link))
+### `runok migrate` escapes bare `?` left over from the optional-value marker change ([#479](https://github.com/fohte/runok/pull/479))
 
 Following up on the breaking change above, `runok migrate` now rewrites a bare `?` in every pattern-syntax field (`rules[].{allow,deny,ask}`, `definitions.wrappers`, `definitions.flag_groups`, `definitions.aliases`, and `definitions.vars` entries with `type: pattern`) to the escaped form `\?`, so a config written before v0.4.0 keeps matching the literal `?` it relied on:
 
