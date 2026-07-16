@@ -14,6 +14,7 @@ struct Summary {
     project_config_created: Option<PathBuf>,
     hook_registered: bool,
     post_hook_registered: bool,
+    hook_migrated: bool,
     converted_rules: Option<String>,
     permissions_removed: bool,
     conflicting_hook_count: usize,
@@ -69,6 +70,9 @@ fn print_summary(summary: &Summary) {
     if summary.post_hook_registered {
         eprintln!("  - Claude Code PostToolUse hook registered (ask approval tracking)");
     }
+    if summary.hook_migrated {
+        eprintln!("  - Claude Code hook command migrated to `runok hook`");
+    }
     if summary.converted_rules.is_some() {
         eprintln!("  - Claude Code permissions converted to runok rules");
     }
@@ -90,6 +94,7 @@ fn apply_scope_result(summary: &mut Summary, result: ScopeResult, is_user: bool)
     }
     summary.hook_registered = result.hook_registered;
     summary.post_hook_registered = result.post_hook_registered;
+    summary.hook_migrated = result.hook_migrated;
     summary.converted_rules = result.converted_rules;
     summary.permissions_removed = result.permissions_removed;
     summary.conflicting_hook_count = result.conflicting_hook_count;
@@ -129,6 +134,7 @@ pub fn run_wizard_with_paths(
         project_config_created: None,
         hook_registered: false,
         post_hook_registered: false,
+        hook_migrated: false,
         converted_rules: None,
         permissions_removed: false,
         conflicting_hook_count: 0,
@@ -511,6 +517,21 @@ mod tests {
             "hooks": [
                 {
                     "type": "command",
+                    "command": "runok hook --agent claude-code"
+                }
+            ]
+        })
+    }
+
+    /// A pre-existing PreToolUse entry using the pre-`runok hook` command,
+    /// as would be found in settings.json from before this migration was
+    /// introduced.
+    fn legacy_runok_hook_entry() -> serde_json::Value {
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
                     "command": "runok check --input-format claude-code-hook"
                 }
             ]
@@ -700,7 +721,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         },
@@ -741,7 +762,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         },
@@ -809,28 +830,16 @@ mod tests {
     #[rstest]
     fn wizard_hook_already_registered_no_prompt_needed() {
         let env = TestEnv::new();
-        env.setup_user_claude_settings(indoc! {r#"
-            {
-                "permissions": {
-                    "allow": ["Bash(git status)"]
-                },
-                "hooks": {
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "runok check --input-format claude-code-hook"
-                                }
-                            ]
-                        }
-                    ]
-                }
-            }
-        "#});
+        env.setup_user_claude_settings(
+            &serde_json::to_string(&serde_json::json!({
+                "permissions": {"allow": ["Bash(git status)"]},
+                "hooks": {"PreToolUse": [runok_hook_entry()]}
+            }))
+            .unwrap(),
+        );
 
-        // Has Bash permissions but PreToolUse hook already registered.
+        // Has Bash permissions but PreToolUse hook already registered under
+        // the current command (nothing to migrate).
         // Confirm(true) for migration, Confirm(true) for PostToolUse opt-in,
         // Confirm(true) for apply
         let prompter = SequencePrompter::new(vec![
@@ -857,6 +866,67 @@ mod tests {
             read_settings(&env.user_claude_dir()),
             serde_json::json!({
                 "permissions": {},
+                "hooks": hook_json()
+            })
+        );
+    }
+
+    #[rstest]
+    fn wizard_hook_migrates_legacy_command_alongside_permissions() {
+        // A legacy PreToolUse entry (registered before `runok hook` existed)
+        // is rewritten in place instead of being duplicated, and the
+        // permission migration / PostToolUse opt-in flows are unaffected.
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(
+            &serde_json::to_string(&serde_json::json!({
+                "permissions": {"allow": ["Bash(git status)"]},
+                "hooks": {"PreToolUse": [legacy_runok_hook_entry()]}
+            }))
+            .unwrap(),
+        );
+
+        // Confirm(true) for permission migration, Confirm(true) for
+        // PostToolUse opt-in, Confirm(true) for apply. The command migration
+        // itself rides on the batch "Apply" confirm, no separate prompt.
+        let prompter = SequencePrompter::new(vec![
+            Response::Confirm(true),
+            Response::Confirm(true),
+            Response::Confirm(true),
+        ]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
+                "permissions": {},
+                "hooks": hook_json()
+            })
+        );
+    }
+
+    #[rstest]
+    fn wizard_hook_migrates_legacy_command_with_no_other_changes() {
+        // Only a legacy PreToolUse entry, no permissions to migrate. The
+        // wizard must still surface the migration and apply it once the
+        // batch is approved.
+        let env = TestEnv::new();
+        env.setup_user_claude_settings(
+            &serde_json::to_string(&serde_json::json!({
+                "hooks": {"PreToolUse": [legacy_runok_hook_entry()]}
+            }))
+            .unwrap(),
+        );
+
+        // Confirm(true) for PostToolUse opt-in, Confirm(true) for apply
+        let prompter =
+            SequencePrompter::new(vec![Response::Confirm(true), Response::Confirm(true)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        assert_eq!(
+            read_settings(&env.user_claude_dir()),
+            serde_json::json!({
                 "hooks": hook_json()
             })
         );

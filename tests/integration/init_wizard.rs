@@ -157,7 +157,7 @@ fn hook_json() -> serde_json::Value {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "runok check --input-format claude-code-hook"
+                        "command": "runok hook --agent claude-code"
                     }
                 ]
             }
@@ -192,7 +192,7 @@ fn settings_bash_only_with_hook() -> &'static str {
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "runok check --input-format claude-code-hook"
+                                "command": "runok hook --agent claude-code"
                             }
                         ]
                     }
@@ -227,7 +227,7 @@ fn settings_no_bash_with_hook() -> &'static str {
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "runok check --input-format claude-code-hook"
+                                "command": "runok hook --agent claude-code"
                             }
                         ]
                     }
