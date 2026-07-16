@@ -21,7 +21,7 @@ See [Global Flags](/cli/overview/#global-flags).
 
 ### `--agent <agent>` (required)
 
-Which agent's hook protocol to speak. Currently only `claude-code` is supported; the flag exists so other agent integrations can be added later without a breaking change. A missing or unrecognized value is rejected with an error (see [Exit codes](#exit-codes) -- this never blocks the tool call, since the error is reported via runok's own exit-1 path rather than clap's).
+Which agent's hook protocol to speak. Currently only `claude-code` is supported; the flag exists so other agent integrations can be added later without a breaking change. A missing or unrecognized value is rejected with an error through runok's own error-handling path (see [Exit codes](#exit-codes)) rather than a raw CLI usage error, so it never triggers Claude Code's blocking exit code 2.
 
 ### `--verbose`
 
