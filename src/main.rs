@@ -454,15 +454,15 @@ mod tests {
         assert_eq!(exit_code, expected_exit);
     }
 
-    fn hook_args(input_format: Option<&str>) -> Commands {
+    fn hook_args(agent: Option<&str>) -> Commands {
         Commands::Hook(cli::HookArgs {
-            input_format: input_format.map(String::from),
+            agent: agent.map(String::from),
             verbose: false,
         })
     }
 
     #[rstest]
-    #[case::pre_tool_use(hook_args(None), indoc! {r#"
+    #[case::pre_tool_use(hook_args(Some("claude-code")), indoc! {r#"
         {
             "session_id": "s",
             "transcript_path": "/tmp",
@@ -474,7 +474,7 @@ mod tests {
             "tool_use_id": "123"
         }
     "#}.as_bytes(), 0)]
-    #[case::post_tool_use(hook_args(None), indoc! {r#"
+    #[case::post_tool_use(hook_args(Some("claude-code")), indoc! {r#"
         {
             "session_id": "s",
             "transcript_path": "/tmp",
@@ -487,7 +487,7 @@ mod tests {
             "tool_use_id": "123"
         }
     "#}.as_bytes(), 0)]
-    #[case::unknown_event(hook_args(None), indoc! {r#"
+    #[case::unknown_event(hook_args(Some("claude-code")), indoc! {r#"
         {
             "session_id": "s",
             "transcript_path": "/tmp",
@@ -499,8 +499,9 @@ mod tests {
             "tool_use_id": "123"
         }
     "#}.as_bytes(), 0)]
-    #[case::invalid_json(hook_args(None), "not json".as_bytes(), 1)]
-    #[case::unknown_input_format(hook_args(Some("other-agent")), "{}".as_bytes(), 1)]
+    #[case::invalid_json(hook_args(Some("claude-code")), "not json".as_bytes(), 1)]
+    #[case::missing_agent(hook_args(None), "{}".as_bytes(), 1)]
+    #[case::unknown_agent(hook_args(Some("other-agent")), "{}".as_bytes(), 1)]
     fn run_command_hook(
         empty_config_file: (TempDir, PathBuf),
         #[case] cmd: Commands,

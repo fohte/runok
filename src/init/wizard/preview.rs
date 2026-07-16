@@ -250,7 +250,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -269,7 +269,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok hook"
+                        "command": "runok hook --agent claude-code"
                       }
                     ]
                   }
@@ -302,7 +302,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -321,7 +321,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok hook"
+                        "command": "runok hook --agent claude-code"
                       }
                     ]
                   }
@@ -340,7 +340,7 @@ mod tests {
                     "PreToolUse": [
                         {
                             "type": "command",
-                            "command": "runok hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -356,7 +356,7 @@ mod tests {
             {
                 "hooks": {
                     "PreToolUse": [
-                        "runok hook"
+                        "runok hook --agent claude-code"
                     ]
                 }
             }
@@ -378,7 +378,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok hook"
+                        "command": "runok hook --agent claude-code"
                       }
                     ]
                   }
@@ -395,7 +395,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -414,7 +414,7 @@ mod tests {
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "runok hook"
+                        "command": "runok hook --agent claude-code"
                       }
                     ]
                   }
@@ -439,7 +439,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         }

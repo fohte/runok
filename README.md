@@ -176,7 +176,7 @@ And add runok as a PreToolUse hook in `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "runok hook"
+            "command": "runok hook --agent claude-code"
           }
         ]
       }

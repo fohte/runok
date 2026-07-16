@@ -178,7 +178,7 @@ pub fn detect_conflicting_hooks(pre_tool_use: &[serde_json::Value]) -> Vec<usize
 /// The hook command registered in Claude Code settings for both the
 /// PreToolUse and PostToolUse events. The binary distinguishes the events by
 /// the `hook_event_name` field of the stdin JSON.
-pub const HOOK_COMMAND: &str = "runok hook";
+pub const HOOK_COMMAND: &str = "runok hook --agent claude-code";
 
 /// The hook command registered before `runok hook` existed. Still
 /// functionally equivalent — `runok check --input-format claude-code-hook`
@@ -624,7 +624,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         }
@@ -644,7 +644,7 @@ mod tests {
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "runok hook"
+                                "command": "runok hook --agent claude-code"
                             }
                         ]
                     }
@@ -658,7 +658,7 @@ mod tests {
                 "PreToolUse": [
                     {
                         "type": "command",
-                        "command": "runok hook"
+                        "command": "runok hook --agent claude-code"
                     }
                 ]
             }
@@ -668,7 +668,7 @@ mod tests {
         {
             "hooks": {
                 "PreToolUse": [
-                    "runok hook"
+                    "runok hook --agent claude-code"
                 ]
             }
         }
@@ -680,7 +680,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            "runok hook"
+                            "runok hook --agent claude-code"
                         ]
                     }
                 ]
@@ -772,7 +772,7 @@ mod tests {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "runok hook"
+                            "command": "runok hook --agent claude-code"
                         }
                     ]
                 }
@@ -804,7 +804,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         }
@@ -830,7 +830,7 @@ mod tests {
                                 "hooks": [
                                     {
                                         "type": "command",
-                                        "command": "runok hook"
+                                        "command": "runok hook --agent claude-code"
                                     }
                                 ]
                             }
@@ -863,7 +863,7 @@ mod tests {
                                 "hooks": [
                                     {
                                         "type": "command",
-                                        "command": "runok hook"
+                                        "command": "runok hook --agent claude-code"
                                     }
                                 ]
                             }
@@ -886,7 +886,7 @@ mod tests {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "runok hook"
+                    "command": "runok hook --agent claude-code"
                 }
             ]
         });
@@ -1078,7 +1078,7 @@ mod tests {
     #[case::runok_only(
         vec![serde_json::json!({
             "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "runok hook"}]
+            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
         })],
         vec![],
     )]
@@ -1106,7 +1106,7 @@ mod tests {
         vec![
             serde_json::json!({
                 "matcher": "Bash",
-                "hooks": [{"type": "command", "command": "runok hook"}]
+                "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
             }),
             serde_json::json!({
                 "matcher": "Bash",
@@ -1120,14 +1120,14 @@ mod tests {
         vec![0],
     )]
     #[case::string_entry_runok(
-        vec![serde_json::json!("runok hook")],
+        vec![serde_json::json!("runok hook --agent claude-code")],
         vec![],
     )]
     #[case::no_matcher_with_runok_present(
         vec![
             serde_json::json!({
                 "matcher": "Bash",
-                "hooks": [{"type": "command", "command": "runok hook"}]
+                "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
             }),
             serde_json::json!({
                 "hooks": [{"type": "command", "command": "linter"}]
@@ -1301,7 +1301,7 @@ mod tests {
         .unwrap();
         let runok_hook_entry = serde_json::json!({
             "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "runok hook"}]
+            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
         });
         assert_eq!(
             value,
@@ -1358,7 +1358,7 @@ mod tests {
                     "PreToolUse": [
                         {
                             "matcher": "Bash",
-                            "hooks": [{"type": "command", "command": "runok hook"}]
+                            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
                         },
                         {
                             "hooks": [{"type": "command", "command": "other-tool"}]
@@ -1380,7 +1380,7 @@ mod tests {
                     "PreToolUse": [
                         {
                             "matcher": "Bash",
-                            "hooks": [{"type": "command", "command": "runok hook"}]
+                            "hooks": [{"type": "command", "command": "runok hook --agent claude-code"}]
                         }
                     ]
                 }

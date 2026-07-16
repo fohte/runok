@@ -141,9 +141,11 @@ pub struct CheckArgs {
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct HookArgs {
-    /// Input format: "claude-code-hook" (default; reserved for future agent integrations)
+    /// Agent to integrate with (required, validated at runtime so a missing
+    /// or unknown value never triggers clap's blocking exit code 2). Valid
+    /// values: "claude-code"
     #[arg(long)]
-    pub input_format: Option<String>,
+    pub agent: Option<String>,
 
     /// Output detailed rule matching information to stderr
     #[arg(long)]
@@ -231,17 +233,17 @@ mod tests {
         &["runok", "check", "--verbose", "--", "git", "status"],
         Commands::Check(CheckArgs { input_format: None, output_format: OutputFormat::Text, verbose: true, command: vec!["git".into(), "status".into()] }),
     )]
-    #[case::hook_default(
+    #[case::hook_no_agent(
         &["runok", "hook"],
-        Commands::Hook(HookArgs { input_format: None, verbose: false }),
+        Commands::Hook(HookArgs { agent: None, verbose: false }),
     )]
-    #[case::hook_with_input_format(
-        &["runok", "hook", "--input-format", "claude-code-hook"],
-        Commands::Hook(HookArgs { input_format: Some("claude-code-hook".into()), verbose: false }),
+    #[case::hook_with_agent(
+        &["runok", "hook", "--agent", "claude-code"],
+        Commands::Hook(HookArgs { agent: Some("claude-code".into()), verbose: false }),
     )]
     #[case::hook_with_verbose(
         &["runok", "hook", "--verbose"],
-        Commands::Hook(HookArgs { input_format: None, verbose: true }),
+        Commands::Hook(HookArgs { agent: None, verbose: true }),
     )]
     #[case::audit_default(
         &["runok", "audit"],

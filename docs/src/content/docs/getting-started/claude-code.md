@@ -39,7 +39,7 @@ Add the runok hook to your Claude Code settings file (`.claude/settings.json`):
         "hooks": [
           {
             "type": "command",
-            "command": "runok hook"
+            "command": "runok hook --agent claude-code"
           }
         ]
       }
@@ -69,7 +69,7 @@ input="$(cat)"
 echo "$input" | other-hook >/dev/null
 
 # Run runok (its stdout becomes the hook response)
-echo "$input" | runok hook
+echo "$input" | runok hook --agent claude-code
 ```
 
 Then register the single wrapper script in `settings.json`:
@@ -117,7 +117,7 @@ By default, the audit log records that runok answered `ask` for a command, but n
         "hooks": [
           {
             "type": "command",
-            "command": "runok hook"
+            "command": "runok hook --agent claude-code"
           }
         ]
       }

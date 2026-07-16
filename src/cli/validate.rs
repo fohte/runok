@@ -145,7 +145,7 @@ const HOOK_FLAGS: &[FlagDef] = &[
         takes_value: true,
     },
     FlagDef {
-        name: "--input-format",
+        name: "--agent",
         short: None,
         takes_value: true,
     },
@@ -271,7 +271,7 @@ mod tests {
     #[case::exec_version("runok exec --version")]
     #[case::exec_version_short("runok exec -V")]
     #[case::hook_no_args("runok hook")]
-    #[case::hook_known_flags("runok hook --input-format claude-code-hook --verbose")]
+    #[case::hook_known_flags("runok hook --agent claude-code --verbose")]
     #[case::hook_help("runok hook --help")]
     #[case::hook_help_short("runok hook -h")]
     #[case::hook_config_long("runok hook --config path/to/config.yml")]

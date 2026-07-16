@@ -67,7 +67,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 Claude Code integration used to register `runok check --input-format claude-code-hook` for both the `PreToolUse` and `PostToolUse` events. This was misleading: `check` is documented as a read-only evaluation command, but in `PostToolUse` mode it does no evaluation at all -- it only writes an `ask_resolution` record to the audit log.
 
-`runok hook` replaces it as the dedicated agent-integration endpoint:
+`runok hook` replaces it as the dedicated agent-integration endpoint. It takes a required `--agent` flag identifying which agent's hook protocol to speak (currently only `claude-code`) rather than defaulting silently to Claude Code, since the flag determines the response shape as well as the input parsing, and `hook` is meant to grow additional agent integrations over time:
 
 ```json
 {
@@ -75,22 +75,26 @@ Claude Code integration used to register `runok check --input-format claude-code
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "runok hook" }]
+        "hooks": [
+          { "type": "command", "command": "runok hook --agent claude-code" }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "runok hook" }]
+        "hooks": [
+          { "type": "command", "command": "runok hook --agent claude-code" }
+        ]
       }
     ]
   }
 }
 ```
 
-It dispatches on the input's `hook_event_name` the same way the old hook mode did (`PreToolUse` evaluates and responds, `PostToolUse` records ask approvals), plus one addition: any other event -- including hook events a future Claude Code release might add -- is silently ignored (exit `0`, no output), so `runok hook` keeps working without requiring a runok upgrade first.
+It dispatches on the input's `hook_event_name` the same way the old hook mode did (`PreToolUse` evaluates and responds, `PostToolUse` records ask approvals), plus one addition: any other event -- including hook events a future Claude Code release might add -- is silently ignored (exit `0`, no output), so `runok hook --agent claude-code` keeps working without requiring a runok upgrade first.
 
-[`runok init`](/cli/init/) now registers `runok hook` for new setups, and rewrites an existing `runok check --input-format claude-code-hook` entry to `runok hook` in place when re-run. `runok check --input-format claude-code-hook` still works for backward compatibility but is deprecated -- see [`runok hook`](/cli/hook/) for the full reference.
+[`runok init`](/cli/init/) now registers `runok hook --agent claude-code` for new setups, and rewrites an existing `runok check --input-format claude-code-hook` entry to `runok hook --agent claude-code` in place when re-run. `runok check --input-format claude-code-hook` still works for backward compatibility but is deprecated -- see [`runok hook`](/cli/hook/) for the full reference.
 
 ### `runok audit --recheck` re-evaluates entries against the current config ([#474](https://github.com/fohte/runok/pull/474))
 

@@ -517,7 +517,7 @@ mod tests {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "runok hook"
+                    "command": "runok hook --agent claude-code"
                 }
             ]
         })
@@ -721,7 +721,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         },
@@ -762,7 +762,7 @@ mod tests {
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "runok hook"
+                                    "command": "runok hook --agent claude-code"
                                 }
                             ]
                         },

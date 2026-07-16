@@ -19,9 +19,9 @@ some-json-hook-input | runok hook [options]
 
 See [Global Flags](/cli/overview/#global-flags).
 
-### `--input-format <format>` [default: `claude-code-hook`]
+### `--agent <agent>` (required)
 
-Input format for stdin. Currently only `claude-code-hook` is supported; the flag exists so other agent integrations can be added without a breaking change. Any other value is rejected with an error.
+Which agent's hook protocol to speak. Currently only `claude-code` is supported; the flag exists so other agent integrations can be added later without a breaking change. A missing or unrecognized value is rejected with an error (see [Exit codes](#exit-codes) -- this never blocks the tool call, since the error is reported via runok's own exit-1 path rather than clap's).
 
 ### `--verbose`
 
@@ -60,13 +60,17 @@ Register both events in `.claude/settings.json`:
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "runok hook" }]
+        "hooks": [
+          { "type": "command", "command": "runok hook --agent claude-code" }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "runok hook" }]
+        "hooks": [
+          { "type": "command", "command": "runok hook --agent claude-code" }
+        ]
       }
     ]
   }
@@ -76,7 +80,7 @@ Register both events in `.claude/settings.json`:
 Run it directly against a captured hook payload:
 
 ```sh
-cat hook-input.json | runok hook
+cat hook-input.json | runok hook --agent claude-code
 # {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}
 ```
 
@@ -89,7 +93,7 @@ The following runok-side failures exit with code `1` instead of `2`:
 - Unknown-flag errors for `runok hook`
 - Stdin JSON parse errors
 - `HookInput` schema mismatches (e.g. when Claude Code adds a new required field)
-- An unknown `--input-format` value
+- A missing or unknown `--agent` value
 
 Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
 
@@ -100,7 +104,7 @@ Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any
 
 ## Migrating from `runok check --input-format claude-code-hook`
 
-`runok check --input-format claude-code-hook` still works and routes to the same logic described above, but it's deprecated: `check` is documented as a read-only evaluation command, which the PostToolUse audit write contradicts. New setups should register `runok hook` instead -- [`runok init`](/cli/init/) does this automatically, and rewrites existing `runok check --input-format claude-code-hook` entries to `runok hook` on re-run.
+`runok check --input-format claude-code-hook` still works and routes to the same logic described above, but it's deprecated: `check` is documented as a read-only evaluation command, which the PostToolUse audit write contradicts. New setups should register `runok hook --agent claude-code` instead -- [`runok init`](/cli/init/) does this automatically, and rewrites existing `runok check --input-format claude-code-hook` entries to `runok hook --agent claude-code` on re-run.
 
 ## Related
 

@@ -34,7 +34,7 @@ Accept all defaults without prompting. Useful for scripted setups.
 2. **Claude Code detection** — If a `.claude/settings.json` exists with Bash permissions, a missing runok hook, or a hook entry registered under the pre-[`runok hook`](/cli/hook/) command, the wizard offers to:
    - **Migrate Bash permissions** — Convert `permissions.allow` and `permissions.deny` entries for `Bash(...)` patterns into runok rules, and remove them from `settings.json`.
    - **Register the hook** — Add the [`runok hook`](/cli/hook/) PreToolUse hook to `settings.json` (user scope only).
-   - **Migrate the hook command** — Rewrite an existing `runok check --input-format claude-code-hook` entry (registered before `runok hook` existed) to `runok hook`, in place.
+   - **Migrate the hook command** — Rewrite an existing `runok check --input-format claude-code-hook` entry (registered before `runok hook` existed) to `runok hook --agent claude-code`, in place.
    - **Track ask approvals** (opt-in) — Also register the same command as a PostToolUse hook so approvals of `ask` decisions are recorded in the audit log (user scope only). See [Track ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
 3. **Preview and confirm** — Show a unified diff of all proposed changes and ask for confirmation.
 4. **Create `runok.yml`** — Write the configuration file with migrated rules (if any) or a boilerplate template. An existing `runok.yml` is only rewritten when a migration was accepted; re-running init just to register hooks leaves it untouched.

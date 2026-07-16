@@ -21,12 +21,18 @@ pub enum HookRoute {
 
 /// Route `runok hook` stdin input by its `hook_event_name`.
 pub fn route_hook(args: &HookArgs, mut stdin: impl Read) -> Result<HookRoute, anyhow::Error> {
-    if let Some(format) = &args.input_format
-        && format != "claude-code-hook"
-    {
-        return Err(anyhow::anyhow!(
-            "Unknown input format: '{format}'. Valid formats: claude-code-hook"
-        ));
+    match args.agent.as_deref() {
+        Some("claude-code") => {}
+        Some(agent) => {
+            return Err(anyhow::anyhow!(
+                "Unknown agent: '{agent}'. Valid agents: claude-code"
+            ));
+        }
+        None => {
+            return Err(anyhow::anyhow!(
+                "Missing required --agent flag. Valid agents: claude-code"
+            ));
+        }
     }
 
     let mut stdin_input = String::new();
@@ -50,9 +56,9 @@ mod tests {
 
     use super::*;
 
-    fn hook_args(input_format: Option<&str>) -> HookArgs {
+    fn hook_args(agent: Option<&str>) -> HookArgs {
         HookArgs {
-            input_format: input_format.map(String::from),
+            agent: agent.map(String::from),
             verbose: false,
         }
     }
@@ -72,10 +78,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_format(Some("claude-code-hook"))]
-    #[case::default_format(None)]
-    fn route_hook_pre_tool_use_routes_to_single(#[case] input_format: Option<&str>) {
-        let args = hook_args(input_format);
+    fn route_hook_pre_tool_use_routes_to_single() {
+        let args = hook_args(Some("claude-code"));
         let stdin = hook_json("PreToolUse", "git status");
         let route =
             route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
@@ -93,7 +97,7 @@ mod tests {
 
     #[rstest]
     fn route_hook_absent_event_name_routes_to_single() {
-        let args = hook_args(None);
+        let args = hook_args(Some("claude-code"));
         let stdin = indoc! {r#"
             {
                 "session_id": "s",
@@ -111,7 +115,7 @@ mod tests {
 
     #[rstest]
     fn route_hook_post_tool_use_routes_to_post_hook() {
-        let args = hook_args(None);
+        let args = hook_args(Some("claude-code"));
         let stdin = hook_json("PostToolUse", "git push");
         let route =
             route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
@@ -122,7 +126,7 @@ mod tests {
     #[case::session_start("SessionStart")]
     #[case::stop("Stop")]
     fn route_hook_unknown_event_routes_to_noop(#[case] hook_event_name: &str) {
-        let args = hook_args(None);
+        let args = hook_args(Some("claude-code"));
         let stdin = hook_json(hook_event_name, "git status");
         let route =
             route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
@@ -130,14 +134,28 @@ mod tests {
     }
 
     #[rstest]
-    fn route_hook_rejects_unknown_input_format() {
+    fn route_hook_rejects_missing_agent() {
+        let args = hook_args(None);
+        let stdin = hook_json("PreToolUse", "git status");
+        let result = route_hook(&args, stdin.as_bytes());
+        match result {
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "Missing required --agent flag. Valid agents: claude-code"
+            ),
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
+    #[rstest]
+    fn route_hook_rejects_unknown_agent() {
         let args = hook_args(Some("other-agent"));
         let stdin = hook_json("PreToolUse", "git status");
         let result = route_hook(&args, stdin.as_bytes());
         match result {
             Err(e) => assert_eq!(
                 e.to_string(),
-                "Unknown input format: 'other-agent'. Valid formats: claude-code-hook"
+                "Unknown agent: 'other-agent'. Valid agents: claude-code"
             ),
             Ok(_) => panic!("expected an error"),
         }
@@ -145,7 +163,7 @@ mod tests {
 
     #[rstest]
     fn route_hook_rejects_non_json_input() {
-        let args = hook_args(None);
+        let args = hook_args(Some("claude-code"));
         let result = route_hook(&args, "not valid json".as_bytes());
         match result {
             Err(e) => assert_eq!(
