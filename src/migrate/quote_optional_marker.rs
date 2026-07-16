@@ -78,6 +78,8 @@ fn migrate_quote_optional_marker(content: &str) -> Result<Option<String>, Migrat
 fn collect_patches(config: &Config) -> Vec<Patch<'_>> {
     let mut patches = Vec::new();
 
+    // `rules` is `Option<Vec<RuleEntry>>`, not `Vec<Option<RuleEntry>>`: `flatten()`
+    // only strips the outer `Option`, so `i` always matches the YAML `rules[]` index.
     for (i, rule) in config.rules.iter().flatten().enumerate() {
         let Some((action, pattern)) = rule.action_and_pattern() else {
             continue;
@@ -94,6 +96,8 @@ fn collect_patches(config: &Config) -> Vec<Patch<'_>> {
         return patches;
     };
 
+    // Same reasoning as the `rules` loop above: `wrappers` is `Option<Vec<String>>`,
+    // so `flatten()` cannot skip an individual element and shift `i`.
     for (i, pattern) in definitions.wrappers.iter().flatten().enumerate() {
         push_patch(&mut patches, route!("definitions", "wrappers", i), pattern);
     }
