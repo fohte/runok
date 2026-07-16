@@ -3,6 +3,18 @@ use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;
 
+/// Writes `input` to `filename` in a fresh temp dir, runs `runok migrate`
+/// against it, and returns the file's contents afterward.
+fn migrate_and_read(filename: &str, input: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+    let config_path = tmp.path().join(filename);
+    fs::write(&config_path, input)?;
+
+    runok::migrate::run(Some(&config_path), true)?;
+
+    Ok(fs::read_to_string(&config_path)?)
+}
+
 #[rstest]
 #[case::rewrites_legacy_sandbox_fs(
     "runok.yml",
@@ -92,14 +104,78 @@ use tempfile::TempDir;
     "},
 )]
 fn migrate_single_file(#[case] filename: &str, #[case] input: &str, #[case] expected: &str) {
-    let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join(filename);
-    fs::write(&config_path, input).unwrap();
+    assert_eq!(migrate_and_read(filename, input).unwrap(), expected);
+}
 
-    runok::migrate::run(Some(&config_path), true).unwrap();
+#[rstest]
+#[case::escapes_bare_optional_marker(
+    indoc! {"
+        rules:
+          - allow: git branch --abbrev ?
+    "},
+    indoc! {"
+        rules:
+          - allow: git branch --abbrev \\?
+    "},
+)]
+#[case::escapes_across_rules_flag_groups_and_aliases(
+    indoc! {"
+        definitions:
+          flag_groups:
+            abbrev: --abbrev ?
+          aliases:
+            gb: git branch --abbrev ?
+        rules:
+          - allow: git branch <flag:abbrev>
+          - allow: gb
+    "},
+    indoc! {"
+        definitions:
+          flag_groups:
+            abbrev: --abbrev \\?
+          aliases:
+            gb: git branch --abbrev \\?
+        rules:
+          - allow: git branch <flag:abbrev>
+          - allow: gb
+    "},
+)]
+#[case::flow_sequence_alias_list(
+    indoc! {"
+        definitions:
+          aliases:
+            gb: [git branch --abbrev ?, git branch -v]
+    "},
+    indoc! {"
+        definitions:
+          aliases:
+            gb: [git branch --abbrev \\?, git branch -v]
+    "},
+)]
+#[case::no_changes_when_already_escaped(
+    indoc! {"
+        rules:
+          - allow: git branch --abbrev \\?
+    "},
+    indoc! {"
+        rules:
+          - allow: git branch --abbrev \\?
+    "},
+)]
+fn migrate_quote_optional_marker_single_file(#[case] input: &str, #[case] expected: &str) {
+    assert_eq!(migrate_and_read("runok.yml", input).unwrap(), expected);
+}
 
-    let result = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(result, expected);
+#[test]
+fn migrate_quote_optional_marker_is_idempotent() {
+    let input = indoc! {"
+        rules:
+          - allow: git branch --abbrev ?
+    "};
+    let once = migrate_and_read("runok.yml", input).unwrap();
+    let twice = migrate_and_read("runok.yml", &once).unwrap();
+
+    assert_eq!(once, twice);
 }
 
 #[rstest]

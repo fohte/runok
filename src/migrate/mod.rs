@@ -1,4 +1,5 @@
 mod migration;
+mod quote_optional_marker;
 mod registry;
 mod sandbox_fs;
 
@@ -54,8 +55,16 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
         let mut changed = false;
 
         for migration in &config_chain_migrations {
-            let Some(proposed) = migration.migrate(&content)? else {
-                continue;
+            let proposed = match migration.migrate(&content) {
+                Ok(Some(proposed)) => proposed,
+                Ok(None) => continue,
+                Err(e) => {
+                    eprintln!(
+                        "warning: {path_display}: {} migration skipped: {e}",
+                        migration.id()
+                    );
+                    continue;
+                }
             };
 
             eprintln!(
@@ -193,4 +202,9 @@ fn print_diff(filename: &str, before: &str, after: &str) {
 pub enum MigrateError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    /// A migration's own logic failed (e.g. it could not apply or re-verify
+    /// its proposed changes). The caller warns and skips this migration for
+    /// the current file rather than aborting the whole run.
+    #[error("{0}")]
+    Migration(String),
 }

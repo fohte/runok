@@ -38,6 +38,22 @@ fs:
     deny: [.env]
 ```
 
+### Bare `?` in pattern strings
+
+A bare `?` in a pattern string now means "optional value" (see [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavior/#optional-flag-values)). A pattern written before this change that relied on `?` matching the literal character is rewritten to the escaped form `\?`, which keeps matching literal `?`:
+
+```yaml
+# Before
+rules:
+  - allow: 'git branch --abbrev ?'
+
+# After
+rules:
+  - allow: 'git branch --abbrev \?'
+```
+
+This applies to every pattern-syntax field: `rules[].{allow,deny,ask}`, `definitions.wrappers`, `definitions.flag_groups`, `definitions.aliases`, and `definitions.vars` entries with `type: pattern`. `rules[].tests` are left untouched, since inline test commands are not patterns.
+
 ## Examples
 
 ```sh
