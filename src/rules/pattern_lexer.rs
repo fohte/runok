@@ -38,12 +38,28 @@ pub enum LexToken {
 
 /// Tokenize a pattern string into a sequence of `LexToken`s.
 pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
+    Ok(tokenize_spanned(pattern)?
+        .into_iter()
+        .map(|(token, _)| token)
+        .collect())
+}
+
+/// Tokenize a pattern string, pairing each token with the byte range in
+/// `pattern` it was lexed from.
+///
+/// Used by the `quote-optional-marker` migration to locate bare `?` words
+/// for in-place rewriting without disturbing the rest of the source string.
+pub(crate) fn tokenize_spanned(
+    pattern: &str,
+) -> Result<Vec<(LexToken, std::ops::Range<usize>)>, PatternParseError> {
     let mut tokens = Vec::new();
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
     let mut chars = pattern.char_indices().peekable();
     let mut in_bracket = false;
     let mut bracket_start: Option<usize> = None;
 
     while let Some(&(pos, ch)) = chars.peek() {
+        let before_len = tokens.len();
         match ch {
             // Skip whitespace
             ' ' | '\t' => {
@@ -193,6 +209,13 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
                 }
             }
         }
+
+        // Every non-whitespace arm above pushes at most one token per
+        // iteration, so this only ever fires 0 or 1 times.
+        if tokens.len() > before_len {
+            let end = chars.peek().map(|&(p, _)| p).unwrap_or(pattern.len());
+            spans.push(pos..end);
+        }
     }
 
     if in_bracket {
@@ -201,7 +224,7 @@ pub fn tokenize(pattern: &str) -> Result<Vec<LexToken>, PatternParseError> {
         ));
     }
 
-    Ok(tokens)
+    Ok(tokens.into_iter().zip(spans).collect())
 }
 
 /// Consume characters forming a "word" (non-whitespace, non-bracket, non-angle-bracket).
@@ -497,6 +520,30 @@ mod tests {
                 LexToken::Literal(r"\?".into()),
             ]
         );
+    }
+
+    // === Spanned tokenization (used by the quote-optional-marker migration) ===
+
+    #[rstest]
+    #[case::bare_optional_value("--abbrev ?", vec![9..10])]
+    #[case::optional_value_in_bracket_group("git branch [--abbrev ?]", vec![21..22])]
+    #[case::escaped_optional_value_has_no_span(r"--mode \?", vec![])]
+    #[case::negated_question_mark_has_no_span("!?", vec![])]
+    #[case::question_mark_in_alternation_has_no_span("a|?", vec![])]
+    #[case::quoted_question_mark_has_no_span("'?'", vec![])]
+    #[case::question_mark_inside_url_has_no_span("https://x?y=z", vec![])]
+    #[case::multiple_optional_values("--a ? --b ?", vec![4..5, 10..11])]
+    fn tokenize_spanned_locates_optional_value_tokens(
+        #[case] input: &str,
+        #[case] expected_spans: Vec<std::ops::Range<usize>>,
+    ) {
+        let spans: Vec<_> = tokenize_spanned(input)
+            .unwrap()
+            .into_iter()
+            .filter(|(token, _)| *token == LexToken::OptionalValue)
+            .map(|(_, span)| span)
+            .collect();
+        assert_eq!(spans, expected_spans);
     }
 
     // === Negation ===

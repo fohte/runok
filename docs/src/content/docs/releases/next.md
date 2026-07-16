@@ -57,11 +57,27 @@ A pattern that wrote a bare `?` directly after a flag used to match the literal 
 
 **What should I do?**
 
-If you have a rule that intentionally relied on `?` being a literal flag value, escape it: replace `?` with `\?` (this works the same as `\*` for a literal `*`).
+If you have a rule that intentionally relied on `?` being a literal flag value, escape it: replace `?` with `\?` (this works the same as `\*` for a literal `*`). [`runok migrate`](/cli/migrate/#bare--in-pattern-strings) does this automatically across every pattern-syntax field.
 
 See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavior/#optional-flag-values) for details.
 
 ## New Features
+
+### `runok migrate` escapes bare `?` left over from the optional-value marker change ([#479](https://github.com/fohte/runok/pull/479))
+
+Following up on the breaking change above, `runok migrate` now rewrites a bare `?` in every pattern-syntax field (`rules[].{allow,deny,ask}`, `definitions.wrappers`, `definitions.flag_groups`, `definitions.aliases`, and `definitions.vars` entries with `type: pattern`) to the escaped form `\?`, so a config written before v0.4.0 keeps matching the literal `?` it relied on:
+
+```yaml
+# Before
+rules:
+  - allow: 'git branch --abbrev ?'
+
+# After
+rules:
+  - allow: 'git branch --abbrev \?'
+```
+
+Comments, formatting, and quoting style outside the rewritten fields are preserved. `rules[].tests` are left untouched, since inline test commands are not patterns. See [`runok migrate` -- Bare `?` in pattern strings](/cli/migrate/#bare--in-pattern-strings) for details.
 
 ### `runok hook`: a dedicated command for agent hook integrations ([#476](https://github.com/fohte/runok/pull/476))
 
