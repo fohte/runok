@@ -1,3 +1,4 @@
+mod claude_code_hook;
 mod migration;
 mod quote_optional_marker;
 mod registry;
@@ -19,16 +20,36 @@ use migration::{Migration, MigrationTarget};
 /// When `yes` is false, shows a diff preview and asks for confirmation before
 /// writing changes. When `yes` is true, applies changes without prompting.
 pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
+    let cwd = std::env::current_dir().map_err(MigrateError::Io)?;
+    let home_dir = crate::config::dirs::home_dir();
+    run_with_paths(config_path, yes, &cwd, home_dir.as_deref())
+}
+
+/// Same as [`run`], but with `cwd` and `home_dir` passed in explicitly
+/// instead of read from the real environment, so callers (tests) can point
+/// Claude Code settings discovery at isolated directories.
+pub fn run_with_paths(
+    config_path: Option<&Path>,
+    yes: bool,
+    cwd: &Path,
+    home_dir: Option<&Path>,
+) -> Result<(), MigrateError> {
     let migrations = registry::all();
     let config_chain_migrations: Vec<&dyn Migration> = migrations
         .iter()
         .filter(|m| m.target() == MigrationTarget::ConfigChain)
         .map(|m| m.as_ref())
         .collect();
+    let claude_settings_migrations: Vec<&dyn Migration> = migrations
+        .iter()
+        .filter(|m| m.target() == MigrationTarget::ClaudeCodeSettings)
+        .map(|m| m.as_ref())
+        .collect();
 
-    let paths = collect_config_chain_paths(config_path)?;
+    let config_chain_paths = collect_config_chain_paths(config_path, cwd);
+    let claude_settings_paths = collect_claude_settings_paths(cwd, home_dir);
 
-    if paths.is_empty() {
+    if config_chain_paths.is_empty() && claude_settings_paths.is_empty() {
         eprintln!("runok: no config files found");
         return Ok(());
     }
@@ -40,8 +61,40 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
     };
 
     let mut migrated_count = 0;
+    migrated_count += migrate_paths(
+        &config_chain_paths,
+        &config_chain_migrations,
+        prompter.as_ref(),
+    )?;
+    migrated_count += migrate_paths(
+        &claude_settings_paths,
+        &claude_settings_migrations,
+        prompter.as_ref(),
+    )?;
 
-    for path in &paths {
+    if migrated_count > 0 {
+        eprintln!(
+            "\n{migrated_count} file{} updated.",
+            if migrated_count == 1 { "" } else { "s" }
+        );
+    } else {
+        eprintln!("Already up to date.");
+    }
+
+    Ok(())
+}
+
+/// Apply `migrations` to each of `paths` in order, showing a diff and asking
+/// for confirmation (via `prompter`) before writing each accepted change.
+/// Returns the number of files that ended up modified.
+fn migrate_paths(
+    paths: &[PathBuf],
+    migrations: &[&dyn Migration],
+    prompter: &dyn Prompter,
+) -> Result<usize, MigrateError> {
+    let mut migrated_count = 0;
+
+    for path in paths {
         let original = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -54,7 +107,7 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
         let mut content = original.clone();
         let mut changed = false;
 
-        for migration in &config_chain_migrations {
+        for migration in migrations {
             let proposed = match migration.migrate(&content) {
                 Ok(Some(proposed)) => proposed,
                 Ok(None) => continue,
@@ -94,27 +147,15 @@ pub fn run(config_path: Option<&Path>, yes: bool) -> Result<(), MigrateError> {
         }
     }
 
-    if migrated_count > 0 {
-        eprintln!(
-            "\n{migrated_count} file{} updated.",
-            if migrated_count == 1 { "" } else { "s" }
-        );
-    } else {
-        eprintln!("Already up to date.");
-    }
-
-    Ok(())
+    Ok(migrated_count)
 }
 
 /// Collect the config chain rooted at `config_path` (or all discovered
-/// config files when `None`), following local `extends` targets.
-fn collect_config_chain_paths(config_path: Option<&Path>) -> Result<Vec<PathBuf>, MigrateError> {
+/// config files under `cwd` when `None`), following local `extends` targets.
+fn collect_config_chain_paths(config_path: Option<&Path>, cwd: &Path) -> Vec<PathBuf> {
     let root_paths = match config_path {
         Some(p) => vec![p.to_path_buf()],
-        None => {
-            let cwd = std::env::current_dir().map_err(MigrateError::Io)?;
-            DefaultConfigLoader::new().find_config_paths(&cwd)
-        }
+        None => DefaultConfigLoader::new().find_config_paths(cwd),
     };
 
     let mut paths = Vec::new();
@@ -122,7 +163,29 @@ fn collect_config_chain_paths(config_path: Option<&Path>) -> Result<Vec<PathBuf>
     for path in &root_paths {
         collect_with_local_extends(path, &mut paths, &mut seen);
     }
-    Ok(paths)
+    paths
+}
+
+/// Collect the Claude Code `.claude/settings.json` files at the user scope
+/// (`home_dir`) and project scope (`cwd`), matching the locations `runok
+/// init` targets. Only paths that exist are returned, deduplicated by
+/// canonical path (relevant when `cwd` is the home directory).
+fn collect_claude_settings_paths(cwd: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for dir in home_dir.into_iter().chain(std::iter::once(cwd)) {
+        let path = dir.join(".claude").join("settings.json");
+        if !path.exists() {
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(canonical) {
+            paths.push(path);
+        }
+    }
+
+    paths
 }
 
 /// Collect a config file path and recursively collect local extends targets.

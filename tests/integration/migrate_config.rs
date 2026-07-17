@@ -5,12 +5,17 @@ use tempfile::TempDir;
 
 /// Writes `input` to `filename` in a fresh temp dir, runs `runok migrate`
 /// against it, and returns the file's contents afterward.
+///
+/// Uses `run_with_paths` with the temp dir as `cwd` and no home dir, instead
+/// of the real-environment `run`, so Claude Code settings discovery (a
+/// separate migration target) never touches the developer's actual
+/// `~/.claude/settings.json` while these config-chain tests run.
 fn migrate_and_read(filename: &str, input: &str) -> Result<String, Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let config_path = tmp.path().join(filename);
     fs::write(&config_path, input)?;
 
-    runok::migrate::run(Some(&config_path), true)?;
+    runok::migrate::run_with_paths(Some(&config_path), true, tmp.path(), None)?;
 
     Ok(fs::read_to_string(&config_path)?)
 }
@@ -210,7 +215,7 @@ fn migrate_follows_local_extends() {
     )
     .unwrap();
 
-    runok::migrate::run(Some(&config_path), true).unwrap();
+    runok::migrate::run_with_paths(Some(&config_path), true, tmp.path(), None).unwrap();
 
     // Main config should be unchanged (no legacy fields)
     let main_result = fs::read_to_string(&config_path).unwrap();

@@ -275,6 +275,20 @@ fn run_command(
         Commands::SandboxExec(_) => unreachable!("handled in main()"),
     };
 
+    // Printed before config is loaded (and thus before the config-error early
+    // return below) so a broken config -- the situation this warning most
+    // wants to reach -- doesn't silently swallow it. stderr only: stdout
+    // carries the hook protocol JSON that Claude Code parses.
+    if let Commands::Check(args) = &command
+        && is_claude_code_hook(args)
+    {
+        eprintln!(
+            "runok: `runok check --input-format claude-code-hook` is deprecated, \
+             use `runok hook --agent claude-code` instead. \
+             Run `runok migrate` to update your settings.json automatically"
+        );
+    }
+
     let loader = DefaultConfigLoader::new();
     let source = ConfigSource::from_flag(config_path, cwd);
     let config = match loader.load(&source) {

@@ -87,6 +87,37 @@ fn hook_bash_allow(hook_env: TestEnv) {
     assert!(json["hookSpecificOutput"]["updatedInput"].is_null());
 }
 
+// --- Deprecation warning ---
+//
+// `--input-format claude-code-hook` is deprecated in favor of `runok hook
+// --agent claude-code`. The warning must land on stderr only: stdout carries
+// the hook protocol JSON that Claude Code parses, so a warning there would
+// corrupt the response.
+
+#[rstest]
+fn hook_deprecation_warning_on_stderr_only(hook_env: TestEnv) {
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("git status"))
+        .assert()
+        .code(0)
+        .stderr(predicates::str::contains("deprecated"))
+        .stderr(predicates::str::contains("runok migrate"));
+    let output = assert.get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow"
+            }
+        })
+    );
+}
+
 // --- Non-Bash tool: exit 0, no output ---
 
 #[rstest]

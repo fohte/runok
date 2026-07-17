@@ -104,10 +104,11 @@ Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any
 
 ## Migrating from `runok check --input-format claude-code-hook`
 
-`runok check --input-format claude-code-hook` still works and routes to the same logic described above, but it's deprecated: `check` is documented as a read-only evaluation command, which the PostToolUse audit write contradicts. New setups should register `runok hook --agent claude-code` instead -- [`runok init`](/cli/init/) does this automatically, and rewrites existing `runok check --input-format claude-code-hook` entries to `runok hook --agent claude-code` on re-run.
+`runok check --input-format claude-code-hook` still works and routes to the same logic described above, but it's deprecated: `check` is documented as a read-only evaluation command, which the PostToolUse audit write contradicts. Running it prints a deprecation warning to stderr (never stdout, so the hook response Claude Code parses stays intact). New setups should register `runok hook --agent claude-code` instead -- [`runok init`](/cli/init/) does this automatically, and rewrites existing `runok check --input-format claude-code-hook` entries to `runok hook --agent claude-code` on re-run. [`runok migrate`](/cli/migrate/#claude-code-legacy-hook-command) does the same rewrite without running the full init wizard.
 
 ## Related
 
 - [Claude Code Integration](/getting-started/claude-code/) -- Full hook setup guide.
 - [`runok check`](/cli/check/) -- Read-only rule evaluation for humans, CI, and scripts.
+- [`runok migrate`](/cli/migrate/) -- Rewrites deprecated config and settings.json entries to the current format.
 - [`runok init`](/cli/init/) -- Registers the hook automatically.

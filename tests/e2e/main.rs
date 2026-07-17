@@ -7,5 +7,6 @@ mod error_handling;
 mod exec;
 mod helpers;
 mod init;
+mod migrate;
 mod sandbox_fs_read_deny;
 mod test_command;
