@@ -25,4 +25,6 @@ pub trait Migration {
 pub enum MigrationTarget {
     /// runok config files reachable via local `extends`.
     ConfigChain,
+    /// Claude Code's `.claude/settings.json`, at the user and project scopes.
+    ClaudeCodeSettings,
 }

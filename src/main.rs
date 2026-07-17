@@ -306,6 +306,15 @@ fn run_command(
         }
         Commands::Check(args) => {
             let is_hook = is_claude_code_hook(&args);
+            if is_hook {
+                // stderr only: stdout carries the hook protocol JSON that
+                // Claude Code parses, so a warning here must never land there.
+                eprintln!(
+                    "runok: `runok check --input-format claude-code-hook` is deprecated, \
+                     use `runok hook --agent claude-code` instead. \
+                     Run `runok migrate` to update your settings.json automatically"
+                );
+            }
             let options = RunOptions {
                 verbose: args.verbose,
             };

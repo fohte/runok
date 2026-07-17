@@ -63,6 +63,20 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
+### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning (TODO(pr-link))
+
+Following up on `runok hook` ([#476](https://github.com/fohte/runok/pull/476)), `runok migrate` now rewrites an existing `.claude/settings.json` registration of the deprecated `runok check --input-format claude-code-hook` command to `runok hook --agent claude-code`, for both the `PreToolUse` and `PostToolUse` events:
+
+```json
+// Before
+{ "type": "command", "command": "runok check --input-format claude-code-hook" }
+
+// After
+{ "type": "command", "command": "runok hook --agent claude-code" }
+```
+
+Unlike the config-chain migrations above, this one targets `.claude/settings.json` directly at the user scope (`~/.claude/settings.json`) and the project scope (`.claude/settings.json` in the current directory), matching the locations `runok init` sets up. Running `runok check --input-format claude-code-hook` now also prints a deprecation warning to stderr on every invocation, pointing at `runok hook` and `runok migrate`; stdout is untouched, since it carries the hook response Claude Code parses. See [`runok migrate` -- Claude Code legacy hook command](/cli/migrate/#claude-code-legacy-hook-command) for details.
+
 ### `runok migrate` escapes bare `?` left over from the optional-value marker change ([#479](https://github.com/fohte/runok/pull/479))
 
 Following up on the breaking change above, `runok migrate` now rewrites a bare `?` in every pattern-syntax field (`rules[].{allow,deny,ask}`, `definitions.wrappers`, `definitions.flag_groups`, `definitions.aliases`, and `definitions.vars` entries with `type: pattern`) to the escaped form `\?`, so a config written before v0.4.0 keeps matching the literal `?` it relied on:

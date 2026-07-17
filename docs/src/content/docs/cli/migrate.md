@@ -54,6 +54,20 @@ rules:
 
 This applies to every pattern-syntax field: `rules[].{allow,deny,ask}`, `definitions.wrappers`, `definitions.flag_groups`, `definitions.aliases`, and `definitions.vars` entries with `type: pattern`. `rules[].tests` are left untouched, since inline test commands are not patterns.
 
+### Claude Code legacy hook command
+
+An existing `.claude/settings.json` registration of the deprecated `runok check --input-format claude-code-hook` command is rewritten to `runok hook --agent claude-code` (both `PreToolUse` and `PostToolUse` entries):
+
+```json
+// Before
+{ "type": "command", "command": "runok check --input-format claude-code-hook" }
+
+// After
+{ "type": "command", "command": "runok hook --agent claude-code" }
+```
+
+Unlike the config-chain migrations above, this one targets `.claude/settings.json` directly -- at the user scope (`~/.claude/settings.json`) and the project scope (`.claude/settings.json` in the current directory), matching the locations [`runok init`](/cli/init/) sets up. See [`runok hook` -- Migrating from `runok check --input-format claude-code-hook`](/cli/hook/#migrating-from-runok-check---input-format-claude-code-hook) for background.
+
 ## Examples
 
 ```sh

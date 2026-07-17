@@ -117,6 +117,6 @@ When checking multiple commands (multi-line stdin), the exit code is the highest
 
 `--input-format claude-code-hook` shares [`runok hook`](/cli/hook/#event-dispatch)'s `PreToolUse`/`PostToolUse` dispatch, response format, and non-blocking (`exit 1` instead of `2`) error handling — see that page for the full reference. One difference remains for backward compatibility: this mode predates the "any other event is a no-op" behavior `runok hook` added, so a `hook_event_name` other than `PreToolUse`/`PostToolUse` still falls through to rule evaluation here instead of being ignored.
 
-It's kept working for existing `settings.json` registrations, but new setups should use `runok hook` directly; `check` is documented above as a read-only evaluation command, which the `PostToolUse` audit write contradicts.
+It's kept working for existing `settings.json` registrations, but new setups should use `runok hook` directly; `check` is documented above as a read-only evaluation command, which the `PostToolUse` audit write contradicts. Every invocation prints a deprecation warning to stderr (stdout is left untouched, since it carries the hook response). Run [`runok migrate`](/cli/migrate/#claude-code-legacy-hook-command) to rewrite an existing `settings.json` registration to `runok hook --agent claude-code`.
 
 Direct CLI usage (without `--input-format claude-code-hook`) is unaffected and still exits `2` on errors.
