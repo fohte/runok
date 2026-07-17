@@ -254,6 +254,29 @@ pub fn migrate_legacy_entries_for_event(root: &mut serde_json::Value, event: &st
     changed
 }
 
+/// Rewrite [`LEGACY_HOOK_COMMAND`] entries to [`HOOK_COMMAND`] in a
+/// settings.json string, across both `PreToolUse` and `PostToolUse`. Returns
+/// `None` if `content` is empty or nothing needs to change. Shared by `runok
+/// init`'s diff preview and `runok migrate`'s claude-code-hook migration, so
+/// the rewrite logic itself lives in exactly one place.
+pub(crate) fn migrate_legacy_hook_content(
+    content: &str,
+) -> Result<Option<String>, serde_json::Error> {
+    if content.is_empty() {
+        return Ok(None);
+    }
+
+    let mut root: serde_json::Value = serde_json::from_str(content)?;
+    let pre_changed = migrate_legacy_entries_for_event(&mut root, "PreToolUse");
+    let post_changed = migrate_legacy_entries_for_event(&mut root, "PostToolUse");
+
+    if pre_changed || post_changed {
+        Ok(Some(serde_json::to_string_pretty(&root)?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Rewrite legacy hook command entries for both PreToolUse and PostToolUse
 /// to [`HOOK_COMMAND`] in settings.json. Returns `true` if the file was
 /// modified. No-op if settings.json doesn't exist.

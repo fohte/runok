@@ -1,6 +1,6 @@
 use super::MigrateError;
 use super::migration::{Migration, MigrationTarget};
-use crate::init::claude_code::migrate_legacy_entries_for_event;
+use crate::init::claude_code::migrate_legacy_hook_content;
 
 /// Rewrites the legacy `runok check --input-format claude-code-hook` hook
 /// command registered in Claude Code's `settings.json` to `runok hook
@@ -29,25 +29,8 @@ impl Migration for ClaudeCodeHookMigration {
 /// within `hooks.PreToolUse`/`hooks.PostToolUse` of a settings.json string.
 /// Returns `None` if there is nothing to rewrite.
 fn migrate_claude_code_hook(content: &str) -> Result<Option<String>, MigrateError> {
-    if content.is_empty() {
-        return Ok(None);
-    }
-
-    let mut root: serde_json::Value = serde_json::from_str(content).map_err(|e| {
-        MigrateError::Migration(format!("claude-code-hook: failed to parse JSON: {e}"))
-    })?;
-
-    let pre_changed = migrate_legacy_entries_for_event(&mut root, "PreToolUse");
-    let post_changed = migrate_legacy_entries_for_event(&mut root, "PostToolUse");
-
-    if !pre_changed && !post_changed {
-        return Ok(None);
-    }
-
-    let output = serde_json::to_string_pretty(&root).map_err(|e| {
-        MigrateError::Migration(format!("claude-code-hook: failed to serialize JSON: {e}"))
-    })?;
-    Ok(Some(output))
+    migrate_legacy_hook_content(content)
+        .map_err(|e| MigrateError::Migration(format!("claude-code-hook: {e}")))
 }
 
 #[cfg(test)]

@@ -31,17 +31,7 @@ pub(super) fn preview_remove_permissions(content: &str) -> Result<String, InitEr
 /// entries (both PreToolUse and PostToolUse) to the current `runok hook`
 /// command. Returns `None` if there is nothing to migrate.
 pub(super) fn preview_migrate_hook(content: &str) -> Result<Option<String>, InitError> {
-    if content.is_empty() {
-        return Ok(None);
-    }
-    let mut root: serde_json::Value = serde_json::from_str(content)?;
-    let pre_changed = claude_code::migrate_legacy_entries_for_event(&mut root, "PreToolUse");
-    let post_changed = claude_code::migrate_legacy_entries_for_event(&mut root, "PostToolUse");
-    if pre_changed || post_changed {
-        Ok(Some(serde_json::to_string_pretty(&root)?))
-    } else {
-        Ok(None)
-    }
+    Ok(claude_code::migrate_legacy_hook_content(content)?)
 }
 
 /// Simulate registering the PreToolUse hook in settings.json content and

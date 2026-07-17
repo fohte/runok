@@ -107,7 +107,15 @@ fn hook_deprecation_warning_on_stderr_only(hook_env: TestEnv) {
     let output = assert.get_output().stdout.clone();
     let json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow"
+            }
+        })
+    );
 }
 
 // --- Non-Bash tool: exit 0, no output ---
