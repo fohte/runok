@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning (TODO(pr-link))
+### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning ([#480](https://github.com/fohte/runok/pull/480))
 
 Following up on `runok hook` ([#476](https://github.com/fohte/runok/pull/476)), `runok migrate` now rewrites an existing `.claude/settings.json` registration of the deprecated `runok check --input-format claude-code-hook` command to `runok hook --agent claude-code`, for both the `PreToolUse` and `PostToolUse` events:
 
