@@ -1,3 +1,7 @@
+//! Not yet read by rule evaluation itself: this module only defines the
+//! injection point a future PATH-existence check will consume through
+//! `EvalContext::resolver`.
+
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
@@ -112,15 +116,10 @@ mod tests {
     #[case::typeset("typeset")]
     #[case::source("source")]
     #[case::shopt("shopt")]
-    fn static_list_names_resolve_as_found(#[case] name: &str) {
+    #[case::real_executable("sh")]
+    fn static_list_or_real_executable_resolves_as_found(#[case] name: &str) {
         let resolver = ProcessCommandResolver::new();
         assert_eq!(resolver.resolve(name), CommandResolution::Found);
-    }
-
-    #[rstest]
-    fn existing_executable_resolves_as_found() {
-        let resolver = ProcessCommandResolver::new();
-        assert_eq!(resolver.resolve("sh"), CommandResolution::Found);
     }
 
     #[rstest]

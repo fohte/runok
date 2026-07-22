@@ -2,14 +2,11 @@ use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_contex
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::parse_config;
-use runok::rules::rule_engine::{
-    Action, EvalContext, StubCommandResolver, evaluate_command, evaluate_compound,
-};
+use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
 
 // ========================================
 // Environment variable conditions
@@ -102,8 +99,7 @@ fn when_satisfied_deny_wins_over_allow() {
 
     let context = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
 
     let result = evaluate_command(&config, "aws s3 ls", &context).unwrap();
@@ -210,8 +206,7 @@ fn multiple_rules_with_different_when_conditions() {
     // Production: deny wins
     let prod_ctx = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "aws s3 ls", &prod_ctx).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
@@ -219,8 +214,7 @@ fn multiple_rules_with_different_when_conditions() {
     // Staging: ask wins over allow
     let staging_ctx = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "staging".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "aws s3 ls", &staging_ctx).unwrap();
     assert!(matches!(result.action, Action::Ask(_)));
@@ -228,8 +222,7 @@ fn multiple_rules_with_different_when_conditions() {
     // Dev: only allow matches
     let dev_ctx = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "aws s3 ls", &dev_ctx).unwrap();
     assert_eq!(result.action, Action::Allow);
@@ -254,8 +247,7 @@ fn when_clause_with_logical_and() {
             ("ENV".to_string(), "prod".to_string()),
             ("FORCE".to_string(), "false".to_string()),
         ]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
@@ -266,8 +258,7 @@ fn when_clause_with_logical_and() {
             ("ENV".to_string(), "prod".to_string()),
             ("FORCE".to_string(), "true".to_string()),
         ]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Ask(None));
@@ -289,8 +280,7 @@ fn when_clause_compound_different_results_per_subcommand() {
 
     let ctx = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
 
     // echo hello && aws s3 ls
@@ -320,8 +310,7 @@ fn when_clause_compound_all_skipped_falls_back() {
 
     let ctx = EvalContext {
         env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
 
     // echo hello && aws s3 ls in dev
@@ -351,8 +340,7 @@ fn when_clause_with_logical_or() {
     // prod -> deny
     let ctx = EvalContext {
         env: HashMap::from([("ENV".to_string(), "prod".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
@@ -360,8 +348,7 @@ fn when_clause_with_logical_or() {
     // staging -> deny
     let ctx = EvalContext {
         env: HashMap::from([("ENV".to_string(), "staging".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert!(matches!(result.action, Action::Deny(_)));
@@ -369,8 +356,7 @@ fn when_clause_with_logical_or() {
     // dev -> allow (deny skipped, allow matches)
     let ctx = EvalContext {
         env: HashMap::from([("ENV".to_string(), "dev".to_string())]),
-        cwd: PathBuf::from("/tmp"),
-        resolver: Arc::new(StubCommandResolver),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "deploy app", &ctx).unwrap();
     assert_eq!(result.action, Action::Allow);
