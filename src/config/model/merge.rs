@@ -18,8 +18,13 @@ impl Config {
     /// - audit: override (local wins at merge level; loader enforces
     ///   global-only by stripping audit from project/local layers)
     /// - tests: override (local wins; test definitions are not merged across layers)
-    /// - experimental: override (local wins per field, like audit; no
-    ///   global-only restriction since these checks never loosen permissions)
+    /// - experimental: override (local wins per field, like audit, but with
+    ///   no global-only restriction). `action` can never be `allow`
+    ///   (validated), but `enabled`/`ignore` can still be relaxed by
+    ///   project/local layers — same trust model as `rules`, where project
+    ///   config can already broaden behavior. This is accepted for now
+    ///   because no experimental check currently ships enforcement; revisit
+    ///   once one does.
     pub fn merge(self, other: Config) -> Config {
         Config {
             // required_runok_version is enforced at load time per file, so

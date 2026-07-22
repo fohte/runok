@@ -55,10 +55,14 @@ mod tests {
 
     #[test]
     fn require_command_in_path_config_default() {
-        let config = RequireCommandInPathConfig::default();
-        assert_eq!(config.enabled, None);
-        assert_eq!(config.action, None);
-        assert_eq!(config.ignore, None);
+        assert_eq!(
+            RequireCommandInPathConfig::default(),
+            RequireCommandInPathConfig {
+                enabled: None,
+                action: None,
+                ignore: None,
+            }
+        );
     }
 
     #[rstest]
