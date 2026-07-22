@@ -1,4 +1,5 @@
 mod definitions_checks;
+mod experimental_checks;
 mod pattern_refs;
 mod rule_checks;
 
@@ -78,6 +79,7 @@ impl Config {
     /// - Each rule entry has exactly one of deny/allow/ask set
     /// - deny rules must not have a sandbox attribute
     /// - sandbox values must reference names defined in definitions.sandbox
+    /// - experimental.require_command_in_path.action must not be `allow`
     pub fn validate(&mut self) -> Result<(), crate::config::ConfigError> {
         let mut errors = Vec::new();
 
@@ -87,6 +89,7 @@ impl Config {
         self.validate_definitions_vars(&mut errors);
         self.validate_flag_groups(&mut errors);
         self.validate_rule_pattern_refs(&mut errors);
+        self.validate_experimental(&mut errors);
 
         if self.rules.is_none() {
             return if errors.is_empty() {
@@ -196,6 +199,7 @@ mod tests {
             ]),
             definitions: None,
             tests: None,
+            experimental: None,
         };
         let err = config.validate().unwrap_err();
         let expected = indoc! {"

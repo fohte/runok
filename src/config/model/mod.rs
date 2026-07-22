@@ -1,5 +1,6 @@
 mod audit_config;
 mod definitions;
+mod experimental_config;
 mod merge;
 mod parse;
 mod rule;
@@ -9,6 +10,7 @@ mod validate;
 
 pub use audit_config::{AuditConfig, RotationConfig};
 pub use definitions::{Definitions, VarDefinition, VarType, VarValue};
+pub use experimental_config::{ExperimentalConfig, RequireCommandInPathConfig};
 pub use parse::{ParsedConfig, parse_config, parse_config_with_warnings};
 pub use rule::{ActionKind, AliasDefinition, Defaults, InlineTestEntry, RuleEntry, TestSection};
 pub use sandbox::{FsAccessPolicy, FsPolicy, MergedSandboxPolicy, NetworkPolicy, SandboxPreset};
@@ -41,4 +43,6 @@ pub struct Config {
     pub audit: Option<AuditConfig>,
     /// Test section for rule verification.
     pub tests: Option<TestSection>,
+    /// Experimental features, disabled by default.
+    pub experimental: Option<ExperimentalConfig>,
 }

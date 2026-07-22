@@ -37,6 +37,17 @@
         }
       ]
     },
+    "experimental": {
+      "description": "Experimental features, disabled by default.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExperimentalConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "extends": {
       "description": "List of configuration files to inherit from. Supports local paths and\nremote Git repositories (`github:<owner>/<repo>[/<path>][@<ref>]`).",
       "type": [
@@ -226,6 +237,23 @@
         }
       }
     },
+    "ExperimentalConfig": {
+      "description": "Experimental features. Each feature is disabled by default and has no\neffect until explicitly enabled.",
+      "type": "object",
+      "properties": {
+        "require_command_in_path": {
+          "description": "Deny (or ask, per `action`) commands whose argv[0] cannot be resolved\nvia `PATH`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequireCommandInPathConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "FsAccessPolicy": {
       "description": "Access policy for a single operation (read or write).",
       "type": "object",
@@ -357,6 +385,40 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "RequireCommandInPathConfig": {
+      "description": "Configuration for the `require_command_in_path` experimental check.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Action to take when a command cannot be resolved via `PATH`: `deny`\nor `ask` (default: deny). `allow` is a validation error.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "description": "Whether this check is enabled (default: false).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ignore": {
+          "description": "Command names exempt from this check (literal exact match).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
