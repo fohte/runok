@@ -122,9 +122,6 @@ pub(super) fn try_unwrap_wrapper(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
     use rstest::rstest;
 
     use crate::config::{ActionKind, Config, Defaults, Definitions, RuleEntry};
@@ -199,14 +196,10 @@ mod tests {
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
-    #[test]
-    fn recursion_depth_exceeded() {
-        let context = EvalContext {
-            env: HashMap::new(),
-            cwd: PathBuf::from("/tmp"),
-        };
+    #[rstest]
+    fn recursion_depth_exceeded(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![], vec!["a <cmd>"]);
-        let result = evaluate_command(&config, "a a a a a a a a a a a a", &context);
+        let result = evaluate_command(&config, "a a a a a a a a a a a a", &empty_context);
         assert!(
             matches!(result, Err(RuleError::RecursionDepthExceeded(_))),
             "expected RecursionDepthExceeded, got {:?}",

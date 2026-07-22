@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::{ActionKind, Config, MergedSandboxPolicy};
 use crate::rules::RuleError;
@@ -7,6 +8,7 @@ use crate::rules::command_parser::{
     FunctionCallInfo, PipeInfo, RedirectInfo, extract_commands_with_metadata,
 };
 
+mod command_resolver;
 mod compound;
 mod dispatch;
 mod flag_schema;
@@ -14,6 +16,9 @@ mod function;
 mod simple_eval;
 mod wrapper;
 
+pub use command_resolver::{
+    CommandResolution, CommandResolver, ProcessCommandResolver, StubCommandResolver,
+};
 pub use compound::{default_action, evaluate_compound};
 
 use dispatch::evaluate_command_inner;
@@ -23,6 +28,9 @@ use dispatch::evaluate_command_inner;
 pub struct EvalContext {
     pub env: HashMap<String, String>,
     pub cwd: PathBuf,
+    /// PATH-dependent command lookup, injected so tests can substitute a
+    /// deterministic stub instead of depending on the host's `$PATH`.
+    pub resolver: Arc<dyn CommandResolver>,
 }
 
 impl EvalContext {
@@ -31,6 +39,7 @@ impl EvalContext {
         Self {
             env: std::env::vars().collect(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            resolver: Arc::new(ProcessCommandResolver::new()),
         }
     }
 }
@@ -172,18 +181,20 @@ pub fn evaluate_command_with_metadata(
 mod test_support {
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use rstest::fixture;
 
     use crate::config::{Config, RuleEntry};
 
-    use super::EvalContext;
+    use super::{EvalContext, StubCommandResolver};
 
     #[fixture]
     pub(super) fn empty_context() -> EvalContext {
         EvalContext {
             env: HashMap::new(),
             cwd: PathBuf::from("/tmp"),
+            resolver: Arc::new(StubCommandResolver),
         }
     }
 

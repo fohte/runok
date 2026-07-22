@@ -4,7 +4,9 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{Config, parse_config};
 use runok::rules::RuleError;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
+use runok::rules::rule_engine::{
+    Action, EvalContext, StubCommandResolver, evaluate_command, evaluate_compound,
+};
 
 fn config_with_standard_wrappers() -> &'static str {
     indoc! {"
@@ -476,6 +478,7 @@ fn when_clause_with_wrapper() {
     let prod_ctx = EvalContext {
         env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
         cwd: std::path::PathBuf::from("/tmp"),
+        resolver: std::sync::Arc::new(StubCommandResolver),
     };
     let result = evaluate_command(&config, "sudo aws s3 ls", &prod_ctx).unwrap();
     assert!(
@@ -488,6 +491,7 @@ fn when_clause_with_wrapper() {
     let dev_ctx = EvalContext {
         env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
         cwd: std::path::PathBuf::from("/tmp"),
+        resolver: std::sync::Arc::new(StubCommandResolver),
     };
     let result = evaluate_command(&config, "sudo aws s3 ls", &dev_ctx).unwrap();
     assert_eq!(result.action, Action::Allow);

@@ -10,7 +10,7 @@ use crate::config::{
     parse_config_with_warnings, resolve_config_paths, resolve_extends,
 };
 use crate::rules::RuleError;
-use crate::rules::rule_engine::{Action, EvalContext, evaluate_compound};
+use crate::rules::rule_engine::{Action, EvalContext, StubCommandResolver, evaluate_compound};
 
 // ---------------------------------------------------------------------------
 // Error
@@ -211,8 +211,14 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
 // ---------------------------------------------------------------------------
 
 /// Run all test cases against the given config and return aggregated results.
+///
+/// Uses `StubCommandResolver` (never the host `$PATH`) so results are
+/// deterministic across machines.
 pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
-    let context = EvalContext::from_env();
+    let context = EvalContext {
+        resolver: std::sync::Arc::new(StubCommandResolver),
+        ..EvalContext::from_env()
+    };
     let results = test_cases
         .iter()
         .map(
