@@ -44,12 +44,13 @@ pub(super) fn resolve_unmatched(
     };
 
     // A wrapper's multi-token capture is re-quoted with single quotes
-    // (`shell_quote_join`), so a still-unresolved variable reference
-    // re-parses as a `raw_string`, not an expansion node -- catch it from
-    // the dequoted text too instead of relying on `command_is_expansion`
-    // alone.
-    let looks_like_unresolved_expansion =
-        parsed.command.starts_with('$') || parsed.command.contains("$(");
+    // (`shell_quote_join`), so a still-unresolved variable reference or
+    // backtick command substitution re-parses as a `raw_string`, not an
+    // expansion node -- catch it from the dequoted text too instead of
+    // relying on `command_is_expansion` alone.
+    let looks_like_unresolved_expansion = parsed.command.starts_with('$')
+        || parsed.command.contains("$(")
+        || parsed.command.contains('`');
 
     if parsed.command_is_expansion
         || looks_like_unresolved_expansion
@@ -113,7 +114,7 @@ mod tests {
 
     use crate::config::{ActionKind, Config, ExperimentalConfig, RequireCommandInPathConfig};
 
-    use super::super::CommandResolver;
+    use super::super::{CommandResolver, StubCommandResolver};
     use super::*;
 
     struct AlwaysNotFoundResolver;
@@ -181,67 +182,57 @@ mod tests {
     // ========================================
 
     #[rstest]
-    fn found_falls_back_to_default_action() {
+    #[case::found(Arc::new(StubCommandResolver) as Arc<dyn CommandResolver>, "terraform version")]
+    #[case::unknown(Arc::new(AlwaysUnknownResolver) as Arc<dyn CommandResolver>, "tarraform version")]
+    fn resolver_result_other_than_not_found_falls_back_to_default_action(
+        #[case] resolver: Arc<dyn CommandResolver>,
+        #[case] command: &str,
+    ) {
         let config = enabled_config(ActionKind::Deny, vec![]);
-        let context = context_with(Arc::new(super::super::StubCommandResolver));
-        let action = resolve_unmatched(&config, "terraform version", &context, None, false);
+        let context = context_with(resolver);
+        let action = resolve_unmatched(&config, command, &context, None, false);
         assert_eq!(action, default_action(&config));
     }
 
     #[rstest]
-    fn unknown_falls_back_to_default_action() {
-        let config = enabled_config(ActionKind::Deny, vec![]);
-        let context = context_with(Arc::new(AlwaysUnknownResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(action, default_action(&config));
-    }
-
-    #[rstest]
-    fn not_found_denies() {
-        let config = enabled_config(ActionKind::Deny, vec![]);
-        let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(
-            action,
-            Action::Deny(DenyResponse {
-                message: Some(
-                    "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
-                        .to_string()
-                ),
-                fix_suggestion: Some(
-                    "if 'tarraform' is a shell function or alias defined in your shell \
-                     profile, add it to experimental.require_command_in_path.ignore, or add \
-                     an allow rule for it instead. Otherwise, check for a typo."
-                        .to_string()
-                ),
-                matched_rule: String::new(),
-            })
-        );
-    }
-
-    #[rstest]
-    fn not_found_asks_when_action_is_ask() {
-        let config = enabled_config(ActionKind::Ask, vec![]);
-        let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(
-            action,
-            Action::Ask(Some(
+    #[case::deny(
+        ActionKind::Deny,
+        Action::Deny(DenyResponse {
+            message: Some(
                 "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
                     .to_string()
-            ))
-        );
-    }
-
-    #[rstest]
-    fn not_found_falls_back_to_default_action_when_action_is_allow() {
-        // `allow` is rejected by config validation, but `resolve_unmatched`
-        // doesn't itself call `validate()` -- a config that skipped it
-        // (e.g. constructed programmatically) must not panic.
-        let config = enabled_config(ActionKind::Allow, vec![]);
+            ),
+            fix_suggestion: Some(
+                "if 'tarraform' is a shell function or alias defined in your shell \
+                 profile, add it to experimental.require_command_in_path.ignore, or add \
+                 an allow rule for it instead. Otherwise, check for a typo."
+                    .to_string()
+            ),
+            matched_rule: String::new(),
+        })
+    )]
+    #[case::ask(
+        ActionKind::Ask,
+        Action::Ask(Some(
+            "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                .to_string()
+        ))
+    )]
+    // `allow` is rejected by config validation, but `resolve_unmatched`
+    // doesn't itself call `validate()` -- a config that skipped it (e.g.
+    // constructed programmatically) must not panic.
+    #[case::allow_falls_back_to_default_action(
+        ActionKind::Allow,
+        default_action(&Config::default())
+    )]
+    fn not_found_resolves_per_configured_action(
+        #[case] action_kind: ActionKind,
+        #[case] expected: Action,
+    ) {
+        let config = enabled_config(action_kind, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
         let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(action, default_action(&config));
+        assert_eq!(action, expected);
     }
 
     // ========================================
@@ -262,6 +253,7 @@ mod tests {
     #[rstest]
     #[case::single_quoted_simple_expansion("'$TERRAFORM' version")]
     #[case::single_quoted_command_substitution("'$(echo terraform)' version")]
+    #[case::single_quoted_backtick_substitution("'`echo terraform`' version")]
     fn dequoted_text_looking_like_expansion_skips(#[case] command: &str) {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));

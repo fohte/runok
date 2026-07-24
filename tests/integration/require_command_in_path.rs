@@ -6,7 +6,8 @@ use indoc::indoc;
 use rstest::{fixture, rstest};
 use runok::config::parse_config;
 use runok::rules::rule_engine::{
-    Action, CommandResolution, CommandResolver, EvalContext, evaluate_command, evaluate_compound,
+    Action, CommandResolution, CommandResolver, DenyResponse, EvalContext, evaluate_command,
+    evaluate_compound,
 };
 
 use super::{assert_allow, assert_ask, assert_deny};
@@ -34,7 +35,7 @@ fn known_commands_context() -> EvalContext {
         env: HashMap::new(),
         cwd: PathBuf::from("/tmp"),
         resolver: Arc::new(FoundOnlyResolver {
-            found: HashSet::from(["sudo", "terraform", "echo", "git", "true"]),
+            found: HashSet::from(["sudo", "terraform", "true", "echo"]),
         }),
     }
 }
@@ -54,14 +55,22 @@ fn denies_unknown_command_when_enabled(known_commands_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "tarraform version", &known_commands_context).unwrap();
-    let Action::Deny(deny) = result.action else {
-        panic!("expected Deny, got {:?}", result.action);
-    };
     assert_eq!(
-        deny.message.as_deref(),
-        Some("command 'tarraform' not found in PATH (experimental.require_command_in_path)")
+        result.action,
+        Action::Deny(DenyResponse {
+            message: Some(
+                "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                    .to_string()
+            ),
+            fix_suggestion: Some(
+                "if 'tarraform' is a shell function or alias defined in your shell profile, \
+                 add it to experimental.require_command_in_path.ignore, or add an allow rule \
+                 for it instead. Otherwise, check for a typo."
+                    .to_string()
+            ),
+            matched_rule: String::new(),
+        })
     );
-    assert_eq!(deny.matched_rule, "");
 }
 
 #[rstest]
@@ -241,12 +250,21 @@ fn wrapper_inner_typo_is_flagged(known_commands_context: EvalContext) {
 
     let result =
         evaluate_command(&config, "sudo tarraform version", &known_commands_context).unwrap();
-    let Action::Deny(deny) = result.action else {
-        panic!("expected Deny, got {:?}", result.action);
-    };
     assert_eq!(
-        deny.message.as_deref(),
-        Some("command 'tarraform' not found in PATH (experimental.require_command_in_path)")
+        result.action,
+        Action::Deny(DenyResponse {
+            message: Some(
+                "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                    .to_string()
+            ),
+            fix_suggestion: Some(
+                "if 'tarraform' is a shell function or alias defined in your shell profile, \
+                 add it to experimental.require_command_in_path.ignore, or add an allow rule \
+                 for it instead. Otherwise, check for a typo."
+                    .to_string()
+            ),
+            matched_rule: String::new(),
+        })
     );
 }
 
@@ -271,5 +289,36 @@ fn wrapper_inner_unresolved_variable_is_not_flagged(known_commands_context: Eval
 
     let result =
         evaluate_command(&config, "sudo $TERRAFORM version", &known_commands_context).unwrap();
+    assert_ask(&result.action);
+}
+
+/// Same as above, but for backtick command substitution instead of a bare
+/// variable -- also re-quoted into a `raw_string` by the wrapper, and also
+/// caught by the textual fallback (dequoted argv[0] containing a backtick).
+/// `echo` must be a known command here: independently of the wrapper, the
+/// backtick's contents are extracted and evaluated as their own nested
+/// sub-command (the same mechanism that catches `echo $(rm -rf /)`), so a
+/// resolver that didn't know `echo` would deny it through that unrelated
+/// path and mask what this test is actually checking.
+#[rstest]
+fn wrapper_inner_backtick_substitution_is_not_flagged(known_commands_context: EvalContext) {
+    let config = parse_config(indoc! {"
+        experimental:
+          require_command_in_path:
+            enabled: true
+            action: deny
+        rules: []
+        definitions:
+          wrappers:
+            - 'sudo <cmd>'
+    "})
+    .unwrap();
+
+    let result = evaluate_command(
+        &config,
+        "sudo `echo terraform` version",
+        &known_commands_context,
+    )
+    .unwrap();
     assert_ask(&result.action);
 }
