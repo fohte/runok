@@ -88,6 +88,19 @@ ask
 
 Colors (green/yellow/red for allow/ask/deny) are applied automatically on a TTY and omitted otherwise (piped output, log files). See [Debugging](/troubleshooting/debugging/) for more examples.
 
+### Experimental: `require_command_in_path` denies commands not found in `PATH` ([#485](https://github.com/fohte/runok/pull/485))
+
+An AI coding agent's most common failure mode is trying to run a typo'd or hallucinated command (`tarraform` for `terraform`) -- previously, runok would allow it through and the command would only fail once the shell actually tried to run it. The new `experimental.require_command_in_path` check catches this earlier: when no rule matches and `argv[0]` cannot be resolved via `PATH`, it denies (or asks) instead of falling through to `defaults.action`.
+
+```yaml title="runok.yml"
+experimental:
+  require_command_in_path:
+    enabled: true
+    action: deny
+```
+
+It is off by default and, like everything under `experimental`, may change in a future minor release. It also skips itself in several situations to avoid a false deny -- an argument still hidden behind an unresolved shell variable, a function defined earlier in the same command string, `source`/`.`/`eval` anywhere in the input, and any `argv[0]` containing a `/`. See [Experimental Features -- `require_command_in_path`](/configuration/experimental/#require_command_in_path) for the full behavior and when `ignore` is the right escape hatch.
+
 ### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning ([#480](https://github.com/fohte/runok/pull/480))
 
 Following up on `runok hook` ([#476](https://github.com/fohte/runok/pull/476)), `runok migrate` now rewrites an existing `.claude/settings.json` registration of the deprecated `runok check --input-format claude-code-hook` command to `runok hook --agent claude-code`, for both the `PreToolUse` and `PostToolUse` events:

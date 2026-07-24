@@ -23,7 +23,7 @@ use super::{EvalContext, EvalResult};
 /// propagating an error.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, the resolved call itself, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, the resolved call itself, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn try_unwrap_function_call(
     config: &Config,
@@ -34,6 +34,7 @@ pub(super) fn try_unwrap_function_call(
     pipe: &PipeInfo,
     loop_kind: &str,
     call_stack: &[String],
+    source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
     if call_stack.contains(&call_info.function_name) {
         return Ok(None);
@@ -68,6 +69,7 @@ pub(super) fn try_unwrap_function_call(
                 &sub.loop_kind,
                 sub.function_call.as_ref(),
                 &new_stack,
+                source_like_present,
             ) {
                 Ok(result) => result,
                 // A sub-command that recurses deeper than the shared

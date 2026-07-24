@@ -16,6 +16,10 @@ use super::{EvalContext, EvalResult};
 /// pipelines, `&&`, `||`, or `;`), it is split into individual commands
 /// and each is evaluated separately. The results are merged using
 /// Explicit Deny Wins.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter carries independent recursive-evaluation context (loop position, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+)]
 pub(super) fn try_unwrap_wrapper(
     config: &Config,
     command: &str,
@@ -24,6 +28,7 @@ pub(super) fn try_unwrap_wrapper(
     depth: usize,
     loop_kind: &str,
     call_stack: &[String],
+    source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
     let wrappers = match definitions.wrappers.as_ref() {
         Some(w) if !w.is_empty() => w,
@@ -82,6 +87,7 @@ pub(super) fn try_unwrap_wrapper(
                     loop_kind,
                     None,
                     call_stack,
+                    source_like_present,
                 )?;
                 result = Some(match result {
                     Some(prev) => merge_results(prev, sub_result),

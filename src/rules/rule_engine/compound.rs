@@ -5,6 +5,7 @@ use crate::rules::RuleError;
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 
 use super::dispatch::evaluate_command_inner;
+use super::require_command_in_path::command_contains_source_like;
 use super::{Action, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SubCommandDetail};
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
@@ -40,6 +41,8 @@ pub fn evaluate_compound(
     let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
     let sandbox_defs = definitions.sandbox.as_ref();
 
+    let source_like_present = command_contains_source_like(command);
+
     let mut merged_action: Option<Action> = None;
     let mut preset_names: Vec<String> = Vec::new();
     let mut sub_results: Vec<EvalResult> = Vec::new();
@@ -56,6 +59,7 @@ pub fn evaluate_compound(
             &ext_cmd.loop_kind,
             ext_cmd.function_call.as_ref(),
             &[],
+            source_like_present,
         )?;
 
         if let Some(ref name) = result.sandbox_preset {
