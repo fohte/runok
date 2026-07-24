@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.5.1",
   "devDependencies": {
-    "@commitlint/cli": "21.0.2",
+    "@commitlint/cli": "21.2.1",
     "prettier": "3.8.3"
   }
 }
