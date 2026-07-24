@@ -200,7 +200,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         Ok(Some(cmd)) => cmd,
         Ok(None) => {
             if options.verbose {
-                eprintln!("[verbose] No command to evaluate");
+                eprintln!("No command to evaluate");
             }
             return endpoint
                 .handle_no_match(&defaults)
@@ -276,7 +276,12 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     evaluations,
                 }
             }
-            Err(e) => return endpoint.handle_error(e.into()),
+            Err(e) => {
+                if options.verbose {
+                    eprint!("{}", verbose::render_error_header(&command));
+                }
+                return endpoint.handle_error(e.into());
+            }
         }
     } else if commands.is_empty() {
         // No executable commands (e.g. comment-only input) — use default action
@@ -343,7 +348,12 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     evaluations,
                 }
             }
-            Err(e) => return endpoint.handle_error(e.into()),
+            Err(e) => {
+                if options.verbose {
+                    eprint!("{}", verbose::render_error_header(&command));
+                }
+                return endpoint.handle_error(e.into());
+            }
         }
     };
 
