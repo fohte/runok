@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.4.0](https://github.com/fohte/runok/compare/v0.3.1...v0.4.0) (2026-07-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **rules:** add `?` syntax for optional flag values ([#471](https://github.com/fohte/runok/issues/471))
+
+### Features
+
+* **audit:** add --recheck flag to runok audit ([#474](https://github.com/fohte/runok/issues/474)) ([4b4a03f](https://github.com/fohte/runok/commit/4b4a03f3466dce6e2158e46d334b2ea6c2dd23ce))
+* **audit:** record ask approvals from Claude Code in the audit log ([#468](https://github.com/fohte/runok/issues/468)) ([15f468d](https://github.com/fohte/runok/commit/15f468d5ef240cdb76df88b38e0c15ae0113e58b))
+* **cli:** add runok hook command ([#476](https://github.com/fohte/runok/issues/476)) ([cc7ed21](https://github.com/fohte/runok/commit/cc7ed21feb0e2632da138325a9baa65f87619c6e))
+* **config:** add the experimental config section ([#482](https://github.com/fohte/runok/issues/482)) ([a1b7103](https://github.com/fohte/runok/commit/a1b7103a8720c9546013e4bd3b289e182e4ac843))
+* **migrate:** auto-escape bare ? left over from the optional-value marker change ([#479](https://github.com/fohte/runok/issues/479)) ([18242f0](https://github.com/fohte/runok/commit/18242f0a18114b743581cdee2aa200d023030144))
+* **migrate:** rewrite legacy claude-code-hook command ([#480](https://github.com/fohte/runok/issues/480)) ([e03b4ff](https://github.com/fohte/runok/commit/e03b4ff0f4770b694057928e67fab4e3b06efa86))
+* **rules:** add `?` syntax for optional flag values ([#471](https://github.com/fohte/runok/issues/471)) ([f234e5b](https://github.com/fohte/runok/commit/f234e5b20a807a79045f4df292a49be4cf840f00))
+* **rules:** add the require_command_in_path check ([#485](https://github.com/fohte/runok/issues/485)) ([c9b1726](https://github.com/fohte/runok/commit/c9b1726a155725a33536fb2332454a991494d8e6))
+* **rules:** resolve shell function calls before matching ([#475](https://github.com/fohte/runok/issues/475)) ([47837f0](https://github.com/fohte/runok/commit/47837f0a0e15088e256d3844d4aa609fa3f78045))
+* **rules:** resolve variables before matching ([#473](https://github.com/fohte/runok/issues/473)) ([e7dae83](https://github.com/fohte/runok/commit/e7dae83cac98b5a65c154856ad22e474f41fc257))
+* **when:** add `glob_matches()` and `definitions` to `when` clauses ([#467](https://github.com/fohte/runok/issues/467)) ([170fea8](https://github.com/fohte/runok/commit/170fea87912eb0547912dd3973fde1ecfd2440cb))
+* **when:** expose `fs.home` and `fs.cwd` in `when` clauses ([#451](https://github.com/fohte/runok/issues/451)) ([1352a7c](https://github.com/fohte/runok/commit/1352a7cf145b03721e13d221d9575938ecd56dd7))
+
+
+### Dependencies
+
+* update rust crate anyhow to v1.0.103 ([#455](https://github.com/fohte/runok/issues/455)) ([765b9ab](https://github.com/fohte/runok/commit/765b9abddb90576694bda36e6f24a2cf24c90bd9))
+* update rust crate serde-saphyr to v0.0.28 ([#456](https://github.com/fohte/runok/issues/456)) ([33459b6](https://github.com/fohte/runok/commit/33459b61083fd61c68331ac90bdbc83124893289))
+* update rust crate tree-sitter to v0.26.10 ([#457](https://github.com/fohte/runok/issues/457)) ([1619865](https://github.com/fohte/runok/commit/1619865b1941fee01c4c336703e10f4552c2d3bf))
+
 ## [0.3.1](https://github.com/fohte/runok/compare/v0.3.0...v0.3.1) (2026-07-01)
 
 
