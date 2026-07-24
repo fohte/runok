@@ -26,9 +26,12 @@ runok check --verbose -- git status
 ```
 
 ```
-[verbose] Evaluating command: "git status"
-[verbose] Rule matched: allow 'git *' (matched tokens: ["status"])
-[verbose] Evaluation result: Allow
+▶ Evaluating: git status
+  ├─ allow  'git *'  (tokens: status)
+  └─ result: allow
+
+────────────────────────────────────────────
+Result: ALLOW
 allow
 ```
 
@@ -39,23 +42,34 @@ runok check --verbose -- rm -rf /
 ```
 
 ```
-[verbose] Evaluating command: "rm -rf /"
-[verbose] No rules matched
-[verbose] Evaluation result: Ask
+▶ Evaluating: rm -rf /
+  └─ result: ask  (no rules matched)
+
+────────────────────────────────────────────
+Result: ASK
 ask
 ```
 
-For [compound commands](/rule-evaluation/compound-commands/) (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually:
+For [compound commands](/rule-evaluation/compound-commands/) (commands joined with `&&`, `||`, `;`, or `|`), verbose output shows each sub-command individually as a numbered tree, followed by which sub-command decided the overall result:
 
 ```bash
 runok check --verbose -- 'git add . && git commit -m fix'
 ```
 
 ```
-[verbose] Compound command detected (2 sub-commands)
-[verbose]   sub-command 1: "git add ."
-[verbose]   sub-command 2: "git commit -m 'fix'"
-[verbose] Compound evaluation result: Allow
+▶ Evaluating: git add . && git commit -m fix
+  Compound command (2 sub-commands)
+
+  [1] git add .
+      ├─ allow  'git *'  (tokens: add, .)
+      └─ result: allow
+
+  [2] git commit -m fix
+      ├─ allow  'git *'  (tokens: commit, -m, fix)
+      └─ result: allow
+
+  ────────────────────────────────────────────
+  Result: ALLOW
 allow
 ```
 

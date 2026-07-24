@@ -63,6 +63,29 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
+### `runok check --verbose` / `runok exec --verbose` / `runok hook` now render a tree instead of `[verbose]`-prefixed log lines (TODO(pr-link))
+
+Verbose output is a colorized, indented tree: each sub-command of a compound command gets its own numbered block listing every matched rule alongside the resolved action, and a footer states the overall result and which sub-command decided it.
+
+```
+▶ Evaluating: git add . && git commit -m fix
+  Compound command (2 sub-commands)
+
+  [1] git add .
+      ├─ allow  'git *'  (tokens: add, .)
+      └─ result: allow
+
+  [2] git commit -m fix
+      ├─ allow  'git *'  (tokens: commit, -m, fix)
+      └─ result: allow
+
+  ────────────────────────────────────────────
+  Result: ALLOW
+allow
+```
+
+Colors (green/yellow/red for allow/ask/deny) are applied automatically on a TTY and omitted otherwise (piped output, log files). See [Debugging](/troubleshooting/debugging/) for more examples.
+
 ### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning ([#480](https://github.com/fohte/runok/pull/480))
 
 Following up on `runok hook` ([#476](https://github.com/fohte/runok/pull/476)), `runok migrate` now rewrites an existing `.claude/settings.json` registration of the deprecated `runok check --input-format claude-code-hook` command to `runok hook --agent claude-code`, for both the `PreToolUse` and `PostToolUse` events:
