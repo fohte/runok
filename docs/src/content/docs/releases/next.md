@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines (TODO(pr-link))
+### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines ([#486](https://github.com/fohte/runok/pull/486))
 
 Verbose output is a colorized, indented tree: each sub-command of a compound command gets its own numbered block listing every matched rule alongside the resolved action, and a footer states the overall result and which sub-command decided it.
 
