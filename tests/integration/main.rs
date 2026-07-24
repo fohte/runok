@@ -21,15 +21,17 @@ mod wrapper_recursive_evaluation;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rstest::fixture;
-use runok::rules::rule_engine::{Action, EvalContext};
+use runok::rules::rule_engine::{Action, EvalContext, StubCommandResolver};
 
 #[fixture]
 fn empty_context() -> EvalContext {
     EvalContext {
         env: HashMap::new(),
         cwd: PathBuf::from("/tmp"),
+        resolver: Arc::new(StubCommandResolver),
     }
 }
 

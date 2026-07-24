@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 
 use super::model::{AuditEntry, SerializableAction, SerializableRuleMatch};
 use crate::config::{Config, ConfigLoader, ConfigSource, DefaultConfigLoader};
-use crate::rules::rule_engine::{EvalContext, evaluate_compound};
+use crate::rules::rule_engine::{
+    CommandResolver, EvalContext, ProcessCommandResolver, evaluate_compound,
+};
 
 /// Re-evaluation of an audit entry's `command` against the config currently
 /// in effect, as opposed to the `action` / `command_evaluations` recorded on
@@ -92,9 +95,12 @@ impl Recheck {
 pub fn recheck_entries(entries: &[AuditEntry], loader: &DefaultConfigLoader) -> Vec<Recheck> {
     let mut config_cache: HashMap<String, Result<Config, String>> = HashMap::new();
     let env: HashMap<String, String> = std::env::vars().collect();
+    // Shared across all entries so repeated commands aren't re-probed via a
+    // fresh shell spawn for each one.
+    let resolver: Arc<dyn CommandResolver> = Arc::new(ProcessCommandResolver::new());
     entries
         .iter()
-        .map(|entry| recheck_one(entry, loader, &mut config_cache, &env))
+        .map(|entry| recheck_one(entry, loader, &mut config_cache, &env, &resolver))
         .collect()
 }
 
@@ -103,6 +109,7 @@ fn recheck_one(
     loader: &DefaultConfigLoader,
     config_cache: &mut HashMap<String, Result<Config, String>>,
     env: &HashMap<String, String>,
+    resolver: &Arc<dyn CommandResolver>,
 ) -> Recheck {
     let Some(cwd) = &entry.metadata.cwd else {
         return Recheck::Error {
@@ -118,6 +125,7 @@ fn recheck_one(
     let context = EvalContext {
         env: env.clone(),
         cwd: PathBuf::from(cwd.as_str()),
+        resolver: Arc::clone(resolver),
     };
 
     match evaluate_compound(config, &entry.command, &context) {

@@ -192,7 +192,6 @@ struct MatchedRule<'a> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     use rstest::rstest;
 
@@ -376,14 +375,14 @@ mod tests {
     // When clause filtering
     // ========================================
 
-    #[test]
-    fn when_clause_satisfied_matches() {
+    #[rstest]
+    fn when_clause_satisfied_matches(empty_context: EvalContext) {
         let mut rule = deny_rule("aws *");
         rule.when = Some("env.AWS_PROFILE == 'prod'".to_string());
 
         let context = EvalContext {
             env: HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
-            cwd: PathBuf::from("/tmp"),
+            ..empty_context
         };
 
         let config = make_config(vec![rule]);
@@ -391,14 +390,14 @@ mod tests {
         assert!(matches!(result.action, Action::Deny(_)));
     }
 
-    #[test]
-    fn when_clause_not_satisfied_skips_rule() {
+    #[rstest]
+    fn when_clause_not_satisfied_skips_rule(empty_context: EvalContext) {
         let mut rule = deny_rule("aws *");
         rule.when = Some("env.AWS_PROFILE == 'prod'".to_string());
 
         let context = EvalContext {
             env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
-            cwd: PathBuf::from("/tmp"),
+            ..empty_context
         };
 
         let config = make_config(vec![rule]);
@@ -406,14 +405,14 @@ mod tests {
         assert_eq!(result.action, Action::Ask(None));
     }
 
-    #[test]
-    fn when_clause_skips_deny_falls_back_to_allow() {
+    #[rstest]
+    fn when_clause_skips_deny_falls_back_to_allow(empty_context: EvalContext) {
         let mut deny = deny_rule("aws *");
         deny.when = Some("env.AWS_PROFILE == 'prod'".to_string());
 
         let context = EvalContext {
             env: HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
-            cwd: PathBuf::from("/tmp"),
+            ..empty_context
         };
 
         let config = make_config(vec![deny, allow_rule("aws *")]);

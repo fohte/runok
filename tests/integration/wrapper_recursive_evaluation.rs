@@ -475,7 +475,7 @@ fn when_clause_with_wrapper() {
     // sudo aws s3 ls in prod -> deny (inner command matches when clause)
     let prod_ctx = EvalContext {
         env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "prod".to_string())]),
-        cwd: std::path::PathBuf::from("/tmp"),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "sudo aws s3 ls", &prod_ctx).unwrap();
     assert!(
@@ -487,7 +487,7 @@ fn when_clause_with_wrapper() {
     // sudo aws s3 ls in dev -> allow (when clause skipped, allow matches)
     let dev_ctx = EvalContext {
         env: std::collections::HashMap::from([("AWS_PROFILE".to_string(), "dev".to_string())]),
-        cwd: std::path::PathBuf::from("/tmp"),
+        ..empty_context()
     };
     let result = evaluate_command(&config, "sudo aws s3 ls", &dev_ctx).unwrap();
     assert_eq!(result.action, Action::Allow);
