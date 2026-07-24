@@ -6,9 +6,10 @@ use crate::rules::expr_evaluator::evaluate;
 use crate::rules::pattern_matcher::matches_with_captures;
 use crate::rules::pattern_parser::parse_multi;
 
-use super::compound::{default_action, merge_results};
+use super::compound::merge_results;
 use super::flag_schema::{build_expr_context, build_flag_schema};
 use super::function::try_unwrap_function_call;
+use super::require_command_in_path::resolve_unmatched;
 use super::wrapper::try_unwrap_wrapper;
 use super::{Action, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
 
@@ -22,7 +23,7 @@ use super::{Action, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
 /// from command substitutions).
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_simple_command(
     config: &Config,
@@ -34,6 +35,7 @@ pub(super) fn evaluate_simple_command(
     loop_kind: &str,
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
+    source_like_present: bool,
 ) -> Result<EvalResult, RuleError> {
     // A resolved function call takes priority over rule matching against
     // the bare call name (e.g. `f`): the call is what actually runs, and
@@ -43,7 +45,15 @@ pub(super) fn evaluate_simple_command(
     // `command` as an ordinary, unknown command instead.
     if let Some(call_info) = function_call
         && let Some(result) = try_unwrap_function_call(
-            config, context, call_info, depth, redirects, pipe, loop_kind, call_stack,
+            config,
+            context,
+            call_info,
+            depth,
+            redirects,
+            pipe,
+            loop_kind,
+            call_stack,
+            source_like_present,
         )?
     {
         return Ok(result);
@@ -53,7 +63,13 @@ pub(super) fn evaluate_simple_command(
         Some(rules) => rules,
         None => {
             return Ok(EvalResult {
-                action: default_action(config),
+                action: resolve_unmatched(
+                    config,
+                    command,
+                    context,
+                    function_call,
+                    source_like_present,
+                ),
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
                 alias_chain: Vec::new(),
@@ -132,11 +148,12 @@ pub(super) fn evaluate_simple_command(
         depth,
         loop_kind,
         call_stack,
+        source_like_present,
     )?;
 
     if matched.is_empty() && wrapper_result.is_none() {
         return Ok(EvalResult {
-            action: default_action(config),
+            action: resolve_unmatched(config, command, context, function_call, source_like_present),
             sandbox_preset: None,
             matched_rules: match_infos,
             alias_chain: Vec::new(),

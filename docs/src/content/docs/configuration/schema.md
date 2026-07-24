@@ -19,7 +19,7 @@ rules:
   - ask: 'npm *'
 ```
 
-The top-level keys are `required_runok_version`, `extends`, `defaults`, `rules`, `definitions`, `audit`, and `tests`. All are optional.
+The top-level keys are `required_runok_version`, `extends`, `defaults`, `rules`, `definitions`, `audit`, `tests`, and `experimental`. All are optional.
 
 ### JSON Schema
 
@@ -534,6 +534,51 @@ Additional configuration files to merge only during test execution. These files 
 Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, or `deny`) and the command to evaluate.
 
 **Type:** `list[TestEntry]`\
+**Default:** `[]`
+
+### `experimental`
+
+Opt-in features that are still evolving. See [Experimental Features](/configuration/experimental/) for the stability caveat that applies to everything under this key.
+
+**Type:** `object`\
+**Default:** `{}`\
+**Required:** No
+
+#### `experimental.require_command_in_path`
+
+Deny (or ask, per `action`) a command whose `argv[0]` cannot be resolved via `PATH`. See [Experimental Features -- `require_command_in_path`](/configuration/experimental/#require_command_in_path) for the full behavior, including the conditions that skip the check to avoid false denials.
+
+**Type:** `object`\
+**Default:** None
+
+```yaml title="runok.yml"
+experimental:
+  require_command_in_path:
+    enabled: true
+    action: deny
+    ignore:
+      - my-shell-function
+```
+
+##### `experimental.require_command_in_path.enabled`
+
+Whether this check is active.
+
+**Type:** `bool`\
+**Default:** `false`
+
+##### `experimental.require_command_in_path.action`
+
+Action to take when a command's `argv[0]` cannot be resolved via `PATH`. `allow` is rejected at config validation time.
+
+**Type:** `"ask" | "deny"`\
+**Default:** `"deny"`
+
+##### `experimental.require_command_in_path.ignore`
+
+Command names exempt from this check, matched as a literal exact string against `argv[0]`.
+
+**Type:** `list[str]`\
 **Default:** `[]`
 
 ## Complete Example

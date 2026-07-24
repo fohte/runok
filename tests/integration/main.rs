@@ -12,6 +12,7 @@ mod optional_notation_and_path_ref;
 mod path_resolution;
 mod property_based;
 mod remote_preset_with_path;
+mod require_command_in_path;
 mod required_runok_version;
 mod var_pattern_evaluation;
 mod var_ref_evaluation;
