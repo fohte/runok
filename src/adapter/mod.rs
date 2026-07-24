@@ -1,6 +1,7 @@
 pub mod check_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
+mod verbose;
 
 use crate::audit::{
     AuditEntry, AuditMetadata, AuditWriter, CommandEvaluation, EvalType, SerializableAction,
@@ -96,32 +97,6 @@ pub trait Endpoint {
     /// Returns `false` for endpoints like `check` where logging is not desired.
     fn is_auditable(&self) -> bool {
         false
-    }
-}
-
-/// Log verbose details about matched rules to stderr.
-fn log_matched_rules(matched_rules: &[RuleMatchInfo]) {
-    if matched_rules.is_empty() {
-        eprintln!("[verbose] No rules matched");
-        return;
-    }
-    for info in matched_rules {
-        let action_label = match info.action_kind {
-            crate::config::ActionKind::Allow => "allow",
-            crate::config::ActionKind::Ask => "ask",
-            crate::config::ActionKind::Deny => "deny",
-        };
-        if info.matched_tokens.is_empty() {
-            eprintln!(
-                "[verbose] Rule matched: {} '{}'",
-                action_label, info.pattern
-            );
-        } else {
-            eprintln!(
-                "[verbose] Rule matched: {} '{}' (matched tokens: {:?})",
-                action_label, info.pattern, info.matched_tokens
-            );
-        }
     }
 }
 
@@ -225,7 +200,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         Ok(Some(cmd)) => cmd,
         Ok(None) => {
             if options.verbose {
-                eprintln!("[verbose] No command to evaluate");
+                eprintln!("No command to evaluate");
             }
             return endpoint
                 .handle_no_match(&defaults)
@@ -233,10 +208,6 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         }
         Err(e) => return endpoint.handle_error(e),
     };
-
-    if options.verbose {
-        eprintln!("[verbose] Evaluating command: {:?}", command);
-    }
 
     let context = EvalContext::from_env();
 
@@ -258,44 +229,23 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         .map(|ec| ec.command.clone())
         .collect();
 
-    if options.verbose && commands.len() > 1 {
-        eprintln!(
-            "[verbose] Compound command detected ({} sub-commands)",
-            commands.len()
-        );
-        for (i, cmd) in commands.iter().enumerate() {
-            eprintln!("[verbose]   sub-command {}: {:?}", i + 1, cmd);
-        }
-    }
-
     // When extract_commands simplifies a compound shell construct (e.g. a for-loop)
     // down to a single sub-command, evaluate that sub-command instead of the
     // original input string.
-    let effective_command = if commands.len() == 1 && commands[0] != command {
-        if options.verbose {
-            eprintln!(
-                "[verbose] Single sub-command extracted: {:?} (from {:?})",
-                commands[0], command
-            );
-        }
-        &commands[0]
-    } else {
-        &command
-    };
+    let extracted_display =
+        (commands.len() == 1 && commands[0] != command).then(|| commands[0].as_str());
+    let effective_command: &str = extracted_display.unwrap_or(command.as_str());
     let action_result = if commands.len() > 1 {
         match evaluate_compound(config, &command, &context) {
             Ok(compound_result) => {
                 if options.verbose {
-                    for detail in &compound_result.sub_command_details {
-                        log_matched_rules(&detail.matched_rules);
-                        eprintln!(
-                            "[verbose]   sub-command {:?}: {:?}",
-                            detail.command, detail.action
-                        );
-                    }
-                    eprintln!(
-                        "[verbose] Compound evaluation result: {:?}",
-                        compound_result.action
+                    eprint!(
+                        "{}",
+                        verbose::render_compound(
+                            &command,
+                            &compound_result.sub_command_details,
+                            &compound_result.action,
+                        )
                     );
                 }
 
@@ -326,7 +276,12 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     evaluations,
                 }
             }
-            Err(e) => return endpoint.handle_error(e.into()),
+            Err(e) => {
+                if options.verbose {
+                    eprint!("{}", verbose::render_error_header(&command));
+                }
+                return endpoint.handle_error(e.into());
+            }
         }
     } else if commands.is_empty() {
         // No executable commands (e.g. comment-only input) — use default action
@@ -360,11 +315,16 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         ) {
             Ok(result) => {
                 if options.verbose {
-                    log_matched_rules(&result.matched_rules);
-                    eprintln!("[verbose] Evaluation result: {:?}", result.action);
-                    if let Some(ref preset) = result.sandbox_preset {
-                        eprintln!("[verbose] Sandbox preset: {:?}", preset);
-                    }
+                    eprint!(
+                        "{}",
+                        verbose::render_single(
+                            &command,
+                            extracted_display,
+                            &result.matched_rules,
+                            &result.action,
+                            result.sandbox_preset.as_deref(),
+                        )
+                    );
                 }
                 let (env, argv, redir_fields, pipe_field) = first_extracted
                     .map(parse_fields_from_extracted)
@@ -388,7 +348,12 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     evaluations,
                 }
             }
-            Err(e) => return endpoint.handle_error(e.into()),
+            Err(e) => {
+                if options.verbose {
+                    eprint!("{}", verbose::render_error_header(&command));
+                }
+                return endpoint.handle_error(e.into());
+            }
         }
     };
 
