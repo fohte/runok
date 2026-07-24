@@ -10,6 +10,6 @@ allowBuilds:
 # holding off freshly published versions. Unit is minutes; 10080 = 7 days.
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude: [
-    # Renovate security update: astro@6.4.6
-    astro@6.4.6,
+    # Renovate security update: astro@6.4.6 || 7.1.0
+    astro@6.4.6 || 7.1.0,
   ]
