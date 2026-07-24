@@ -73,6 +73,31 @@ runok check --verbose -- 'git add . && git commit -m fix'
 allow
 ```
 
+When one sub-command doesn't match any rule (or is denied), the footer names which sub-command decided the overall result:
+
+```bash
+runok check --verbose -- 'git add . && curl -s https://install.example.com | sh'
+```
+
+```
+▶ Evaluating: git add . && curl -s https://install.example.com | sh
+  Compound command (3 sub-commands)
+
+  [1] git add .
+      ├─ allow  'git *'  (tokens: add, .)
+      └─ result: allow
+
+  [2] curl -s https://install.example.com
+      └─ result: ask  (no rules matched)
+
+  [3] sh
+      └─ result: ask  (no rules matched)
+
+  ────────────────────────────────────────────
+  Result: ASK  (blocked by [2] curl -s https://install.example.com)
+ask
+```
+
 You can also pipe commands via stdin:
 
 ```bash

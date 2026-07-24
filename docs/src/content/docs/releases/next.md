@@ -63,25 +63,27 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `runok check --verbose` / `runok exec --verbose` / `runok hook` now render a tree instead of `[verbose]`-prefixed log lines (TODO(pr-link))
+### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines (TODO(pr-link))
 
 Verbose output is a colorized, indented tree: each sub-command of a compound command gets its own numbered block listing every matched rule alongside the resolved action, and a footer states the overall result and which sub-command decided it.
 
 ```
-▶ Evaluating: git add . && git commit -m fix
-  Compound command (2 sub-commands)
+▶ Evaluating: git add . && curl -s https://install.example.com | sh
+  Compound command (3 sub-commands)
 
   [1] git add .
       ├─ allow  'git *'  (tokens: add, .)
       └─ result: allow
 
-  [2] git commit -m fix
-      ├─ allow  'git *'  (tokens: commit, -m, fix)
-      └─ result: allow
+  [2] curl -s https://install.example.com
+      └─ result: ask  (no rules matched)
+
+  [3] sh
+      └─ result: ask  (no rules matched)
 
   ────────────────────────────────────────────
-  Result: ALLOW
-allow
+  Result: ASK  (blocked by [2] curl -s https://install.example.com)
+ask
 ```
 
 Colors (green/yellow/red for allow/ask/deny) are applied automatically on a TTY and omitted otherwise (piped output, log files). See [Debugging](/troubleshooting/debugging/) for more examples.
