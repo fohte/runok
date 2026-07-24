@@ -188,6 +188,7 @@ pub(super) fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
             sandbox_preset: b.sandbox_preset,
             matched_rules: combined_rules,
             alias_chain,
+            require_command_in_path: b.require_command_in_path,
         }
     } else {
         let mut alias_chain = a.alias_chain;
@@ -201,6 +202,7 @@ pub(super) fn merge_results(a: EvalResult, b: EvalResult) -> EvalResult {
             sandbox_preset: a.sandbox_preset,
             matched_rules: combined_rules,
             alias_chain,
+            require_command_in_path: a.require_command_in_path,
         }
     }
 }

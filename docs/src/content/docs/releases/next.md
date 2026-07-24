@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### Experimental: `require_command_in_path` denies commands not found in `PATH` (TODO(pr-link))
+### Experimental: `require_command_in_path` denies commands not found in `PATH` ([#485](https://github.com/fohte/runok/pull/485))
 
 An AI coding agent's most common failure mode is trying to run a typo'd or hallucinated command (`tarraform` for `terraform`) -- previously, runok would allow it through and the command would only fail once the shell actually tried to run it. The new `experimental.require_command_in_path` check catches this earlier: when no rule matches and `argv[0]` cannot be resolved via `PATH`, it denies (or asks) instead of falling through to `defaults.action`.
 
@@ -75,6 +75,21 @@ experimental:
 ```
 
 It is off by default and, like everything under `experimental`, may change in a future minor release. It also skips itself in several situations to avoid a false deny -- an argument still hidden behind an unresolved shell variable, a function defined earlier in the same command string, `source`/`.`/`eval` anywhere in the input, and any `argv[0]` containing a `/`. See [Experimental Features -- `require_command_in_path`](/configuration/experimental/#require_command_in_path) for the full behavior and when `ignore` is the right escape hatch.
+
+### The audit log records when `require_command_in_path` decided the outcome (TODO(pr-link))
+
+`experimental.require_command_in_path` denies or asks by falling through the same code path as an unmatched command resolved via `defaults.action`, so an audit entry with empty `matched_rules` used to be ambiguous between the two. Each `command_evaluations` entry now carries `require_command_in_path`, the unresolved command name, whenever this check (rather than a matched rule or `defaults.action`) decided that branch's action:
+
+```json
+{
+  "command": "tarraform version",
+  "action": { "type": "deny", "detail": { "message": "..." } },
+  "argv": ["tarraform", "version"],
+  "require_command_in_path": "tarraform"
+}
+```
+
+The field is omitted whenever the check did not decide the branch's action, so existing `runok audit --json` consumers are unaffected. See [Audit Log JSON Schema -- `require_command_in_path`](/cli/audit-log-schema/#require_command_in_path) for details.
 
 ### `runok migrate` rewrites the legacy Claude Code hook command, which now prints a deprecation warning ([#480](https://github.com/fohte/runok/pull/480))
 

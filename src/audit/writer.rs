@@ -236,6 +236,7 @@ mod tests {
                 redirects: vec![],
                 pipe: crate::audit::SerializablePipe::default(),
                 alias_chain: vec![],
+                require_command_in_path: None,
             }],
         };
 

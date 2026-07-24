@@ -16,31 +16,36 @@ const SOURCE_LIKE_COMMANDS: &[&str] = &["source", ".", "eval"];
 /// falls back to `default_action` in every other case (disabled, a skip
 /// condition, or the resolver finding the command or being unable to
 /// tell).
+///
+/// The second tuple element is the unresolved command name, present only
+/// when this check itself decided the returned action (deny or ask)
+/// rather than deferring to `default_action` -- callers thread it into
+/// `EvalResult::require_command_in_path` for audit logging.
 pub(super) fn resolve_unmatched(
     config: &Config,
     command: &str,
     context: &EvalContext,
     function_call: Option<&FunctionCallInfo>,
     source_like_present: bool,
-) -> Action {
+) -> (Action, Option<String>) {
     let Some(check) = config
         .experimental
         .as_ref()
         .and_then(|e| e.require_command_in_path.as_ref())
         .filter(|c| c.is_enabled())
     else {
-        return default_action(config);
+        return (default_action(config), None);
     };
 
     // A call resolved earlier in the same command string is a defined
     // function by construction. A `source`/`.`/`eval` anywhere in the
     // input may define or invoke functions no static check can see.
     if function_call.is_some() || source_like_present {
-        return default_action(config);
+        return (default_action(config), None);
     }
 
     let Ok(parsed) = parse_command(command, &FlagSchema::default()) else {
-        return default_action(config);
+        return (default_action(config), None);
     };
 
     // A wrapper's multi-token capture is re-quoted with single quotes
@@ -57,33 +62,40 @@ pub(super) fn resolve_unmatched(
         || parsed.command.contains('/')
         || check.resolved_ignore().contains(&parsed.command)
     {
-        return default_action(config);
+        return (default_action(config), None);
     }
 
     match context.resolver.resolve(&parsed.command) {
-        CommandResolution::Found | CommandResolution::Unknown => default_action(config),
+        CommandResolution::Found | CommandResolution::Unknown => (default_action(config), None),
         CommandResolution::NotFound => deny_or_ask(config, check, &parsed.command),
     }
 }
 
-fn deny_or_ask(config: &Config, check: &RequireCommandInPathConfig, command_name: &str) -> Action {
+fn deny_or_ask(
+    config: &Config,
+    check: &RequireCommandInPathConfig,
+    command_name: &str,
+) -> (Action, Option<String>) {
     let message = format!(
         "command '{command_name}' not found in PATH (experimental.require_command_in_path)"
     );
     match check.resolved_action() {
-        ActionKind::Deny => Action::Deny(DenyResponse {
-            message: Some(message),
-            fix_suggestion: Some(format!(
-                "if '{command_name}' is a shell function or alias defined in your shell \
-                 profile, add it to experimental.require_command_in_path.ignore, or add an \
-                 allow rule for it instead. Otherwise, check for a typo."
-            )),
-            matched_rule: String::new(),
-        }),
-        ActionKind::Ask => Action::Ask(Some(message)),
+        ActionKind::Deny => (
+            Action::Deny(DenyResponse {
+                message: Some(message),
+                fix_suggestion: Some(format!(
+                    "if '{command_name}' is a shell function or alias defined in your shell \
+                     profile, add it to experimental.require_command_in_path.ignore, or add an \
+                     allow rule for it instead. Otherwise, check for a typo."
+                )),
+                matched_rule: String::new(),
+            }),
+            Some(command_name.to_owned()),
+        ),
+        ActionKind::Ask => (Action::Ask(Some(message)), Some(command_name.to_owned())),
         // Rejected by config validation; treated as absent rather than
         // panicking on a config that skipped validation.
-        ActionKind::Allow => default_action(config),
+        ActionKind::Allow => (default_action(config), None),
     }
 }
 
@@ -173,8 +185,8 @@ mod tests {
     })]
     fn disabled_falls_back_to_default_action(#[case] config: Config) {
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, "tarraform version", &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     // ========================================
@@ -190,49 +202,55 @@ mod tests {
     ) {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(resolver);
-        let action = resolve_unmatched(&config, command, &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, command, &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
     #[case::deny(
         ActionKind::Deny,
-        Action::Deny(DenyResponse {
-            message: Some(
-                "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
-                    .to_string()
-            ),
-            fix_suggestion: Some(
-                "if 'tarraform' is a shell function or alias defined in your shell \
-                 profile, add it to experimental.require_command_in_path.ignore, or add \
-                 an allow rule for it instead. Otherwise, check for a typo."
-                    .to_string()
-            ),
-            matched_rule: String::new(),
-        })
+        (
+            Action::Deny(DenyResponse {
+                message: Some(
+                    "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                        .to_string()
+                ),
+                fix_suggestion: Some(
+                    "if 'tarraform' is a shell function or alias defined in your shell \
+                     profile, add it to experimental.require_command_in_path.ignore, or add \
+                     an allow rule for it instead. Otherwise, check for a typo."
+                        .to_string()
+                ),
+                matched_rule: String::new(),
+            }),
+            Some("tarraform".to_string()),
+        )
     )]
     #[case::ask(
         ActionKind::Ask,
-        Action::Ask(Some(
-            "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
-                .to_string()
-        ))
+        (
+            Action::Ask(Some(
+                "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                    .to_string()
+            )),
+            Some("tarraform".to_string()),
+        )
     )]
     // `allow` is rejected by config validation, but `resolve_unmatched`
     // doesn't itself call `validate()` -- a config that skipped it (e.g.
     // constructed programmatically) must not panic.
     #[case::allow_falls_back_to_default_action(
         ActionKind::Allow,
-        default_action(&Config::default())
+        (default_action(&Config::default()), None)
     )]
     fn not_found_resolves_per_configured_action(
         #[case] action_kind: ActionKind,
-        #[case] expected: Action,
+        #[case] expected: (Action, Option<String>),
     ) {
         let config = enabled_config(action_kind, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(action, expected);
+        let result = resolve_unmatched(&config, "tarraform version", &context, None, false);
+        assert_eq!(result, expected);
     }
 
     // ========================================
@@ -246,8 +264,8 @@ mod tests {
     fn unresolved_expansion_argv0_skips(#[case] command: &str) {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, command, &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, command, &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
@@ -257,8 +275,8 @@ mod tests {
     fn dequoted_text_looking_like_expansion_skips(#[case] command: &str) {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, command, &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, command, &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
@@ -267,16 +285,16 @@ mod tests {
     fn argv0_with_slash_skips(#[case] command: &str) {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, command, &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, command, &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
     fn ignored_command_skips() {
         let config = enabled_config(ActionKind::Deny, vec!["tarraform"]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, "tarraform version", &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
@@ -288,24 +306,24 @@ mod tests {
             .iter()
             .find_map(|ec| ec.function_call.as_ref())
             .expect("f() {..}; f should produce a resolved function call");
-        let action = resolve_unmatched(&config, "f", &context, Some(call), false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, "f", &context, Some(call), false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
     fn source_like_present_skips() {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "tarraform version", &context, None, true);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, "tarraform version", &context, None, true);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     #[rstest]
     fn unparsable_command_skips() {
         let config = enabled_config(ActionKind::Deny, vec![]);
         let context = context_with(Arc::new(AlwaysNotFoundResolver));
-        let action = resolve_unmatched(&config, "", &context, None, false);
-        assert_eq!(action, default_action(&config));
+        let result = resolve_unmatched(&config, "", &context, None, false);
+        assert_eq!(result, (default_action(&config), None));
     }
 
     // ========================================

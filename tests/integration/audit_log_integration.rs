@@ -455,6 +455,65 @@ fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir)
             redirects: vec![],
             pipe: runok::audit::SerializablePipe::default(),
             alias_chain: vec![],
+            require_command_in_path: None,
+        }]
+    );
+}
+
+#[rstest]
+fn audit_log_records_require_command_in_path_trigger(audit_dir: TempDir) {
+    let audit_path = audit_dir.path().to_string_lossy().to_string();
+    let config = parse_config(&format!(
+        indoc! {"
+            experimental:
+              require_command_in_path:
+                enabled: true
+            audit:
+              path: '{}'
+        "},
+        audit_path
+    ))
+    .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
+
+    let endpoint = ExecAdapter::new(
+        vec!["runok-test-definitely-not-a-real-command-xyz".into()],
+        None,
+        Box::new(MockExecutor::new(3)),
+    );
+
+    adapter::run_with_options(&endpoint, &config, &RunOptions::default());
+
+    let entries = read_audit_entries(audit_dir.path());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].command_evaluations,
+        vec![CommandEvaluation {
+            command: "runok-test-definitely-not-a-real-command-xyz".to_owned(),
+            original_command: None,
+            action: runok::audit::SerializableAction::Deny {
+                message: Some(
+                    "command 'runok-test-definitely-not-a-real-command-xyz' not found in PATH \
+                     (experimental.require_command_in_path)"
+                        .to_owned()
+                ),
+                fix_suggestion: Some(
+                    "if 'runok-test-definitely-not-a-real-command-xyz' is a shell function or \
+                     alias defined in your shell profile, add it to \
+                     experimental.require_command_in_path.ignore, or add an allow rule for it \
+                     instead. Otherwise, check for a typo."
+                        .to_owned()
+                ),
+            },
+            matched_rules: vec![],
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec!["runok-test-definitely-not-a-real-command-xyz".to_owned()],
+            redirects: vec![],
+            pipe: runok::audit::SerializablePipe::default(),
+            alias_chain: vec![],
+            require_command_in_path: Some(
+                "runok-test-definitely-not-a-real-command-xyz".to_owned()
+            ),
         }]
     );
 }
