@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{AuditConfig, Config, Defaults, Definitions, RotationConfig, VarDefinition};
+use super::{
+    AuditConfig, Config, Defaults, Definitions, ExperimentalConfig, RequireCommandInPathConfig,
+    RotationConfig, VarDefinition,
+};
 
 impl Config {
     /// Merge two configs. `self` is the base (e.g. global), `other` is the override (e.g. local).
@@ -15,6 +18,13 @@ impl Config {
     /// - audit: override (local wins at merge level; loader enforces
     ///   global-only by stripping audit from project/local layers)
     /// - tests: override (local wins; test definitions are not merged across layers)
+    /// - experimental: override (local wins per field, like audit, but with
+    ///   no global-only restriction). `action` can never be `allow`
+    ///   (validated), but `enabled`/`ignore` can still be relaxed by
+    ///   project/local layers — same trust model as `rules`, where project
+    ///   config can already broaden behavior. This is accepted for now
+    ///   because no experimental check currently ships enforcement; revisit
+    ///   once one does.
     pub fn merge(self, other: Config) -> Config {
         Config {
             // required_runok_version is enforced at load time per file, so
@@ -27,6 +37,7 @@ impl Config {
             definitions: Self::merge_definitions(self.definitions, other.definitions),
             audit: Self::merge_audit(self.audit, other.audit),
             tests: other.tests.or(self.tests),
+            experimental: Self::merge_experimental(self.experimental, other.experimental),
         }
     }
 
@@ -150,6 +161,39 @@ impl Config {
             (None, Some(o)) => Some(o),
             (Some(b), Some(o)) => Some(RotationConfig {
                 retention_days: o.retention_days.or(b.retention_days),
+            }),
+        }
+    }
+
+    fn merge_experimental(
+        base: Option<ExperimentalConfig>,
+        over: Option<ExperimentalConfig>,
+    ) -> Option<ExperimentalConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(ExperimentalConfig {
+                require_command_in_path: Self::merge_require_command_in_path(
+                    b.require_command_in_path,
+                    o.require_command_in_path,
+                ),
+            }),
+        }
+    }
+
+    fn merge_require_command_in_path(
+        base: Option<RequireCommandInPathConfig>,
+        over: Option<RequireCommandInPathConfig>,
+    ) -> Option<RequireCommandInPathConfig> {
+        match (base, over) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(RequireCommandInPathConfig {
+                enabled: o.enabled.or(b.enabled),
+                action: o.action.or(b.action),
+                ignore: o.ignore.or(b.ignore),
             }),
         }
     }
@@ -563,6 +607,105 @@ mod tests {
         assert_eq!(audit.enabled, Some(true));
         assert_eq!(audit.path.as_deref(), Some("/base/"));
         assert_eq!(audit.rotation.unwrap().retention_days, Some(14));
+    }
+
+    // === Merge: experimental ===
+
+    #[test]
+    fn merge_experimental_both_none() {
+        let base = Config::default();
+        let over = Config::default();
+        let result = base.merge(over);
+        assert_eq!(result.experimental, None);
+    }
+
+    #[test]
+    fn merge_experimental_base_preserved() {
+        let base = Config {
+            experimental: Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(true),
+                    action: Some(ActionKind::Deny),
+                    ignore: Some(vec!["my-func".to_string()]),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config::default();
+        let result = base.merge(over);
+        assert_eq!(
+            result.experimental,
+            Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(true),
+                    action: Some(ActionKind::Deny),
+                    ignore: Some(vec!["my-func".to_string()]),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn merge_experimental_override_only() {
+        let base = Config::default();
+        let over = Config {
+            experimental: Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(true),
+                    action: Some(ActionKind::Ask),
+                    ignore: None,
+                }),
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        assert_eq!(
+            result.experimental,
+            Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(true),
+                    action: Some(ActionKind::Ask),
+                    ignore: None,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn merge_experimental_override_wins_per_field() {
+        let base = Config {
+            experimental: Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(true),
+                    action: Some(ActionKind::Deny),
+                    ignore: Some(vec!["base-func".to_string()]),
+                }),
+            }),
+            ..Config::default()
+        };
+        let over = Config {
+            experimental: Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(false),
+                    action: None,
+                    ignore: Some(vec!["over-func".to_string()]),
+                }),
+            }),
+            ..Config::default()
+        };
+        let result = base.merge(over);
+        // override wins per field (enabled, ignore), base fills gaps (action),
+        // unlike definitions.paths which appends instead of replacing
+        assert_eq!(
+            result.experimental,
+            Some(ExperimentalConfig {
+                require_command_in_path: Some(RequireCommandInPathConfig {
+                    enabled: Some(false),
+                    action: Some(ActionKind::Deny),
+                    ignore: Some(vec!["over-func".to_string()]),
+                }),
+            })
+        );
     }
 
     // === definitions.vars ===

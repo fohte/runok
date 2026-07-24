@@ -134,6 +134,7 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
+            experimental: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
@@ -158,6 +159,7 @@ mod tests {
             definitions: None,
             audit: None,
             tests: None,
+            experimental: None,
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("exactly one"));
