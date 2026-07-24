@@ -13,6 +13,7 @@ mod compound;
 mod dispatch;
 mod flag_schema;
 mod function;
+mod require_command_in_path;
 mod simple_eval;
 mod wrapper;
 
@@ -22,6 +23,7 @@ pub use command_resolver::{
 pub use compound::{default_action, evaluate_compound};
 
 use dispatch::evaluate_command_inner;
+use require_command_in_path::command_contains_source_like;
 
 /// Context for rule evaluation, providing environment variables and
 /// working directory for `when` clause evaluation.
@@ -114,6 +116,8 @@ pub fn evaluate_command(
     command: &str,
     context: &EvalContext,
 ) -> Result<EvalResult, RuleError> {
+    let source_like_present = command_contains_source_like(command);
+
     // For single commands, extract redirect/pipe metadata so that `when`
     // clauses referencing `redirects` or `pipe` work correctly.
     // Compound commands (multiple extracted commands) are left to the
@@ -132,6 +136,7 @@ pub fn evaluate_command(
             &first.loop_kind,
             first.function_call.as_ref(),
             &[],
+            source_like_present,
         );
     }
     evaluate_command_inner(
@@ -144,6 +149,7 @@ pub fn evaluate_command(
         "",
         None,
         &[],
+        source_like_present,
     )
 }
 
@@ -172,6 +178,7 @@ pub fn evaluate_command_with_metadata(
         loop_kind,
         function_call,
         &[],
+        command_contains_source_like(command),
     )
 }
 

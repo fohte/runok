@@ -14,7 +14,7 @@ pub(super) const MAX_WRAPPER_DEPTH: usize = 10;
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, and the in-progress call stack for cycle detection); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_command_inner(
     config: &Config,
@@ -26,6 +26,7 @@ pub(super) fn evaluate_command_inner(
     loop_kind: &str,
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
+    source_like_present: bool,
 ) -> Result<EvalResult, RuleError> {
     if depth > MAX_WRAPPER_DEPTH {
         return Err(RuleError::RecursionDepthExceeded(MAX_WRAPPER_DEPTH));
@@ -70,6 +71,7 @@ pub(super) fn evaluate_command_inner(
                     &sub.loop_kind,
                     sub.function_call.as_ref(),
                     call_stack,
+                    source_like_present,
                 )?;
                 merged = Some(match merged {
                     Some(prev) => merge_results(prev, result),
@@ -96,6 +98,7 @@ pub(super) fn evaluate_command_inner(
                     &sub.loop_kind,
                     sub.function_call.as_ref(),
                     call_stack,
+                    source_like_present,
                 )?;
                 nested_merged = Some(match nested_merged {
                     Some(prev) => merge_results(prev, result),
@@ -119,6 +122,7 @@ pub(super) fn evaluate_command_inner(
                     loop_kind,
                     function_call,
                     call_stack,
+                    source_like_present,
                 )?;
                 return Ok(merge_results(nested_result, simple_result));
             }
@@ -137,6 +141,7 @@ pub(super) fn evaluate_command_inner(
         loop_kind,
         function_call,
         call_stack,
+        source_like_present,
     )
 }
 
