@@ -395,7 +395,7 @@ Rule-evaluation result for this branch. See [Action Object](#action-object).
 
 ### `matched_rules`
 
-Rules that matched for this branch, in match order. See [RuleMatch Object](#rulematch-object). Empty both when `defaults.action` resolved the branch and when [`require_command_in_path`](#require_command_in_path) did -- check that field to tell the two apart.
+Rules that matched for this branch, in match order. See [RuleMatch Object](#rulematch-object). Empty when `defaults.action` resolved the branch. Usually also empty when [`require_command_in_path`](#require_command_in_path) did, though a compound branch with a nested command substitution can carry a rule matched by the outer command text even then -- check `require_command_in_path` directly rather than assuming emptiness here.
 
 **Type:** [`list[RuleMatch]`](#rulematch-object)\
 **Omitted when empty.**
@@ -442,7 +442,7 @@ Pipeline position of this branch. See [Pipe Object](#pipe-object).
 
 ### `require_command_in_path`
 
-The unresolved command name, present only when [`experimental.require_command_in_path`](/configuration/experimental/#require_command_in_path) decided this branch's `action` (a `deny` or `ask` because the command's `argv[0]` could not be resolved via `PATH`) rather than a matched rule or the `defaults.action` fallback. Since a `require_command_in_path` decision also leaves `matched_rules` empty, use this field to tell the two apart when `matched_rules` is empty:
+The unresolved command name, present only when [`experimental.require_command_in_path`](/configuration/experimental/#require_command_in_path) decided this branch's `action` (a `deny` or `ask` because the command's `argv[0]` could not be resolved via `PATH`) rather than a matched rule or the `defaults.action` fallback. `matched_rules` is usually also empty in this case, but check this field directly rather than inferring from `matched_rules` emptiness -- a compound branch containing a nested command substitution (e.g. `rm $(tarraform)`) can carry a matched rule for the outer command (`rm *`) alongside a `require_command_in_path` decision from the inner one:
 
 ```json
 {
