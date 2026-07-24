@@ -35,7 +35,10 @@ use super::{FlagSchema, ParsedCommand};
 /// structures, parse errors) — those inputs are expected to be split
 /// upstream by [`extract_commands_with_metadata`](super::extract_commands_with_metadata).
 pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, CommandParseError> {
-    let raw_tokens = tokenize_command(input)?;
+    let TokenizeResult {
+        tokens: raw_tokens,
+        command_is_expansion,
+    } = tokenize_command_full(input)?;
     let command = raw_tokens[0].clone();
 
     let mut flags = HashMap::new();
@@ -78,6 +81,7 @@ pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, 
         flags,
         args,
         raw_tokens,
+        command_is_expansion,
     })
 }
 
@@ -109,13 +113,33 @@ pub fn parse_command(input: &str, schema: &FlagSchema) -> Result<ParsedCommand, 
 ///   produce a token stream (e.g. truly unclosed quotes, pipelines /
 ///   lists / control flow that callers were expected to split first).
 pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
+    tokenize_command_full(input).map(|result| result.tokens)
+}
+
+/// Result of [`tokenize_command_full`]: the token stream plus metadata
+/// only [`parse_command`] needs. Kept separate from the public
+/// [`tokenize_command`] so that function's return type (relied on by
+/// its many existing callers/tests) doesn't have to change.
+struct TokenizeResult {
+    tokens: Vec<String>,
+    /// See [`tokens_from_command`](extract::tokens_from_command)'s doc
+    /// comment for what this flags. Always `false` when tokenization
+    /// fell back to `shlex::split`, since that path has no AST to
+    /// inspect.
+    command_is_expansion: bool,
+}
+
+fn tokenize_command_full(input: &str) -> Result<TokenizeResult, CommandParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CommandParseError::EmptyCommand);
     }
 
     match tokenize_via_ast(trimmed) {
-        AstTokenizeOutcome::Tokens(tokens) => Ok(tokens),
+        AstTokenizeOutcome::Tokens(tokens, command_is_expansion) => Ok(TokenizeResult {
+            tokens,
+            command_is_expansion,
+        }),
         AstTokenizeOutcome::ParseError => {
             // Fallback: tree-sitter-bash gave up on this input (most
             // often because a flag value contains shell metacharacters
@@ -127,7 +151,10 @@ pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
             if let Some(tokens) = shlex::split(trimmed)
                 && !tokens.is_empty()
             {
-                return Ok(tokens);
+                return Ok(TokenizeResult {
+                    tokens,
+                    command_is_expansion: false,
+                });
             }
             Err(CommandParseError::SyntaxError)
         }
@@ -143,7 +170,7 @@ pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// would silently swallow pipelines and feed `["ls", "|", "tail"]`
 /// into pattern matching as if they were a single command.
 enum AstTokenizeOutcome {
-    Tokens(Vec<String>),
+    Tokens(Vec<String>, bool),
     ParseError,
     NotASingleCommand,
 }
@@ -178,16 +205,18 @@ fn tokenize_via_ast(input: &str) -> AstTokenizeOutcome {
     };
     let source = input.as_bytes();
 
-    let tokens_result = match command_node.kind() {
-        "test_command" => tokens_from_test_command(command_node, source),
+    let tokens_result: Result<(Vec<String>, bool), CommandParseError> = match command_node.kind() {
+        "test_command" => tokens_from_test_command(command_node, source).map(|t| (t, false)),
         "declaration_command" | "unset_command" => {
-            tokens_from_declaration_command(command_node, source)
+            tokens_from_declaration_command(command_node, source).map(|t| (t, false))
         }
         _ => tokens_from_command(command_node, source),
     };
 
     match tokens_result {
-        Ok(tokens) if !tokens.is_empty() => AstTokenizeOutcome::Tokens(tokens),
+        Ok((tokens, command_is_expansion)) if !tokens.is_empty() => {
+            AstTokenizeOutcome::Tokens(tokens, command_is_expansion)
+        }
         _ => AstTokenizeOutcome::NotASingleCommand,
     }
 }
@@ -610,5 +639,32 @@ mod tests {
             result.raw_tokens,
             vec!["curl", "-X", "POST", "https://example.com"]
         );
+    }
+
+    // ========================================
+    // parse_command: command_is_expansion
+    //
+    // Only a `command_name` child that wraps a bare `simple_expansion`
+    // (`$X`), `expansion` (`${X}`, `${X:-default}`), or
+    // `command_substitution` (`$(cmd)`) node is flagged. Everything
+    // else — a plain word, a quoted string/raw_string (even one whose
+    // contents look like a variable reference), or a concatenation
+    // that merely contains an expansion among other pieces — is not,
+    // since the AST node itself isn't a pure unresolved expansion.
+    // ========================================
+
+    #[rstest]
+    #[case::word("echo hello", false)]
+    #[case::dquoted_expansion(r#""$X" hello"#, false)]
+    #[case::squoted_not_expansion("'$X' hello", false)]
+    #[case::simple_expansion("$X hello", true)]
+    #[case::braced_expansion("${X} hello", true)]
+    #[case::braced_expansion_with_default("${X:-y} hello", true)]
+    #[case::command_substitution("$(cmd) hello", true)]
+    #[case::concatenation("foo$X hello", false)]
+    fn parse_command_command_is_expansion(#[case] input: &str, #[case] expected: bool) {
+        let schema = FlagSchema::default();
+        let result = parse_command(input, &schema).unwrap();
+        assert_eq!(result.command_is_expansion, expected);
     }
 }

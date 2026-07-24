@@ -41,6 +41,12 @@ pub struct ParsedCommand {
     pub args: Vec<String>,
     /// The original raw tokens from tokenization.
     pub raw_tokens: Vec<String>,
+    /// Whether `command` came from an unresolved shell expansion node
+    /// rather than a literal or quoted word. See `tokens_from_command`'s
+    /// doc comment (`tokenizer/extract.rs`) for exactly what counts as
+    /// an expansion. Always `false` when tokenization fell back to
+    /// `shlex::split` (no AST available).
+    pub command_is_expansion: bool,
 }
 
 /// Information about a single redirect operator attached to a command.

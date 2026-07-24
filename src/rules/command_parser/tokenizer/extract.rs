@@ -7,11 +7,26 @@ use super::dequote::dequote_node;
 /// `variable_assignment` prefixes and `redirect` field children, both
 /// of which are tracked elsewhere and must not appear in the token
 /// stream used for pattern matching.
+///
+/// Also reports whether the `command_name` child wraps an unresolved
+/// shell expansion (`simple_expansion`/`$X`, `expansion`/`${X}`, or
+/// `command_substitution`/`$(cmd)`) rather than a literal/quoted word —
+/// i.e. an argv[0] that could not be statically resolved to a fixed
+/// command name (`VarEnv` substitution already ran upstream in the
+/// splitter, so a surviving expansion node here means it couldn't be
+/// resolved). Determined purely from the AST node kind, not by
+/// inspecting token text, so a quoted literal like `'$foo'` (a
+/// `raw_string`) is never mistaken for an expansion. A double-quoted
+/// `"$X"` is excluded too, even though bash still substitutes it at
+/// runtime (only word-splitting is suppressed) -- dequoting collapses
+/// its token text to the same `$X` form as the bare expansion, so a
+/// separate check against the token text can still catch it.
 pub(super) fn tokens_from_command(
     command_node: tree_sitter::Node<'_>,
     source: &[u8],
-) -> Result<Vec<String>, CommandParseError> {
+) -> Result<(Vec<String>, bool), CommandParseError> {
     let mut tokens: Vec<String> = Vec::new();
+    let mut command_is_expansion = false;
     for i in 0..command_node.child_count() {
         let Some(child) = command_node.child(i as u32) else {
             continue;
@@ -25,10 +40,16 @@ pub(super) fn tokens_from_command(
         if command_node.field_name_for_child(i as u32) == Some("redirect") {
             continue;
         }
+        if child.kind() == "command_name" {
+            command_is_expansion = matches!(
+                child.named_child(0).map(|inner| inner.kind()),
+                Some("simple_expansion" | "expansion" | "command_substitution")
+            );
+        }
         let token = dequote_node(child, source).ok_or(CommandParseError::SyntaxError)?;
         tokens.push(token);
     }
-    Ok(tokens)
+    Ok((tokens, command_is_expansion))
 }
 
 /// Extract tokens from a `declaration_command` (`export FOO=bar`,
