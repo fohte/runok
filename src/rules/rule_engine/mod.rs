@@ -68,6 +68,10 @@ pub struct EvalResult {
     /// Names of aliases applied while resolving the command, in order.
     /// Empty when no alias rewrite fired.
     pub alias_chain: Vec<String>,
+    /// Unresolved command name, present only when
+    /// `experimental.require_command_in_path` decided `action` (deny or
+    /// ask) rather than a matched rule or `default_action`.
+    pub require_command_in_path: Option<String>,
 }
 
 /// Per-sub-command evaluation detail, for verbose logging.

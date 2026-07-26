@@ -101,6 +101,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
                     redirects: Vec::new(),
                     pipe: SerializablePipe::default(),
                     alias_chain: Vec::new(),
+                    require_command_in_path: None,
                 })
                 .collect()
         } else {
@@ -117,6 +118,7 @@ impl TryFrom<RawAuditEntry> for AuditEntry {
                 redirects: Vec::new(),
                 pipe: SerializablePipe::default(),
                 alias_chain: Vec::new(),
+                require_command_in_path: None,
             }]
         };
 
@@ -289,6 +291,15 @@ pub struct CommandEvaluation {
     /// omitted from JSON in that case to keep legacy audit shape unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alias_chain: Vec<String>,
+    /// Unresolved command name, present only when
+    /// `experimental.require_command_in_path` decided this branch's
+    /// `action` (a deny or ask because the command's `argv[0]` could not
+    /// be resolved via `PATH`) rather than a matched rule or the
+    /// `defaults.action` fallback. `None` in every other case, including
+    /// when `matched_rules` is also empty because `defaults.action`
+    /// resolved the branch instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_command_in_path: Option<String>,
 }
 
 /// A `KEY=VALUE` environment variable assignment that prefixed the
@@ -503,6 +514,7 @@ mod tests {
             redirects: vec![],
             pipe: SerializablePipe::default(),
             alias_chain: vec![],
+            require_command_in_path: None,
         }
     }
 
@@ -551,6 +563,7 @@ mod tests {
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
                 alias_chain: vec![],
+                require_command_in_path: None,
             },
             CommandEvaluation {
                 command: "rm -rf /".to_owned(),
@@ -570,6 +583,7 @@ mod tests {
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
                 alias_chain: vec![],
+                require_command_in_path: None,
             },
         ],
     })]
@@ -676,6 +690,7 @@ mod tests {
                 redirects: vec![],
                 pipe: SerializablePipe::default(),
                 alias_chain: vec![],
+                require_command_in_path: None,
             }],
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -700,6 +715,7 @@ mod tests {
             redirects: vec![],
             pipe: SerializablePipe::default(),
             alias_chain: vec![],
+            require_command_in_path: None,
         },
         r#"{"command":"echo hi","action":{"type":"allow"},"eval_type":"primary","argv":["echo","hi"]}"#,
     )]
@@ -723,8 +739,36 @@ mod tests {
             }],
             pipe: SerializablePipe { stdin: false, stdout: true },
             alias_chain: vec![],
+            require_command_in_path: None,
         },
         r#"{"command":"FOO=x echo hi > /tmp/log","action":{"type":"allow"},"eval_type":"compound","env":[{"name":"FOO","value":"x"}],"argv":["echo","hi"],"redirects":[{"redirect_type":"output","operator":">","target":"/tmp/log","descriptor":null}],"pipe":{"stdin":false,"stdout":true}}"#,
+    )]
+    #[case::require_command_in_path(
+        CommandEvaluation {
+            command: "tarraform version".to_owned(),
+            original_command: None,
+            action: SerializableAction::Deny {
+                message: Some(
+                    "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                        .to_owned(),
+                ),
+                fix_suggestion: Some(
+                    "if 'tarraform' is a shell function or alias defined in your shell \
+                     profile, add it to experimental.require_command_in_path.ignore, or add \
+                     an allow rule for it instead. Otherwise, check for a typo."
+                        .to_owned(),
+                ),
+            },
+            matched_rules: vec![],
+            eval_type: EvalType::Primary,
+            env: vec![],
+            argv: vec!["tarraform".to_owned(), "version".to_owned()],
+            redirects: vec![],
+            pipe: SerializablePipe::default(),
+            alias_chain: vec![],
+            require_command_in_path: Some("tarraform".to_owned()),
+        },
+        r#"{"command":"tarraform version","action":{"type":"deny","detail":{"message":"command 'tarraform' not found in PATH (experimental.require_command_in_path)","fix_suggestion":"if 'tarraform' is a shell function or alias defined in your shell profile, add it to experimental.require_command_in_path.ignore, or add an allow rule for it instead. Otherwise, check for a typo."}},"eval_type":"primary","argv":["tarraform","version"],"require_command_in_path":"tarraform"}"#,
     )]
     fn command_evaluation_serialises(#[case] eval: CommandEvaluation, #[case] expected: &str) {
         let serialized = serde_json::to_string(&eval).unwrap();

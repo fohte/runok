@@ -51,6 +51,10 @@ pub struct CommandEvalResult {
     /// Alias names applied to this branch, in firing order. Empty when no
     /// alias rewrite happened.
     pub alias_chain: Vec<String>,
+    /// Unresolved command name, present only when
+    /// `experimental.require_command_in_path` decided this branch's
+    /// `action` rather than a matched rule or `default_action`.
+    pub require_command_in_path: Option<String>,
 }
 
 /// Sandbox information from rule evaluation, varying by command type.
@@ -190,6 +194,7 @@ fn write_audit_log(
             redirects: e.redirects.clone(),
             pipe: e.pipe.clone(),
             alias_chain: e.alias_chain.clone(),
+            require_command_in_path: e.require_command_in_path.clone(),
         })
         .collect();
 
@@ -316,6 +321,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                             redirects,
                             pipe,
                             alias_chain: result.alias_chain,
+                            require_command_in_path: result.require_command_in_path,
                         }
                     })
                     .collect();
@@ -381,6 +387,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     redirects: redir_fields,
                     pipe: pipe_field,
                     alias_chain: result.alias_chain,
+                    require_command_in_path: result.require_command_in_path,
                 }];
                 ActionResult {
                     action: result.action,

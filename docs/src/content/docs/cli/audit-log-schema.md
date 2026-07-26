@@ -395,7 +395,7 @@ Rule-evaluation result for this branch. See [Action Object](#action-object).
 
 ### `matched_rules`
 
-Rules that matched for this branch, in match order. See [RuleMatch Object](#rulematch-object).
+Rules that matched for this branch, in match order. See [RuleMatch Object](#rulematch-object). Empty when `defaults.action` resolved the branch. Usually also empty when [`require_command_in_path`](#require_command_in_path) did, though a compound branch with a nested command substitution can carry a rule matched by the outer command text even then -- check `require_command_in_path` directly rather than assuming emptiness here.
 
 **Type:** [`list[RuleMatch]`](#rulematch-object)\
 **Omitted when empty.**
@@ -439,6 +439,29 @@ Pipeline position of this branch. See [Pipe Object](#pipe-object).
 
 **Type:** [`Pipe`](#pipe-object)\
 **Omitted when both `stdin` and `stdout` are `false`** (i.e. the branch is not part of a pipeline).
+
+### `require_command_in_path`
+
+The unresolved command name, present only when [`experimental.require_command_in_path`](/configuration/experimental/#require_command_in_path) decided this branch's `action` (a `deny` or `ask` because the command's `argv[0]` could not be resolved via `PATH`) rather than a matched rule or the `defaults.action` fallback. `matched_rules` is usually also empty in this case, but check this field directly rather than inferring from `matched_rules` emptiness -- a compound branch containing a nested command substitution (e.g. `rm $(tarraform)`) can carry a matched rule for the outer command (`rm *`) alongside a `require_command_in_path` decision from the inner one:
+
+```json
+{
+  "command": "tarraform version",
+  "action": {
+    "type": "deny",
+    "detail": {
+      "message": "command 'tarraform' not found in PATH (experimental.require_command_in_path)",
+      "fix_suggestion": "if 'tarraform' is a shell function or alias defined in your shell profile, add it to experimental.require_command_in_path.ignore, or add an allow rule for it instead. Otherwise, check for a typo."
+    }
+  },
+  "eval_type": "primary",
+  "argv": ["tarraform", "version"],
+  "require_command_in_path": "tarraform"
+}
+```
+
+**Type:** `str`\
+**Omitted when this check did not decide the branch's action** -- including when the check is disabled, skipped, or the command resolved via `PATH`.
 
 ## RuleMatch Object
 
