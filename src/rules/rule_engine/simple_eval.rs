@@ -62,17 +62,14 @@ pub(super) fn evaluate_simple_command(
     let rules = match &config.rules {
         Some(rules) => rules,
         None => {
+            let (action, require_command_in_path) =
+                resolve_unmatched(config, command, context, function_call, source_like_present);
             return Ok(EvalResult {
-                action: resolve_unmatched(
-                    config,
-                    command,
-                    context,
-                    function_call,
-                    source_like_present,
-                ),
+                action,
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
                 alias_chain: Vec::new(),
+                require_command_in_path,
             });
         }
     };
@@ -152,11 +149,14 @@ pub(super) fn evaluate_simple_command(
     )?;
 
     if matched.is_empty() && wrapper_result.is_none() {
+        let (action, require_command_in_path) =
+            resolve_unmatched(config, command, context, function_call, source_like_present);
         return Ok(EvalResult {
-            action: resolve_unmatched(config, command, context, function_call, source_like_present),
+            action,
             sandbox_preset: None,
             matched_rules: match_infos,
             alias_chain: Vec::new(),
+            require_command_in_path,
         });
     }
 
@@ -187,6 +187,7 @@ pub(super) fn evaluate_simple_command(
             sandbox_preset,
             matched_rules: match_infos,
             alias_chain,
+            require_command_in_path: None,
         })
     };
 

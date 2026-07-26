@@ -83,6 +83,7 @@ pub(super) fn evaluate_command_inner(
                 sandbox_preset: None,
                 matched_rules: Vec::new(),
                 alias_chain: Vec::new(),
+                require_command_in_path: None,
             }));
         }
         if !nested_subs.is_empty() {
