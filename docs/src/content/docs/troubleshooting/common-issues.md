@@ -15,7 +15,7 @@ sidebar:
 runok check --verbose -- <your-command>
 ```
 
-Look for the `[verbose] No rules matched` message to confirm, then check the following causes.
+Look for a `result: ask  (no rules matched)` line to confirm, then check the following causes.
 
 **Common causes:**
 
