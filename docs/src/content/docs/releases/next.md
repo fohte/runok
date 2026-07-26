@@ -76,7 +76,7 @@ experimental:
 
 It is off by default and, like everything under `experimental`, may change in a future minor release. It also skips itself in several situations to avoid a false deny -- an argument still hidden behind an unresolved shell variable, a function defined earlier in the same command string, `source`/`.`/`eval` anywhere in the input, and any `argv[0]` containing a `/`. See [Experimental Features -- `require_command_in_path`](/configuration/experimental/#require_command_in_path) for the full behavior and when `ignore` is the right escape hatch.
 
-### The audit log records when `require_command_in_path` decided the outcome (TODO(pr-link))
+### The audit log records when `require_command_in_path` decided the outcome ([#487](https://github.com/fohte/runok/pull/487))
 
 `experimental.require_command_in_path` denies or asks by falling through the same code path as an unmatched command resolved via `defaults.action`, so an audit entry with empty `matched_rules` used to be ambiguous between the two. Each `command_evaluations` entry now carries `require_command_in_path`, the unresolved command name, whenever this check (rather than a matched rule or `defaults.action`) decided that branch's action:
 
