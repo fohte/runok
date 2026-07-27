@@ -1,7 +1,13 @@
 allowBuilds:
   # required by astro / vite for bundling
   esbuild: true
+<<<<<<< before updating
   # required by astro / @astrojs/starlight for image processing
+||||||| last update
+  # required by @fohte/eslint-config -> eslint-plugin-import-x for "@/*" resolution
+=======
+  # required by @fohte/eslint-config -> eslint-plugin-import-x for module resolution
+>>>>>>> after updating
   sharp: true
   # required by wrangler for the local Cloudflare Workers runtime
   workerd: true
