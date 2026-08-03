@@ -18,6 +18,12 @@ fi
 # Enable corepack so that pnpm version from package.json packageManager field is used
 corepack enable
 
+# corepack creates the pnpm executable inside mise's node install bin
+# directory; reshim so the mise shims dir (which is on PATH) picks it up.
+if command -v mise > /dev/null 2>&1; then
+  mise reshim
+fi
+
 # Use --frozen-lockfile when a lockfile exists so a Renovate-bumped dep still
 # inside the pnpm-workspace.yaml minimumReleaseAge window does not re-trigger
 # the supply-chain policy check and block bootstrap. Fall back to plain
