@@ -33,7 +33,7 @@ jobs:
           domain: octo-sts.fohte.net
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.octo-sts.outputs.token }}
@@ -53,7 +53,7 @@ jobs:
 
       - name: Run copier-update-action
         id: copier-update
-        uses: fohte/copier-update-action@9fe7399ce4db739a9d2eb66cc9e40986d3d03f89 # v0.1.4
+        uses: fohte/copier-update-action@a1c6dfff1b9bb8d5c7ec7af88436611fe7d3f209 # v0.1.5
         with:
           template-repo: ${{ env.TEMPLATE_REPO }}
           target-version: ${{ github.event.inputs.target-version }}
