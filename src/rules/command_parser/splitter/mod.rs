@@ -116,7 +116,7 @@ fn extract_commands_with_context(
     // Bare `assignment redirect` prefixes with no command name
     // (`TS=foo 2>/dev/null`) are valid POSIX shell that tree-sitter-bash
     // 0.25.1 can't parse cleanly. See `all_errors_explained`.
-    if root.has_error() && !all_errors_explained(root) {
+    if root.has_error() && !all_errors_explained(root, trimmed.as_bytes()) {
         return Err(CommandParseError::SyntaxError);
     }
 
@@ -172,12 +172,12 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
 
     let root = tree.root_node();
 
+    let source = trimmed.as_bytes();
+
     // See `all_errors_explained`.
-    if root.has_error() && !all_errors_explained(root) {
+    if root.has_error() && !all_errors_explained(root, source) {
         return Err(CommandParseError::SyntaxError);
     }
-
-    let source = trimmed.as_bytes();
     let mut commands = Vec::new();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn extract_bare_assignment_with_redirect_returns_empty() {
         let result = extract_commands("TS=foo 2>/dev/null").unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result, Vec::<String>::new());
     }
 
     #[test]
@@ -1031,16 +1031,14 @@ mod tests {
         // `command` node -- this stays a genuine SyntaxError, not our
         // misparse pattern.
         let err = extract_commands("TS=foo 2>/dev/null &&").unwrap_err();
-        assert!(
-            matches!(err, CommandParseError::SyntaxError),
-            "expected SyntaxError, got {:?}",
-            err
+        assert_eq!(
+            std::mem::discriminant(&err),
+            std::mem::discriminant(&CommandParseError::SyntaxError),
         );
     }
 
-    // Real-world repro from the bug report: a command substitution
-    // inside the bare assignment's value, followed by two more
-    // statements, the last one a pipeline.
+    // A command substitution inside the bare assignment's value,
+    // followed by two more statements, the last one a pipeline.
     #[test]
     fn extract_real_world_repro_ts_opensrc_assignment_redirect() {
         let input = r#"TS=$(opensrc path 'tailscale/tailscale@v1.90.6') 2>/dev/null; echo "$TS"; ls "$TS/cmd/containerboot" 2>&1 | head -30"#;

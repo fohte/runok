@@ -122,7 +122,16 @@ fn strip_first_token(input: &str) -> Option<&str> {
 /// instead of staying inside a `command` node, so it never reaches this
 /// function as a `command` kind at all -- it stays a real
 /// `SyntaxError` via [`all_errors_explained`].
-pub(super) fn is_assignment_redirect_misparse(node: tree_sitter::Node) -> bool {
+///
+/// The `ERROR` node's own source text must be exactly one of the five
+/// operators bash actually recognizes as a statement/pipe separator
+/// (`;`, `&`, `&&`, `||`, `|`) -- an invalid operator sequence (`&&&`,
+/// `;&`, `|||`, ...) also produces an `ERROR` child in this same shape,
+/// but is a genuine syntax error (`bash -n` rejects it), not an instance
+/// of this misparse.
+const VALID_SWALLOWED_SEPARATORS: &[&str] = &[";", "&", "&&", "||", "|"];
+
+pub(super) fn is_assignment_redirect_misparse(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "command" {
         return false;
     }
@@ -143,7 +152,15 @@ pub(super) fn is_assignment_redirect_misparse(node: tree_sitter::Node) -> bool {
         }
         match child.kind() {
             "variable_assignment" => has_assignment = true,
-            _ if child.is_error() => has_error = true,
+            _ if child.is_error() => {
+                let is_valid_separator = child
+                    .utf8_text(source)
+                    .is_ok_and(|text| VALID_SWALLOWED_SEPARATORS.contains(&text.trim()));
+                if !is_valid_separator {
+                    return false;
+                }
+                has_error = true;
+            }
             _ if node.field_name_for_child(i as u32) == Some("name") => {
                 name_field_missing = Some(child.child(0).is_some_and(|c| c.is_missing()));
             }
@@ -165,9 +182,11 @@ pub(super) fn is_assignment_redirect_misparse(node: tree_sitter::Node) -> bool {
 /// [`strip_misparsed_compound_prefix`] -- that workaround runs as a
 /// separate text-level pre-pass before the tree checked here is even
 /// parsed.
-pub(super) fn all_errors_explained(node: tree_sitter::Node) -> bool {
+pub(super) fn all_errors_explained(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.is_error() {
-        return node.parent().is_some_and(is_assignment_redirect_misparse);
+        return node
+            .parent()
+            .is_some_and(|p| is_assignment_redirect_misparse(p, source));
     }
     if node.is_missing() {
         return node.kind() == "word"
@@ -175,13 +194,13 @@ pub(super) fn all_errors_explained(node: tree_sitter::Node) -> bool {
             && node
                 .parent()
                 .and_then(|p| p.parent())
-                .is_some_and(is_assignment_redirect_misparse);
+                .is_some_and(|gp| is_assignment_redirect_misparse(gp, source));
     }
     for i in 0..node.child_count() {
         let Some(child) = node.child(i as u32) else {
             continue;
         };
-        if !all_errors_explained(child) {
+        if !all_errors_explained(child, source) {
             return false;
         }
     }
@@ -201,7 +220,6 @@ mod tests {
         parser.parse(source, None).unwrap()
     }
 
-    /// Depth-first search for the first node of `kind` in the tree.
     fn find_first<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
@@ -227,10 +245,16 @@ mod tests {
     #[case::swallowed_or("TS=foo 2>/dev/null || echo hi", true)]
     #[case::swallowed_ampersand("TS=foo 2>/dev/null & echo hi", true)]
     #[case::well_formed_assignment_and_redirect_not_triggered("FOO=bar cat <<< hello", false)]
+    #[case::invalid_triple_ampersand_stays_syntax_error("TS=foo 2>/dev/null &&& echo hi", false)]
+    #[case::invalid_triple_pipe_stays_syntax_error("TS=foo 2>/dev/null ||| echo hi", false)]
+    #[case::invalid_semicolon_ampersand_stays_syntax_error("TS=foo 2>/dev/null ;& echo hi", false)]
     fn is_assignment_redirect_misparse_cases(#[case] input: &str, #[case] expected: bool) {
         let tree = parse(input);
         let command = find_first(tree.root_node(), "command").expect("input has a `command` node");
-        assert_eq!(is_assignment_redirect_misparse(command), expected);
+        assert_eq!(
+            is_assignment_redirect_misparse(command, input.as_bytes()),
+            expected
+        );
     }
 
     #[rstest]
@@ -246,8 +270,12 @@ mod tests {
     #[case::swallowed_ampersand("TS=foo 2>/dev/null & echo hi", true)]
     #[case::env_prefix_command_unaffected("FOO=bar echo hi 2>&1", true)]
     #[case::dangling_and_with_nothing_after_stays_syntax_error("TS=foo 2>/dev/null &&", false)]
+    #[case::invalid_triple_ampersand_stays_syntax_error("TS=foo 2>/dev/null &&& echo hi", false)]
     fn all_errors_explained_cases(#[case] input: &str, #[case] expected: bool) {
         let tree = parse(input);
-        assert_eq!(all_errors_explained(tree.root_node()), expected);
+        assert_eq!(
+            all_errors_explained(tree.root_node(), input.as_bytes()),
+            expected
+        );
     }
 }

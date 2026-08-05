@@ -296,7 +296,7 @@ pub(in crate::rules::command_parser) fn collect_commands(
             }
         }
         "command" => {
-            if is_assignment_redirect_misparse(node) {
+            if is_assignment_redirect_misparse(node, source) {
                 handle_assignment_redirect_misparse(
                     node,
                     source,
