@@ -1,13 +1,17 @@
+mod assignment_redirect_misparse;
 mod control_flow;
 mod redirected;
 mod simple_command;
 
+use assignment_redirect_misparse::handle_assignment_redirect_misparse;
 use control_flow::{
     handle_case_item, handle_case_statement, handle_elif_or_else, handle_for_statement,
     handle_if_statement, handle_while_statement,
 };
 use redirected::handle_redirected_statement;
 use simple_command::{handle_command, handle_declaration_or_unset};
+
+use super::misparse::is_assignment_redirect_misparse;
 
 use crate::rules::command_parser::function_table::FunctionTable;
 use crate::rules::command_parser::redirect::collect_substitutions_recursive;
@@ -292,17 +296,31 @@ pub(in crate::rules::command_parser) fn collect_commands(
             }
         }
         "command" => {
-            handle_command(
-                node,
-                source,
-                commands,
-                pipe_info,
-                redirects,
-                loop_kind,
-                var_env,
-                function_table,
-                poison,
-            );
+            if is_assignment_redirect_misparse(node) {
+                handle_assignment_redirect_misparse(
+                    node,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    function_table,
+                    poison,
+                );
+            } else {
+                handle_command(
+                    node,
+                    source,
+                    commands,
+                    pipe_info,
+                    redirects,
+                    loop_kind,
+                    var_env,
+                    function_table,
+                    poison,
+                );
+            }
         }
         "declaration_command" | "unset_command" => {
             handle_declaration_or_unset(

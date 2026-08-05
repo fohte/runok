@@ -2,7 +2,7 @@ mod collect;
 mod misparse;
 
 pub(super) use collect::collect_commands;
-use misparse::strip_misparsed_compound_prefix;
+use misparse::{all_errors_explained, strip_misparsed_compound_prefix};
 
 use crate::rules::CommandParseError;
 
@@ -113,7 +113,10 @@ fn extract_commands_with_context(
 
     let root = tree.root_node();
 
-    if root.has_error() {
+    // Bare `assignment redirect` prefixes with no command name
+    // (`TS=foo 2>/dev/null`) are valid POSIX shell that tree-sitter-bash
+    // 0.25.1 can't parse cleanly. See `all_errors_explained`.
+    if root.has_error() && !all_errors_explained(root) {
         return Err(CommandParseError::SyntaxError);
     }
 
@@ -169,7 +172,8 @@ pub fn split_top_level_commands(input: &str) -> Result<Vec<String>, CommandParse
 
     let root = tree.root_node();
 
-    if root.has_error() {
+    // See `all_errors_explained`.
+    if root.has_error() && !all_errors_explained(root) {
         return Err(CommandParseError::SyntaxError);
     }
 
@@ -900,6 +904,170 @@ mod tests {
         // A bare variable assignment (no command substitution) produces no commands.
         let result = extract_commands("X=1").unwrap();
         assert!(result.is_empty());
+    }
+
+    // ========================================
+    // extract_commands: bare assignment + redirect, no command name
+    // (`TS=foo 2>/dev/null`)
+    //
+    // tree-sitter-bash 0.25.1 can't parse this shape cleanly -- it's a
+    // complete, valid POSIX simple command (both `bash -n` and `zsh -n`
+    // accept it), but the `command` grammar rule requires a
+    // `command_name`. See `splitter::misparse::is_assignment_redirect_misparse`.
+    // ========================================
+
+    #[test]
+    fn extract_bare_assignment_with_redirect_returns_empty() {
+        let result = extract_commands("TS=foo 2>/dev/null").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_bare_assignment_with_redirect_persists_assignment() {
+        // The assignment PERSISTS (like a plain top-level
+        // `variable_assignment`), unlike `handle_command`'s ephemeral
+        // env-prefix treatment: `$TS` resolves in a later command.
+        let result = extract_commands_with_metadata("TS=foo 2>/dev/null; echo $TS").unwrap();
+        assert_eq!(
+            result,
+            vec![ExtractedCommand {
+                command: "echo foo".to_string(),
+                env: vec![],
+                argv: vec!["echo".to_string(), "foo".to_string()],
+                redirects: vec![],
+                pipe: PipeInfo::default(),
+                loop_kind: String::new(),
+                original_command: Some("echo $TS".to_string()),
+                function_call: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn extract_env_prefix_command_unaffected_by_assignment_redirect_fix() {
+        // `FOO=bar echo hi 2>&1` parses with no misparse (real,
+        // non-missing `command_name`), so it must keep its existing
+        // env-prefix + redirect treatment untouched.
+        let result = extract_commands_with_metadata("FOO=bar echo hi 2>&1").unwrap();
+        assert_eq!(
+            result,
+            vec![ExtractedCommand {
+                command: "echo hi".to_string(),
+                env: vec![EnvAssignment {
+                    name: "FOO".to_string(),
+                    value: Some("bar".to_string()),
+                }],
+                argv: vec!["echo".to_string(), "hi".to_string()],
+                redirects: vec![RedirectInfo {
+                    redirect_type: "dup".to_string(),
+                    operator: ">&".to_string(),
+                    target: "1".to_string(),
+                    descriptor: Some(2),
+                }],
+                pipe: PipeInfo::default(),
+                loop_kind: String::new(),
+                original_command: None,
+                function_call: None,
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::swallowed_semicolon("TS=foo 2>/dev/null; echo hi", vec!["echo hi"])]
+    #[case::chained_double_assignment_swallow(
+        "TS=foo 2>/dev/null; TS2=bar 2>/dev/null; echo hi",
+        vec!["echo hi"],
+    )]
+    #[case::only_immediate_next_statement_merged(
+        "TS=foo 2>/dev/null; echo a; echo b",
+        vec!["echo a", "echo b"],
+    )]
+    #[case::swallowed_pipe("TS=foo 2>/dev/null | cat", vec!["cat"])]
+    #[case::swallowed_and("TS=foo 2>/dev/null && echo hi", vec!["echo hi"])]
+    #[case::swallowed_or("TS=foo 2>/dev/null || echo hi", vec!["echo hi"])]
+    #[case::swallowed_ampersand("TS=foo 2>/dev/null & echo hi", vec!["echo hi"])]
+    #[case::inside_if_body("if true; then TS=foo 2>/dev/null; fi", vec!["true"])]
+    fn extract_assignment_redirect_misparse_cases(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let result = extract_commands(input).unwrap();
+        let expected: Vec<String> = expected.into_iter().map(String::from).collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn extract_assignment_redirect_misparse_chained_resolves_both_assignments() {
+        let result =
+            extract_commands("TS=foo 2>/dev/null; TS2=bar 2>/dev/null; echo $TS $TS2").unwrap();
+        assert_eq!(result, vec!["echo foo bar"]);
+    }
+
+    #[test]
+    fn extract_assignment_redirect_misparse_pipe_pins_pipe_metadata() {
+        let commands = extract_commands_with_metadata("TS=foo 2>/dev/null | cat").unwrap();
+        assert_eq!(
+            commands,
+            vec![ExtractedCommand {
+                command: "cat".to_string(),
+                env: vec![],
+                argv: vec!["cat".to_string()],
+                redirects: vec![],
+                pipe: PipeInfo {
+                    stdin: true,
+                    stdout: false
+                },
+                loop_kind: String::new(),
+                original_command: None,
+                function_call: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn extract_assignment_redirect_dangling_operator_still_syntax_error() {
+        // No tail follows `&&`, so tree-sitter swallows the whole
+        // thing into an `ERROR` at the `program` level instead of a
+        // `command` node -- this stays a genuine SyntaxError, not our
+        // misparse pattern.
+        let err = extract_commands("TS=foo 2>/dev/null &&").unwrap_err();
+        assert!(
+            matches!(err, CommandParseError::SyntaxError),
+            "expected SyntaxError, got {:?}",
+            err
+        );
+    }
+
+    // Real-world repro from the bug report: a command substitution
+    // inside the bare assignment's value, followed by two more
+    // statements, the last one a pipeline.
+    #[test]
+    fn extract_real_world_repro_ts_opensrc_assignment_redirect() {
+        let input = r#"TS=$(opensrc path 'tailscale/tailscale@v1.90.6') 2>/dev/null; echo "$TS"; ls "$TS/cmd/containerboot" 2>&1 | head -30"#;
+        let result = extract_commands(input).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                "opensrc path 'tailscale/tailscale@v1.90.6'".to_string(),
+                r#"echo "$TS""#.to_string(),
+                r#"ls "$TS/cmd/containerboot""#.to_string(),
+                "head -30".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_real_world_repro_ts_opensrc_assignment_redirect() {
+        let input = r#"TS=$(opensrc path 'tailscale/tailscale@v1.90.6') 2>/dev/null; echo "$TS"; ls "$TS/cmd/containerboot" 2>&1 | head -30"#;
+        let result = split_top_level_commands(input).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                r#"TS=$(opensrc path 'tailscale/tailscale@v1.90.6') 2>/dev/null; echo "$TS""#
+                    .to_string(),
+                r#"ls "$TS/cmd/containerboot" 2>&1 | head -30"#.to_string(),
+            ]
+        );
     }
 
     // ========================================
