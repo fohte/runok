@@ -253,7 +253,7 @@ rules:
 
 Applying Claude Code integration changes in `runok init` used to rewrite an existing `runok.yml` with the boilerplate template when no permission migration happened. The wizard now only rewrites an existing config when a migration was accepted; re-running init just to register hooks leaves the file untouched.
 
-### A bare `assignment redirect` prefix with no command name no longer fails to parse (TODO(pr-link))
+### A bare `assignment redirect` prefix with no command name no longer fails to parse ([#491](https://github.com/fohte/runok/pull/491))
 
 A simple command consisting of only variable assignment(s) and redirect(s) -- no command name -- is valid POSIX shell (`bash -n` and `zsh -n` both accept it), but the underlying parser couldn't parse it, so `runok check` rejected it outright:
 
