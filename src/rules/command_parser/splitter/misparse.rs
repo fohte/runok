@@ -87,3 +87,195 @@ fn strip_first_token(input: &str) -> Option<&str> {
     let rest = &trimmed[end..];
     Some(rest.trim_start_matches([' ', '\t']))
 }
+
+/// Whether `node` is a `command` node produced by the tree-sitter-bash
+/// 0.25.1 misparse of a bare `assignment redirect` prefix with no
+/// command name -- e.g. `TS=foo 2>/dev/null`. This is a complete,
+/// valid POSIX simple command (both `bash -n` and `zsh -n` accept it),
+/// but the `command` grammar rule requires a `command_name`, so
+/// tree-sitter produces one of two malformed shapes instead of a clean
+/// parse:
+///
+/// - **Terminal**: nothing follows the assignment(s)/redirect(s) (or
+///   what follows can't continue as a command name, e.g. a keyword
+///   like `fi`). tree-sitter emits a `command_name` field whose sole
+///   child is a zero-width MISSING `word`, with no `ERROR` child:
+///   `TS=foo 2>/dev/null` parses as `(command (variable_assignment ...)
+///   redirect: (file_redirect ...) name: (command_name (MISSING word)))`.
+/// - **Swallowed continuation**: the assignment/redirect is immediately
+///   followed by a statement/pipe separator (`;`, `&`, `&&`, `||`, `|`)
+///   and then a real statement. tree-sitter recovers by inserting an
+///   `ERROR` node for the separator and folding the *next* statement's
+///   tokens into the *same* malformed node's `name`/`argument` fields:
+///   `TS=foo 2>/dev/null; echo hi` parses as `(command
+///   (variable_assignment ...) redirect: (...) (ERROR) name:
+///   (command_name (word)) argument: (word))` -- two logically separate
+///   statements folded into one AST node. Chained bare assignments
+///   before the real tail repeat the same
+///   `variable_assignment`/`redirect`/`ERROR` group.
+///
+/// A well-formed command that happens to carry both an assignment and a
+/// redirect (`FOO=bar cat <<< hello`) has a real, non-missing
+/// `command_name` and no `ERROR` child, so it matches neither shape. A
+/// genuinely dangling operator with nothing after it (`TS=foo
+/// 2>/dev/null &&`) gets swallowed into the *enclosing* `ERROR` node
+/// instead of staying inside a `command` node, so it never reaches this
+/// function as a `command` kind at all -- it stays a real
+/// `SyntaxError` via [`all_errors_explained`].
+///
+/// The `ERROR` node's own source text must be exactly one of the five
+/// operators bash actually recognizes as a statement/pipe separator
+/// (`;`, `&`, `&&`, `||`, `|`) -- an invalid operator sequence (`&&&`,
+/// `;&`, `|||`, ...) also produces an `ERROR` child in this same shape,
+/// but is a genuine syntax error (`bash -n` rejects it), not an instance
+/// of this misparse.
+const VALID_SWALLOWED_SEPARATORS: &[&str] = &[";", "&", "&&", "||", "|"];
+
+pub(super) fn is_assignment_redirect_misparse(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "command" {
+        return false;
+    }
+    let mut has_assignment = false;
+    let mut has_redirect = false;
+    let mut has_error = false;
+    let mut name_field_missing: Option<bool> = None;
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i as u32) else {
+            continue;
+        };
+        if node.field_name_for_child(i as u32) == Some("redirect") {
+            has_redirect = true;
+            continue;
+        }
+        if !child.is_named() {
+            continue;
+        }
+        match child.kind() {
+            "variable_assignment" => has_assignment = true,
+            _ if child.is_error() => {
+                let is_valid_separator = child
+                    .utf8_text(source)
+                    .is_ok_and(|text| VALID_SWALLOWED_SEPARATORS.contains(&text.trim()));
+                if !is_valid_separator {
+                    return false;
+                }
+                has_error = true;
+            }
+            _ if node.field_name_for_child(i as u32) == Some("name") => {
+                name_field_missing = Some(child.child(0).is_some_and(|c| c.is_missing()));
+            }
+            _ => {}
+        }
+    }
+    has_assignment
+        && has_redirect
+        && matches!(
+            (has_error, name_field_missing),
+            (false, Some(true)) | (true, Some(false))
+        )
+}
+
+/// Whether every `ERROR`/MISSING node anywhere in `root`'s subtree is
+/// explained by [`is_assignment_redirect_misparse`] on its enclosing
+/// `command` node, so callers can walk the tree instead of bailing out
+/// with `SyntaxError`. Doesn't affect nodes already handled by
+/// [`strip_misparsed_compound_prefix`] -- that workaround runs as a
+/// separate text-level pre-pass before the tree checked here is even
+/// parsed.
+pub(super) fn all_errors_explained(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.is_error() {
+        return node
+            .parent()
+            .is_some_and(|p| is_assignment_redirect_misparse(p, source));
+    }
+    if node.is_missing() {
+        return node.kind() == "word"
+            && node.parent().is_some_and(|p| p.kind() == "command_name")
+            && node
+                .parent()
+                .and_then(|p| p.parent())
+                .is_some_and(|gp| is_assignment_redirect_misparse(gp, source));
+    }
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i as u32) else {
+            continue;
+        };
+        if !all_errors_explained(child, source) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn parse(source: &str) -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .unwrap();
+        parser.parse(source, None).unwrap()
+    }
+
+    fn find_first<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        for i in 0..node.child_count() {
+            let child = node.child(i as u32)?;
+            if let Some(found) = find_first(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[rstest]
+    #[case::terminal("TS=foo 2>/dev/null", true)]
+    #[case::swallowed_semicolon("TS=foo 2>/dev/null; echo hi", true)]
+    #[case::chained_double_assignment_swallow(
+        "TS=foo 2>/dev/null; TS2=bar 2>/dev/null; echo hi",
+        true
+    )]
+    #[case::swallowed_pipe("TS=foo 2>/dev/null | cat", true)]
+    #[case::swallowed_and("TS=foo 2>/dev/null && echo hi", true)]
+    #[case::swallowed_or("TS=foo 2>/dev/null || echo hi", true)]
+    #[case::swallowed_ampersand("TS=foo 2>/dev/null & echo hi", true)]
+    #[case::well_formed_assignment_and_redirect_not_triggered("FOO=bar cat <<< hello", false)]
+    #[case::invalid_triple_ampersand_stays_syntax_error("TS=foo 2>/dev/null &&& echo hi", false)]
+    #[case::invalid_triple_pipe_stays_syntax_error("TS=foo 2>/dev/null ||| echo hi", false)]
+    #[case::invalid_semicolon_ampersand_stays_syntax_error("TS=foo 2>/dev/null ;& echo hi", false)]
+    fn is_assignment_redirect_misparse_cases(#[case] input: &str, #[case] expected: bool) {
+        let tree = parse(input);
+        let command = find_first(tree.root_node(), "command").expect("input has a `command` node");
+        assert_eq!(
+            is_assignment_redirect_misparse(command, input.as_bytes()),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::terminal("TS=foo 2>/dev/null", true)]
+    #[case::swallowed_semicolon("TS=foo 2>/dev/null; echo hi", true)]
+    #[case::chained_double_assignment_swallow(
+        "TS=foo 2>/dev/null; TS2=bar 2>/dev/null; echo hi",
+        true
+    )]
+    #[case::swallowed_pipe("TS=foo 2>/dev/null | cat", true)]
+    #[case::swallowed_and("TS=foo 2>/dev/null && echo hi", true)]
+    #[case::swallowed_or("TS=foo 2>/dev/null || echo hi", true)]
+    #[case::swallowed_ampersand("TS=foo 2>/dev/null & echo hi", true)]
+    #[case::env_prefix_command_unaffected("FOO=bar echo hi 2>&1", true)]
+    #[case::dangling_and_with_nothing_after_stays_syntax_error("TS=foo 2>/dev/null &&", false)]
+    #[case::invalid_triple_ampersand_stays_syntax_error("TS=foo 2>/dev/null &&& echo hi", false)]
+    fn all_errors_explained_cases(#[case] input: &str, #[case] expected: bool) {
+        let tree = parse(input);
+        assert_eq!(
+            all_errors_explained(tree.root_node(), input.as_bytes()),
+            expected
+        );
+    }
+}

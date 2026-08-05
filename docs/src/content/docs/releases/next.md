@@ -252,3 +252,14 @@ rules:
 ### `runok init` no longer replaces an existing `runok.yml` with boilerplate ([#468](https://github.com/fohte/runok/pull/468))
 
 Applying Claude Code integration changes in `runok init` used to rewrite an existing `runok.yml` with the boilerplate template when no permission migration happened. The wizard now only rewrites an existing config when a migration was accepted; re-running init just to register hooks leaves the file untouched.
+
+### A bare `assignment redirect` prefix with no command name no longer fails to parse ([#491](https://github.com/fohte/runok/pull/491))
+
+A simple command consisting of only variable assignment(s) and redirect(s) -- no command name -- is valid POSIX shell (`bash -n` and `zsh -n` both accept it), but the underlying parser couldn't parse it, so `runok check` rejected it outright:
+
+```sh
+$ printf '%s' 'TS=foo 2>/dev/null' | runok check
+runok: stdin parse error: failed to parse stdin as shell input
+```
+
+`TS=foo 2>/dev/null; echo hi` now correctly extracts to a single command (`echo hi`), with the assignment persisted so a later `$TS` in the same command string resolves it -- `TS` is never looked up as a command name in `PATH`.
