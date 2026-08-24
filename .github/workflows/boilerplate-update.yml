@@ -89,18 +89,35 @@ jobs:
             chmod +x scripts/bootstrap
           fi
 
+      # copier-update-action leaves conflict markers in the working tree when
+      # it can't cleanly 3-way-merge a file; a marker landing in a file
+      # pnpm/cargo parse directly (e.g. pnpm-workspace.yaml) crashes the sync
+      # outright, so lockfile sync must wait until conflicts are resolved.
+      - name: Determine whether lockfile sync is safe
+        if: steps.should-update.outputs.value == 'true'
+        id: can-sync-lockfiles
+        env:
+          UNRESOLVED_FILES: ${{ steps.copier-update.outputs.unresolved-files }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UNRESOLVED_FILES}" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # copier only rewrites version strings in package.json/Cargo.toml; the
       # lockfiles are never touched, so they must be regenerated here or the
       # PR ships a stale lockfile. This also fails the workflow outright (before
       # a PR is opened) if a bumped version doesn't actually exist upstream.
       - name: Set up mise
-        if: steps.should-update.outputs.value == 'true' && hashFiles('**/pnpm-lock.yaml') != ''
+        if: steps.can-sync-lockfiles.outputs.value == 'true' && hashFiles('**/pnpm-lock.yaml') != ''
         uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
           version: 2026.7.12
 
       - name: Sync pnpm lockfiles
-        if: steps.should-update.outputs.value == 'true' && hashFiles('**/pnpm-lock.yaml') != ''
+        if: steps.can-sync-lockfiles.outputs.value == 'true' && hashFiles('**/pnpm-lock.yaml') != ''
         run: |
           set -euo pipefail
           # corepack creates the pnpm executable inside mise's node install bin
@@ -117,7 +134,7 @@ jobs:
           done < <(find . -name pnpm-lock.yaml -not -path '*/node_modules/*' -not -path '*/.git/*' -print0)
 
       - name: Sync Cargo lockfiles
-        if: steps.should-update.outputs.value == 'true' && hashFiles('**/Cargo.lock') != ''
+        if: steps.can-sync-lockfiles.outputs.value == 'true' && hashFiles('**/Cargo.lock') != ''
         run: |
           set -euo pipefail
           while IFS= read -r -d '' lockfile; do
@@ -177,6 +194,7 @@ jobs:
           FROM_VERSION: ${{ steps.current-version.outputs.version }}
           TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
           UNRESOLVED_FILES: ${{ steps.copier-update.outputs.unresolved-files }}
+          HAS_LOCKFILES: ${{ hashFiles('**/pnpm-lock.yaml', '**/Cargo.lock') != '' }}
           BRANCH: ${{ steps.branch.outputs.name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
@@ -195,6 +213,11 @@ jobs:
           > Manual review required. Unresolved conflicts remain in:
           >
           ${unresolved_list}"
+            if [ "${HAS_LOCKFILES}" = "true" ]; then
+              body="${body}
+          >
+          > Lockfiles were not synced because conflicts remain. Resolve the conflicts above, then sync lockfiles manually (e.g. \`pnpm install\`, \`cargo generate-lockfile\`)."
+            fi
           fi
 
           body="${body}
