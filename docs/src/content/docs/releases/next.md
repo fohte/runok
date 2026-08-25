@@ -63,6 +63,19 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
+### `defaults.action: pass` defers to Claude Code's own permission flow ([#496](https://github.com/fohte/runok/pull/496))
+
+An unmatched command previously always resolved to a concrete decision (`allow`, `deny`, or `ask`, per `defaults.action`), even when `ask` meant forcing a permission prompt that Claude Code's own permission flow might have resolved without one. The new `pass` value for `defaults.action` writes nothing to the `PreToolUse` hook's stdout and exits `0` instead, which Claude Code interprets as "no decision to report" -- the tool call falls through to its own permission flow rather than being short-circuited into `ask`:
+
+```yaml
+defaults:
+  action: pass
+```
+
+`pass` is opt-in; the default remains `ask`, unchanged. It cannot be combined with `defaults.sandbox`, since a `pass` decision produces no `updatedInput` and the sandbox wrapping would be silently dropped -- this is rejected at config validation time. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`; `runok check` reports `pass` as its own distinct decision value instead. `pass` decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+
+**Breaking:** since a passing test case's output could otherwise read as `PASS: cmd => pass`, [`runok test`](/cli/test/) now labels a passing test case `ok` instead of `PASS` (`FAIL` is unchanged). Update any script or CI step that greps `runok test` output for the literal `PASS:` prefix.
+
 ### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines ([#486](https://github.com/fohte/runok/pull/486))
 
 Verbose output is a colorized, indented tree: each sub-command of a compound command gets its own numbered block listing every matched rule alongside the resolved action, and a footer states the overall result and which sub-command decided it.

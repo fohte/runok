@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-runok evaluates commands against your rules to decide whether to **allow**, **deny**, or **ask** for confirmation. This section explains the internal evaluation engine in detail.
+runok evaluates commands against your rules to decide whether to **allow**, **deny**, **ask** for confirmation, or defer the decision (**pass**). This section explains the internal evaluation engine in detail.
 
 ## Key concepts
 
@@ -28,4 +28,4 @@ When runok receives a command:
    c. Merge direct and wrapped command results using Explicit Deny Wins.
 3. **Aggregate**: Merge all sub-command results (strictest wins).
 4. **Resolve [sandbox](/sandbox/overview/)**: Merge sandbox policies from matched presets.
-5. **Return**: The final action (`allow`, `deny`, or `ask`) and sandbox policy. If no rule matched, the action is resolved to the configured `defaults.action` (defaulting to `ask`).
+5. **Return**: The final action (`allow`, `deny`, `ask`, or `pass`) and sandbox policy. If no rule matched, the action is resolved to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `ask`).

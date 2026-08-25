@@ -28,7 +28,8 @@ impl AliasDefinition {
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Defaults {
-    /// Default action when no rule matches: `allow`, `deny`, or `ask`.
+    /// Default action when no rule matches: `allow`, `deny`, `ask`, or
+    /// `pass`.
     pub action: Option<ActionKind>,
     /// Default sandbox preset name to apply.
     pub sandbox: Option<String>,
@@ -40,6 +41,17 @@ pub struct Defaults {
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
     Allow,
+    /// No decision: the hook writes nothing and exits 0, so Claude Code's
+    /// own permission flow (the auto-mode classifier) decides instead.
+    /// Only meaningful for `defaults.action` -- a per-rule `deny`/`allow`/
+    /// `ask` entry can never resolve to this variant, since `RuleEntry` has
+    /// no `pass` field.
+    ///
+    /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
+    /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
+    /// is a weaker decision than an explicit `ask`, but still more
+    /// restrictive than silently allowing.
+    Pass,
     #[default]
     Ask,
     Deny,
@@ -123,7 +135,8 @@ mod tests {
 
     #[test]
     fn action_kind_ordering() {
-        assert!(ActionKind::Allow < ActionKind::Ask);
+        assert!(ActionKind::Allow < ActionKind::Pass);
+        assert!(ActionKind::Pass < ActionKind::Ask);
         assert!(ActionKind::Ask < ActionKind::Deny);
     }
 

@@ -86,14 +86,17 @@ defaults:
 
 Action to take when no rule matches.
 
-**Type:** `"allow" | "ask" | "deny"`\
+**Type:** `"allow" | "ask" | "deny" | "pass"`\
 **Default:** `"ask"`
 
-| Value   | Behavior                              |
-| ------- | ------------------------------------- |
-| `allow` | Permit the command without prompting. |
-| `ask`   | Prompt the user for confirmation.     |
-| `deny`  | Reject the command.                   |
+| Value   | Behavior                                                                                         |
+| ------- | ------------------------------------------------------------------------------------------------ |
+| `allow` | Permit the command without prompting.                                                            |
+| `ask`   | Prompt the user for confirmation.                                                                |
+| `deny`  | Reject the command.                                                                              |
+| `pass`  | Defer to the caller's own permission flow instead of forcing a decision (Claude Code hook only). |
+
+`pass` cannot be combined with `defaults.sandbox`: a `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`. `runok check` reports `pass` as its own distinct decision value instead, since it only evaluates and never executes.
 
 #### `defaults.sandbox`
 

@@ -2,8 +2,10 @@ use crate::config::{ActionKind, Config};
 
 impl Config {
     /// Validate that `experimental.require_command_in_path.action`, if set,
-    /// is `deny` or `ask`. `allow` would defeat the purpose of the check, so
-    /// it's rejected regardless of whether the check is currently enabled.
+    /// is `deny` or `ask`. `allow` would defeat the purpose of the check,
+    /// and `pass` would silently hand the decision to Claude Code's
+    /// classifier instead of enforcing it, so both are rejected regardless
+    /// of whether the check is currently enabled.
     pub(super) fn validate_experimental(&self, errors: &mut Vec<String>) {
         let action = self
             .experimental
@@ -11,12 +13,19 @@ impl Config {
             .and_then(|e| e.require_command_in_path.as_ref())
             .and_then(|r| r.action);
 
-        if action == Some(ActionKind::Allow) {
-            errors.push(
-                "experimental.require_command_in_path.action: 'allow' is not a valid action \
+        if let Some(invalid) = action.filter(|a| matches!(a, ActionKind::Allow | ActionKind::Pass))
+        {
+            let label = match invalid {
+                ActionKind::Allow => "allow",
+                ActionKind::Pass => "pass",
+                ActionKind::Ask | ActionKind::Deny => {
+                    unreachable!("filtered to Allow | Pass above")
+                }
+            };
+            errors.push(format!(
+                "experimental.require_command_in_path.action: '{label}' is not a valid action \
                  for this check (must be 'deny' or 'ask')"
-                    .to_string(),
-            );
+            ));
         }
     }
 }
@@ -43,6 +52,23 @@ mod tests {
             err.to_string(),
             "validation errors:\n  - experimental.require_command_in_path.action: 'allow' is \
              not a valid action for this check (must be 'deny' or 'ask')"
+        );
+    }
+
+    #[test]
+    fn validate_errors_on_require_command_in_path_action_pass() {
+        let mut config = parse_config(indoc! {"
+            experimental:
+              require_command_in_path:
+                enabled: true
+                action: pass
+        "})
+        .unwrap();
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "validation errors:\n  - experimental.require_command_in_path.action: 'pass' \
+             is not a valid action for this check (must be 'deny' or 'ask')"
         );
     }
 

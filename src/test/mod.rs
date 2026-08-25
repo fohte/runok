@@ -134,6 +134,7 @@ fn action_to_kind(action: &Action) -> ActionKind {
         Action::Allow => ActionKind::Allow,
         Action::Deny(_) => ActionKind::Deny,
         Action::Ask(_) => ActionKind::Ask,
+        Action::Pass => ActionKind::Pass,
     }
 }
 
@@ -142,6 +143,7 @@ fn action_kind_label(kind: ActionKind) -> &'static str {
         ActionKind::Allow => "allow",
         ActionKind::Ask => "ask",
         ActionKind::Deny => "deny",
+        ActionKind::Pass => "pass",
     }
 }
 
@@ -253,10 +255,12 @@ pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
 pub fn report(results: &TestResults, writer: &mut impl Write) {
     for result in &results.results {
         if result.passed {
+            // "ok" (not "PASS") so it can't be misread against the `pass` action value
+            // that may follow it on the same line.
             writeln!(
                 writer,
                 "{}: {} => {}",
-                "PASS".if_supports_color(Stdout, |t| t.green()),
+                "ok".if_supports_color(Stdout, |t| t.green()),
                 result.test_case.command,
                 action_kind_label(result.actual),
             )
@@ -766,7 +770,7 @@ mod tests {
         ExpectedDecision::Allow,
         ActionKind::Allow,
         true,
-        "PASS: git status => allow\n"
+        "ok: git status => allow\n"
     )]
     #[case::fail(
         "rm -rf /",
@@ -965,6 +969,7 @@ mod tests {
         ActionKind::Deny
     )]
     #[case::ask(Action::Ask(None), ActionKind::Ask)]
+    #[case::pass(Action::Pass, ActionKind::Pass)]
     fn test_action_to_kind(#[case] action: Action, #[case] expected: ActionKind) {
         assert_eq!(action_to_kind(&action), expected);
     }
@@ -977,6 +982,7 @@ mod tests {
     #[case::allow(ActionKind::Allow, "allow")]
     #[case::ask(ActionKind::Ask, "ask")]
     #[case::deny(ActionKind::Deny, "deny")]
+    #[case::pass(ActionKind::Pass, "pass")]
     fn test_action_kind_label(#[case] kind: ActionKind, #[case] expected: &str) {
         assert_eq!(action_kind_label(kind), expected);
     }

@@ -83,6 +83,7 @@ fn build_check_output(result: &ActionResult) -> CheckOutput {
             deny.fix_suggestion.clone(),
         ),
         Action::Ask(message) => ("ask".to_string(), message.clone(), None),
+        Action::Pass => ("pass".to_string(), None, None),
     };
 
     let sandbox = build_sandbox_info(&result.sandbox);
@@ -101,6 +102,7 @@ fn build_no_match_output(defaults: &Defaults) -> CheckOutput {
         Some(ActionKind::Allow) => "allow",
         Some(ActionKind::Deny) => "deny",
         Some(ActionKind::Ask) | None => "ask",
+        Some(ActionKind::Pass) => "pass",
     };
 
     CheckOutput {
@@ -260,6 +262,11 @@ mod tests {
             sandbox: Some(CheckSandboxInfo { preset: "restricted".to_string(), writable_roots: None, network_allowed: None }),
         },
     )]
+    #[case::pass(
+        Action::Pass,
+        SandboxInfo::Preset(None),
+        CheckOutput { decision: "pass".to_string(), reason: None, fix_suggestion: None, sandbox: None },
+    )]
     fn build_check_output_maps_action_to_output(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
@@ -283,6 +290,7 @@ mod tests {
         matched_rule: "test".to_string(),
     }))]
     #[case::ask(Action::Ask(None))]
+    #[case::pass(Action::Pass)]
     fn handle_action_always_returns_exit_0(#[case] action: Action) {
         let adapter = CheckAdapter::from_command("test".to_string());
         let result = ActionResult {
@@ -300,6 +308,7 @@ mod tests {
     #[case::explicit_allow(Some(ActionKind::Allow), "allow")]
     #[case::explicit_deny(Some(ActionKind::Deny), "deny")]
     #[case::explicit_ask(Some(ActionKind::Ask), "ask")]
+    #[case::explicit_pass(Some(ActionKind::Pass), "pass")]
     fn build_no_match_output_maps_defaults(
         #[case] action_kind: Option<ActionKind>,
         #[case] expected_decision: &str,

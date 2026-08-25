@@ -137,6 +137,10 @@ rules:
     sandbox: build-env # overrides with "build-env"
 ```
 
+:::caution
+`defaults.sandbox` cannot be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction). A `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped -- this is rejected at config validation time.
+:::
+
 ## Sandbox merging for compound commands
 
 When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-command may match a different sandbox preset. runok merges all matched policies using the **Strictest Wins** rule:

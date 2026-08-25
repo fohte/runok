@@ -88,6 +88,10 @@ fn collect_patches(config: &Config) -> Vec<Patch<'_>> {
             ActionKind::Allow => "allow",
             ActionKind::Deny => "deny",
             ActionKind::Ask => "ask",
+            ActionKind::Pass => unreachable!(
+                "action_and_pattern() reads a rule's deny/allow/ask field; \
+                 a rule entry can never resolve to ActionKind::Pass"
+            ),
         };
         push_patch(&mut patches, route!("rules", i, key), pattern);
     }

@@ -16,6 +16,7 @@ fn action_kind_of(action: &Action) -> ActionKind {
         Action::Allow => ActionKind::Allow,
         Action::Ask(_) => ActionKind::Ask,
         Action::Deny(_) => ActionKind::Deny,
+        Action::Pass => ActionKind::Pass,
     }
 }
 
@@ -24,6 +25,7 @@ fn action_label(kind: ActionKind) -> &'static str {
         ActionKind::Allow => "allow",
         ActionKind::Ask => "ask",
         ActionKind::Deny => "deny",
+        ActionKind::Pass => "pass",
     }
 }
 
@@ -32,6 +34,7 @@ fn colorize(word: &str, kind: ActionKind) -> String {
         ActionKind::Allow => word.if_supports_color(Stderr, |t| t.green()).to_string(),
         ActionKind::Ask => word.if_supports_color(Stderr, |t| t.yellow()).to_string(),
         ActionKind::Deny => word.if_supports_color(Stderr, |t| t.red()).to_string(),
+        ActionKind::Pass => word.if_supports_color(Stderr, |t| t.cyan()).to_string(),
     }
 }
 
@@ -441,7 +444,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::plain_text_passthrough("git status", "git status")]
+    #[case::plain_text_pass("git status", "git status")]
     #[case::escapes_ansi_escape_and_carriage_return("git\x1b[2K\rstatus", "git\\u{1b}[2K\\rstatus")]
     fn sanitize_escapes_control_chars(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(sanitize(input), expected);

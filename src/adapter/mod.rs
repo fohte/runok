@@ -148,6 +148,7 @@ fn write_audit_log(
         crate::config::ActionKind::Allow => "allow".to_owned(),
         crate::config::ActionKind::Ask => "ask".to_owned(),
         crate::config::ActionKind::Deny => "deny".to_owned(),
+        crate::config::ActionKind::Pass => "pass".to_owned(),
     });
 
     let command_evaluations: Vec<CommandEvaluation> = action_result

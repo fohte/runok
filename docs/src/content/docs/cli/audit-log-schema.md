@@ -97,7 +97,7 @@ Name of the sandbox preset that was applied to this evaluation. `null` when no s
 
 The configured `defaults.action` value at the time of evaluation. `null` when no default was configured. See [`defaults.action`](/configuration/schema/#defaultsaction) for the possible values.
 
-**Type:** `"allow" | "ask" | "deny" | null`\
+**Type:** `"allow" | "ask" | "deny" | "pass" | null`\
 **Always present:** Yes (may be `null`)
 
 ### `metadata`
@@ -142,7 +142,7 @@ The entry's `command`, re-evaluated against the config currently in effect (as o
 
 ## Action Object
 
-Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow`, and present (with type-specific keys) for `deny` and `ask`.
+Represents an evaluation result. The `type` field is a discriminator; `detail` is omitted for `allow` and `pass`, and present (with type-specific keys) for `deny` and `ask`.
 
 ```json
 // allow
@@ -159,22 +159,26 @@ Represents an evaluation result. The `type` field is a discriminator; `detail` i
 
 // ask
 { "type": "ask", "detail": { "message": "are you sure?" } }
+
+// pass
+{ "type": "pass" }
 ```
 
-When no rule matches, the configured [`default_action`](#default_action) is applied directly: `type` is `"allow"`, `"deny"`, or `"ask"` accordingly. There is no separate `"default"` discriminator in the audit-log JSON.
+When no rule matches, the configured [`default_action`](#default_action) is applied directly: `type` is `"allow"`, `"deny"`, `"ask"`, or `"pass"` accordingly. There is no separate `"default"` discriminator in the audit-log JSON.
 
 ### `type`
 
 The kind of action.
 
-**Type:** `"allow" | "deny" | "ask"`\
+**Type:** `"allow" | "deny" | "ask" | "pass"`\
 **Always present:** Yes
 
-| Value   | Meaning                                 |
-| ------- | --------------------------------------- |
-| `allow` | The command is permitted.               |
-| `deny`  | The command is rejected.                |
-| `ask`   | The command requires user confirmation. |
+| Value   | Meaning                                                                 |
+| ------- | ----------------------------------------------------------------------- |
+| `allow` | The command is permitted.                                               |
+| `deny`  | The command is rejected.                                                |
+| `ask`   | The command requires user confirmation.                                 |
+| `pass`  | No decision was made; the caller's own permission flow decided instead. |
 
 ### `detail.message`
 
