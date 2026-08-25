@@ -8,7 +8,7 @@ is_public: true
 project_name: runok
 release_binary: true
 release_type: rust
-repo_id: ''
+repo_id: '1147979258'
 repo_language: en
 subpackages:
   - name: docs
