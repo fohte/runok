@@ -109,6 +109,7 @@ Name of a sandbox preset (defined in `definitions.sandbox`) to apply by default.
 
 ```yaml title="runok.yml"
 defaults:
+  action: ask
   sandbox: standard
 ```
 

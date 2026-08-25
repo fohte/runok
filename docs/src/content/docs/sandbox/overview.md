@@ -129,6 +129,7 @@ Use `defaults.sandbox` to apply a sandbox preset to all rules that do not specif
 
 ```yaml
 defaults:
+  action: ask
   sandbox: restricted
 
 rules:
@@ -194,6 +195,7 @@ definitions:
         allow: false
 
 defaults:
+  action: ask
   sandbox: workspace-write
 
 rules:
