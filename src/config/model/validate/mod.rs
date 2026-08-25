@@ -1,3 +1,4 @@
+mod defaults_checks;
 mod definitions_checks;
 mod experimental_checks;
 mod pattern_refs;
@@ -75,14 +76,16 @@ impl Config {
     /// can fix every issue in a single pass.
     ///
     /// Checks:
+    /// - `defaults.action: passthrough` must not be combined with `defaults.sandbox`
     /// - Sandbox preset `<path:name>` references resolve to `definitions.paths`
     /// - Each rule entry has exactly one of deny/allow/ask set
     /// - deny rules must not have a sandbox attribute
     /// - sandbox values must reference names defined in definitions.sandbox
-    /// - experimental.require_command_in_path.action must not be `allow`
+    /// - experimental.require_command_in_path.action must not be `allow` or `passthrough`
     pub fn validate(&mut self) -> Result<(), crate::config::ConfigError> {
         let mut errors = Vec::new();
 
+        self.validate_defaults(&mut errors);
         self.expand_sandbox_path_refs(&mut errors);
         self.validate_fs_read_allow(&mut errors);
         self.validate_definitions_paths_refs(&mut errors);

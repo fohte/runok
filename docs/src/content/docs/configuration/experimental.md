@@ -40,7 +40,7 @@ Action to take when a command's `argv[0]` cannot be resolved via `PATH`.
 **Type:** `"ask" | "deny"`\
 **Default:** `"deny"`
 
-`allow` is rejected at config validation time -- setting it would defeat the purpose of the check.
+`allow` and `passthrough` are rejected at config validation time -- both would defeat the purpose of the check (`passthrough` defers to a permission flow this check has no way to feed its decision into).
 
 #### `ignore`
 

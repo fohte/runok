@@ -63,6 +63,17 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
+### `defaults.action: passthrough` defers to Claude Code's own permission flow (TODO(pr-link))
+
+An unmatched command previously always resolved to a concrete decision (`allow`, `deny`, or `ask`, per `defaults.action`), even when `ask` meant forcing a permission prompt that Claude Code's own auto-mode classifier might have resolved without one. The new `passthrough` value for `defaults.action` writes nothing to the `PreToolUse` hook's stdout and exits `0` instead, which Claude Code interprets as "no decision to report" -- the tool call falls through to its normal permission flow (allow/ask/deny rules, then read-only auto-approval, then the classifier) rather than being short-circuited into `ask`:
+
+```yaml
+defaults:
+  action: passthrough
+```
+
+`passthrough` is opt-in; the default remains `ask`, unchanged. It cannot be combined with `defaults.sandbox`, since a passthrough decision produces no `updatedInput` and the sandbox wrapping would be silently dropped -- this is rejected at config validation time. Outside the Claude Code hook (`runok exec`, `runok check`), there is no underlying permission flow to defer to, so `passthrough` falls back to the same behavior as `ask`. Passthrough decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+
 ### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines ([#486](https://github.com/fohte/runok/pull/486))
 
 Verbose output is a colorized, indented tree: each sub-command of a compound command gets its own numbered block listing every matched rule alongside the resolved action, and a footer states the overall result and which sub-command decided it.

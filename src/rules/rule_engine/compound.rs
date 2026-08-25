@@ -219,11 +219,19 @@ fn merge_actions(a: Action, b: Action) -> Action {
 
 /// Map an action to its priority for Explicit Deny Wins comparison.
 /// Higher value = more restrictive.
+///
+/// `Passthrough` sits between `Allow` and `Ask`: within a compound command,
+/// an unmatched sub-command resolved via `defaults.action: passthrough`
+/// must still outrank an explicitly allowed sub-command elsewhere in the
+/// same compound (otherwise the compound would silently resolve to Allow,
+/// the same bypass the Allow-vs-Ask ordering already guards against). An
+/// explicit `ask:` rule, however, still outranks a mere deferral.
 pub(super) fn action_priority(action: &Action) -> u8 {
     match action {
         Action::Allow => 0,
-        Action::Ask(_) => 1,
-        Action::Deny(_) => 2,
+        Action::Passthrough => 1,
+        Action::Ask(_) => 2,
+        Action::Deny(_) => 3,
     }
 }
 
@@ -241,6 +249,7 @@ pub fn default_action(config: &Config) -> Action {
             matched_rule: String::new(),
         }),
         Some(ActionKind::Ask) | None => Action::Ask(None),
+        Some(ActionKind::Passthrough) => Action::Passthrough,
     }
 }
 
@@ -348,6 +357,28 @@ mod tests {
         assert!(
             matches!(result.action, Action::Ask(_)),
             "expected Ask, got {:?}",
+            result.action
+        );
+    }
+
+    #[rstest]
+    fn compound_default_resolved_to_passthrough_wins_over_allow(empty_context: EvalContext) {
+        // Passthrough must outrank Allow for the same reason Ask does: an
+        // unmatched sub-command must not let an explicitly allowed
+        // sub-command silently decide the whole compound's outcome.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Passthrough),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("echo *")]),
+            ..Default::default()
+        };
+        let result =
+            evaluate_compound(&config, "echo hello; eval \"rm -rf /\"", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Passthrough),
+            "expected Passthrough, got {:?}",
             result.action
         );
     }

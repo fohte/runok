@@ -177,6 +177,10 @@ pub(super) fn evaluate_simple_command(
             }),
             ActionKind::Ask => Action::Ask(most_restrictive.rule.message.clone()),
             ActionKind::Allow => Action::Allow,
+            ActionKind::Passthrough => unreachable!(
+                "RuleEntry has no `passthrough` field (only deny/allow/ask); \
+                 action_and_pattern() can never return ActionKind::Passthrough"
+            ),
         };
 
         let sandbox_preset = most_restrictive.rule.sandbox.clone();
@@ -268,6 +272,20 @@ mod tests {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_command(&config, "hg status", &empty_context).unwrap();
         assert_eq!(result.action, Action::Ask(None));
+    }
+
+    #[rstest]
+    fn no_matching_rule_with_defaults_passthrough_returns_passthrough(empty_context: EvalContext) {
+        let config = Config {
+            defaults: Some(crate::config::Defaults {
+                action: Some(ActionKind::Passthrough),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule("git status")]),
+            ..Default::default()
+        };
+        let result = evaluate_command(&config, "hg status", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Passthrough);
     }
 
     // ========================================

@@ -156,7 +156,18 @@ impl ClaudeCodeHookAdapter {
 
     /// Build a HookOutput for a given action result.
     /// Separated from I/O for testability.
-    fn build_action_output(&self, result: &ActionResult) -> Result<HookOutput, anyhow::Error> {
+    ///
+    /// Returns `None` for `Action::Passthrough`: no decision to report, so
+    /// the caller writes nothing and Claude Code's normal permission flow
+    /// (the auto-mode classifier) decides instead.
+    fn build_action_output(
+        &self,
+        result: &ActionResult,
+    ) -> Result<Option<HookOutput>, anyhow::Error> {
+        if matches!(result.action, Action::Passthrough) {
+            return Ok(None);
+        }
+
         let bash_input = self.parse_bash_input()?;
 
         let (decision, reason, updated_input) = match &result.action {
@@ -174,18 +185,20 @@ impl ClaudeCodeHookAdapter {
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("ask", message.clone(), updated)
             }
+            Action::Passthrough => unreachable!("handled by the early return above"),
         };
 
-        Ok(Self::build_output(decision, reason, updated_input))
+        Ok(Some(Self::build_output(decision, reason, updated_input)))
     }
 
     /// Build a HookOutput for the no-match case (Bash tool, rule didn't match).
-    /// Returns `None` when tool_name is not "Bash" (nothing to output).
+    /// Returns `None` when tool_name is not "Bash", or when `defaults.action`
+    /// is `passthrough` (nothing to output either way).
     fn build_no_match_output(
         &self,
         defaults: &Defaults,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if self.input.tool_name != "Bash" {
+        if self.input.tool_name != "Bash" || defaults.action == Some(ActionKind::Passthrough) {
             return Ok(None);
         }
 
@@ -193,6 +206,7 @@ impl ClaudeCodeHookAdapter {
             Some(ActionKind::Allow) => "allow",
             Some(ActionKind::Deny) => "deny",
             Some(ActionKind::Ask) | None => "ask",
+            Some(ActionKind::Passthrough) => unreachable!("handled by the early return above"),
         };
 
         let updated_input = if decision == "allow" || decision == "ask" {
@@ -286,8 +300,9 @@ impl Endpoint for ClaudeCodeHookAdapter {
     }
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-        let output = self.build_action_output(&result)?;
-        Self::write_json(&mut std::io::stdout(), &output)?;
+        if let Some(output) = self.build_action_output(&result)? {
+            Self::write_json(&mut std::io::stdout(), &output)?;
+        }
         Ok(0)
     }
 
@@ -453,7 +468,22 @@ mod tests {
         let output = adapter
             .build_action_output(&result)
             .unwrap_or_else(|e| panic!("build_action_output failed: {e}"));
-        assert_eq!(output, expected);
+        assert_eq!(output, Some(expected));
+    }
+
+    #[rstest]
+    fn build_action_output_passthrough_returns_none() {
+        let adapter =
+            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
+        let result = ActionResult {
+            action: Action::Passthrough,
+            sandbox: SandboxInfo::Preset(None),
+            evaluations: vec![],
+        };
+        let output = adapter
+            .build_action_output(&result)
+            .unwrap_or_else(|e| panic!("build_action_output failed: {e}"));
+        assert!(output.is_none());
     }
 
     // --- build_no_match_output ---
@@ -487,6 +517,20 @@ mod tests {
             .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"));
         let output = output.unwrap_or_else(|| panic!("expected Some(HookOutput)"));
         assert_eq!(output, make_output(expected_decision, None, None),);
+    }
+
+    #[rstest]
+    fn build_no_match_output_bash_passthrough_returns_none() {
+        let adapter =
+            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("some-command")));
+        let defaults = Defaults {
+            action: Some(ActionKind::Passthrough),
+            sandbox: None,
+        };
+        let output = adapter
+            .build_no_match_output(&defaults)
+            .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"));
+        assert!(output.is_none());
     }
 
     #[rstest]
@@ -535,6 +579,20 @@ mod tests {
         let exit_code = adapter
             .handle_action(ActionResult {
                 action: Action::Allow,
+                sandbox: SandboxInfo::Preset(None),
+                evaluations: vec![],
+            })
+            .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
+        assert_eq!(exit_code, 0);
+    }
+
+    #[rstest]
+    fn handle_action_passthrough_writes_nothing_and_returns_exit_0() {
+        let adapter =
+            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
+        let exit_code = adapter
+            .handle_action(ActionResult {
+                action: Action::Passthrough,
                 sandbox: SandboxInfo::Preset(None),
                 evaluations: vec![],
             })

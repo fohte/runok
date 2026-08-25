@@ -93,9 +93,10 @@ fn deny_or_ask(
             Some(command_name.to_owned()),
         ),
         ActionKind::Ask => (Action::Ask(Some(message)), Some(command_name.to_owned())),
-        // Rejected by config validation; treated as absent rather than
-        // panicking on a config that skipped validation.
-        ActionKind::Allow => (default_action(config), None),
+        // Both rejected by config validation (neither `allow` nor
+        // `passthrough` would enforce anything here); treated as absent
+        // rather than panicking on a config that skipped validation.
+        ActionKind::Allow | ActionKind::Passthrough => (default_action(config), None),
     }
 }
 
@@ -236,11 +237,15 @@ mod tests {
             Some("tarraform".to_string()),
         )
     )]
-    // `allow` is rejected by config validation, but `resolve_unmatched`
-    // doesn't itself call `validate()` -- a config that skipped it (e.g.
-    // constructed programmatically) must not panic.
+    // `allow` and `passthrough` are rejected by config validation, but
+    // `resolve_unmatched` doesn't itself call `validate()` -- a config that
+    // skipped it (e.g. constructed programmatically) must not panic.
     #[case::allow_falls_back_to_default_action(
         ActionKind::Allow,
+        (default_action(&Config::default()), None)
+    )]
+    #[case::passthrough_falls_back_to_default_action(
+        ActionKind::Passthrough,
         (default_action(&Config::default()), None)
     )]
     fn not_found_resolves_per_configured_action(

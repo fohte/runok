@@ -28,7 +28,8 @@ impl AliasDefinition {
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Defaults {
-    /// Default action when no rule matches: `allow`, `deny`, or `ask`.
+    /// Default action when no rule matches: `allow`, `deny`, `ask`, or
+    /// `passthrough`.
     pub action: Option<ActionKind>,
     /// Default sandbox preset name to apply.
     pub sandbox: Option<String>,
@@ -43,6 +44,12 @@ pub enum ActionKind {
     #[default]
     Ask,
     Deny,
+    /// No decision: the hook writes nothing and exits 0, so Claude Code's
+    /// own permission flow (the auto-mode classifier) decides instead.
+    /// Only meaningful for `defaults.action` -- a per-rule `deny`/`allow`/
+    /// `ask` entry can never resolve to this variant, since `RuleEntry` has
+    /// no `passthrough` field.
+    Passthrough,
 }
 
 /// A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.
@@ -125,6 +132,7 @@ mod tests {
     fn action_kind_ordering() {
         assert!(ActionKind::Allow < ActionKind::Ask);
         assert!(ActionKind::Ask < ActionKind::Deny);
+        assert!(ActionKind::Deny < ActionKind::Passthrough);
     }
 
     // === RuleEntry::action_and_pattern ===

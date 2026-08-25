@@ -134,6 +134,7 @@ fn action_to_kind(action: &Action) -> ActionKind {
         Action::Allow => ActionKind::Allow,
         Action::Deny(_) => ActionKind::Deny,
         Action::Ask(_) => ActionKind::Ask,
+        Action::Passthrough => ActionKind::Passthrough,
     }
 }
 
@@ -142,6 +143,7 @@ fn action_kind_label(kind: ActionKind) -> &'static str {
         ActionKind::Allow => "allow",
         ActionKind::Ask => "ask",
         ActionKind::Deny => "deny",
+        ActionKind::Passthrough => "passthrough",
     }
 }
 
@@ -965,6 +967,7 @@ mod tests {
         ActionKind::Deny
     )]
     #[case::ask(Action::Ask(None), ActionKind::Ask)]
+    #[case::passthrough(Action::Passthrough, ActionKind::Passthrough)]
     fn test_action_to_kind(#[case] action: Action, #[case] expected: ActionKind) {
         assert_eq!(action_to_kind(&action), expected);
     }
@@ -977,6 +980,7 @@ mod tests {
     #[case::allow(ActionKind::Allow, "allow")]
     #[case::ask(ActionKind::Ask, "ask")]
     #[case::deny(ActionKind::Deny, "deny")]
+    #[case::passthrough(ActionKind::Passthrough, "passthrough")]
     fn test_action_kind_label(#[case] kind: ActionKind, #[case] expected: &str) {
         assert_eq!(action_kind_label(kind), expected);
     }

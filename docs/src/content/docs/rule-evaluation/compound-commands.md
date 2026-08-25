@@ -135,7 +135,7 @@ After evaluating each sub-command, runok aggregates the results using the same [
 
 > The most restrictive action across all sub-commands becomes the final action.
 
-The priority order is: `deny` > `ask` > `allow`.
+The priority order is: `deny` > `ask` > `passthrough` > `allow`.
 
 ### Example
 
@@ -149,7 +149,7 @@ rules:
 For the command `git add . && rm -rf /tmp`:
 
 1. `git add .` → `allow` (priority 0)
-2. `rm -rf /tmp` → `deny` (priority 2)
+2. `rm -rf /tmp` → `deny` (priority 3)
 3. Final result: **deny** (strictest wins)
 
 The entire compound command is blocked because one sub-command is denied.
@@ -169,7 +169,7 @@ rules:
 For the command `git status && unknown-cmd`:
 
 1. `git status` → `allow` (priority 0)
-2. `unknown-cmd` → no rule matched → resolved to `ask` (priority 1)
+2. `unknown-cmd` → no rule matched → resolved to `ask` (priority 2)
 3. Final result: **ask** (strictest wins)
 
 Without this resolution, unmatched sub-commands would be silently ignored.

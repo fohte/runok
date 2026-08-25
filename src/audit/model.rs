@@ -218,6 +218,7 @@ pub enum SerializableAction {
         message: Option<String>,
     },
     Default,
+    Passthrough,
 }
 
 /// Serializable representation of a matched rule.
@@ -354,6 +355,7 @@ impl From<Action> for SerializableAction {
                 fix_suggestion,
             },
             Action::Ask(message) => SerializableAction::Ask { message },
+            Action::Passthrough => SerializableAction::Passthrough,
         }
     }
 }
@@ -365,6 +367,10 @@ impl From<RuleMatchInfo> for SerializableRuleMatch {
                 ActionKind::Allow => "allow".to_owned(),
                 ActionKind::Ask => "ask".to_owned(),
                 ActionKind::Deny => "deny".to_owned(),
+                ActionKind::Passthrough => unreachable!(
+                    "RuleMatchInfo is only built from a matched rule (deny/allow/ask); \
+                     a rule entry can never resolve to ActionKind::Passthrough"
+                ),
             },
             pattern: info.pattern,
             matched_tokens: info.matched_tokens,
@@ -462,6 +468,10 @@ mod tests {
     #[case::default_action(
         SerializableAction::Default,
         indoc! {r#"{"type":"default"}"#},
+    )]
+    #[case::passthrough_action(
+        SerializableAction::Passthrough,
+        indoc! {r#"{"type":"passthrough"}"#},
     )]
     fn serializable_action_roundtrip(
         #[case] action: SerializableAction,
@@ -811,6 +821,7 @@ mod tests {
         Action::Ask(None),
         SerializableAction::Ask { message: None },
     )]
+    #[case::passthrough(Action::Passthrough, SerializableAction::Passthrough)]
     fn action_to_serializable(#[case] action: Action, #[case] expected: SerializableAction) {
         let result: SerializableAction = action.into();
         assert_eq!(result, expected);
