@@ -48,11 +48,13 @@ impl Defaults {
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
     Allow,
-    /// No decision: the hook writes nothing and exits 0, so Claude Code's
-    /// own permission flow (the auto-mode classifier) decides instead.
-    /// Only meaningful for `defaults.action` -- a per-rule `deny`/`allow`/
-    /// `ask` entry can never resolve to this variant, since `RuleEntry` has
-    /// no `pass` field.
+    /// No decision: the hook omits `permissionDecision` so Claude Code's own
+    /// permission flow (the auto-mode classifier) decides instead. Writes
+    /// nothing at all when no sandbox applies either; when a sandbox does
+    /// apply, `updatedInput` alone is still emitted so the rewritten command
+    /// reaches that flow. Only meaningful for `defaults.action` -- a
+    /// per-rule `deny`/`allow`/`ask` entry can never resolve to this
+    /// variant, since `RuleEntry` has no `pass` field.
     ///
     /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
     /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass

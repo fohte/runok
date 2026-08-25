@@ -70,7 +70,7 @@ defaults:
   action: ask # no longer implied; write this explicitly to keep the old behavior
 ```
 
-**What changes for existing configs?** A `runok.yml` without a `defaults.action` key now defers unmatched commands to Claude Code's normal permission flow instead of always prompting. A `defaults.sandbox` set without a `defaults.action` is now also rejected at config validation time, for the same reason `pass` + `sandbox` already was: a `pass` decision produces no hook output, so the sandbox wrapping would be silently dropped.
+**What changes for existing configs?** A `runok.yml` without a `defaults.action` key now defers unmatched commands to Claude Code's normal permission flow instead of always prompting.
 
 **What should I do?** To keep the previous allowlist-style behavior (every unmatched command prompts), set `defaults.action: ask` explicitly. No other change is required to restore the old behavior.
 
@@ -85,7 +85,7 @@ defaults:
   action: pass
 ```
 
-It cannot be combined with `defaults.sandbox`, since a `pass` decision produces no `updatedInput` and the sandbox wrapping would be silently dropped -- this is rejected at config validation time. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`; `runok check` reports `pass` as its own distinct decision value instead. `pass` decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+It can be combined with `defaults.sandbox`: the hook response omits `permissionDecision` entirely but still includes `updatedInput` with the command rewritten to run under the sandbox preset, so Claude Code's own permission flow decides against the original command while the sandbox still applies to whatever actually runs. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`; `runok check` reports `pass` as its own distinct decision value instead. `pass` decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
 
 **Breaking:** since a passing test case's output could otherwise read as `PASS: cmd => pass`, [`runok test`](/cli/test/) now labels a passing test case `ok` instead of `PASS` (`FAIL` is unchanged). Update any script or CI step that greps `runok test` output for the literal `PASS:` prefix.
 

@@ -269,6 +269,53 @@ fn hook_pattern_parse_error_exits_1() {
         .stderr(predicates::str::contains("pattern parse error"));
 }
 
+// --- Bash tool: no matching rule with defaults.sandbox → updatedInput
+// only, no permissionDecision (defers to Claude Code's own permission
+// flow while still routing the executed command through the sandbox) ---
+
+#[rstest]
+#[case::default_unset(indoc! {"
+    defaults:
+      sandbox: restricted
+    definitions:
+      sandbox:
+        restricted:
+          fs:
+            writable: [./tmp]
+"})]
+#[case::explicit_pass(indoc! {"
+    defaults:
+      action: pass
+      sandbox: restricted
+    definitions:
+      sandbox:
+        restricted:
+          fs:
+            writable: [./tmp]
+"})]
+fn hook_bash_no_match_with_default_sandbox_omits_permission_decision(#[case] config_yaml: &str) {
+    let env = TestEnv::new(config_yaml);
+    let assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("unknown-command --flag"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {
+                    "command": "runok exec --sandbox restricted -- 'unknown-command --flag'"
+                }
+            }
+        })
+    );
+}
+
 // --- Hook event name ---
 
 #[rstest]
