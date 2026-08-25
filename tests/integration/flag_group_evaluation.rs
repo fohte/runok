@@ -1,6 +1,6 @@
 #![allow(clippy::panic, reason = "test helper for substring assertions")]
 
-use super::{ActionAssertion, assert_allow, assert_ask, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -183,7 +183,7 @@ fn bool_flag_group_captures_presence(empty_context: EvalContext) {
 #[rstest]
 fn bool_flag_group_not_present_fails_match(empty_context: EvalContext) {
     // When the bool flag is not in the command, <flag:name> does not match,
-    // so the rule is skipped entirely (falls through to default ask).
+    // so the rule is skipped entirely (falls through to the default pass).
     let yaml = indoc! {r#"
         definitions:
           flag_groups:
@@ -193,7 +193,7 @@ fn bool_flag_group_not_present_fails_match(empty_context: EvalContext) {
     "#};
     let config = parse_config(yaml).unwrap();
     let result = evaluate_command(&config, "command foo", &empty_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -203,7 +203,7 @@ fn bool_flag_group_not_present_fails_match(empty_context: EvalContext) {
 #[rstest]
 #[case::allowed_value("command -X GET foo", assert_allow as ActionAssertion)]
 #[case::allowed_value_head("command --method HEAD foo", assert_allow as ActionAssertion)]
-#[case::disallowed_value("command -X POST foo", assert_ask as ActionAssertion)]
+#[case::disallowed_value("command -X POST foo", assert_pass as ActionAssertion)]
 fn value_restricted_flag_group(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

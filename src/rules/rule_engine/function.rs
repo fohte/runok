@@ -145,14 +145,14 @@ mod tests {
     ) {
         let config = make_config(vec![allow_rule("git push")]);
         let result = evaluate_command(&config, command, &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Ask(_)));
+        assert!(matches!(result.action, Action::Pass));
     }
 
     #[rstest]
     fn call_before_definition_stays_unknown(empty_context: EvalContext) {
         let config = make_config(vec![allow_rule("git push")]);
         let result = evaluate_command(&config, "f; f() { git push; }", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]

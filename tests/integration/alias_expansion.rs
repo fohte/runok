@@ -50,7 +50,7 @@ fn alias_does_not_grant_unlisted_subcommands(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "kubectl -n prod delete pods", &empty_context).unwrap();
-    assert!(matches!(result.action, Action::Ask(_)));
+    assert!(matches!(result.action, Action::Pass));
     assert!(result.alias_chain.is_empty());
 }
 

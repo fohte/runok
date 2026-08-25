@@ -714,7 +714,8 @@ mod tests {
 
     #[rstest]
     fn run_tests_default_action() {
-        // No rules means default action (ask) applies
+        // No rules means the default action (pass, not ask) applies, so a
+        // case asserting "ask" for an unmatched command now fails.
         let config = Config::default();
         let test_cases = vec![TestCase {
             command: "echo hello".to_string(),
@@ -725,7 +726,8 @@ mod tests {
         }];
 
         let results = run_tests(&config, &test_cases);
-        assert!(results.is_success());
+        assert!(!results.is_success());
+        assert_eq!(results.results[0].actual, ActionKind::Pass);
     }
 
     #[rstest]

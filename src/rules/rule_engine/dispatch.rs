@@ -171,10 +171,10 @@ mod tests {
         vec![allow_rule("cd *"), allow_rule("pnpm *")],
         "Allow",
     )]
-    #[case::cd_and_unmatched_escalates_to_ask(
+    #[case::cd_and_unmatched_falls_back_to_pass(
         "cd /path && unknown-cmd",
         vec![allow_rule("cd *")],
-        "Ask",
+        "Pass",
     )]
     #[case::triple_compound(
         "cd /path/to/dir && rm -rf dist .astro && pnpm build",
@@ -215,8 +215,9 @@ mod tests {
     fn compound_guard_cd_wildcard_does_not_match_entire_compound(empty_context: EvalContext) {
         // This is the exact bug scenario: `cd *` must NOT match the entire
         // compound command `cd /path && rm -rf dist && pnpm build`.
-        // Unmatched sub-commands escalate to Ask even without defaults.action,
-        // so the overall result must be Ask, not Allow.
+        // Unmatched sub-commands fall back to the default action (Pass
+        // without defaults.action configured), so the overall result must
+        // not be Allow.
         let config = make_config(vec![allow_rule("cd *")]);
         let result = evaluate_command(
             &config,
@@ -225,8 +226,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(result.action, Action::Ask(_)),
-            "expected Ask (from unmatched sub-commands), got {:?}",
+            matches!(result.action, Action::Pass),
+            "expected Pass (from unmatched sub-commands), got {:?}",
             result.action
         );
     }

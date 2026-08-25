@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -23,7 +23,7 @@ fn config_with_standard_wrappers() -> &'static str {
 #[rstest]
 #[case::sudo_rm_denied("sudo rm -rf /", assert_deny as ActionAssertion)]
 #[case::sudo_safe_allowed("sudo ls -la", assert_allow as ActionAssertion)]
-#[case::sudo_unmatched_default("sudo hg status", assert_ask as ActionAssertion)]
+#[case::sudo_unmatched_default("sudo hg status", assert_pass as ActionAssertion)]
 fn sudo_wrapper_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -188,7 +188,7 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
 
     // Without wrappers, "sudo rm -rf /" is just "sudo" command, not unwrapped
     let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Ask(None));
+    assert_eq!(result.action, Action::Pass);
 }
 
 // ========================================
@@ -204,7 +204,7 @@ fn without_wrappers_sudo_is_not_unwrapped(empty_context: EvalContext) {
 #[case::env_var_echo_allowed("env FOO=bar echo hello", assert_allow as ActionAssertion)]
 #[case::env_var_rm_denied("env FOO=bar rm -rf /", assert_deny as ActionAssertion)]
 #[case::env_multiple_vars("env FOO=bar BAZ=qux echo hello", assert_allow as ActionAssertion)]
-#[case::env_var_unmatched_default("env FOO=bar hg status", assert_ask as ActionAssertion)]
+#[case::env_var_unmatched_default("env FOO=bar hg status", assert_pass as ActionAssertion)]
 fn env_wrapper_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -706,7 +706,7 @@ fn wrapper_without_cmd_placeholder_no_recurse(empty_context: EvalContext) {
     // "time ls -la": time * matches as wrapper but has no <cmd>,
     // so no recursive evaluation occurs. "time" itself has no rule -> Default
     let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Ask(None));
+    assert_eq!(result.action, Action::Pass);
 }
 
 // ========================================
@@ -796,7 +796,7 @@ fn cmd_placeholder_skips_flag_starting_tokens(
 #[case::find_execdir_echo_allowed("find . -execdir echo hello +", assert_allow as ActionAssertion)]
 #[case::find_ok_rm_denied("find /tmp -ok rm -rf / \\;", assert_deny as ActionAssertion)]
 #[case::find_okdir_ls_allowed("find . -okdir ls -la +", assert_allow as ActionAssertion)]
-#[case::find_exec_unmatched_default("find . -exec hg status +", assert_ask as ActionAssertion)]
+#[case::find_exec_unmatched_default("find . -exec hg status +", assert_pass as ActionAssertion)]
 fn find_exec_wrapper_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -1001,7 +1001,7 @@ fn docker_exec_wrapper_with_optional_flags(
 #[rstest]
 #[case::path_ref_match_inner_deny("via /usr/bin/sudo rm -rf /", assert_deny as ActionAssertion)]
 #[case::path_ref_match_inner_allow("via /bin/sudo ls -la", assert_allow as ActionAssertion)]
-#[case::path_ref_no_match("via /opt/bin/other rm -rf /", assert_ask as ActionAssertion)]
+#[case::path_ref_no_match("via /opt/bin/other rm -rf /", assert_pass as ActionAssertion)]
 fn wrapper_with_path_ref_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -1027,7 +1027,7 @@ fn wrapper_with_path_ref_evaluates_inner(
 #[rstest]
 #[case::var_ref_inner_deny("run-as alice rm -rf /", assert_deny as ActionAssertion)]
 #[case::var_ref_inner_allow("run-as bob ls -la", assert_allow as ActionAssertion)]
-#[case::var_ref_unknown_user_no_match("run-as eve rm -rf /", assert_ask as ActionAssertion)]
+#[case::var_ref_unknown_user_no_match("run-as eve rm -rf /", assert_pass as ActionAssertion)]
 fn wrapper_with_var_ref_evaluates_inner(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

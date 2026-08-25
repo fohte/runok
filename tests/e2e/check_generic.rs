@@ -43,7 +43,7 @@ fn check_command_arg_json(
 #[rstest]
 #[case::deny_rm(&["rm", "-rf", "/"], "deny")]
 #[case::allow_git_status(&["git", "status"], "allow")]
-#[case::comment_only(&["# just a comment"], "ask")]
+#[case::comment_only(&["# just a comment"], "pass")]
 fn check_command_arg_text(
     check_env: TestEnv,
     #[case] command: &[&str],

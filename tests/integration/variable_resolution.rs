@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -72,9 +72,9 @@ fn conditional_list_reassignment_falls_back_to_defaults_action(
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     // `$F` stays unresolved (`git push $F` matches neither rule
     // pattern), so the branch falls through to `defaults.action`
-    // (unset here -> the safe `Ask` default) -- never to the `allow`
+    // (unset here -> the `Pass` default) -- never to the `allow`
     // rule, which would mean the reassignment was wrongly trusted.
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -200,10 +200,10 @@ fn unresolvable_assignment_falls_back_to_defaults_action(
     let config = parse_config(config_yaml).unwrap();
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
     // `defaults.action` is unset in every case above, so an unresolved
-    // `$X` (never matching a rule) always resolves to the safe default
-    // (`Ask`), and never to a `deny` rule that would only match if `$X`
+    // `$X` (never matching a rule) always resolves to the default
+    // (`Pass`), and never to a `deny` rule that would only match if `$X`
     // had incorrectly been resolved to a stale/guessed literal value.
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -223,7 +223,7 @@ fn function_body_assignment_does_not_leak_to_caller(empty_context: EvalContext) 
     .unwrap();
 
     let result = evaluate_compound(&config, "f() { local X=1; }; echo $X", &empty_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================

@@ -73,7 +73,7 @@ See [Extends (Presets)](/configuration/extends/) for full details on local paths
 Default settings applied when no rule matches a command.
 
 **Type:** `object`\
-**Default:** `{ action: "ask" }`\
+**Default:** `{ action: "pass" }`\
 **Required:** No
 
 ```yaml title="runok.yml"
@@ -87,7 +87,7 @@ defaults:
 Action to take when no rule matches.
 
 **Type:** `"allow" | "ask" | "deny" | "pass"`\
-**Default:** `"ask"`
+**Default:** `"pass"`
 
 | Value   | Behavior                                                                                         |
 | ------- | ------------------------------------------------------------------------------------------------ |
@@ -96,7 +96,9 @@ Action to take when no rule matches.
 | `deny`  | Reject the command.                                                                              |
 | `pass`  | Defer to the caller's own permission flow instead of forcing a decision (Claude Code hook only). |
 
-`pass` cannot be combined with `defaults.sandbox`: a `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`. `runok check` reports `pass` as its own distinct decision value instead, since it only evaluates and never executes.
+`ask` is no longer the implicit fallback for an unset `defaults.action`: to force a prompt on every unmatched command (the old default behavior), set `defaults.action: ask` explicitly.
+
+`pass` (including the unset default, which resolves to `pass`) cannot be combined with `defaults.sandbox`: a `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`. `runok check` reports `pass` as its own distinct decision value instead, since it only evaluates and never executes.
 
 #### `defaults.sandbox`
 

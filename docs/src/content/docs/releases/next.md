@@ -72,9 +72,22 @@ defaults:
   action: pass
 ```
 
-`pass` is opt-in; the default remains `ask`, unchanged. It cannot be combined with `defaults.sandbox`, since a `pass` decision produces no `updatedInput` and the sandbox wrapping would be silently dropped -- this is rejected at config validation time. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`; `runok check` reports `pass` as its own distinct decision value instead. `pass` decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+It cannot be combined with `defaults.sandbox`, since a `pass` decision produces no `updatedInput` and the sandbox wrapping would be silently dropped -- this is rejected at config validation time. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`; `runok check` reports `pass` as its own distinct decision value instead. `pass` decisions are still recorded in the audit log, so `runok audit`'s rule-authoring workflow keeps working for unmatched commands. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
 
 **Breaking:** since a passing test case's output could otherwise read as `PASS: cmd => pass`, [`runok test`](/cli/test/) now labels a passing test case `ok` instead of `PASS` (`FAIL` is unchanged). Update any script or CI step that greps `runok test` output for the literal `PASS:` prefix.
+
+### Breaking: unmatched commands now resolve to `pass` by default, not `ask` ([#TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+
+`defaults.action`'s fallback when left unset has changed from `ask` to `pass` ([see above](#defaultsaction-pass-defers-to-claude-codes-own-permission-flow-496)). This closes the gap the previous PR only opened: runok's allowlist model returning `ask` for every unmatched Bash command was overriding Claude Code's own auto-mode classifier, since a hook-level `ask`/`deny`/`allow` decision short-circuits that flow before it ever runs. Most `runok.yml` configs never set `defaults.action` explicitly, so this had been quietly defeating auto mode for anyone using the default settings.
+
+```yaml
+defaults:
+  action: ask # no longer implied; write this explicitly to keep the old behavior
+```
+
+**What changes for existing configs?** A `runok.yml` without a `defaults.action` key now defers unmatched commands to Claude Code's normal permission flow instead of always prompting. A `defaults.sandbox` set without a `defaults.action` is now also rejected at config validation time, for the same reason `pass` + `sandbox` already was: a `pass` decision produces no hook output, so the sandbox wrapping would be silently dropped.
+
+**What should I do?** To keep the previous allowlist-style behavior (every unmatched command prompts), set `defaults.action: ask` explicitly. No other change is required to restore the old behavior.
 
 ### `runok check --verbose` / `runok exec --verbose` / `runok hook --verbose` now render a tree instead of `[verbose]`-prefixed log lines ([#486](https://github.com/fohte/runok/pull/486))
 

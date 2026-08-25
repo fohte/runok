@@ -57,3 +57,11 @@ fn assert_ask(actual: &Action) {
         actual
     );
 }
+
+fn assert_pass(actual: &Action) {
+    assert!(
+        matches!(actual, Action::Pass),
+        "expected Pass, got {:?}",
+        actual
+    );
+}

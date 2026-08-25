@@ -199,19 +199,16 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     );
 }
 
-// --- Bash tool: no matching rule → ask ---
+// --- Bash tool: no matching rule → pass (no output, defers to Claude Code) ---
 
 #[rstest]
-fn hook_bash_no_match_returns_ask(hook_env: TestEnv) {
+fn hook_bash_no_match_returns_pass(hook_env: TestEnv) {
     let assert = hook_env
         .command()
         .args(["check", "--input-format", "claude-code-hook"])
         .write_stdin(bash_hook_json("unknown-command --flag"))
         .assert();
-    let output = assert.code(0).get_output().stdout.clone();
-    let json: serde_json::Value =
-        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert.code(0).stdout(predicates::str::is_empty());
 }
 
 // --- Config errors fall back to exit 1 (non-blocking) ---

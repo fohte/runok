@@ -713,15 +713,15 @@ fn rewrite_project_config(env: &AuditTestEnv, yaml: &str) {
     }),
 )]
 #[case::ask_rule_removed(
-    // The explicit `ask` rule is gone; the command now resolves to `ask`
-    // purely via the `defaults.action` fallback (no matched rule).
+    // The explicit `ask` rule is gone; the command now resolves to `pass`
+    // via the `defaults.action` fallback (no matched rule).
     "",
     serde_json::json!({
-        "action": {"type": "ask", "detail": {"message": null}},
+        "action": {"type": "pass"},
         "command_evaluations": [
             {
                 "command": "terraform apply",
-                "action": {"type": "ask", "detail": {"message": null}}
+                "action": {"type": "pass"}
             }
         ]
     }),

@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -51,7 +51,7 @@ use runok::rules::rule_engine::{EvalContext, evaluate_command};
           - allow: aws ec2 terminate-instances --instance-ids <var:instance-ids>
     "},
     "aws ec2 terminate-instances --instance-ids i-UNKNOWN",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::literal_explicit_type(
     indoc! {"
@@ -124,7 +124,7 @@ fn var_ref_literal(
           - allow: bash <var:test-script>
     "},
     "bash ./scripts/deploy",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::path_dotdot_resolution(
     indoc! {"
@@ -359,7 +359,7 @@ fn var_ref_when_clause_with_vars(
           - allow: '<var:runok> check'
     "},
     "node check",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::command_position_path_type(
     indoc! {"

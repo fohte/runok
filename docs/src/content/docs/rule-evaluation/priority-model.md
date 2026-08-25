@@ -54,7 +54,7 @@ defaults:
   action: ask # "allow", "deny", "ask", or "pass"
 ```
 
-If `defaults.action` is not set, it defaults to `ask`.
+If `defaults.action` is not set, it defaults to `pass`.
 
 Because unmatched commands are resolved at evaluation time, they participate directly in the Explicit Deny Wins comparison at their effective restriction level. For example, during [compound command evaluation](/rule-evaluation/compound-commands/), an unmatched sub-command resolved to `ask` (priority 2) will correctly outrank an `allow` (priority 0) sub-command.
 

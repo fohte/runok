@@ -10,7 +10,7 @@ use runok::rules::rule_engine::{
     evaluate_compound,
 };
 
-use super::{assert_allow, assert_ask, assert_deny};
+use super::{assert_allow, assert_ask, assert_deny, assert_pass};
 
 /// Resolver that treats a fixed set of names as installed and everything
 /// else as missing, so tests stay deterministic regardless of the host's
@@ -98,7 +98,7 @@ fn known_command_is_not_flagged(known_commands_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "terraform version", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 #[rstest]
@@ -112,7 +112,7 @@ fn disabled_check_falls_back_to_default_action(known_commands_context: EvalConte
     .unwrap();
 
     let result = evaluate_command(&config, "tarraform version", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 #[rstest]
@@ -120,7 +120,7 @@ fn not_configured_falls_back_to_default_action(known_commands_context: EvalConte
     let config = parse_config("{}").unwrap();
 
     let result = evaluate_command(&config, "tarraform version", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -176,7 +176,7 @@ fn ignored_command_is_not_flagged(known_commands_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "tarraform version", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 #[rstest]
@@ -192,7 +192,7 @@ fn argv0_with_slash_is_not_flagged(#[case] command: &str, known_commands_context
     .unwrap();
 
     let result = evaluate_command(&config, command, &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 #[rstest]
@@ -206,7 +206,7 @@ fn function_defined_in_same_command_string_is_not_flagged(known_commands_context
     .unwrap();
 
     let result = evaluate_command(&config, "f() { true; }; f", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 #[rstest]
@@ -227,7 +227,7 @@ fn source_anywhere_in_input_disables_the_check_for_the_whole_compound(
         &known_commands_context,
     )
     .unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -289,7 +289,7 @@ fn wrapper_inner_unresolved_variable_is_not_flagged(known_commands_context: Eval
 
     let result =
         evaluate_command(&config, "sudo $TERRAFORM version", &known_commands_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 /// Same as above, but for backtick command substitution instead of a bare
@@ -320,5 +320,5 @@ fn wrapper_inner_backtick_substitution_is_not_flagged(known_commands_context: Ev
         &known_commands_context,
     )
     .unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }

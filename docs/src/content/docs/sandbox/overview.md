@@ -138,7 +138,7 @@ rules:
 ```
 
 :::caution
-`defaults.sandbox` cannot be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction). A `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped -- this is rejected at config validation time.
+`defaults.sandbox` cannot be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction) -- including the unset (default) case, which also resolves to `pass`. A `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped -- this is rejected at config validation time.
 :::
 
 ## Sandbox merging for compound commands

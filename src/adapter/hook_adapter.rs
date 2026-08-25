@@ -193,20 +193,22 @@ impl ClaudeCodeHookAdapter {
 
     /// Build a HookOutput for the no-match case (Bash tool, rule didn't match).
     /// Returns `None` when tool_name is not "Bash", or when `defaults.action`
-    /// is `pass` (nothing to output either way).
+    /// is `pass` -- including unset, since `pass` is the default (nothing to
+    /// output either way).
     fn build_no_match_output(
         &self,
         defaults: &Defaults,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if self.input.tool_name != "Bash" || defaults.action == Some(ActionKind::Pass) {
+        let is_pass = matches!(defaults.action, Some(ActionKind::Pass) | None);
+        if self.input.tool_name != "Bash" || is_pass {
             return Ok(None);
         }
 
         let decision = match defaults.action {
             Some(ActionKind::Allow) => "allow",
             Some(ActionKind::Deny) => "deny",
-            Some(ActionKind::Ask) | None => "ask",
-            Some(ActionKind::Pass) => unreachable!("handled by the early return above"),
+            Some(ActionKind::Ask) => "ask",
+            Some(ActionKind::Pass) | None => unreachable!("handled by the early return above"),
         };
 
         let updated_input = if decision == "allow" || decision == "ask" {
@@ -498,7 +500,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::default_ask(None, "ask")]
     #[case::explicit_ask(Some(ActionKind::Ask), "ask")]
     #[case::explicit_allow(Some(ActionKind::Allow), "allow")]
     #[case::explicit_deny(Some(ActionKind::Deny), "deny")]
@@ -520,11 +521,13 @@ mod tests {
     }
 
     #[rstest]
-    fn build_no_match_output_bash_pass_returns_none() {
+    #[case::explicit_pass(Some(ActionKind::Pass))]
+    #[case::default_unset(None)]
+    fn build_no_match_output_bash_pass_returns_none(#[case] default_action: Option<ActionKind>) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("some-command")));
         let defaults = Defaults {
-            action: Some(ActionKind::Pass),
+            action: default_action,
             sandbox: None,
         };
         let output = adapter

@@ -246,8 +246,9 @@ pub(super) fn action_priority(action: &Action) -> u8 {
 
 /// Return the action to use when no rule matched.
 ///
-/// Uses `defaults.action` from the config, falling back to `Ask` when
-/// not configured.
+/// Uses `defaults.action` from the config, falling back to `Pass` when
+/// not configured -- an unmatched command defers to the caller's own
+/// permission flow rather than forcing an `ask` prompt.
 pub fn default_action(config: &Config) -> Action {
     use crate::config::ActionKind;
     match config.defaults.as_ref().and_then(|d| d.action) {
@@ -257,8 +258,8 @@ pub fn default_action(config: &Config) -> Action {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        Some(ActionKind::Ask) | None => Action::Ask(None),
-        Some(ActionKind::Pass) => Action::Pass,
+        Some(ActionKind::Ask) => Action::Ask(None),
+        Some(ActionKind::Pass) | None => Action::Pass,
     }
 }
 
@@ -341,7 +342,7 @@ mod tests {
     fn compound_no_matching_rules_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_compound(&config, "hg status | wc -l", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     // ========================================
@@ -398,11 +399,12 @@ mod tests {
     #[rstest]
     fn compound_no_defaults_unmatched_wins_over_allow(empty_context: EvalContext) {
         // Without defaults.action configured, unmatched sub-commands
-        // resolve to Ask (the safe default).  Ask wins over Allow,
-        // preventing a security bypass.
+        // resolve to Pass (the default). Pass still outranks Allow,
+        // so an unrelated allowed sub-command cannot silently decide
+        // the whole compound's outcome.
         let config = make_config(vec![allow_rule("echo *")]);
         let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]

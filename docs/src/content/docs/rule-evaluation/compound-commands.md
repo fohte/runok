@@ -156,7 +156,7 @@ The entire compound command is blocked because one sub-command is denied.
 
 ## Default action resolution
 
-When a sub-command does not match any rule, its action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `ask` if unconfigured). This ensures unmatched sub-commands participate in the aggregation at their effective restriction level.
+When a sub-command does not match any rule, its action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `pass` if unconfigured). This ensures unmatched sub-commands participate in the aggregation at their effective restriction level.
 
 ```yaml
 defaults:
