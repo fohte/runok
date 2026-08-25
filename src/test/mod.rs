@@ -733,8 +733,10 @@ mod tests {
     #[rstest]
     fn run_tests_eval_error_is_failure_not_false_positive() {
         // A rule with a malformed `when` expression causes an eval error.
-        // Even though the expected decision is "ask" (matching the default),
-        // the test must fail because the rule was never actually evaluated.
+        // `expected` is irrelevant to the outcome here (`ExpectedDecision` has
+        // no `Pass` variant, so it can never equal the unmatched-command
+        // default): the test must fail because the rule was never actually
+        // evaluated, regardless of what was expected.
         let config = Config {
             rules: Some(vec![RuleEntry {
                 deny: Some("rm *".to_string()),

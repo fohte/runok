@@ -35,6 +35,13 @@ pub struct Defaults {
     pub sandbox: Option<String>,
 }
 
+impl Defaults {
+    /// Returns the configured action, defaulting to `pass` when unset.
+    pub fn resolved_action(&self) -> ActionKind {
+        self.action.unwrap_or(ActionKind::Pass)
+    }
+}
+
 /// Permission action kind.
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
@@ -51,8 +58,11 @@ pub enum ActionKind {
     /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
     /// is a weaker decision than an explicit `ask`, but still more
     /// restrictive than silently allowing.
-    Pass,
+    ///
+    /// The type-level default: matches `Defaults::resolved_action()`, which
+    /// falls back to `Pass` when `defaults.action` is unset.
     #[default]
+    Pass,
     Ask,
     Deny,
 }
@@ -129,8 +139,22 @@ mod tests {
     // === ActionKind ===
 
     #[test]
-    fn action_kind_default_is_ask() {
-        assert_eq!(ActionKind::default(), ActionKind::Ask);
+    fn action_kind_default_is_pass() {
+        assert_eq!(ActionKind::default(), ActionKind::Pass);
+    }
+
+    #[rstest]
+    #[case::allow(Some(ActionKind::Allow), ActionKind::Allow)]
+    #[case::ask(Some(ActionKind::Ask), ActionKind::Ask)]
+    #[case::deny(Some(ActionKind::Deny), ActionKind::Deny)]
+    #[case::pass(Some(ActionKind::Pass), ActionKind::Pass)]
+    #[case::default_when_none(None, ActionKind::Pass)]
+    fn defaults_resolved_action(#[case] action: Option<ActionKind>, #[case] expected: ActionKind) {
+        let defaults = Defaults {
+            action,
+            sandbox: None,
+        };
+        assert_eq!(defaults.resolved_action(), expected);
     }
 
     #[test]

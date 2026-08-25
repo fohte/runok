@@ -199,16 +199,16 @@ impl ClaudeCodeHookAdapter {
         &self,
         defaults: &Defaults,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        let is_pass = matches!(defaults.action, Some(ActionKind::Pass) | None);
-        if self.input.tool_name != "Bash" || is_pass {
+        let resolved = defaults.resolved_action();
+        if self.input.tool_name != "Bash" || resolved == ActionKind::Pass {
             return Ok(None);
         }
 
-        let decision = match defaults.action {
-            Some(ActionKind::Allow) => "allow",
-            Some(ActionKind::Deny) => "deny",
-            Some(ActionKind::Ask) => "ask",
-            Some(ActionKind::Pass) | None => unreachable!("handled by the early return above"),
+        let decision = match resolved {
+            ActionKind::Allow => "allow",
+            ActionKind::Deny => "deny",
+            ActionKind::Ask => "ask",
+            ActionKind::Pass => unreachable!("handled by the early return above"),
         };
 
         let updated_input = if decision == "allow" || decision == "ask" {

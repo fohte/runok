@@ -159,10 +159,13 @@ fn has_writable_contradiction(
     })
 }
 
-/// Escalate an action to Ask if it is currently Allow or Default.
+/// Escalate an action to Ask if it is currently Allow or Pass. Pass must be
+/// escalated too: like Allow, it carries no `updatedInput`, so silently
+/// leaving it as Pass would drop the writable-roots contradiction signal
+/// the same way an unescalated Allow would.
 fn escalate_to_ask(action: Action) -> Action {
     match action {
-        Action::Allow => Action::Ask(Some(
+        Action::Allow | Action::Pass => Action::Ask(Some(
             "sandbox policy conflict: writable roots are contradictory".to_string(),
         )),
         other => other,
@@ -250,16 +253,21 @@ pub(super) fn action_priority(action: &Action) -> u8 {
 /// not configured -- an unmatched command defers to the caller's own
 /// permission flow rather than forcing an `ask` prompt.
 pub fn default_action(config: &Config) -> Action {
-    use crate::config::ActionKind;
-    match config.defaults.as_ref().and_then(|d| d.action) {
-        Some(ActionKind::Allow) => Action::Allow,
-        Some(ActionKind::Deny) => Action::Deny(DenyResponse {
+    use crate::config::{ActionKind, Defaults};
+    let action = config
+        .defaults
+        .as_ref()
+        .map(Defaults::resolved_action)
+        .unwrap_or(ActionKind::Pass);
+    match action {
+        ActionKind::Allow => Action::Allow,
+        ActionKind::Deny => Action::Deny(DenyResponse {
             message: None,
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        Some(ActionKind::Ask) => Action::Ask(None),
-        Some(ActionKind::Pass) | None => Action::Pass,
+        ActionKind::Ask => Action::Ask(None),
+        ActionKind::Pass => Action::Pass,
     }
 }
 
@@ -700,6 +708,58 @@ mod tests {
         let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
         // Writable roots intersection is empty -> contradiction -> escalate to Ask
         assert!(matches!(result.action, Action::Ask(_)));
+    }
+
+    #[rstest]
+    fn compound_writable_contradiction_with_pass_escalates_to_ask(empty_context: EvalContext) {
+        // An unmatched sub-command resolves to Pass (no defaults.action
+        // configured), which outranks the other two sub-commands' Allow --
+        // the merged action going into contradiction detection is Pass, not
+        // Allow. Pass must still be escalated: it carries no `updatedInput`,
+        // so leaving it unescalated would silently drop the sandbox
+        // contradiction the same way an unescalated Allow would.
+        let config = make_sandbox_config(
+            vec![
+                allow_rule_with_sandbox("ls *", "only_tmp"),
+                allow_rule_with_sandbox("cat *", "only_home"),
+            ],
+            HashMap::from([
+                (
+                    "only_tmp".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
+                        }),
+                        network: None,
+                    },
+                ),
+                (
+                    "only_home".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/home".to_string()]),
+                                deny: None,
+                            }),
+                        }),
+                        network: None,
+                    },
+                ),
+            ]),
+        );
+
+        let result =
+            evaluate_compound(&config, "unknown_cmd && ls -la && cat -", &empty_context).unwrap();
+        assert!(
+            matches!(result.action, Action::Ask(_)),
+            "expected Ask, got {:?}",
+            result.action
+        );
     }
 
     #[rstest]

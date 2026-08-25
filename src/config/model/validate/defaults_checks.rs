@@ -10,8 +10,7 @@ impl Config {
         let Some(defaults) = &self.defaults else {
             return;
         };
-        let is_pass = matches!(defaults.action, Some(ActionKind::Pass) | None);
-        if is_pass && defaults.sandbox.is_some() {
+        if defaults.resolved_action() == ActionKind::Pass && defaults.sandbox.is_some() {
             errors.push(
                 "defaults: 'pass' action (the default when defaults.action is unset) \
                  cannot be combined with 'sandbox' (a pass decision produces no hook \
