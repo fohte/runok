@@ -135,6 +135,7 @@ impl Endpoint for ExecAdapter {
         }
     }
 
+    // Unreachable via the CLI: `ExecArgs.command` is `required = true`, so `args` is never empty.
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
         match defaults.action {
             Some(ActionKind::Allow) | None => {
