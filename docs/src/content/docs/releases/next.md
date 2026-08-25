@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ## New Features
 
-### `defaults.action: pass` defers to Claude Code's own permission flow (TODO(pr-link))
+### `defaults.action: pass` defers to Claude Code's own permission flow ([#496](https://github.com/fohte/runok/pull/496))
 
 An unmatched command previously always resolved to a concrete decision (`allow`, `deny`, or `ask`, per `defaults.action`), even when `ask` meant forcing a permission prompt that Claude Code's own permission flow might have resolved without one. The new `pass` value for `defaults.action` writes nothing to the `PreToolUse` hook's stdout and exits `0` instead, which Claude Code interprets as "no decision to report" -- the tool call falls through to its own permission flow rather than being short-circuited into `ask`:
 
