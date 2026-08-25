@@ -498,7 +498,7 @@ fn action_variant(action: &Action) -> &'static str {
         Action::Allow => "Allow",
         Action::Deny(_) => "Deny",
         Action::Ask(_) => "Ask",
-        Action::Passthrough => "Passthrough",
+        Action::Pass => "Pass",
     }
 }
 

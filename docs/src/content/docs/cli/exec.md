@@ -7,7 +7,7 @@ sidebar:
 
 `runok exec` evaluates a command against your runok rules and, if allowed, executes it — [optionally within a sandbox](/sandbox/overview/). If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
 
-[`defaults.action: passthrough`](/configuration/schema/#defaultsaction) has no effect here: unlike the Claude Code hook, `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` (exit code `3`).
+[`defaults.action: pass`](/configuration/schema/#defaultsaction) has no effect here: unlike the Claude Code hook, `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` (exit code `3`).
 
 ## Usage
 
@@ -55,11 +55,11 @@ runok exec -- 'echo hello && echo world'
 
 ## Exit codes
 
-| Code | Meaning                                                           |
-| ---- | ----------------------------------------------------------------- |
-| _N_  | Command's own exit code (on successful execution).                |
-| `1`  | An error occurred (config error, sandbox setup failure, etc.).    |
-| `3`  | Command was denied or requires confirmation (ask or passthrough). |
+| Code | Meaning                                                        |
+| ---- | -------------------------------------------------------------- |
+| _N_  | Command's own exit code (on successful execution).             |
+| `1`  | An error occurred (config error, sandbox setup failure, etc.). |
+| `3`  | Command was denied or requires confirmation (ask or pass).     |
 
 ## Related
 

@@ -29,7 +29,7 @@ impl AliasDefinition {
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Defaults {
     /// Default action when no rule matches: `allow`, `deny`, `ask`, or
-    /// `passthrough`.
+    /// `pass`.
     pub action: Option<ActionKind>,
     /// Default sandbox preset name to apply.
     pub sandbox: Option<String>,
@@ -45,13 +45,13 @@ pub enum ActionKind {
     /// own permission flow (the auto-mode classifier) decides instead.
     /// Only meaningful for `defaults.action` -- a per-rule `deny`/`allow`/
     /// `ask` entry can never resolve to this variant, since `RuleEntry` has
-    /// no `passthrough` field.
+    /// no `pass` field.
     ///
     /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
-    /// `action_priority()` in `rules/rule_engine/compound.rs` -- passthrough
+    /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
     /// is a weaker decision than an explicit `ask`, but still more
     /// restrictive than silently allowing.
-    Passthrough,
+    Pass,
     #[default]
     Ask,
     Deny,
@@ -135,8 +135,8 @@ mod tests {
 
     #[test]
     fn action_kind_ordering() {
-        assert!(ActionKind::Allow < ActionKind::Passthrough);
-        assert!(ActionKind::Passthrough < ActionKind::Ask);
+        assert!(ActionKind::Allow < ActionKind::Pass);
+        assert!(ActionKind::Pass < ActionKind::Ask);
         assert!(ActionKind::Ask < ActionKind::Deny);
     }
 

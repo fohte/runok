@@ -157,14 +157,14 @@ impl ClaudeCodeHookAdapter {
     /// Build a HookOutput for a given action result.
     /// Separated from I/O for testability.
     ///
-    /// Returns `None` for `Action::Passthrough`: no decision to report, so
+    /// Returns `None` for `Action::Pass`: no decision to report, so
     /// the caller writes nothing and Claude Code's normal permission flow
     /// (the auto-mode classifier) decides instead.
     fn build_action_output(
         &self,
         result: &ActionResult,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if matches!(result.action, Action::Passthrough) {
+        if matches!(result.action, Action::Pass) {
             return Ok(None);
         }
 
@@ -185,7 +185,7 @@ impl ClaudeCodeHookAdapter {
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
                 ("ask", message.clone(), updated)
             }
-            Action::Passthrough => unreachable!("handled by the early return above"),
+            Action::Pass => unreachable!("handled by the early return above"),
         };
 
         Ok(Some(Self::build_output(decision, reason, updated_input)))
@@ -193,12 +193,12 @@ impl ClaudeCodeHookAdapter {
 
     /// Build a HookOutput for the no-match case (Bash tool, rule didn't match).
     /// Returns `None` when tool_name is not "Bash", or when `defaults.action`
-    /// is `passthrough` (nothing to output either way).
+    /// is `pass` (nothing to output either way).
     fn build_no_match_output(
         &self,
         defaults: &Defaults,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if self.input.tool_name != "Bash" || defaults.action == Some(ActionKind::Passthrough) {
+        if self.input.tool_name != "Bash" || defaults.action == Some(ActionKind::Pass) {
             return Ok(None);
         }
 
@@ -206,7 +206,7 @@ impl ClaudeCodeHookAdapter {
             Some(ActionKind::Allow) => "allow",
             Some(ActionKind::Deny) => "deny",
             Some(ActionKind::Ask) | None => "ask",
-            Some(ActionKind::Passthrough) => unreachable!("handled by the early return above"),
+            Some(ActionKind::Pass) => unreachable!("handled by the early return above"),
         };
 
         let updated_input = if decision == "allow" || decision == "ask" {
@@ -472,11 +472,11 @@ mod tests {
     }
 
     #[rstest]
-    fn build_action_output_passthrough_returns_none() {
+    fn build_action_output_pass_returns_none() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
         let result = ActionResult {
-            action: Action::Passthrough,
+            action: Action::Pass,
             sandbox: SandboxInfo::Preset(None),
             evaluations: vec![],
         };
@@ -520,11 +520,11 @@ mod tests {
     }
 
     #[rstest]
-    fn build_no_match_output_bash_passthrough_returns_none() {
+    fn build_no_match_output_bash_pass_returns_none() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("some-command")));
         let defaults = Defaults {
-            action: Some(ActionKind::Passthrough),
+            action: Some(ActionKind::Pass),
             sandbox: None,
         };
         let output = adapter
@@ -587,12 +587,12 @@ mod tests {
     }
 
     #[rstest]
-    fn handle_action_passthrough_writes_nothing_and_returns_exit_0() {
+    fn handle_action_pass_writes_nothing_and_returns_exit_0() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
         let exit_code = adapter
             .handle_action(ActionResult {
-                action: Action::Passthrough,
+                action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
                 evaluations: vec![],
             })

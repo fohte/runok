@@ -100,9 +100,9 @@
           ]
         },
         {
-          "description": "No decision: the hook writes nothing and exits 0, so Claude Code's\nown permission flow (the auto-mode classifier) decides instead.\nOnly meaningful for `defaults.action` -- a per-rule `deny`/`allow`/\n`ask` entry can never resolve to this variant, since `RuleEntry` has\nno `passthrough` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- passthrough\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.",
+          "description": "No decision: the hook writes nothing and exits 0, so Claude Code's\nown permission flow (the auto-mode classifier) decides instead.\nOnly meaningful for `defaults.action` -- a per-rule `deny`/`allow`/\n`ask` entry can never resolve to this variant, since `RuleEntry` has\nno `pass` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.",
           "type": "string",
-          "const": "passthrough"
+          "const": "pass"
         }
       ]
     },
@@ -158,7 +158,7 @@
       "type": "object",
       "properties": {
         "action": {
-          "description": "Default action when no rule matches: `allow`, `deny`, `ask`, or\n`passthrough`.",
+          "description": "Default action when no rule matches: `allow`, `deny`, `ask`, or\n`pass`.",
           "anyOf": [
             {
               "$ref": "#/$defs/ActionKind"

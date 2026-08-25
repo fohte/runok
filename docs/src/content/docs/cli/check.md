@@ -40,7 +40,7 @@ Output format. Available values:
 - `text` — Human-readable single line (e.g., `deny: reason (suggestion: fix)`)
 - `json` — Machine-readable JSON object with `decision`, `reason`, `fix_suggestion`, and `sandbox` fields. Fields with no value are omitted.
 
-`decision` is one of `allow`, `deny`, `ask`, or `passthrough`. Unlike [`runok exec`](/cli/exec/), which has no permission flow to defer to and falls back to `ask`, `runok check` reports [`defaults.action: passthrough`](/configuration/schema/#defaultsaction) as its own distinct decision, since it only evaluates and never executes.
+`decision` is one of `allow`, `deny`, `ask`, or `pass`. Unlike [`runok exec`](/cli/exec/), which has no permission flow to defer to and falls back to `ask`, `runok check` reports [`defaults.action: pass`](/configuration/schema/#defaultsaction) as its own distinct decision, since it only evaluates and never executes.
 
 ### `--verbose`
 

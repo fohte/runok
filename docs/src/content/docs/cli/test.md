@@ -82,11 +82,11 @@ tests:
 
 ## Output
 
-Each test case produces a `PASS` or `FAIL` line:
+Each test case produces an `ok` or `FAIL` line:
 
 ```
-PASS: git status => allow
-PASS: git push --force origin main => deny
+ok: git status => allow
+ok: git push --force origin main => deny
 FAIL: git push origin main => expected allow, got ask
 ```
 

@@ -21,7 +21,7 @@ use crate::helpers::TestEnv;
               - deny: 'rm -rf /'
     "},
     0,
-    "PASS",
+    "ok",
     "2 passed, 0 failed, 2 total",
 )]
 #[case::some_fail(
@@ -172,7 +172,7 @@ fn output_shows_pass_and_fail_details() {
     let output = env.command().args(["test"]).assert().code(1);
 
     output
-        .stdout(predicate::str::contains("PASS: rm -rf / => deny"))
+        .stdout(predicate::str::contains("ok: rm -rf / => deny"))
         .stdout(predicate::str::contains(
             "FAIL: rm -rf / => expected allow, got deny",
         ));
@@ -327,5 +327,5 @@ fn ask_decision_test() {
         .args(["test"])
         .assert()
         .code(0)
-        .stdout(predicate::str::contains("PASS: terraform apply => ask"));
+        .stdout(predicate::str::contains("ok: terraform apply => ask"));
 }

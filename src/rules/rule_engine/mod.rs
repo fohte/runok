@@ -100,11 +100,11 @@ pub enum Action {
     Allow,
     Deny(DenyResponse),
     Ask(Option<String>),
-    /// No decision: resolved from `defaults.action: passthrough` when no
+    /// No decision: resolved from `defaults.action: pass` when no
     /// rule matched. Endpoints that have a caller to defer to (the Claude
     /// Code hook) report nothing; endpoints that must pick a concrete
     /// outcome (`exec`, `check`) fall back to a documented default.
-    Passthrough,
+    Pass,
 }
 
 /// Details included when a command is denied.

@@ -135,7 +135,7 @@ After evaluating each sub-command, runok aggregates the results using the same [
 
 > The most restrictive action across all sub-commands becomes the final action.
 
-The priority order is: `deny` > `ask` > `passthrough` > `allow`.
+The priority order is: `deny` > `ask` > `pass` > `allow`.
 
 ### Example
 

@@ -39,7 +39,7 @@ fn action_str(action: &SerializableAction) -> &'static str {
         SerializableAction::Deny { .. } => "deny",
         SerializableAction::Ask { .. } => "ask",
         SerializableAction::Default => "default",
-        SerializableAction::Passthrough => "passthrough",
+        SerializableAction::Pass => "pass",
     }
 }
 
@@ -85,9 +85,9 @@ fn escape_control_chars(s: &str) -> String {
 }
 
 // Column widths: TIMESTAMP is fixed 19 chars ("2026-03-13 10:30:00"),
-// ACTION and NOW are fixed 11 chars ("passthrough" is the longest)
+// ACTION and NOW are fixed 7 chars ("default"/"ask-def" are the longest)
 const TS_WIDTH: usize = 19;
-const ACTION_WIDTH: usize = 11;
+const ACTION_WIDTH: usize = 7;
 
 /// Pad `text` to `ACTION_WIDTH`, then colorize per `action` -- padding first
 /// keeps ANSI escape codes from breaking column alignment.
@@ -104,9 +104,7 @@ fn colorize_action(action: &SerializableAction, text: &str) -> String {
         SerializableAction::Default => padded
             .if_supports_color(Stdout, |t| t.bright_black())
             .to_string(),
-        SerializableAction::Passthrough => {
-            padded.if_supports_color(Stdout, |t| t.cyan()).to_string()
-        }
+        SerializableAction::Pass => padded.if_supports_color(Stdout, |t| t.cyan()).to_string(),
     }
 }
 

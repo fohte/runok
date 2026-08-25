@@ -132,12 +132,12 @@ impl Endpoint for ExecAdapter {
                 eprintln!("runok: {}", msg);
                 Ok(3)
             }
-            Action::Passthrough => {
+            Action::Pass => {
                 // exec has no caller to defer a decision to (unlike the
                 // Claude Code hook, there's no "normal permission flow"
                 // underneath it) -- treated as deny, same as Ask.
                 eprintln!(
-                    "runok: command requires confirmation (defaults.action: passthrough has \
+                    "runok: command requires confirmation (defaults.action: pass has \
                      no effect outside the Claude Code hook)"
                 );
                 Ok(3)
@@ -164,10 +164,10 @@ impl Endpoint for ExecAdapter {
                 eprintln!("runok: command requires confirmation (default policy)");
                 Ok(3)
             }
-            Some(ActionKind::Passthrough) => {
+            Some(ActionKind::Pass) => {
                 // exec has no caller to defer to; treated as deny like Ask.
                 eprintln!(
-                    "runok: command requires confirmation (defaults.action: passthrough has \
+                    "runok: command requires confirmation (defaults.action: pass has \
                      no effect outside the Claude Code hook)"
                 );
                 Ok(3)
@@ -420,10 +420,10 @@ mod tests {
         assert_eq!(result, 3);
     }
 
-    // --- handle_action: Passthrough (treated as deny) ---
+    // --- handle_action: Pass (treated as deny) ---
 
     #[rstest]
-    fn handle_action_passthrough_returns_exit_3() {
+    fn handle_action_pass_returns_exit_3() {
         let adapter = ExecAdapter::new(
             vec!["terraform".into(), "apply".into()],
             None,
@@ -431,7 +431,7 @@ mod tests {
         );
         let result = adapter
             .handle_action(ActionResult {
-                action: Action::Passthrough,
+                action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
                 evaluations: vec![],
             })
@@ -446,7 +446,7 @@ mod tests {
     #[case::none_default(None, 0, true)]
     #[case::deny_default(Some(ActionKind::Deny), 3, false)]
     #[case::ask_default(Some(ActionKind::Ask), 3, false)]
-    #[case::passthrough_default(Some(ActionKind::Passthrough), 3, false)]
+    #[case::pass_default(Some(ActionKind::Pass), 3, false)]
     fn handle_no_match_follows_defaults(
         #[case] default_action: Option<ActionKind>,
         #[case] expected_exit_code: i32,

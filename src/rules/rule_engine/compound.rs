@@ -113,12 +113,12 @@ pub fn evaluate_compound(
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))
         }
-        // A passthrough response carries no `updatedInput`, so a sandbox
+        // A pass response carries no `updatedInput`, so a sandbox
         // policy merged in from another sub-command's matched rule would be
         // silently dropped instead of applied -- escalate to `ask` instead.
-        (Action::Passthrough, Some(policy)) => (
+        (Action::Pass, Some(policy)) => (
             Action::Ask(Some(
-                "a matched rule's sandbox policy cannot be applied via passthrough".to_string(),
+                "a matched rule's sandbox policy cannot be applied via pass".to_string(),
             )),
             Some(policy),
         ),
@@ -229,8 +229,8 @@ fn merge_actions(a: Action, b: Action) -> Action {
 /// Map an action to its priority for Explicit Deny Wins comparison.
 /// Higher value = more restrictive.
 ///
-/// `Passthrough` sits between `Allow` and `Ask`: within a compound command,
-/// an unmatched sub-command resolved via `defaults.action: passthrough`
+/// `Pass` sits between `Allow` and `Ask`: within a compound command,
+/// an unmatched sub-command resolved via `defaults.action: pass`
 /// must still outrank an explicitly allowed sub-command elsewhere in the
 /// same compound (otherwise the compound would silently resolve to Allow,
 /// the same bypass the Allow-vs-Ask ordering already guards against). An
@@ -238,7 +238,7 @@ fn merge_actions(a: Action, b: Action) -> Action {
 pub(super) fn action_priority(action: &Action) -> u8 {
     match action {
         Action::Allow => 0,
-        Action::Passthrough => 1,
+        Action::Pass => 1,
         Action::Ask(_) => 2,
         Action::Deny(_) => 3,
     }
@@ -258,7 +258,7 @@ pub fn default_action(config: &Config) -> Action {
             matched_rule: String::new(),
         }),
         Some(ActionKind::Ask) | None => Action::Ask(None),
-        Some(ActionKind::Passthrough) => Action::Passthrough,
+        Some(ActionKind::Pass) => Action::Pass,
     }
 }
 
@@ -354,7 +354,7 @@ mod tests {
     // otherwise an explicitly allowed sub-command would silently decide the
     // whole compound's outcome.
     #[case::ask(ActionKind::Ask, "ask")]
-    #[case::passthrough(ActionKind::Passthrough, "passthrough")]
+    #[case::pass(ActionKind::Pass, "pass")]
     #[case::deny(ActionKind::Deny, "deny")]
     fn compound_default_resolved_wins_over_allow(
         empty_context: EvalContext,
@@ -374,7 +374,7 @@ mod tests {
             Action::Allow => "allow",
             Action::Ask(_) => "ask",
             Action::Deny(_) => "deny",
-            Action::Passthrough => "passthrough",
+            Action::Pass => "pass",
         };
         assert_eq!(actual_label, expected_label);
     }
@@ -728,17 +728,17 @@ mod tests {
     }
 
     // ========================================
-    // Compound: passthrough with merged sandbox policy -> ask escalation
+    // Compound: pass with merged sandbox policy -> ask escalation
     // ========================================
 
     #[rstest]
-    fn compound_passthrough_with_sandbox_escalates_to_ask(empty_context: EvalContext) {
-        // A passthrough decision carries no `updatedInput`, so a sandbox
+    fn compound_pass_with_sandbox_escalates_to_ask(empty_context: EvalContext) {
+        // A pass decision carries no `updatedInput`, so a sandbox
         // policy merged in from another sub-command's matched rule would be
         // silently dropped instead of applied -- this must escalate to `ask`.
         let config = Config {
             defaults: Some(Defaults {
-                action: Some(ActionKind::Passthrough),
+                action: Some(ActionKind::Pass),
                 sandbox: None,
             }),
             rules: Some(vec![allow_rule_with_sandbox("ls *", "only_tmp")]),

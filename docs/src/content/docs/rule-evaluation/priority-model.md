@@ -11,12 +11,12 @@ When multiple rules match a single command, runok must decide which action to ta
 
 Each action has a fixed restriction level. When multiple rules match, the **most restrictive** action wins:
 
-| Priority    | Action        | Meaning                                   |
-| ----------- | ------------- | ----------------------------------------- |
-| 3 (highest) | `deny`        | Block the command                         |
-| 2           | `ask`         | Prompt the user for confirmation          |
-| 1           | `passthrough` | Defer to the caller's own permission flow |
-| 0           | `allow`       | Permit the command                        |
+| Priority    | Action  | Meaning                                   |
+| ----------- | ------- | ----------------------------------------- |
+| 3 (highest) | `deny`  | Block the command                         |
+| 2           | `ask`   | Prompt the user for confirmation          |
+| 1           | `pass`  | Defer to the caller's own permission flow |
+| 0           | `allow` | Permit the command                        |
 
 This priority is defined in `action_priority()` in the rule engine (`src/rules/rule_engine/compound.rs`).
 
@@ -51,14 +51,14 @@ When no rule matches a command, the action is resolved immediately to the config
 
 ```yaml
 defaults:
-  action: ask # "allow", "deny", "ask", or "passthrough"
+  action: ask # "allow", "deny", "ask", or "pass"
 ```
 
 If `defaults.action` is not set, it defaults to `ask`.
 
 Because unmatched commands are resolved at evaluation time, they participate directly in the Explicit Deny Wins comparison at their effective restriction level. For example, during [compound command evaluation](/rule-evaluation/compound-commands/), an unmatched sub-command resolved to `ask` (priority 2) will correctly outrank an `allow` (priority 0) sub-command.
 
-`passthrough` sits between `allow` and `ask` (priority 1): it defers the decision to the caller's own permission flow rather than forcing one, but an explicit `ask` rule elsewhere in a compound command still outranks it. See [`defaults.action`](/configuration/schema/#defaultsaction) for the full behavior and its restrictions.
+`pass` sits between `allow` and `ask` (priority 1): it defers the decision to the caller's own permission flow rather than forcing one, but an explicit `ask` rule elsewhere in a compound command still outranks it. See [`defaults.action`](/configuration/schema/#defaultsaction) for the full behavior and its restrictions.
 
 ## Wrapped command interactions
 

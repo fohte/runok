@@ -3,7 +3,7 @@ use crate::config::{ActionKind, Config};
 impl Config {
     /// Validate that `experimental.require_command_in_path.action`, if set,
     /// is `deny` or `ask`. `allow` would defeat the purpose of the check,
-    /// and `passthrough` would silently hand the decision to Claude Code's
+    /// and `pass` would silently hand the decision to Claude Code's
     /// classifier instead of enforcing it, so both are rejected regardless
     /// of whether the check is currently enabled.
     pub(super) fn validate_experimental(&self, errors: &mut Vec<String>) {
@@ -13,14 +13,13 @@ impl Config {
             .and_then(|e| e.require_command_in_path.as_ref())
             .and_then(|r| r.action);
 
-        if let Some(invalid) =
-            action.filter(|a| matches!(a, ActionKind::Allow | ActionKind::Passthrough))
+        if let Some(invalid) = action.filter(|a| matches!(a, ActionKind::Allow | ActionKind::Pass))
         {
             let label = match invalid {
                 ActionKind::Allow => "allow",
-                ActionKind::Passthrough => "passthrough",
+                ActionKind::Pass => "pass",
                 ActionKind::Ask | ActionKind::Deny => {
-                    unreachable!("filtered to Allow | Passthrough above")
+                    unreachable!("filtered to Allow | Pass above")
                 }
             };
             errors.push(format!(
@@ -57,18 +56,18 @@ mod tests {
     }
 
     #[test]
-    fn validate_errors_on_require_command_in_path_action_passthrough() {
+    fn validate_errors_on_require_command_in_path_action_pass() {
         let mut config = parse_config(indoc! {"
             experimental:
               require_command_in_path:
                 enabled: true
-                action: passthrough
+                action: pass
         "})
         .unwrap();
         let err = config.validate().unwrap_err();
         assert_eq!(
             err.to_string(),
-            "validation errors:\n  - experimental.require_command_in_path.action: 'passthrough' \
+            "validation errors:\n  - experimental.require_command_in_path.action: 'pass' \
              is not a valid action for this check (must be 'deny' or 'ask')"
         );
     }

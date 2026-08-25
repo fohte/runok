@@ -177,9 +177,9 @@ pub(super) fn evaluate_simple_command(
             }),
             ActionKind::Ask => Action::Ask(most_restrictive.rule.message.clone()),
             ActionKind::Allow => Action::Allow,
-            ActionKind::Passthrough => unreachable!(
-                "RuleEntry has no `passthrough` field (only deny/allow/ask); \
-                 action_and_pattern() can never return ActionKind::Passthrough"
+            ActionKind::Pass => unreachable!(
+                "RuleEntry has no `pass` field (only deny/allow/ask); \
+                 action_and_pattern() can never return ActionKind::Pass"
             ),
         };
 
@@ -275,17 +275,17 @@ mod tests {
     }
 
     #[rstest]
-    fn no_matching_rule_with_defaults_passthrough_returns_passthrough(empty_context: EvalContext) {
+    fn no_matching_rule_with_defaults_pass_returns_pass(empty_context: EvalContext) {
         let config = Config {
             defaults: Some(crate::config::Defaults {
-                action: Some(ActionKind::Passthrough),
+                action: Some(ActionKind::Pass),
                 sandbox: None,
             }),
             rules: Some(vec![allow_rule("git status")]),
             ..Default::default()
         };
         let result = evaluate_command(&config, "hg status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Passthrough);
+        assert_eq!(result.action, Action::Pass);
     }
 
     // ========================================
