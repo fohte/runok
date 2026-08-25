@@ -11,3 +11,7 @@ rules:
   - conditions:
       - expr: ActionRepoFullName == "fohte/copier-update-action"
     min_age: 0
+  # Owned action; min-age policy targets third-party supply chain risk.
+  - conditions:
+      - expr: ActionRepoFullName == "fohte/storybook-vrt-workflows"
+    min_age: 0
