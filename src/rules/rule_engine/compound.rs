@@ -113,6 +113,15 @@ pub fn evaluate_compound(
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))
         }
+        // A passthrough response carries no `updatedInput`, so a sandbox
+        // policy merged in from another sub-command's matched rule would be
+        // silently dropped instead of applied -- escalate to `ask` instead.
+        (Action::Passthrough, Some(policy)) => (
+            Action::Ask(Some(
+                "a matched rule's sandbox policy cannot be applied via passthrough".to_string(),
+            )),
+            Some(policy),
+        ),
         (action, policy) => (action, policy),
     };
 
@@ -340,65 +349,34 @@ mod tests {
     // ========================================
 
     #[rstest]
-    fn compound_default_resolved_to_ask_wins_over_allow(empty_context: EvalContext) {
-        // When one sub-command is allowed and another is unmatched,
-        // the unmatched sub-command should be resolved via defaults.action.
-        // With defaults.action = ask, the overall result should be Ask (not Allow).
+    // When one sub-command is allowed and another is unmatched, the
+    // unmatched sub-command's resolved defaults.action must outrank Allow --
+    // otherwise an explicitly allowed sub-command would silently decide the
+    // whole compound's outcome.
+    #[case::ask(ActionKind::Ask, "ask")]
+    #[case::passthrough(ActionKind::Passthrough, "passthrough")]
+    #[case::deny(ActionKind::Deny, "deny")]
+    fn compound_default_resolved_wins_over_allow(
+        empty_context: EvalContext,
+        #[case] default_action_kind: ActionKind,
+        #[case] expected_label: &str,
+    ) {
         let config = Config {
             defaults: Some(Defaults {
-                action: Some(ActionKind::Ask),
-                sandbox: None,
-            }),
-            rules: Some(vec![allow_rule("echo *")]),
-            ..Default::default()
-        };
-        let result =
-            evaluate_compound(&config, "echo hello; eval \"rm -rf /\"", &empty_context).unwrap();
-        assert!(
-            matches!(result.action, Action::Ask(_)),
-            "expected Ask, got {:?}",
-            result.action
-        );
-    }
-
-    #[rstest]
-    fn compound_default_resolved_to_passthrough_wins_over_allow(empty_context: EvalContext) {
-        // Passthrough must outrank Allow for the same reason Ask does: an
-        // unmatched sub-command must not let an explicitly allowed
-        // sub-command silently decide the whole compound's outcome.
-        let config = Config {
-            defaults: Some(Defaults {
-                action: Some(ActionKind::Passthrough),
-                sandbox: None,
-            }),
-            rules: Some(vec![allow_rule("echo *")]),
-            ..Default::default()
-        };
-        let result =
-            evaluate_compound(&config, "echo hello; eval \"rm -rf /\"", &empty_context).unwrap();
-        assert!(
-            matches!(result.action, Action::Passthrough),
-            "expected Passthrough, got {:?}",
-            result.action
-        );
-    }
-
-    #[rstest]
-    fn compound_default_resolved_to_deny_wins_over_allow(empty_context: EvalContext) {
-        let config = Config {
-            defaults: Some(Defaults {
-                action: Some(ActionKind::Deny),
+                action: Some(default_action_kind),
                 sandbox: None,
             }),
             rules: Some(vec![allow_rule("echo *")]),
             ..Default::default()
         };
         let result = evaluate_compound(&config, "echo hello; unknown_cmd", &empty_context).unwrap();
-        assert!(
-            matches!(result.action, Action::Deny(_)),
-            "expected Deny, got {:?}",
-            result.action
-        );
+        let actual_label = match result.action {
+            Action::Allow => "allow",
+            Action::Ask(_) => "ask",
+            Action::Deny(_) => "deny",
+            Action::Passthrough => "passthrough",
+        };
+        assert_eq!(actual_label, expected_label);
     }
 
     #[rstest]
@@ -747,6 +725,45 @@ mod tests {
         let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
         // deny should not be downgraded to ask
         assert!(matches!(result.action, Action::Deny(_)));
+    }
+
+    // ========================================
+    // Compound: passthrough with merged sandbox policy -> ask escalation
+    // ========================================
+
+    #[rstest]
+    fn compound_passthrough_with_sandbox_escalates_to_ask(empty_context: EvalContext) {
+        // A passthrough decision carries no `updatedInput`, so a sandbox
+        // policy merged in from another sub-command's matched rule would be
+        // silently dropped instead of applied -- this must escalate to `ask`.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Passthrough),
+                sandbox: None,
+            }),
+            rules: Some(vec![allow_rule_with_sandbox("ls *", "only_tmp")]),
+            definitions: Some(Definitions {
+                sandbox: Some(HashMap::from([(
+                    "only_tmp".to_string(),
+                    SandboxPreset {
+                        fs: Some(FsPolicy {
+                            read: None,
+                            write: Some(FsAccessPolicy {
+                                allow: Some(vec!["/tmp".to_string()]),
+                                deny: None,
+                            }),
+                        }),
+                        network: None,
+                    },
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = evaluate_compound(&config, "ls -la; unknown_cmd", &empty_context).unwrap();
+        assert!(matches!(result.action, Action::Ask(_)));
+        assert!(result.sandbox_policy.is_some());
     }
 
     #[rstest]

@@ -96,7 +96,7 @@ Action to take when no rule matches.
 | `deny`        | Reject the command.                                                                              |
 | `passthrough` | Defer to the caller's own permission flow instead of forcing a decision (Claude Code hook only). |
 
-`passthrough` cannot be combined with `defaults.sandbox`: a passthrough decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped. Outside the Claude Code hook (`runok exec`, `runok check`), there is no underlying permission flow to defer to, so `passthrough` is treated the same as `ask`.
+`passthrough` cannot be combined with `defaults.sandbox`: a passthrough decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask`. `runok check` reports `passthrough` as its own distinct decision value instead, since it only evaluates and never executes.
 
 #### `defaults.sandbox`
 

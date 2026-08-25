@@ -100,7 +100,7 @@
           ]
         },
         {
-          "description": "No decision: the hook writes nothing and exits 0, so Claude Code's\nown permission flow (the auto-mode classifier) decides instead.\nOnly meaningful for `defaults.action` -- a per-rule `deny`/`allow`/\n`ask` entry can never resolve to this variant, since `RuleEntry` has\nno `passthrough` field.",
+          "description": "No decision: the hook writes nothing and exits 0, so Claude Code's\nown permission flow (the auto-mode classifier) decides instead.\nOnly meaningful for `defaults.action` -- a per-rule `deny`/`allow`/\n`ask` entry can never resolve to this variant, since `RuleEntry` has\nno `passthrough` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- passthrough\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.",
           "type": "string",
           "const": "passthrough"
         }

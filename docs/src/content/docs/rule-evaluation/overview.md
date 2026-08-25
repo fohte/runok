@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-runok evaluates commands against your rules to decide whether to **allow**, **deny**, or **ask** for confirmation. This section explains the internal evaluation engine in detail.
+runok evaluates commands against your rules to decide whether to **allow**, **deny**, **ask** for confirmation, or defer the decision (**passthrough**). This section explains the internal evaluation engine in detail.
 
 ## Key concepts
 

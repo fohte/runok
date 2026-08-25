@@ -97,7 +97,7 @@ Name of the sandbox preset that was applied to this evaluation. `null` when no s
 
 The configured `defaults.action` value at the time of evaluation. `null` when no default was configured. See [`defaults.action`](/configuration/schema/#defaultsaction) for the possible values.
 
-**Type:** `"allow" | "ask" | "deny" | null`\
+**Type:** `"allow" | "ask" | "deny" | "passthrough" | null`\
 **Always present:** Yes (may be `null`)
 
 ### `metadata`
