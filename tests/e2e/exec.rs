@@ -28,6 +28,7 @@ fn exec_env() -> TestEnv {
     &["exec", "--", "curl", "-X", "POST", "https://example.com"],
     3,
 )]
+#[case::no_match_denies_when_defaults_action_unset(&["exec", "--", "ls", "-la"], 3)]
 fn exec_exit_code(exec_env: TestEnv, #[case] args: &[&str], #[case] expected_exit: i32) {
     let assert = exec_env.command().args(args).assert();
     assert.code(expected_exit);
