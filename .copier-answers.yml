@@ -11,7 +11,7 @@ release_type: rust
 repo_id: ''
 repo_language: en
 subpackages:
--   name: docs
+  - name: docs
     tests: false
     type: node
 type: rust
