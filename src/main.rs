@@ -315,7 +315,8 @@ fn run_command(
                 args.sandbox,
                 executor,
             )
-            .with_sandbox_definitions(sandbox_defs);
+            .with_sandbox_definitions(sandbox_defs)
+            .with_hook_origin(args.hook_origin);
             adapter::run_with_options(&endpoint, &config, &options)
         }
         Commands::Check(args) => {

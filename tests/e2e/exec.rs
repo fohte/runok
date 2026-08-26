@@ -69,6 +69,28 @@ fn exec_no_match_uses_default_deny() {
 }
 
 #[rstest]
+fn exec_pass_with_sandbox_denies_when_typed_directly() {
+    // `defaults.action: pass` + `defaults.sandbox` only takes effect for
+    // wrappers the hook generated (marked with `--__hook-origin`). A user
+    // typing `--sandbox` directly must still be denied.
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    let assert = env
+        .command()
+        .args(["exec", "--sandbox", "restricted", "--", "ls", "-la"])
+        .assert();
+    assert.code(3);
+}
+
+#[rstest]
 fn exec_allow_runs_command() {
     let env = TestEnv::new(indoc! {"
         rules:

@@ -7,7 +7,7 @@ sidebar:
 
 `runok exec` evaluates a command against your runok rules and, if allowed, executes it — [optionally within a sandbox](/sandbox/overview/). If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
 
-[`defaults.action: pass`](/configuration/schema/#defaultsaction) has no effect here: unlike the Claude Code hook, `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` (exit code `3`).
+[`defaults.action: pass`](/configuration/schema/#defaultsaction) has no effect when `runok exec` is invoked directly: unlike the Claude Code hook, it has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` (exit code `3`). The one exception is the sandbox-wrapped command the Claude Code hook itself generates for a `pass` decision (see [`defaults.action`](/configuration/schema/#defaultsaction)) -- that invocation runs under the resolved sandbox, since the hook has already deferred the permission decision to Claude Code's own flow.
 
 ## Usage
 

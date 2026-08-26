@@ -271,16 +271,19 @@ impl ClaudeCodeHookAdapter {
         }
     }
 
-    /// Wrap a command with `runok exec --sandbox <preset> -- <quoted_command>`.
-    /// The command is shell-quoted to prevent shell metacharacters (e.g. `&&`,
-    /// `||`, `;`, `|`) from being interpreted outside the sandbox.
+    /// Wrap a command with `runok exec --sandbox <preset> --__hook-origin --
+    /// <quoted_command>`. The command is shell-quoted to prevent shell
+    /// metacharacters (e.g. `&&`, `||`, `;`, `|`) from being interpreted
+    /// outside the sandbox. `--__hook-origin` tells `exec` that this
+    /// invocation came from the hook (not typed directly by a user), so that
+    /// `defaults.action: pass` runs under the sandbox instead of being denied.
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
         let quoted_preset = shlex::try_quote(preset)
             .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
         let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
         Ok(format!(
-            "runok exec --sandbox {quoted_preset} -- {quoted_command}"
+            "runok exec --sandbox {quoted_preset} --__hook-origin -- {quoted_command}"
         ))
     }
 }
@@ -420,7 +423,7 @@ mod tests {
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(Some("allow"), None, Some("runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("allow"), None, Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -462,12 +465,12 @@ mod tests {
     #[case::ask_with_sandbox(
         Action::Ask(Some("please confirm".to_string())),
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(Some("ask"), Some("please confirm"), Some("runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("ask"), Some("please confirm"), Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
     )]
     #[case::pass_with_sandbox(
         Action::Pass,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(None, None, Some("runok exec --sandbox restricted -- 'git status'")),
+        make_output(None, None, Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -596,7 +599,7 @@ mod tests {
             make_output(
                 expected_decision,
                 None,
-                Some("runok exec --sandbox restricted -- 'npm install'"),
+                Some("runok exec --sandbox restricted --__hook-origin -- 'npm install'"),
             ),
         );
     }
@@ -717,7 +720,11 @@ mod tests {
 
     #[rstest]
     fn hook_output_omits_permission_decision_when_none() {
-        let output = make_output(None, None, Some("runok exec --sandbox restricted -- ls"));
+        let output = make_output(
+            None,
+            None,
+            Some("runok exec --sandbox restricted --__hook-origin -- ls"),
+        );
         let json_val: serde_json::Value =
             serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
 
@@ -725,7 +732,7 @@ mod tests {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "runok exec --sandbox restricted -- ls"
+                    "command": "runok exec --sandbox restricted --__hook-origin -- ls"
                 }
             }
         });
@@ -738,7 +745,7 @@ mod tests {
     #[case::preset_some(
         SandboxInfo::Preset(Some("restricted".to_string())),
         "echo hello",
-        Some("runok exec --sandbox restricted -- 'echo hello'"),
+        Some("runok exec --sandbox restricted --__hook-origin -- 'echo hello'"),
     )]
     #[case::preset_none(SandboxInfo::Preset(None), "echo hello", None)]
     #[case::merged_policy(SandboxInfo::MergedPolicy(None), "echo hello", None)]
@@ -761,17 +768,23 @@ mod tests {
     // --- wrap_with_sandbox quotes shell metacharacters ---
 
     #[rstest]
-    #[case::simple_command("ls", "runok exec --sandbox restricted -- ls")]
-    #[case::command_with_spaces("git status", "runok exec --sandbox restricted -- 'git status'")]
+    #[case::simple_command("ls", "runok exec --sandbox restricted --__hook-origin -- ls")]
+    #[case::command_with_spaces(
+        "git status",
+        "runok exec --sandbox restricted --__hook-origin -- 'git status'"
+    )]
     #[case::compound_and(
         "safe-cmd && dangerous-cmd",
-        "runok exec --sandbox restricted -- 'safe-cmd && dangerous-cmd'"
+        "runok exec --sandbox restricted --__hook-origin -- 'safe-cmd && dangerous-cmd'"
     )]
     #[case::compound_pipe(
         "cat file | grep secret",
-        "runok exec --sandbox restricted -- 'cat file | grep secret'"
+        "runok exec --sandbox restricted --__hook-origin -- 'cat file | grep secret'"
     )]
-    #[case::compound_semicolon("cmd1; cmd2", "runok exec --sandbox restricted -- 'cmd1; cmd2'")]
+    #[case::compound_semicolon(
+        "cmd1; cmd2",
+        "runok exec --sandbox restricted --__hook-origin -- 'cmd1; cmd2'"
+    )]
     fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
         assert_eq!(
             ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command)
@@ -784,9 +797,13 @@ mod tests {
     #[case::preset_with_spaces(
         "my preset",
         "echo hello",
-        "runok exec --sandbox 'my preset' -- 'echo hello'"
+        "runok exec --sandbox 'my preset' --__hook-origin -- 'echo hello'"
     )]
-    #[case::preset_with_special_chars("pre$et", "ls", "runok exec --sandbox 'pre$et' -- ls")]
+    #[case::preset_with_special_chars(
+        "pre$et",
+        "ls",
+        "runok exec --sandbox 'pre$et' --__hook-origin -- ls"
+    )]
     fn wrap_with_sandbox_quotes_preset(
         #[case] preset: &str,
         #[case] command: &str,

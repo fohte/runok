@@ -195,7 +195,7 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
     assert_eq!(
         rewritten_command,
-        "runok exec --sandbox restricted -- 'echo hello'"
+        "runok exec --sandbox restricted --__hook-origin -- 'echo hello'"
     );
 }
 
@@ -309,11 +309,50 @@ fn hook_bash_no_match_with_default_sandbox_omits_permission_decision(#[case] con
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "runok exec --sandbox restricted -- 'unknown-command --flag'"
+                    "command": "runok exec --sandbox restricted --__hook-origin -- 'unknown-command --flag'"
                 }
             }
         })
     );
+}
+
+// --- Bash tool: hook-generated wrapper actually runs the command under the
+// sandbox instead of being denied by `exec`'s own re-evaluation ---
+
+#[rstest]
+fn hook_pass_with_sandbox_wrapper_executes_successfully() {
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+        rules:
+          - allow: 'echo hello'
+    "});
+    std::fs::create_dir_all(env.cwd.join("tmp"))
+        .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
+
+    let hook_assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("ls -la"))
+        .assert();
+    let output = hook_assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let wrapped_command = json["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
+
+    let mut tokens = shlex::split(wrapped_command)
+        .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
+    assert_eq!(tokens.remove(0), "runok");
+
+    env.command().args(tokens).assert().code(0);
 }
 
 // --- Hook event name ---
