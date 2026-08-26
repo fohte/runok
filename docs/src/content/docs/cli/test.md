@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-`runok test` runs test cases defined in your `runok.yml` and reports whether each command produces the expected decision (allow, ask, or deny). Use it to verify that your rules work as intended before deploying configuration changes.
+`runok test` runs test cases defined in your `runok.yml` and reports whether each command produces the expected decision (allow, ask, deny, or pass). Use it to verify that your rules work as intended before deploying configuration changes.
 
 ## Usage
 
@@ -46,7 +46,7 @@ rules:
 
 ### Top-level tests
 
-For cross-rule tests or tests that need additional configuration, use the top-level `tests` section:
+For cross-rule tests or tests that need additional configuration, use the top-level `tests` section. Since these cases are evaluated against the whole config, `pass` can be used to assert that a command matches no rule and falls through to `defaults.action`:
 
 ```yaml title="runok.yml"
 rules:
@@ -57,6 +57,7 @@ tests:
   cases:
     - allow: 'git push origin main'
     - deny: 'git push --force origin main'
+    - pass: 'echo hello'
 ```
 
 #### `tests.extends`

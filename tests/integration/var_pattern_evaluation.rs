@@ -1,6 +1,6 @@
 #![allow(clippy::panic, reason = "test helper for substring assertions")]
 
-use super::{ActionAssertion, assert_allow, assert_ask, empty_context};
+use super::{ActionAssertion, assert_allow, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -45,8 +45,8 @@ fn pattern_var_kubectl_allows(#[case] command: &str, empty_context: EvalContext)
 fn pattern_var_kubectl_does_not_match(#[case] command: &str, empty_context: EvalContext) {
     let config = parse_config(KUBECTL_PATTERN_YAML).unwrap();
     let result = evaluate_command(&config, command, &empty_context).unwrap();
-    // No allow rule matched -> falls through to default action (ask).
-    assert_ask(&result.action);
+    // No allow rule matched -> falls through to default action (pass).
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -56,7 +56,7 @@ fn pattern_var_kubectl_does_not_match(#[case] command: &str, empty_context: Eval
 #[rstest]
 #[case::first_alternative("kubectl get pods", assert_allow as ActionAssertion)]
 #[case::second_alternative("oc get pods", assert_allow as ActionAssertion)]
-#[case::neither("crictl get pods", assert_ask as ActionAssertion)]
+#[case::neither("crictl get pods", assert_pass as ActionAssertion)]
 fn pattern_var_multiple_values(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

@@ -72,10 +72,11 @@ pub(super) fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     }
 }
 
-/// Transform the generated `InlineTestEntry` schema into a `oneOf` with three variants:
-/// - `allow`: requires `allow`, forbids `ask`/`deny`
-/// - `ask`: requires `ask`, forbids `allow`/`deny`
-/// - `deny`: requires `deny`, forbids `allow`/`ask`
+/// Transform the generated `InlineTestEntry` schema into a `oneOf` with four variants:
+/// - `allow`: requires `allow`, forbids `ask`/`deny`/`pass`
+/// - `ask`: requires `ask`, forbids `allow`/`deny`/`pass`
+/// - `deny`: requires `deny`, forbids `allow`/`ask`/`pass`
+/// - `pass`: requires `pass`, forbids `allow`/`ask`/`deny`
 #[cfg(any(feature = "config-schema", test))]
 pub(super) fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) {
     let make_variant = |action: &str| -> serde_json::Value {
@@ -101,6 +102,7 @@ pub(super) fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) 
     let allow_variant = make_variant("allow");
     let ask_variant = make_variant("ask");
     let deny_variant = make_variant("deny");
+    let pass_variant = make_variant("pass");
 
     let description = schema.get("description").cloned();
 
@@ -110,7 +112,7 @@ pub(super) fn inline_test_entry_one_of_transform(schema: &mut schemars::Schema) 
 
     schema.insert(
         "oneOf".to_owned(),
-        serde_json::Value::Array(vec![allow_variant, ask_variant, deny_variant]),
+        serde_json::Value::Array(vec![allow_variant, ask_variant, deny_variant, pass_variant]),
     );
 
     if let Some(desc) = description {

@@ -137,8 +137,8 @@ rules:
     sandbox: build-env # overrides with "build-env"
 ```
 
-:::caution
-`defaults.sandbox` cannot be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction). A `pass` decision produces no `updatedInput`, so the sandbox wrapping would be silently dropped -- this is rejected at config validation time.
+:::note
+`defaults.sandbox` can be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction) -- including the unset (default) case, which also resolves to `pass`. When combined, the Claude Code hook response omits `permissionDecision` entirely but still includes `updatedInput` with the command rewritten to run under the sandbox preset: Claude Code's own permission flow decides against the original command, while the sandbox still applies to whatever actually runs.
 :::
 
 ## Sandbox merging for compound commands

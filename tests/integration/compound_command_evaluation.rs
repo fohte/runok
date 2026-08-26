@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -569,7 +569,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
 }
 
 // ========================================
-// defaults.action absent: unmatched sub-commands resolve to Ask
+// defaults.action absent: unmatched sub-commands resolve to Pass
 // ========================================
 
 #[rstest]
@@ -579,7 +579,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
         rules:
           - allow: 'echo *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::no_defaults_all_unmatched(
     "unknown_a && unknown_b",
@@ -587,7 +587,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
         rules:
           - allow: 'echo *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::no_defaults_all_matched(
     "echo hello && echo world",
@@ -597,7 +597,7 @@ fn sandbox_contradiction_preserves_existing_ask(empty_context: EvalContext) {
     "},
     assert_allow as ActionAssertion,
 )]
-fn defaults_action_absent_compound_unmatched_asks(
+fn defaults_action_absent_compound_unmatched_falls_back_to_pass(
     #[case] command: &str,
     #[case] config_yaml: &str,
     #[case] expected: ActionAssertion,
@@ -800,7 +800,7 @@ fn empty_rules_compound_returns_default(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_compound(&config, "echo hello && ls", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Ask(None));
+    assert_eq!(result.action, Action::Pass);
 }
 
 // ========================================
@@ -881,7 +881,7 @@ fn single_sandbox_preset_via_compound(empty_context: EvalContext) {
         rules:
           - allow: 'cd *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::cd_and_rm_deny_wins(
     "cd /path && rm -rf dist",
@@ -901,13 +901,13 @@ fn single_sandbox_preset_via_compound(empty_context: EvalContext) {
     "},
     assert_allow as ActionAssertion,
 )]
-#[case::unmatched_sub_command_escalates_to_ask(
+#[case::unmatched_sub_command_falls_back_to_pass(
     "cd /path && unknown-cmd",
     indoc! {"
         rules:
           - allow: 'cd *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::unmatched_with_defaults_action_deny(
     "cd /path && unknown-cmd",
@@ -1125,7 +1125,7 @@ fn command_substitution_in_strings(
         rules:
           - allow: 'echo *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::unmatched_outer_with_allowed_inner_chain(
     "echo test && gh pr edit 10",
@@ -1133,7 +1133,7 @@ fn command_substitution_in_strings(
         rules:
           - allow: 'echo *'
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::unmatched_outer_with_allowed_inner_defaults_deny(
     r#"gh pr edit 10 --body "$(echo test)""#,
@@ -1176,7 +1176,7 @@ fn command_substitution_must_not_bypass_rules(
 )]
 #[case::sort_with_banned_flag_in_pipeline(
     "jq .type file | sort -o result.txt | uniq -c",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn flag_negation_empty_tokens_in_compound(
     #[case] command: &str,
@@ -1251,13 +1251,13 @@ fn flag_negation_empty_tokens_in_compound(
     "},
     assert_deny as ActionAssertion,
 )]
-#[case::heredoc_into_unmatched_command_asks(
+#[case::heredoc_into_unmatched_command_falls_back_to_pass(
     indoc! {"
         cat <<EOF | kubectl apply -f -
         apiVersion: v1
         EOF
     "},
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::heredoc_pipe_chain_with_deny_at_end(
     indoc! {"

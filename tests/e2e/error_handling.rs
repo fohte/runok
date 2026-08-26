@@ -91,8 +91,8 @@ fn no_config_check_returns_default() {
     let output = assert.code(0).get_output().stdout.clone();
     let json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
-    // No rules match → defaults to "ask" (default action)
-    assert_eq!(json["decision"], "ask");
+    // No rules match → defaults to "pass" (default action)
+    assert_eq!(json["decision"], "pass");
 }
 
 // --- Unknown format flag ---

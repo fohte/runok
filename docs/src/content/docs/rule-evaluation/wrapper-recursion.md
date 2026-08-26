@@ -134,4 +134,4 @@ When a wrapper pattern uses placeholders like `<opts>`, the placeholder consumes
 
 ## Default action resolution
 
-When the wrapped command does not match any rule, its action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `ask` if unconfigured). This ensures that unmatched wrapped commands participate in the merge at their effective restriction level, rather than being silently ignored.
+When the wrapped command does not match any rule, its action is resolved immediately to the configured [`defaults.action`](/configuration/schema/#defaultsaction) (defaulting to `pass` if unconfigured). This ensures that unmatched wrapped commands participate in the merge at their effective restriction level, rather than being silently ignored.

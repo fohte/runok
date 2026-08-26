@@ -236,13 +236,13 @@ mod tests {
             }],
         },
     )]
-    #[case::still_ask_without_matching_rule(
+    #[case::falls_back_to_pass_without_matching_rule(
         "",
         Recheck::Ok {
-            action: SerializableAction::Ask { message: None },
+            action: SerializableAction::Pass,
             command_evaluations: vec![RecheckCommandEvaluation {
                 command: "terraform apply".to_owned(),
-                action: SerializableAction::Ask { message: None },
+                action: SerializableAction::Pass,
                 matched_rules: vec![],
             }],
         },

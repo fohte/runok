@@ -189,7 +189,7 @@ mod tests {
     fn wrapper_no_match_returns_default(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![deny_rule("rm -rf *")], vec!["sudo <cmd>"]);
         let result = evaluate_command(&config, "ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]
@@ -217,14 +217,14 @@ mod tests {
     fn wrapper_without_placeholder_does_not_recurse(empty_context: EvalContext) {
         let config = make_config_with_wrappers(vec![allow_rule("sudo *")], vec!["time *"]);
         let result = evaluate_command(&config, "time ls -la", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]
     fn no_wrappers_defined_skips_unwrap(empty_context: EvalContext) {
         let config = make_config(vec![deny_rule("rm -rf *")]);
         let result = evaluate_command(&config, "sudo rm -rf /", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]

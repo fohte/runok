@@ -615,18 +615,15 @@ mod tests {
     #[rstest]
     #[case::no_matching_rule("unknown-command", make_config(vec![allow_rule("git status")]))]
     #[case::empty_config("git status", Config::default())]
-    fn no_match_calls_handle_action_with_ask(#[case] command: &str, #[case] config: Config) {
+    fn no_match_calls_handle_action_with_pass(#[case] command: &str, #[case] config: Config) {
         // With no defaults.action configured, unmatched commands resolve
-        // to Ask (the safe fallback).
+        // to Pass (the default), deferring to the caller's own permission flow.
         let endpoint = MockEndpoint::new(Ok(Some(command.to_string())));
         let exit_code = run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_action.borrow());
         assert!(!*endpoint.called_handle_no_match.borrow());
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Ask(None))
-        ));
+        assert!(matches!(*endpoint.last_action.borrow(), Some(Action::Pass)));
         assert_eq!(exit_code, 0);
     }
 
@@ -676,20 +673,17 @@ mod tests {
         ));
     }
 
-    // --- compound command: all unmatched -> handle_action with Ask ---
+    // --- compound command: all unmatched -> handle_action with Pass ---
 
     #[rstest]
-    fn compound_all_unmatched_calls_handle_action_with_ask() {
+    fn compound_all_unmatched_calls_handle_action_with_pass() {
         let endpoint = MockEndpoint::new(Ok(Some("unknown-cmd1 && unknown-cmd2".to_string())));
         let config = make_config(vec![allow_rule("git status")]);
         let exit_code = run(&endpoint, &config);
 
         assert!(*endpoint.called_handle_action.borrow());
         assert!(!*endpoint.called_handle_no_match.borrow());
-        assert!(matches!(
-            *endpoint.last_action.borrow(),
-            Some(Action::Ask(None))
-        ));
+        assert!(matches!(*endpoint.last_action.borrow(), Some(Action::Pass)));
         assert_eq!(exit_code, 0);
     }
 

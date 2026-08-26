@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::{formatdoc, indoc};
 use rstest::rstest;
@@ -40,7 +40,7 @@ use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
           - allow: 'git status'
     "},
     "hg status",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn yaml_config_evaluates_commands(
     #[case] yaml: &str,
@@ -395,7 +395,7 @@ fn full_config_evaluates_correctly(
 )]
 #[case::unrelated_command_default(
     "yarn prettier --write .",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn multi_word_alternation_config(
     #[case] command: &str,
@@ -452,7 +452,7 @@ fn multi_word_alternation_allow_and_deny(
 )]
 #[case::glob_alt_delete_blocked(
     "aws s3api delete-bucket my-bucket",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn alternation_glob_wildcard_config(
     #[case] command: &str,
@@ -648,7 +648,7 @@ fn rule_order_independence(
           - allow: '* --help'
     "},
     "git status",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn wildcard_command_patterns(
     #[case] yaml: &str,
@@ -710,7 +710,7 @@ fn wildcard_command_patterns(
           - allow: 'pre-* --help'
     "},
     "post-build --help",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::escaped_star_in_command_only_matches_literal_star(
     indoc! {r"
@@ -758,7 +758,7 @@ fn command_position_glob_patterns(
 )]
 #[case::unrelated_command_not_affected(
     "echo hello",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn wildcard_deny_beats_specific_allow(
     #[case] command: &str,
@@ -868,7 +868,7 @@ fn ask_without_message_has_none(empty_context: EvalContext) {
 
 #[rstest]
 #[case::unicode_arg_allowed("echo こんにちは", assert_allow as ActionAssertion)]
-#[case::unicode_in_path("cat /tmp/日本語.txt", assert_ask as ActionAssertion)]
+#[case::unicode_in_path("cat /tmp/日本語.txt", assert_pass as ActionAssertion)]
 fn unicode_in_commands(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -890,7 +890,7 @@ fn unicode_in_commands(
 
 #[rstest]
 #[case::equals_flag_matches("java -Denv=prod Main", assert_allow as ActionAssertion)]
-#[case::different_value_no_match("java -Denv=staging Main", assert_ask as ActionAssertion)]
+#[case::different_value_no_match("java -Denv=staging Main", assert_pass as ActionAssertion)]
 fn equals_sign_in_flag_token(
     #[case] command: &str,
     #[case] expected: ActionAssertion,
@@ -936,7 +936,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "echo hello", &empty_context).unwrap();
-    assert_eq!(result.action, Action::Ask(None));
+    assert_eq!(result.action, Action::Pass);
 }
 
 // ========================================
@@ -958,7 +958,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 #[case::quoted_star_glob_no_match(
     r#"git commit -m "WIP*""#,
     "git commit -m 'DONE: release'",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 // `\*` is literal
 #[case::escaped_star_exact_match(
@@ -969,7 +969,7 @@ fn empty_rules_returns_default(empty_context: EvalContext) {
 #[case::escaped_star_no_glob(
     r#"git commit -m "WIP\*""#,
     "git commit -m 'WIP: fixup'",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn quoted_and_escaped_star_matching(
     #[case] pattern: &str,
@@ -998,7 +998,7 @@ fn quoted_and_escaped_star_matching(
 )]
 #[case::quoted_glob_with_space_no_match(
     "npx --package renovate -c 'other-tool foo.json'",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn quoted_glob_with_space(
     #[case] command: &str,
@@ -1034,7 +1034,7 @@ fn quoted_glob_with_space(
 #[case::quoted_flag_value_wrong_value_rejects(
     "grep -e '-v' *",
     "grep foo.txt -e -x",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn quoted_flag_like_value(
     #[case] pattern: &str,
@@ -1087,11 +1087,11 @@ fn backslash_before_closing_quote(empty_context: EvalContext) {
 )]
 #[case::checkout_ref_then_double_dash_rejected(
     "git checkout HEAD~1 -- README.md",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::checkout_ref_then_double_dash_with_c_rejected(
     "git -C /tmp checkout HEAD~1 -- README.md",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn double_dash_positional_matching(
     #[case] command: &str,
@@ -1115,11 +1115,11 @@ fn double_dash_positional_matching(
 #[rstest]
 #[case::flag_negation_rejects_at_any_position(
     "find . -delete",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::flag_negation_rejects_alt_at_any_position(
     "find . -type f -fprint output.txt",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::flag_negation_allows_safe_command(
     "find . -name foo -type f",
@@ -1159,7 +1159,7 @@ fn flag_negation_order_independent(
 )]
 #[case::literal_mismatch(
     "gh -X GET issues /repos",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn literal_order_independent(
     #[case] command: &str,
@@ -1183,7 +1183,7 @@ fn literal_order_independent(
 )]
 #[case::double_dash_wrong_position(
     "cmd -- foo bar",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn double_dash_remains_positional(
     #[case] command: &str,
@@ -1215,7 +1215,7 @@ fn double_dash_remains_positional(
 )]
 #[case::non_flag_alt_mismatch(
     "git push -v develop origin",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn alternation_order_independent(
     #[case] command: &str,
@@ -1239,11 +1239,11 @@ fn alternation_order_independent(
 #[rstest]
 #[case::equals_form_rejected(
     "rg --pre=pdftotext pattern",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::space_form_rejected(
     "rg --pre pdftotext pattern",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::different_flag_equals_allowed(
     "rg --color=always pattern",
@@ -1255,7 +1255,7 @@ fn alternation_order_independent(
 )]
 #[case::alt_negation_equals_rejected(
     "sort --output=result.txt file.txt",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::alt_negation_equals_different_flag_allowed(
     "sort --reverse file.txt",
@@ -1292,7 +1292,7 @@ fn flag_negation_equals_form(
 )]
 #[case::sort_banned_flag_rejected(
     "sort -o result.txt",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::find_no_args_allowed(
     "find",
@@ -1304,7 +1304,7 @@ fn flag_negation_equals_form(
 )]
 #[case::find_banned_flag_rejected(
     "find . -delete",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn flag_negation_empty_tokens(
     #[case] command: &str,
@@ -1337,11 +1337,11 @@ fn flag_negation_empty_tokens(
 )]
 #[case::banned_flag_rejected(
     "git interpret-trailers --parse --in-place",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 #[case::banned_flag_with_arg_rejected(
     "git interpret-trailers --parse --in-place file.txt",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn long_flag_negation_with_preceding_literals(
     #[case] command: &str,
@@ -1496,7 +1496,7 @@ fn fused_short_flag_value(
 )]
 #[case::backslash_then_wildcard_no_match(
     r"other \\ foo",
-    assert_ask as ActionAssertion,
+    assert_pass as ActionAssertion,
 )]
 fn backslash_followed_by_space(
     #[case] command: &str,

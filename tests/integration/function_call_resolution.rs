@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, empty_context};
+use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -85,7 +85,7 @@ fn recursive_call_falls_back_to_defaults_action(#[case] command: &str, empty_con
 fn call_before_definition_stays_unresolved(empty_context: EvalContext) {
     let config = parse_config(RULES).unwrap();
     let result = evaluate_compound(&config, "f; f() { git push; }", &empty_context).unwrap();
-    assert_ask(&result.action);
+    assert_pass(&result.action);
 }
 
 // ========================================
@@ -172,7 +172,7 @@ fn multiple_definitions_merge_worst_case(empty_context: EvalContext) {
 #[rstest]
 #[case::simple_allow("git push", assert_allow as ActionAssertion)]
 #[case::simple_deny("git push --force", assert_deny as ActionAssertion)]
-#[case::unknown_command("hg status", assert_ask as ActionAssertion)]
+#[case::unknown_command("hg status", assert_pass as ActionAssertion)]
 fn input_without_function_definitions_is_unaffected(
     #[case] command: &str,
     #[case] expected: ActionAssertion,

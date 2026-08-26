@@ -100,7 +100,7 @@
           ]
         },
         {
-          "description": "No decision: the hook writes nothing and exits 0, so Claude Code's\nown permission flow (the auto-mode classifier) decides instead.\nOnly meaningful for `defaults.action` -- a per-rule `deny`/`allow`/\n`ask` entry can never resolve to this variant, since `RuleEntry` has\nno `pass` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.",
+          "description": "No decision: the hook omits `permissionDecision` so Claude Code's own\npermission flow (the auto-mode classifier) decides instead. Writes\nnothing at all when no sandbox applies either; when a sandbox does\napply, `updatedInput` alone is still emitted so the rewritten command\nreaches that flow. Only meaningful for `defaults.action` -- a\nper-rule `deny`/`allow`/`ask` entry can never resolve to this\nvariant, since `RuleEntry` has no `pass` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.\n\nThe type-level default: matches `Defaults::resolved_action()`, which\nfalls back to `Pass` when `defaults.action` is unset.",
           "type": "string",
           "const": "pass"
         }
@@ -332,7 +332,7 @@
       ]
     },
     "InlineTestEntry": {
-      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
+      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, `deny`, or `pass` must be set. The key\ndetermines the expected decision, the value is the command to evaluate.",
       "oneOf": [
         {
           "type": "object",
@@ -380,6 +380,22 @@
           "additionalProperties": false,
           "required": [
             "deny"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pass": {
+              "description": "Command expected to fall through to `defaults.action`/`defaults.sandbox`\nbecause no rule matches it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "pass"
           ]
         }
       ]

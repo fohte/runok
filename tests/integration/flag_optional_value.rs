@@ -1,4 +1,4 @@
-use super::{ActionAssertion, assert_allow, assert_ask, empty_context};
+use super::{ActionAssertion, assert_allow, assert_pass, empty_context};
 
 use indoc::indoc;
 use rstest::rstest;
@@ -20,14 +20,14 @@ const ABBREV_CONFIG: &str = indoc! {r#"
 // Or attached via `=`.
 #[case::equals_joined("git branch --abbrev=8", assert_allow as ActionAssertion)]
 // The flag itself is still required.
-#[case::flag_missing("git branch", assert_ask as ActionAssertion)]
+#[case::flag_missing("git branch", assert_pass as ActionAssertion)]
 // A space-separated following token is a separate positional argument, not
 // the flag's value (mirrors real git: `git branch --abbrev 8` creates a
 // branch named `8` rather than setting `--abbrev`'s value to `8`), so it is
 // left over and the pattern (with no trailing wildcard) does not match.
 #[case::space_separated_leaves_extra_token(
     "git branch --abbrev 8",
-    assert_ask as ActionAssertion
+    assert_pass as ActionAssertion
 )]
 fn optional_flag_value_on_required_flag(
     #[case] command: &str,

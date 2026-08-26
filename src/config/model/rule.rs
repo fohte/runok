@@ -35,24 +35,36 @@ pub struct Defaults {
     pub sandbox: Option<String>,
 }
 
+impl Defaults {
+    /// Returns the configured action, defaulting to `pass` when unset.
+    pub fn resolved_action(&self) -> ActionKind {
+        self.action.unwrap_or(ActionKind::Pass)
+    }
+}
+
 /// Permission action kind.
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
     Allow,
-    /// No decision: the hook writes nothing and exits 0, so Claude Code's
-    /// own permission flow (the auto-mode classifier) decides instead.
-    /// Only meaningful for `defaults.action` -- a per-rule `deny`/`allow`/
-    /// `ask` entry can never resolve to this variant, since `RuleEntry` has
-    /// no `pass` field.
+    /// No decision: the hook omits `permissionDecision` so Claude Code's own
+    /// permission flow (the auto-mode classifier) decides instead. Writes
+    /// nothing at all when no sandbox applies either; when a sandbox does
+    /// apply, `updatedInput` alone is still emitted so the rewritten command
+    /// reaches that flow. Only meaningful for `defaults.action` -- a
+    /// per-rule `deny`/`allow`/`ask` entry can never resolve to this
+    /// variant, since `RuleEntry` has no `pass` field.
     ///
     /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
     /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
     /// is a weaker decision than an explicit `ask`, but still more
     /// restrictive than silently allowing.
-    Pass,
+    ///
+    /// The type-level default: matches `Defaults::resolved_action()`, which
+    /// falls back to `Pass` when `defaults.action` is unset.
     #[default]
+    Pass,
     Ask,
     Deny,
 }
@@ -94,8 +106,8 @@ impl RuleEntry {
 }
 
 /// A test case entry used in both inline rule tests and top-level test cases.
-/// Exactly one of `allow`, `ask`, or `deny` must be set. The key determines
-/// the expected decision, the value is the command to evaluate.
+/// Exactly one of `allow`, `ask`, `deny`, or `pass` must be set. The key
+/// determines the expected decision, the value is the command to evaluate.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[cfg_attr(any(feature = "config-schema", test), schemars(transform = super::schema_gen::inline_test_entry_one_of_transform))]
@@ -106,6 +118,9 @@ pub struct InlineTestEntry {
     pub ask: Option<String>,
     /// Command expected to be denied.
     pub deny: Option<String>,
+    /// Command expected to fall through to `defaults.action`/`defaults.sandbox`
+    /// because no rule matches it.
+    pub pass: Option<String>,
 }
 
 /// Top-level test section for cross-rule tests and test-only extends.
@@ -129,8 +144,22 @@ mod tests {
     // === ActionKind ===
 
     #[test]
-    fn action_kind_default_is_ask() {
-        assert_eq!(ActionKind::default(), ActionKind::Ask);
+    fn action_kind_default_is_pass() {
+        assert_eq!(ActionKind::default(), ActionKind::Pass);
+    }
+
+    #[rstest]
+    #[case::allow(Some(ActionKind::Allow), ActionKind::Allow)]
+    #[case::ask(Some(ActionKind::Ask), ActionKind::Ask)]
+    #[case::deny(Some(ActionKind::Deny), ActionKind::Deny)]
+    #[case::pass(Some(ActionKind::Pass), ActionKind::Pass)]
+    #[case::default_when_none(None, ActionKind::Pass)]
+    fn defaults_resolved_action(#[case] action: Option<ActionKind>, #[case] expected: ActionKind) {
+        let defaults = Defaults {
+            action,
+            sandbox: None,
+        };
+        assert_eq!(defaults.resolved_action(), expected);
     }
 
     #[test]

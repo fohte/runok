@@ -46,7 +46,10 @@ pub struct HookOutput {
 #[cfg_attr(test, derive(Deserialize))]
 pub struct HookSpecificOutput {
     pub hook_event_name: String,
-    pub permission_decision: String,
+    /// Omitted for a `pass` decision, so Claude Code's own permission flow
+    /// decides instead of runok.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_decision_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,83 +160,91 @@ impl ClaudeCodeHookAdapter {
     /// Build a HookOutput for a given action result.
     /// Separated from I/O for testability.
     ///
-    /// Returns `None` for `Action::Pass`: no decision to report, so
-    /// the caller writes nothing and Claude Code's normal permission flow
-    /// (the auto-mode classifier) decides instead.
+    /// `Action::Pass` omits `permissionDecision` so Claude Code's own
+    /// permission flow (the auto-mode classifier) decides instead. When no
+    /// sandbox applies either, this writes nothing at all (`Ok(None)`);
+    /// permission is evaluated against the command as Claude Code already
+    /// has it, so when a sandbox does apply, `updatedInput` alone still
+    /// needs to reach that flow.
     fn build_action_output(
         &self,
         result: &ActionResult,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if matches!(result.action, Action::Pass) {
-            return Ok(None);
-        }
-
         let bash_input = self.parse_bash_input()?;
 
         let (decision, reason, updated_input) = match &result.action {
             Action::Allow => {
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
-                ("allow", None, updated)
+                (Some("allow"), None, updated)
             }
             Action::Deny(deny_response) => {
                 let reason = build_deny_reason(deny_response);
-                ("deny", Some(reason), None)
+                (Some("deny"), Some(reason), None)
             }
             Action::Ask(message) => {
                 // When the user approves an ask, Claude Code executes the updatedInput
                 // command, so we need to wrap it with the sandbox just like allow.
                 let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
-                ("ask", message.clone(), updated)
+                (Some("ask"), message.clone(), updated)
             }
-            Action::Pass => unreachable!("handled by the early return above"),
+            Action::Pass => {
+                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                (None, None, updated)
+            }
         };
+
+        if decision.is_none() && updated_input.is_none() {
+            return Ok(None);
+        }
 
         Ok(Some(Self::build_output(decision, reason, updated_input)))
     }
 
     /// Build a HookOutput for the no-match case (Bash tool, rule didn't match).
     /// Returns `None` when tool_name is not "Bash", or when `defaults.action`
-    /// is `pass` (nothing to output either way).
+    /// resolves to `pass` (including unset) and no `defaults.sandbox` is
+    /// configured. When a sandbox is configured, a `pass` resolution still
+    /// emits `updatedInput` alone, omitting `permissionDecision`.
     fn build_no_match_output(
         &self,
         defaults: &Defaults,
     ) -> Result<Option<HookOutput>, anyhow::Error> {
-        if self.input.tool_name != "Bash" || defaults.action == Some(ActionKind::Pass) {
+        if self.input.tool_name != "Bash" {
             return Ok(None);
         }
 
-        let decision = match defaults.action {
-            Some(ActionKind::Allow) => "allow",
-            Some(ActionKind::Deny) => "deny",
-            Some(ActionKind::Ask) | None => "ask",
-            Some(ActionKind::Pass) => unreachable!("handled by the early return above"),
+        let decision = match defaults.resolved_action() {
+            ActionKind::Allow => Some("allow"),
+            ActionKind::Deny => Some("deny"),
+            ActionKind::Ask => Some("ask"),
+            ActionKind::Pass => None,
         };
 
-        let updated_input = if decision == "allow" || decision == "ask" {
-            if let Some(ref sandbox_name) = defaults.sandbox {
-                let bash_input = self.parse_bash_input()?;
-                Some(UpdatedInput {
-                    command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command)?,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
+        if decision == Some("deny") {
+            return Ok(Some(Self::build_output(decision, None, None)));
+        }
+
+        let Some(ref sandbox_name) = defaults.sandbox else {
+            return Ok(decision.map(|d| Self::build_output(Some(d), None, None)));
         };
+
+        let bash_input = self.parse_bash_input()?;
+        let updated_input = Some(UpdatedInput {
+            command: Self::wrap_with_sandbox(sandbox_name, &bash_input.command)?,
+        });
 
         Ok(Some(Self::build_output(decision, None, updated_input)))
     }
 
     fn build_output(
-        decision: &str,
+        decision: Option<&str>,
         reason: Option<String>,
         updated_input: Option<UpdatedInput>,
     ) -> HookOutput {
         HookOutput {
             hook_specific_output: HookSpecificOutput {
                 hook_event_name: "PreToolUse".to_string(),
-                permission_decision: decision.to_string(),
+                permission_decision: decision.map(str::to_string),
                 permission_decision_reason: reason,
                 updated_input,
             },
@@ -357,14 +368,14 @@ mod tests {
     }
 
     fn make_output(
-        decision: &str,
+        decision: Option<&str>,
         reason: Option<&str>,
         updated_command: Option<&str>,
     ) -> HookOutput {
         HookOutput {
             hook_specific_output: HookSpecificOutput {
                 hook_event_name: "PreToolUse".to_string(),
-                permission_decision: decision.to_string(),
+                permission_decision: decision.map(|s| s.to_string()),
                 permission_decision_reason: reason.map(|s| s.to_string()),
                 updated_input: updated_command.map(|c| UpdatedInput {
                     command: c.to_string(),
@@ -404,12 +415,12 @@ mod tests {
     #[case::allow(
         Action::Allow,
         SandboxInfo::Preset(None),
-        make_output("allow", None, None)
+        make_output(Some("allow"), None, None)
     )]
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output("allow", None, Some("runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("allow"), None, Some("runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -418,7 +429,7 @@ mod tests {
             matched_rule: "rm -rf /".to_string(),
         }),
         SandboxInfo::Preset(None),
-        make_output("deny", Some("denied: rm -rf / (not allowed)"), None),
+        make_output(Some("deny"), Some("denied: rm -rf / (not allowed)"), None),
     )]
     #[case::deny_without_message(
         Action::Deny(DenyResponse {
@@ -427,7 +438,7 @@ mod tests {
             matched_rule: "rm *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        make_output("deny", Some("denied: rm *"), None),
+        make_output(Some("deny"), Some("denied: rm *"), None),
     )]
     #[case::deny_with_message_and_suggestion(
         Action::Deny(DenyResponse {
@@ -436,22 +447,27 @@ mod tests {
             matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        make_output("deny", Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
+        make_output(Some("deny"), Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
     )]
     #[case::ask_with_message(
         Action::Ask(Some("please confirm".to_string())),
         SandboxInfo::Preset(None),
-        make_output("ask", Some("please confirm"), None),
+        make_output(Some("ask"), Some("please confirm"), None),
     )]
     #[case::ask_without_message(
         Action::Ask(None),
         SandboxInfo::Preset(None),
-        make_output("ask", None, None)
+        make_output(Some("ask"), None, None)
     )]
     #[case::ask_with_sandbox(
         Action::Ask(Some("please confirm".to_string())),
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output("ask", Some("please confirm"), Some("runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("ask"), Some("please confirm"), Some("runok exec --sandbox restricted -- 'git status'")),
+    )]
+    #[case::pass_with_sandbox(
+        Action::Pass,
+        SandboxInfo::Preset(Some("restricted".to_string())),
+        make_output(None, None, Some("runok exec --sandbox restricted -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -472,12 +488,20 @@ mod tests {
     }
 
     #[rstest]
-    fn build_action_output_pass_returns_none() {
+    #[case::preset_none(SandboxInfo::Preset(None))]
+    #[case::merged_policy_none(SandboxInfo::MergedPolicy(None))]
+    #[case::merged_policy_some(SandboxInfo::MergedPolicy(Some(crate::config::MergedSandboxPolicy {
+        writable: vec!["/tmp".to_string()],
+        deny: vec![],
+        read_deny: vec![],
+        network_allowed: false,
+    })))]
+    fn build_action_output_pass_without_preset_returns_none(#[case] sandbox: SandboxInfo) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
         let result = ActionResult {
             action: Action::Pass,
-            sandbox: SandboxInfo::Preset(None),
+            sandbox,
             evaluations: vec![],
         };
         let output = adapter
@@ -498,7 +522,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::default_ask(None, "ask")]
     #[case::explicit_ask(Some(ActionKind::Ask), "ask")]
     #[case::explicit_allow(Some(ActionKind::Allow), "allow")]
     #[case::explicit_deny(Some(ActionKind::Deny), "deny")]
@@ -516,15 +539,31 @@ mod tests {
             .build_no_match_output(&defaults)
             .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"));
         let output = output.unwrap_or_else(|| panic!("expected Some(HookOutput)"));
-        assert_eq!(output, make_output(expected_decision, None, None),);
+        assert_eq!(output, make_output(Some(expected_decision), None, None),);
     }
 
     #[rstest]
-    fn build_no_match_output_bash_pass_returns_none() {
+    fn build_no_match_output_deny_ignores_sandbox() {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("some-command")));
         let defaults = Defaults {
-            action: Some(ActionKind::Pass),
+            action: Some(ActionKind::Deny),
+            sandbox: Some("restricted".to_string()),
+        };
+        let output = adapter
+            .build_no_match_output(&defaults)
+            .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"));
+        assert_eq!(output, Some(make_output(Some("deny"), None, None)));
+    }
+
+    #[rstest]
+    #[case::explicit_pass(Some(ActionKind::Pass))]
+    #[case::default_unset(None)]
+    fn build_no_match_output_bash_pass_returns_none(#[case] default_action: Option<ActionKind>) {
+        let adapter =
+            ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("some-command")));
+        let defaults = Defaults {
+            action: default_action,
             sandbox: None,
         };
         let output = adapter
@@ -534,16 +573,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::ask(ActionKind::Ask, "ask")]
-    #[case::allow(ActionKind::Allow, "allow")]
+    #[case::ask(Some(ActionKind::Ask), Some("ask"))]
+    #[case::allow(Some(ActionKind::Allow), Some("allow"))]
+    #[case::explicit_pass(Some(ActionKind::Pass), None)]
+    #[case::default_unset(None, None)]
     fn build_no_match_output_with_default_sandbox(
-        #[case] action_kind: ActionKind,
-        #[case] expected_decision: &str,
+        #[case] action_kind: Option<ActionKind>,
+        #[case] expected_decision: Option<&str>,
     ) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("npm install")));
         let defaults = Defaults {
-            action: Some(action_kind),
+            action: action_kind,
             sandbox: Some("restricted".to_string()),
         };
         let output = adapter
@@ -638,7 +679,7 @@ mod tests {
 
     #[rstest]
     fn hook_output_serializes_to_camel_case_json() {
-        let output = make_output("allow", None, None);
+        let output = make_output(Some("allow"), None, None);
         let json_val: serde_json::Value =
             serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
 
@@ -653,7 +694,11 @@ mod tests {
 
     #[rstest]
     fn hook_output_includes_optional_fields_when_present() {
-        let output = make_output("deny", Some("dangerous command"), Some("safe-command"));
+        let output = make_output(
+            Some("deny"),
+            Some("dangerous command"),
+            Some("safe-command"),
+        );
         let json_val: serde_json::Value =
             serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
 
@@ -664,6 +709,23 @@ mod tests {
                 "permissionDecisionReason": "dangerous command",
                 "updatedInput": {
                     "command": "safe-command"
+                }
+            }
+        });
+        assert_eq!(json_val, expected);
+    }
+
+    #[rstest]
+    fn hook_output_omits_permission_decision_when_none() {
+        let output = make_output(None, None, Some("runok exec --sandbox restricted -- ls"));
+        let json_val: serde_json::Value =
+            serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
+
+        let expected = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": {
+                    "command": "runok exec --sandbox restricted -- ls"
                 }
             }
         });

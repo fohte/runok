@@ -231,7 +231,7 @@ mod tests {
     fn no_rules_returns_default(empty_context: EvalContext) {
         let config = Config::default();
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
         assert_eq!(result.sandbox_preset, None);
     }
 
@@ -239,7 +239,7 @@ mod tests {
     fn empty_rules_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     // ========================================
@@ -271,7 +271,7 @@ mod tests {
     fn no_matching_rule_returns_default(empty_context: EvalContext) {
         let config = make_config(vec![allow_rule("git status")]);
         let result = evaluate_command(&config, "hg status", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]
@@ -388,7 +388,7 @@ mod tests {
     #[rstest]
     #[case::help_matches("* --help", "git --help", Action::Allow)]
     #[case::version_matches("* --version", "node --version", Action::Allow)]
-    #[case::no_match_without_flag("* --help", "git status", Action::Ask(None))]
+    #[case::no_match_without_flag("* --help", "git status", Action::Pass)]
     fn wildcard_command_matching(
         #[case] pattern: &str,
         #[case] command: &str,
@@ -438,7 +438,7 @@ mod tests {
 
         let config = make_config(vec![rule]);
         let result = evaluate_command(&config, "aws s3 ls", &context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     #[rstest]
@@ -561,7 +561,7 @@ mod tests {
         assert!(matches!(result.action, Action::Deny(_)));
 
         let result = evaluate_command(&config, "cat /tmp/safe.txt", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Ask(None));
+        assert_eq!(result.action, Action::Pass);
     }
 
     // ========================================

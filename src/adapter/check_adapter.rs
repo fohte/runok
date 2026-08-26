@@ -98,11 +98,11 @@ fn build_check_output(result: &ActionResult) -> CheckOutput {
 
 /// Build a `CheckOutput` for the no-match case based on defaults.
 fn build_no_match_output(defaults: &Defaults) -> CheckOutput {
-    let decision = match defaults.action {
-        Some(ActionKind::Allow) => "allow",
-        Some(ActionKind::Deny) => "deny",
-        Some(ActionKind::Ask) | None => "ask",
-        Some(ActionKind::Pass) => "pass",
+    let decision = match defaults.resolved_action() {
+        ActionKind::Allow => "allow",
+        ActionKind::Deny => "deny",
+        ActionKind::Ask => "ask",
+        ActionKind::Pass => "pass",
     };
 
     CheckOutput {
@@ -304,7 +304,7 @@ mod tests {
     // --- build_no_match_output: defaults mapping ---
 
     #[rstest]
-    #[case::default_ask(None, "ask")]
+    #[case::default_pass(None, "pass")]
     #[case::explicit_allow(Some(ActionKind::Allow), "allow")]
     #[case::explicit_deny(Some(ActionKind::Deny), "deny")]
     #[case::explicit_ask(Some(ActionKind::Ask), "ask")]
