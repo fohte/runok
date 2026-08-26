@@ -536,7 +536,7 @@ Additional configuration files to merge only during test execution. These files 
 
 #### `tests.cases`
 
-Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, or `deny`) and the command to evaluate.
+Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, `deny`, or `pass`) and the command to evaluate.
 
 **Type:** `list[TestEntry]`\
 **Default:** `[]`

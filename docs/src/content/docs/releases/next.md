@@ -63,7 +63,7 @@ See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavio
 
 ### Breaking: unmatched commands now resolve to `pass` by default, not `ask` ([#TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
 
-`defaults.action`'s fallback when left unset has changed from `ask` to `pass` ([see above](#defaultsaction-pass-defers-to-claude-codes-own-permission-flow-496)). This closes the gap the previous PR only opened: runok's allowlist model returning `ask` for every unmatched Bash command was overriding Claude Code's own auto-mode classifier, since a hook-level `ask`/`deny`/`allow` decision short-circuits that flow before it ever runs. Most `runok.yml` configs never set `defaults.action` explicitly, so this had been quietly defeating auto mode for anyone using the default settings.
+`defaults.action`'s fallback when left unset has changed from `ask` to `pass` ([see below](#defaultsaction-pass-defers-to-claude-codes-own-permission-flow-496)). This closes the gap the previous PR only opened: runok's allowlist model returning `ask` for every unmatched Bash command was overriding Claude Code's own auto-mode classifier, since a hook-level `ask`/`deny`/`allow` decision short-circuits that flow before it ever runs. Most `runok.yml` configs never set `defaults.action` explicitly, so this had been quietly defeating auto mode for anyone using the default settings.
 
 ```yaml
 defaults:
@@ -72,7 +72,9 @@ defaults:
 
 **What changes for existing configs?** A `runok.yml` without a `defaults.action` key now defers unmatched commands to Claude Code's normal permission flow instead of always prompting.
 
-**What should I do?** To keep the previous allowlist-style behavior (every unmatched command prompts), set `defaults.action: ask` explicitly. No other change is required to restore the old behavior.
+**What should I do?** To keep the previous allowlist-style behavior (every unmatched command prompts), set `defaults.action: ask` explicitly. No other change is required to restore the old behavior. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+
+Since `pass` is now the common outcome for a command that matches no rule, the top-level `tests` section also accepts `pass` as an expected decision (`- pass: 'some command'`), for asserting that a command falls through to `defaults.action`/`defaults.sandbox` rather than being caught by an explicit rule. See [`runok test`](/cli/test/) for details.
 
 ## New Features
 

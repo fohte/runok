@@ -54,6 +54,7 @@ pub enum ExpectedDecision {
     Allow,
     Ask,
     Deny,
+    Pass,
 }
 
 impl fmt::Display for ExpectedDecision {
@@ -62,6 +63,7 @@ impl fmt::Display for ExpectedDecision {
             Self::Allow => write!(f, "allow"),
             Self::Ask => write!(f, "ask"),
             Self::Deny => write!(f, "deny"),
+            Self::Pass => write!(f, "pass"),
         }
     }
 }
@@ -72,6 +74,7 @@ impl From<ExpectedDecision> for ActionKind {
             ExpectedDecision::Allow => ActionKind::Allow,
             ExpectedDecision::Ask => ActionKind::Ask,
             ExpectedDecision::Deny => ActionKind::Deny,
+            ExpectedDecision::Pass => ActionKind::Pass,
         }
     }
 }
@@ -153,13 +156,14 @@ fn action_kind_label(kind: ActionKind) -> &'static str {
 
 /// Extract `(ExpectedDecision, command)` from an `InlineTestEntry`.
 ///
-/// Exactly one of `allow`, `ask`, or `deny` should be set; the key
+/// Exactly one of `allow`, `ask`, `deny`, or `pass` should be set; the key
 /// determines the expected decision and the value is the command string.
 fn parse_inline_entry(entry: &InlineTestEntry) -> Option<(ExpectedDecision, String)> {
-    match (&entry.allow, &entry.ask, &entry.deny) {
-        (Some(cmd), None, None) => Some((ExpectedDecision::Allow, cmd.clone())),
-        (None, Some(cmd), None) => Some((ExpectedDecision::Ask, cmd.clone())),
-        (None, None, Some(cmd)) => Some((ExpectedDecision::Deny, cmd.clone())),
+    match (&entry.allow, &entry.ask, &entry.deny, &entry.pass) {
+        (Some(cmd), None, None, None) => Some((ExpectedDecision::Allow, cmd.clone())),
+        (None, Some(cmd), None, None) => Some((ExpectedDecision::Ask, cmd.clone())),
+        (None, None, Some(cmd), None) => Some((ExpectedDecision::Deny, cmd.clone())),
+        (None, None, None, Some(cmd)) => Some((ExpectedDecision::Pass, cmd.clone())),
         _ => None,
     }
 }
@@ -458,6 +462,7 @@ mod tests {
     #[case::allow(ExpectedDecision::Allow, "allow")]
     #[case::ask(ExpectedDecision::Ask, "ask")]
     #[case::deny(ExpectedDecision::Deny, "deny")]
+    #[case::pass(ExpectedDecision::Pass, "pass")]
     fn expected_decision_display(#[case] decision: ExpectedDecision, #[case] expected: &str) {
         assert_eq!(decision.to_string(), expected);
     }
@@ -470,6 +475,7 @@ mod tests {
     #[case::allow(ExpectedDecision::Allow, ActionKind::Allow)]
     #[case::ask(ExpectedDecision::Ask, ActionKind::Ask)]
     #[case::deny(ExpectedDecision::Deny, ActionKind::Deny)]
+    #[case::pass(ExpectedDecision::Pass, ActionKind::Pass)]
     fn expected_decision_to_action_kind(
         #[case] decision: ExpectedDecision,
         #[case] expected: ActionKind,
@@ -528,23 +534,27 @@ mod tests {
 
     #[rstest]
     #[case::allow_entry(
-        InlineTestEntry { allow: Some("git status".into()), ask: None, deny: None },
+        InlineTestEntry { allow: Some("git status".into()), ask: None, deny: None, pass: None },
         Some((ExpectedDecision::Allow, "git status".into()))
     )]
     #[case::ask_entry(
-        InlineTestEntry { allow: None, ask: Some("git push".into()), deny: None },
+        InlineTestEntry { allow: None, ask: Some("git push".into()), deny: None, pass: None },
         Some((ExpectedDecision::Ask, "git push".into()))
     )]
     #[case::deny_entry(
-        InlineTestEntry { allow: None, ask: None, deny: Some("rm -rf /".into()) },
+        InlineTestEntry { allow: None, ask: None, deny: Some("rm -rf /".into()), pass: None },
         Some((ExpectedDecision::Deny, "rm -rf /".into()))
     )]
+    #[case::pass_entry(
+        InlineTestEntry { allow: None, ask: None, deny: None, pass: Some("echo hello".into()) },
+        Some((ExpectedDecision::Pass, "echo hello".into()))
+    )]
     #[case::none_set(
-        InlineTestEntry { allow: None, ask: None, deny: None },
+        InlineTestEntry { allow: None, ask: None, deny: None, pass: None },
         None
     )]
     #[case::multiple_set(
-        InlineTestEntry { allow: Some("a".into()), ask: Some("b".into()), deny: None },
+        InlineTestEntry { allow: Some("a".into()), ask: Some("b".into()), deny: None, pass: None },
         None
     )]
     fn test_parse_inline_entry(
@@ -714,29 +724,26 @@ mod tests {
 
     #[rstest]
     fn run_tests_default_action() {
-        // No rules means the default action (pass, not ask) applies, so a
-        // case asserting "ask" for an unmatched command now fails.
+        // No rules means the default action (pass) applies to an unmatched command.
         let config = Config::default();
         let test_cases = vec![TestCase {
             command: "echo hello".to_string(),
-            expected: ExpectedDecision::Ask,
+            expected: ExpectedDecision::Pass,
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
         }];
 
         let results = run_tests(&config, &test_cases);
-        assert!(!results.is_success());
-        assert_eq!(results.results[0].actual, ActionKind::Pass);
+        assert!(results.is_success());
+        assert_eq!(results.passed_count(), 1);
     }
 
     #[rstest]
     fn run_tests_eval_error_is_failure_not_false_positive() {
         // A rule with a malformed `when` expression causes an eval error.
-        // `expected` is irrelevant to the outcome here (`ExpectedDecision` has
-        // no `Pass` variant, so it can never equal the unmatched-command
-        // default): the test must fail because the rule was never actually
-        // evaluated, regardless of what was expected.
+        // The test must fail because the rule was never actually evaluated,
+        // regardless of what `expected` was set to.
         let config = Config {
             rules: Some(vec![RuleEntry {
                 deny: Some("rm *".to_string()),

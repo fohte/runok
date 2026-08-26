@@ -106,8 +106,8 @@ impl RuleEntry {
 }
 
 /// A test case entry used in both inline rule tests and top-level test cases.
-/// Exactly one of `allow`, `ask`, or `deny` must be set. The key determines
-/// the expected decision, the value is the command to evaluate.
+/// Exactly one of `allow`, `ask`, `deny`, or `pass` must be set. The key
+/// determines the expected decision, the value is the command to evaluate.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[cfg_attr(any(feature = "config-schema", test), schemars(transform = super::schema_gen::inline_test_entry_one_of_transform))]
@@ -118,6 +118,9 @@ pub struct InlineTestEntry {
     pub ask: Option<String>,
     /// Command expected to be denied.
     pub deny: Option<String>,
+    /// Command expected to fall through to `defaults.action`/`defaults.sandbox`
+    /// because no rule matches it.
+    pub pass: Option<String>,
 }
 
 /// Top-level test section for cross-rule tests and test-only extends.
