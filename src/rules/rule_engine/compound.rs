@@ -275,7 +275,7 @@ pub fn default_action(config: &Config) -> Action {
 mod tests {
     use std::collections::HashMap;
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use crate::config::{ActionKind, Config, Defaults, Definitions, RuleEntry};
 
@@ -668,93 +668,62 @@ mod tests {
     // Compound: writable roots contradiction -> ask escalation
     // ========================================
 
-    #[rstest]
-    fn compound_writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
-        let config = make_sandbox_config(
-            vec![
-                allow_rule_with_sandbox("ls *", "only_tmp"),
-                allow_rule_with_sandbox("cat *", "only_home"),
-            ],
-            HashMap::from([
-                (
-                    "only_tmp".to_string(),
-                    SandboxPreset {
-                        fs: Some(FsPolicy {
-                            read: None,
-                            write: Some(FsAccessPolicy {
-                                allow: Some(vec!["/tmp".to_string()]),
-                                deny: None,
-                            }),
+    #[fixture]
+    fn writable_contradiction_presets() -> HashMap<String, SandboxPreset> {
+        HashMap::from([
+            (
+                "only_tmp".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/tmp".to_string()]),
+                            deny: None,
                         }),
-                        network: None,
-                    },
-                ),
-                (
-                    "only_home".to_string(),
-                    SandboxPreset {
-                        fs: Some(FsPolicy {
-                            read: None,
-                            write: Some(FsAccessPolicy {
-                                allow: Some(vec!["/home".to_string()]),
-                                deny: None,
-                            }),
+                    }),
+                    network: None,
+                },
+            ),
+            (
+                "only_home".to_string(),
+                SandboxPreset {
+                    fs: Some(FsPolicy {
+                        read: None,
+                        write: Some(FsAccessPolicy {
+                            allow: Some(vec!["/home".to_string()]),
+                            deny: None,
                         }),
-                        network: None,
-                    },
-                ),
-            ]),
-        );
-
-        let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
-        // Writable roots intersection is empty -> contradiction -> escalate to Ask
-        assert!(matches!(result.action, Action::Ask(_)));
+                    }),
+                    network: None,
+                },
+            ),
+        ])
     }
 
     #[rstest]
-    fn compound_writable_contradiction_with_pass_escalates_to_ask(empty_context: EvalContext) {
-        // An unmatched sub-command resolves to Pass (no defaults.action
-        // configured), which outranks the other two sub-commands' Allow --
-        // the merged action going into contradiction detection is Pass, not
-        // Allow. Pass must still be escalated: it carries no `updatedInput`,
-        // so leaving it unescalated would silently drop the sandbox
-        // contradiction the same way an unescalated Allow would.
+    #[case::allow("ls -la | cat -")]
+    // An unmatched sub-command resolves to Pass (no defaults.action
+    // configured), which outranks the other two sub-commands' Allow -- the
+    // merged action going into contradiction detection is Pass, not Allow.
+    // Pass must still be escalated: it carries no `updatedInput`, so leaving
+    // it unescalated would silently drop the sandbox contradiction the same
+    // way an unescalated Allow would.
+    #[case::pass("unknown_cmd && ls -la && cat -")]
+    fn compound_writable_contradiction_escalates_to_ask(
+        empty_context: EvalContext,
+        writable_contradiction_presets: HashMap<String, SandboxPreset>,
+        #[case] command: &str,
+    ) {
         let config = make_sandbox_config(
             vec![
                 allow_rule_with_sandbox("ls *", "only_tmp"),
                 allow_rule_with_sandbox("cat *", "only_home"),
             ],
-            HashMap::from([
-                (
-                    "only_tmp".to_string(),
-                    SandboxPreset {
-                        fs: Some(FsPolicy {
-                            read: None,
-                            write: Some(FsAccessPolicy {
-                                allow: Some(vec!["/tmp".to_string()]),
-                                deny: None,
-                            }),
-                        }),
-                        network: None,
-                    },
-                ),
-                (
-                    "only_home".to_string(),
-                    SandboxPreset {
-                        fs: Some(FsPolicy {
-                            read: None,
-                            write: Some(FsAccessPolicy {
-                                allow: Some(vec!["/home".to_string()]),
-                                deny: None,
-                            }),
-                        }),
-                        network: None,
-                    },
-                ),
-            ]),
+            writable_contradiction_presets,
         );
 
-        let result =
-            evaluate_compound(&config, "unknown_cmd && ls -la && cat -", &empty_context).unwrap();
+        let result = evaluate_compound(&config, command, &empty_context).unwrap();
+        // Writable roots intersection is empty -> contradiction -> escalate to Ask
         assert!(
             matches!(result.action, Action::Ask(_)),
             "expected Ask, got {:?}",
