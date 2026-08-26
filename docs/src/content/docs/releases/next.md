@@ -61,7 +61,7 @@ If you have a rule that intentionally relied on `?` being a literal flag value, 
 
 See [Matching Behavior -- Optional Flag Values](/pattern-syntax/matching-behavior/#optional-flag-values) for details.
 
-### Breaking: unmatched commands now resolve to `pass` by default, not `ask` ([#TODO(pr-link)](https://github.com/fohte/runok/pull/TODO))
+### Breaking: unmatched commands now resolve to `pass` by default, not `ask` ([#502](https://github.com/fohte/runok/pull/502))
 
 `defaults.action`'s fallback when left unset has changed from `ask` to `pass` ([see below](#defaultsaction-pass-defers-to-claude-codes-own-permission-flow-496)). This closes the gap the previous PR only opened: runok's allowlist model returning `ask` for every unmatched Bash command was overriding Claude Code's own auto-mode classifier, since a hook-level `ask`/`deny`/`allow` decision short-circuits that flow before it ever runs. Most `runok.yml` configs never set `defaults.action` explicitly, so this had been quietly defeating auto mode for anyone using the default settings.
 
