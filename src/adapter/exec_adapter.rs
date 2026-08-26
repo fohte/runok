@@ -147,8 +147,8 @@ impl Endpoint for ExecAdapter {
 
     // Unreachable via the CLI: `ExecArgs.command` is `required = true`, so `args` is never empty.
     fn handle_no_match(&self, defaults: &Defaults) -> Result<i32, anyhow::Error> {
-        match defaults.action {
-            Some(ActionKind::Allow) | None => {
+        match defaults.resolved_action() {
+            ActionKind::Allow => {
                 if self.args.is_empty() {
                     return Ok(0);
                 }
@@ -156,16 +156,16 @@ impl Endpoint for ExecAdapter {
                 let exit_code = self.executor.exec(&command_input, None)?;
                 Ok(exit_code)
             }
-            Some(ActionKind::Deny) => {
+            ActionKind::Deny => {
                 eprintln!("runok: command denied by default policy");
                 Ok(3)
             }
-            Some(ActionKind::Ask) => {
+            ActionKind::Ask => {
                 // Ask is treated as deny in exec mode
                 eprintln!("runok: command requires confirmation (default policy)");
                 Ok(3)
             }
-            Some(ActionKind::Pass) => {
+            ActionKind::Pass => {
                 // exec has no caller to defer to; treated as deny like Ask.
                 eprintln!(
                     "runok: command requires confirmation (defaults.action: pass has \
@@ -444,7 +444,7 @@ mod tests {
 
     #[rstest]
     #[case::allow_default(Some(ActionKind::Allow), 0, true)]
-    #[case::none_default(None, 0, true)]
+    #[case::none_default(None, 3, false)]
     #[case::deny_default(Some(ActionKind::Deny), 3, false)]
     #[case::ask_default(Some(ActionKind::Ask), 3, false)]
     #[case::pass_default(Some(ActionKind::Pass), 3, false)]
@@ -506,7 +506,7 @@ mod tests {
     fn handle_no_match_empty_args_returns_0() {
         let adapter = ExecAdapter::new(vec![], None, Box::new(MockExecutor::new(0)));
         let defaults = Defaults {
-            action: None,
+            action: Some(ActionKind::Allow),
             sandbox: None,
         };
         let result = adapter.handle_no_match(&defaults).unwrap();

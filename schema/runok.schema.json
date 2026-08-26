@@ -332,7 +332,7 @@
       ]
     },
     "InlineTestEntry": {
-      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, or `deny` must be set. The key determines\nthe expected decision, the value is the command to evaluate.",
+      "description": "A test case entry used in both inline rule tests and top-level test cases.\nExactly one of `allow`, `ask`, `deny`, or `pass` must be set. The key\ndetermines the expected decision, the value is the command to evaluate.",
       "oneOf": [
         {
           "type": "object",
@@ -380,6 +380,22 @@
           "additionalProperties": false,
           "required": [
             "deny"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pass": {
+              "description": "Command expected to fall through to `defaults.action`/`defaults.sandbox`\nbecause no rule matches it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "pass"
           ]
         }
       ]
