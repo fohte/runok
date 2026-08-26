@@ -20,6 +20,17 @@ pub struct ExecAdapter {
     /// user. Only in that case does `Action::Pass` defer to the sandbox
     /// instead of being treated as deny -- the hook already decided to route
     /// the permission decision through Claude Code's own flow.
+    ///
+    /// This flag is a plain, self-declared CLI argument -- there is no
+    /// cryptographic proof that a given invocation actually came from the
+    /// hook. Anyone who can run `runok exec` at all can set it. This is
+    /// deliberately not treated as a security hole: it only relaxes
+    /// `Action::Pass` (a command that matched no rule), never `Action::Deny`
+    /// or `Action::Ask`, both of which `exec` still re-evaluates and rejects
+    /// regardless of this flag. So spoofing it can only turn "the caller's
+    /// own permission flow decides, unsandboxed" into "the caller's own
+    /// permission flow decides, sandboxed" -- a strictly narrower outcome,
+    /// not a privilege escalation.
     hook_origin: bool,
     sandbox_definitions: HashMap<String, SandboxPreset>,
     executor: Box<dyn CommandExecutor>,
@@ -419,6 +430,32 @@ mod tests {
         assert_eq!(result, 3);
     }
 
+    // `--__hook-origin` only relaxes `Action::Pass` -- a spoofed flag must
+    // never let a denied command through. This is the load-bearing guarantee
+    // behind treating the flag's forgeability as an accepted risk rather than
+    // a security hole (see the doc comment on `ExecAdapter::hook_origin`).
+    #[rstest]
+    fn handle_action_deny_returns_exit_3_even_with_hook_origin() {
+        let adapter = ExecAdapter::new(
+            vec!["rm".into(), "-rf".into(), "/".into()],
+            None,
+            Box::new(MockExecutor::new(0)),
+        )
+        .with_hook_origin(true);
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Deny(DenyResponse {
+                    message: None,
+                    fix_suggestion: None,
+                    matched_rule: "rm -rf /".to_string(),
+                }),
+                sandbox: SandboxInfo::Preset(None),
+                evaluations: vec![],
+            })
+            .unwrap();
+        assert_eq!(result, 3);
+    }
+
     // --- handle_action: Ask (treated as deny) ---
 
     #[rstest]
@@ -433,6 +470,25 @@ mod tests {
         let result = adapter
             .handle_action(ActionResult {
                 action: Action::Ask(message),
+                sandbox: SandboxInfo::Preset(None),
+                evaluations: vec![],
+            })
+            .unwrap();
+        assert_eq!(result, 3);
+    }
+
+    // Same guarantee as the deny case above, for ask.
+    #[rstest]
+    fn handle_action_ask_returns_exit_3_even_with_hook_origin() {
+        let adapter = ExecAdapter::new(
+            vec!["terraform".into(), "apply".into()],
+            None,
+            Box::new(MockExecutor::new(0)),
+        )
+        .with_hook_origin(true);
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Ask(Some("please confirm".to_string())),
                 sandbox: SandboxInfo::Preset(None),
                 evaluations: vec![],
             })
@@ -457,6 +513,50 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result, 3);
+    }
+
+    // --- handle_action: Pass with hook_origin (executes via sandbox) ---
+
+    #[rstest]
+    #[case::exit_0(0)]
+    #[case::exit_1(1)]
+    #[case::exit_42(42)]
+    fn handle_action_pass_with_hook_origin_executes_and_returns_exit_code(#[case] exit_code: i32) {
+        let adapter = ExecAdapter::new(
+            vec!["terraform".into(), "apply".into()],
+            None,
+            Box::new(MockExecutor::new(exit_code)),
+        )
+        .with_hook_origin(true);
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Pass,
+                sandbox: SandboxInfo::Preset(None),
+                evaluations: vec![],
+            })
+            .unwrap();
+        assert_eq!(result, exit_code);
+    }
+
+    #[rstest]
+    fn handle_action_pass_with_hook_origin_errors_on_undefined_sandbox_preset() {
+        let adapter = ExecAdapter::new(
+            vec!["echo".into(), "hello".into()],
+            Some("nonexistent".into()),
+            Box::new(MockExecutor::new(0)),
+        )
+        .with_hook_origin(true);
+        let result = adapter.handle_action(ActionResult {
+            action: Action::Pass,
+            sandbox: SandboxInfo::Preset(None),
+            evaluations: vec![],
+        });
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent"),
+            "error should mention the preset name: {}",
+            err
+        );
     }
 
     // --- handle_no_match ---

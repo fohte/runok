@@ -91,6 +91,105 @@ fn exec_pass_with_sandbox_denies_when_typed_directly() {
 }
 
 #[rstest]
+fn exec_pass_with_sandbox_runs_when_marked_as_hook_origin() {
+    // The counterpart to the test above: the hidden `--__hook-origin` flag
+    // marks the wrapper as hook-generated, so `pass` defers to the sandbox
+    // and the command actually executes.
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    std::fs::create_dir_all(env.cwd.join("tmp"))
+        .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
+    let assert = env
+        .command()
+        .args([
+            "exec",
+            "--sandbox",
+            "restricted",
+            "--__hook-origin",
+            "--",
+            "ls",
+            "-la",
+        ])
+        .assert();
+    assert.code(0);
+}
+
+// `--__hook-origin` only relaxes `Action::Pass`. A caller who forges the
+// flag on a command that actually matches a deny/ask rule must still be
+// rejected -- this is the guarantee that makes the flag's forgeability an
+// accepted risk rather than a privilege escalation (see the doc comment on
+// `ExecAdapter::hook_origin`).
+
+#[rstest]
+fn exec_deny_still_rejects_with_hook_origin() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - deny: 'rm -rf *'
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    let assert = env
+        .command()
+        .args([
+            "exec",
+            "--sandbox",
+            "restricted",
+            "--__hook-origin",
+            "--",
+            "rm",
+            "-rf",
+            "/tmp/x",
+        ])
+        .assert();
+    assert.code(3);
+}
+
+#[rstest]
+fn exec_ask_still_rejects_with_hook_origin() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - ask: 'git push *'
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    let assert = env
+        .command()
+        .args([
+            "exec",
+            "--sandbox",
+            "restricted",
+            "--__hook-origin",
+            "--",
+            "git",
+            "push",
+            "origin",
+            "main",
+        ])
+        .assert();
+    assert.code(3);
+}
+
+#[rstest]
 fn exec_allow_runs_command() {
     let env = TestEnv::new(indoc! {"
         rules:

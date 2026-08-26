@@ -61,6 +61,8 @@ runok exec -- 'echo hello && echo world'
 | `1`  | An error occurred (config error, sandbox setup failure, etc.). |
 | `3`  | Command was denied or requires confirmation (ask or pass).     |
 
+The `pass` row above applies when `runok exec` is invoked directly. The one exception is the sandbox-wrapped command the Claude Code hook generates for a `pass` decision (see above) -- that invocation runs under the resolved sandbox and can exit `0` instead of `3`.
+
 ## Related
 
 - [`runok check`](/cli/check/) -- Evaluate commands without executing them.

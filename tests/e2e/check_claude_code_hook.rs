@@ -330,8 +330,6 @@ fn hook_pass_with_sandbox_wrapper_executes_successfully() {
             restricted:
               fs:
                 writable: [./tmp]
-        rules:
-          - allow: 'echo hello'
     "});
     std::fs::create_dir_all(env.cwd.join("tmp"))
         .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
