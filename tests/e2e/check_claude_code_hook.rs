@@ -1,7 +1,7 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
 
-use super::helpers::TestEnv;
+use super::helpers::{TestEnv, normalize_hook_origin_token};
 
 #[fixture]
 fn hook_env() -> TestEnv {
@@ -194,8 +194,8 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
         .as_str()
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
     assert_eq!(
-        rewritten_command,
-        "runok exec --sandbox restricted -- 'echo hello'"
+        normalize_hook_origin_token(rewritten_command),
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"
     );
 }
 
@@ -301,19 +301,68 @@ fn hook_bash_no_match_with_default_sandbox_omits_permission_decision(#[case] con
         .write_stdin(bash_hook_json("unknown-command --flag"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
-    let json: serde_json::Value =
+    let mut json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let command_field = &mut json["hookSpecificOutput"]["updatedInput"]["command"];
+    if let Some(command) = command_field.as_str() {
+        *command_field = serde_json::Value::String(normalize_hook_origin_token(command));
+    }
     assert_eq!(
         json,
         serde_json::json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "runok exec --sandbox restricted -- 'unknown-command --flag'"
+                    "command": "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'unknown-command --flag'"
                 }
             }
         })
     );
+}
+
+// --- Bash tool: hook-generated wrapper actually runs the command under the
+// sandbox instead of being denied by `exec`'s own re-evaluation ---
+
+#[rstest]
+fn hook_pass_with_sandbox_wrapper_executes_successfully() {
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    std::fs::create_dir_all(env.cwd.join("tmp"))
+        .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
+
+    let hook_assert = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("ls -la"))
+        .assert();
+    let output = hook_assert.code(0).get_output().stdout.clone();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let wrapped_command = json["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
+
+    let mut tokens = shlex::split(wrapped_command)
+        .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
+    let env_assignment = tokens.remove(0);
+    let (env_key, env_value) = env_assignment
+        .split_once('=')
+        .unwrap_or_else(|| panic!("expected KEY=VALUE env assignment, got: {env_assignment}"));
+    assert_eq!(tokens.remove(0), "runok");
+
+    env.command()
+        .env(env_key, env_value)
+        .args(tokens)
+        .assert()
+        .code(0);
 }
 
 // --- Hook event name ---

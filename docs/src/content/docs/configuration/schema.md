@@ -98,7 +98,7 @@ Action to take when no rule matches.
 
 `ask` is no longer the implicit fallback for an unset `defaults.action`: to force a prompt on every unmatched command (the old default behavior), set `defaults.action: ask` explicitly.
 
-`pass` (including the unset default, which resolves to `pass`) can be combined with `defaults.sandbox`: the hook response omits `permissionDecision` entirely but still includes `updatedInput` with the command rewritten to run under the sandbox preset, so Claude Code's own permission flow decides against the original command while the sandbox still applies to whatever actually runs. `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` regardless of whether a sandbox is set. `runok check` reports `pass` as its own distinct decision value instead, since it only evaluates and never executes.
+`pass` (including the unset default, which resolves to `pass`) can be combined with `defaults.sandbox`: the hook response omits `permissionDecision` entirely but still includes `updatedInput` with the command rewritten to run under the sandbox preset, so Claude Code's own permission flow decides against the original command while the sandbox still applies to whatever actually runs. That rewritten command runs under the resolved sandbox when Claude Code executes it. Typed directly, `runok exec` has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` regardless of whether a sandbox is set. `runok check` reports `pass` as its own distinct decision value instead, since it only evaluates and never executes.
 
 #### `defaults.sandbox`
 

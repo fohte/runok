@@ -47,3 +47,13 @@ impl TestEnv {
         cmd
     }
 }
+
+/// `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- ...` embeds a
+/// fresh token on every call. Replace it with a fixed placeholder so tests
+/// can still assert the wrapped command with a single equality check.
+pub fn normalize_hook_origin_token(command: &str) -> String {
+    let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+")
+        .unwrap_or_else(|e| panic!("invalid regex: {e}"));
+    re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
+        .into_owned()
+}

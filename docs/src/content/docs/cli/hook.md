@@ -48,7 +48,7 @@ Output detailed rule matching information to stderr.
 }
 ```
 
-`permissionDecisionReason` and `updatedInput` are omitted when not applicable. `updatedInput` is present when a `sandbox` preset applies to the matched rule -- it rewrites the command to `runok exec --sandbox <preset> -- <command>` so Claude Code executes it inside the sandbox.
+`permissionDecisionReason` and `updatedInput` are omitted when not applicable. `updatedInput` is present when a `sandbox` preset applies to the matched rule -- it rewrites the command to `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- <command>` so Claude Code executes it inside the sandbox.
 
 ## Examples
 
