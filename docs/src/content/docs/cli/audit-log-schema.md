@@ -271,7 +271,7 @@ Denials cannot be observed (see [Claude Code Integration](/getting-started/claud
   "session_id": "abc-123",
   "cwd": "/home/user/project",
   "command": "terraform apply",
-  "executed_command": "runok exec --sandbox restricted --__hook-origin -- 'terraform apply'"
+  "executed_command": "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'terraform apply'"
 }
 ```
 
@@ -326,7 +326,7 @@ The original command, copied from the correlated `ask` decision entry. The recor
 
 ### `executed_command`
 
-The command the agent actually executed (`tool_input.command` of the PostToolUse input). Differs from [`command`](#command-1) when the PreToolUse response rewrote the command via `updatedInput` — with runok that happens for [sandbox wrapping](/getting-started/claude-code/#sandbox-execution), producing the `runok exec --sandbox <preset> --__hook-origin -- '<command>'` form.
+The command the agent actually executed (`tool_input.command` of the PostToolUse input). Differs from [`command`](#command-1) when the PreToolUse response rewrote the command via `updatedInput` — with runok that happens for [sandbox wrapping](/getting-started/claude-code/#sandbox-execution), producing the `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<command>'` form.
 
 **Type:** `str`\
 **Always present:** Yes

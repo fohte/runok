@@ -271,20 +271,39 @@ impl ClaudeCodeHookAdapter {
         }
     }
 
-    /// Wrap a command with `runok exec --sandbox <preset> --__hook-origin --
-    /// <quoted_command>`. The command is shell-quoted to prevent shell
-    /// metacharacters (e.g. `&&`, `||`, `;`, `|`) from being interpreted
-    /// outside the sandbox. `--__hook-origin` tells `exec` that this
-    /// invocation came from the hook (not typed directly by a user), so that
-    /// `defaults.action: pass` runs under the sandbox instead of being denied.
+    /// Wrap a command with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox
+    /// <preset> -- <quoted_command>`. The command is shell-quoted to prevent
+    /// shell metacharacters (e.g. `&&`, `||`, `;`, `|`) from being
+    /// interpreted outside the sandbox. The `RUNOK_HOOK_ORIGIN` env var
+    /// (scoped to this one invocation via the shell's assignment-prefix
+    /// syntax) tells `exec` that this invocation came from the hook (not
+    /// typed directly by a user), so that `defaults.action: pass` runs under
+    /// the sandbox instead of being denied. The token changes on every call
+    /// so it can't just be copy-pasted from a doc or a previous run -- `exec`
+    /// never verifies the token's value, only that the env var was set (see
+    /// the doc comment on `ExecAdapter::hook_origin` for why that's still an
+    /// accepted trade-off).
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
         let quoted_preset = shlex::try_quote(preset)
             .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
         let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+        let token = Self::hook_origin_token();
+        let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
         Ok(format!(
-            "runok exec --sandbox {quoted_preset} --__hook-origin -- {quoted_command}"
+            "{env_var}={token} runok exec --sandbox {quoted_preset} -- {quoted_command}"
         ))
+    }
+
+    /// A per-call, non-cryptographic token (process id + current time) --
+    /// just enough entropy that the env var's value differs on every
+    /// invocation instead of being a single string anyone can hardcode.
+    fn hook_origin_token() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{:x}-{:x}", std::process::id(), nanos)
     }
 }
 
@@ -387,6 +406,29 @@ mod tests {
         }
     }
 
+    /// `wrap_with_sandbox` embeds a fresh token on every call (see its doc
+    /// comment). Replace it with a fixed placeholder so tests can still
+    /// assert the wrapped command with a single equality check.
+    fn normalize_hook_origin_token(command: &str) -> String {
+        let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
+        re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
+            .into_owned()
+    }
+
+    fn normalize_hook_origin_output(output: HookOutput) -> HookOutput {
+        HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                updated_input: output
+                    .hook_specific_output
+                    .updated_input
+                    .map(|u| UpdatedInput {
+                        command: normalize_hook_origin_token(&u.command),
+                    }),
+                ..output.hook_specific_output
+            },
+        }
+    }
+
     // --- extract_command ---
 
     #[rstest]
@@ -423,7 +465,7 @@ mod tests {
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(Some("allow"), None, Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
+        make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -465,12 +507,12 @@ mod tests {
     #[case::ask_with_sandbox(
         Action::Ask(Some("please confirm".to_string())),
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(Some("ask"), Some("please confirm"), Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
+        make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::pass_with_sandbox(
         Action::Pass,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        make_output(None, None, Some("runok exec --sandbox restricted --__hook-origin -- 'git status'")),
+        make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -486,7 +528,8 @@ mod tests {
         };
         let output = adapter
             .build_action_output(&result)
-            .unwrap_or_else(|e| panic!("build_action_output failed: {e}"));
+            .unwrap_or_else(|e| panic!("build_action_output failed: {e}"))
+            .map(normalize_hook_origin_output);
         assert_eq!(output, Some(expected));
     }
 
@@ -594,12 +637,13 @@ mod tests {
             .build_no_match_output(&defaults)
             .unwrap_or_else(|e| panic!("build_no_match_output failed: {e}"))
             .unwrap_or_else(|| panic!("expected Some(HookOutput)"));
+        let output = normalize_hook_origin_output(output);
         assert_eq!(
             output,
             make_output(
                 expected_decision,
                 None,
-                Some("runok exec --sandbox restricted --__hook-origin -- 'npm install'"),
+                Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'npm install'"),
             ),
         );
     }
@@ -723,7 +767,7 @@ mod tests {
         let output = make_output(
             None,
             None,
-            Some("runok exec --sandbox restricted --__hook-origin -- ls"),
+            Some("RUNOK_HOOK_ORIGIN=abc123 runok exec --sandbox restricted -- ls"),
         );
         let json_val: serde_json::Value =
             serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
@@ -732,7 +776,7 @@ mod tests {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "runok exec --sandbox restricted --__hook-origin -- ls"
+                    "command": "RUNOK_HOOK_ORIGIN=abc123 runok exec --sandbox restricted -- ls"
                 }
             }
         });
@@ -745,7 +789,7 @@ mod tests {
     #[case::preset_some(
         SandboxInfo::Preset(Some("restricted".to_string())),
         "echo hello",
-        Some("runok exec --sandbox restricted --__hook-origin -- 'echo hello'"),
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
     )]
     #[case::preset_none(SandboxInfo::Preset(None), "echo hello", None)]
     #[case::merged_policy(SandboxInfo::MergedPolicy(None), "echo hello", None)]
@@ -759,7 +803,7 @@ mod tests {
         match expected_command {
             Some(expected) => {
                 let updated = result.unwrap_or_else(|| panic!("expected Some(UpdatedInput)"));
-                assert_eq!(updated.command, expected);
+                assert_eq!(normalize_hook_origin_token(&updated.command), expected);
             }
             None => assert!(result.is_none()),
         }
@@ -768,52 +812,51 @@ mod tests {
     // --- wrap_with_sandbox quotes shell metacharacters ---
 
     #[rstest]
-    #[case::simple_command("ls", "runok exec --sandbox restricted --__hook-origin -- ls")]
+    #[case::simple_command(
+        "ls",
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- ls"
+    )]
     #[case::command_with_spaces(
         "git status",
-        "runok exec --sandbox restricted --__hook-origin -- 'git status'"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'"
     )]
     #[case::compound_and(
         "safe-cmd && dangerous-cmd",
-        "runok exec --sandbox restricted --__hook-origin -- 'safe-cmd && dangerous-cmd'"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'safe-cmd && dangerous-cmd'"
     )]
     #[case::compound_pipe(
         "cat file | grep secret",
-        "runok exec --sandbox restricted --__hook-origin -- 'cat file | grep secret'"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'cat file | grep secret'"
     )]
     #[case::compound_semicolon(
         "cmd1; cmd2",
-        "runok exec --sandbox restricted --__hook-origin -- 'cmd1; cmd2'"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'cmd1; cmd2'"
     )]
     fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
-        assert_eq!(
-            ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command)
-                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
-            expected,
-        );
+        let actual = ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert_eq!(normalize_hook_origin_token(&actual), expected);
     }
 
     #[rstest]
     #[case::preset_with_spaces(
         "my preset",
         "echo hello",
-        "runok exec --sandbox 'my preset' --__hook-origin -- 'echo hello'"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox 'my preset' -- 'echo hello'"
     )]
     #[case::preset_with_special_chars(
         "pre$et",
         "ls",
-        "runok exec --sandbox 'pre$et' --__hook-origin -- ls"
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox 'pre$et' -- ls"
     )]
     fn wrap_with_sandbox_quotes_preset(
         #[case] preset: &str,
         #[case] command: &str,
         #[case] expected: &str,
     ) {
-        assert_eq!(
-            ClaudeCodeHookAdapter::wrap_with_sandbox(preset, command)
-                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
-            expected,
-        );
+        let actual = ClaudeCodeHookAdapter::wrap_with_sandbox(preset, command)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert_eq!(normalize_hook_origin_token(&actual), expected);
     }
 
     #[rstest]

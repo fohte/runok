@@ -1,7 +1,7 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
 
-use super::helpers::TestEnv;
+use super::helpers::{TestEnv, normalize_hook_origin_token};
 
 #[fixture]
 fn hook_env() -> TestEnv {
@@ -194,8 +194,8 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
         .as_str()
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
     assert_eq!(
-        rewritten_command,
-        "runok exec --sandbox restricted --__hook-origin -- 'echo hello'"
+        normalize_hook_origin_token(rewritten_command),
+        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"
     );
 }
 
@@ -301,15 +301,19 @@ fn hook_bash_no_match_with_default_sandbox_omits_permission_decision(#[case] con
         .write_stdin(bash_hook_json("unknown-command --flag"))
         .assert();
     let output = assert.code(0).get_output().stdout.clone();
-    let json: serde_json::Value =
+    let mut json: serde_json::Value =
         serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let command_field = &mut json["hookSpecificOutput"]["updatedInput"]["command"];
+    if let Some(command) = command_field.as_str() {
+        *command_field = serde_json::Value::String(normalize_hook_origin_token(command));
+    }
     assert_eq!(
         json,
         serde_json::json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "runok exec --sandbox restricted --__hook-origin -- 'unknown-command --flag'"
+                    "command": "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'unknown-command --flag'"
                 }
             }
         })
@@ -348,9 +352,17 @@ fn hook_pass_with_sandbox_wrapper_executes_successfully() {
 
     let mut tokens = shlex::split(wrapped_command)
         .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
+    let env_assignment = tokens.remove(0);
+    let (env_key, env_value) = env_assignment
+        .split_once('=')
+        .unwrap_or_else(|| panic!("expected KEY=VALUE env assignment, got: {env_assignment}"));
     assert_eq!(tokens.remove(0), "runok");
 
-    env.command().args(tokens).assert().code(0);
+    env.command()
+        .env(env_key, env_value)
+        .args(tokens)
+        .assert()
+        .code(0);
 }
 
 // --- Hook event name ---

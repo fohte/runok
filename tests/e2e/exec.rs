@@ -71,7 +71,7 @@ fn exec_no_match_uses_default_deny() {
 #[rstest]
 fn exec_pass_with_sandbox_denies_when_typed_directly() {
     // `defaults.action: pass` + `defaults.sandbox` only takes effect for
-    // wrappers the hook generated (marked with `--__hook-origin`). A user
+    // wrappers the hook generated (marked via `RUNOK_HOOK_ORIGIN`). A user
     // typing `--sandbox` directly must still be denied.
     let env = TestEnv::new(indoc! {"
         defaults:
@@ -92,9 +92,9 @@ fn exec_pass_with_sandbox_denies_when_typed_directly() {
 
 #[rstest]
 fn exec_pass_with_sandbox_runs_when_marked_as_hook_origin() {
-    // The counterpart to the test above: the hidden `--__hook-origin` flag
-    // marks the wrapper as hook-generated, so `pass` defers to the sandbox
-    // and the command actually executes.
+    // The counterpart to the test above: the hidden `RUNOK_HOOK_ORIGIN` env
+    // var marks the wrapper as hook-generated, so `pass` defers to the
+    // sandbox and the command actually executes.
     let env = TestEnv::new(indoc! {"
         defaults:
           action: pass
@@ -109,22 +109,15 @@ fn exec_pass_with_sandbox_runs_when_marked_as_hook_origin() {
         .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
     let assert = env
         .command()
-        .args([
-            "exec",
-            "--sandbox",
-            "restricted",
-            "--__hook-origin",
-            "--",
-            "ls",
-            "-la",
-        ])
+        .env("RUNOK_HOOK_ORIGIN", "test-token")
+        .args(["exec", "--sandbox", "restricted", "--", "ls", "-la"])
         .assert();
     assert.code(0);
 }
 
-// `--__hook-origin` only relaxes `Action::Pass`. A caller who forges the
-// flag on a command that actually matches a deny/ask rule must still be
-// rejected -- this is the guarantee that makes the flag's forgeability an
+// `RUNOK_HOOK_ORIGIN` only relaxes `Action::Pass`. A caller who forges the
+// env var on a command that actually matches a deny/ask rule must still be
+// rejected -- this is the guarantee that makes the env var's forgeability an
 // accepted risk rather than a privilege escalation (see the doc comment on
 // `ExecAdapter::hook_origin`).
 
@@ -144,11 +137,11 @@ fn exec_deny_still_rejects_with_hook_origin() {
     "});
     let assert = env
         .command()
+        .env("RUNOK_HOOK_ORIGIN", "test-token")
         .args([
             "exec",
             "--sandbox",
             "restricted",
-            "--__hook-origin",
             "--",
             "rm",
             "-rf",
@@ -174,11 +167,11 @@ fn exec_ask_still_rejects_with_hook_origin() {
     "});
     let assert = env
         .command()
+        .env("RUNOK_HOOK_ORIGIN", "test-token")
         .args([
             "exec",
             "--sandbox",
             "restricted",
-            "--__hook-origin",
             "--",
             "git",
             "push",

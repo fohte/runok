@@ -310,13 +310,14 @@ fn run_command(
                 .as_ref()
                 .and_then(|d| d.sandbox.clone())
                 .unwrap_or_default();
+            let hook_origin = std::env::var_os(runok::adapter::HOOK_ORIGIN_ENV_VAR).is_some();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
                 executor,
             )
             .with_sandbox_definitions(sandbox_defs)
-            .with_hook_origin(args.hook_origin);
+            .with_hook_origin(hook_origin);
             adapter::run_with_options(&endpoint, &config, &options)
         }
         Commands::Check(args) => {
