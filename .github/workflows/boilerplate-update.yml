@@ -28,7 +28,7 @@ jobs:
         id: octo-sts
         uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
         with:
-          scope: fohte
+          scope: ${{ github.repository }}
           identity: ${{ github.event.repository.name }}-boilerplate-update
           domain: octo-sts.fohte.net
 
