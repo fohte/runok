@@ -183,6 +183,40 @@ fn exec_ask_still_rejects_with_hook_origin() {
 }
 
 #[rstest]
+fn exec_pass_with_sandbox_does_not_leak_hook_origin_to_child_env() {
+    // `RUNOK_HOOK_ORIGIN` must not propagate into the spawned command's own
+    // environment -- env vars are inherited by children, so a nested `runok
+    // exec` that command runs would otherwise inherit hook-origin trust it
+    // was never granted.
+    let env = TestEnv::new(indoc! {"
+        defaults:
+          action: pass
+          sandbox: restricted
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                writable: [./tmp]
+    "});
+    let output = env
+        .command()
+        .env("RUNOK_HOOK_ORIGIN", "test-token")
+        .args([
+            "exec",
+            "--sandbox",
+            "restricted",
+            "--",
+            "printenv",
+            "RUNOK_HOOK_ORIGIN",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
+
+    // `printenv NAME` prints nothing and exits 1 when `NAME` is unset.
+    assert_eq!((output.status.code(), output.stdout), (Some(1), Vec::new()),);
+}
+
+#[rstest]
 fn exec_allow_runs_command() {
     let env = TestEnv::new(indoc! {"
         rules:

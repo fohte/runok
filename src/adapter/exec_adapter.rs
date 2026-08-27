@@ -33,7 +33,10 @@ pub struct ExecAdapter {
     /// regardless of this env var. So spoofing it can only turn "the
     /// caller's own permission flow decides, unsandboxed" into "the caller's
     /// own permission flow decides, sandboxed" -- a strictly narrower
-    /// outcome, not a privilege escalation.
+    /// outcome, not a privilege escalation. `main` removes the var from the
+    /// process's own environment as soon as it's read, so it never leaks
+    /// into the spawned command's process tree and can't be inherited by a
+    /// nested `runok exec` that command runs.
     hook_origin: bool,
     sandbox_definitions: HashMap<String, SandboxPreset>,
     executor: Box<dyn CommandExecutor>,

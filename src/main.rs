@@ -69,6 +69,24 @@ fn reset_sigpipe() {
 #[cfg(not(unix))]
 fn reset_sigpipe() {}
 
+/// Remove `RUNOK_HOOK_ORIGIN` from this process's own environment.
+///
+/// Env vars are inherited by every child process (unlike CLI flags, which
+/// are never inherited), so leaving it set would let it leak into the
+/// spawned command's process tree -- a nested `runok exec` that command
+/// runs would then inherit hook-origin trust it was never granted.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "single-threaded startup, before the executor spawns any subprocess"
+)]
+fn clear_hook_origin_env_var() {
+    // SAFETY: single-threaded startup, before the executor spawns any
+    // subprocess.
+    unsafe {
+        std::env::remove_var(runok::adapter::HOOK_ORIGIN_ENV_VAR);
+    }
+}
+
 fn main() -> ExitCode {
     reset_sigpipe();
 
@@ -311,6 +329,7 @@ fn run_command(
                 .and_then(|d| d.sandbox.clone())
                 .unwrap_or_default();
             let hook_origin = std::env::var_os(runok::adapter::HOOK_ORIGIN_ENV_VAR).is_some();
+            clear_hook_origin_env_var();
             let endpoint = runok::adapter::exec_adapter::ExecAdapter::new(
                 args.command,
                 args.sandbox,
