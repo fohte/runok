@@ -51,40 +51,46 @@ jobs:
           fi
           echo "version=${from_version}" >> "$GITHUB_OUTPUT"
 
-      - name: Backfill repo_id in copier answers
-        id: backfill
+      - name: Determine repo_id backfill data
+        id: repo-id-data
         env:
           REPO_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
           # `repo_id` is a normal copier.yml question (no `when: false`), so
           # `copier update --defaults` reuses whatever value already sits in
-          # `.copier-answers.yml` instead of resetting it. Only the
-          # still-empty default is patched; an already-backfilled value is
-          # left as-is, and a missing key (pre-repo_id template versions) is
-          # a no-op here and picked up on a later run once copier adds it.
+          # `.copier-answers.yml` instead of resetting it. Only pass `--data`
+          # while the key is still the empty default; an already-backfilled
+          # value is left as-is, and a missing key (pre-repo_id template
+          # versions) is a no-op here and picked up on a later run once
+          # copier adds it.
+          #
+          # This must NOT be committed to `.copier-answers.yml` before
+          # `copier update` runs: copier diffs against a render of the old
+          # template using the *current* `.copier-answers.yml`, so a
+          # pre-committed repo_id would already unlock the trust-policy
+          # files on the "old" side too, making the diff empty and
+          # generating nothing. Passing it only via `--data` keeps the old
+          # side unaware of repo_id, so the new side's trust policies show
+          # up as an addition.
           if grep -q "^repo_id: ''$" .copier-answers.yml; then
-            sed -i "s/^repo_id: ''$/repo_id: '${REPO_ID}'/" .copier-answers.yml
-            # `copier update` refuses to run against a dirty working tree, so
-            # commit immediately rather than leaving this as an uncommitted change.
-            git add .copier-answers.yml
-            git -c 'user.name=fohte-bot[bot]' \
-                -c 'user.email=139195068+fohte-bot[bot]@users.noreply.github.com' \
-                commit -m "chore: backfill repo_id in copier answers"
-            echo "backfilled=true" >> "$GITHUB_OUTPUT"
-            echo "Backfilled repo_id=${REPO_ID}"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "extra-data=repo_id=${REPO_ID}" >> "$GITHUB_OUTPUT"
+            echo "Backfilling repo_id=${REPO_ID} via copier update --data" >&2
           else
-            echo "backfilled=false" >> "$GITHUB_OUTPUT"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "extra-data=" >> "$GITHUB_OUTPUT"
             echo "repo_id already set or key not present; skipping backfill" >&2
           fi
 
       - name: Run copier-update-action
         id: copier-update
-        uses: fohte/copier-update-action@a1c6dfff1b9bb8d5c7ec7af88436611fe7d3f209 # v0.1.5
+        uses: fohte/copier-update-action@67c40aba9180be12f8ddde7912a7284cecc0f4c8 # v0.1.6
         with:
           template-repo: ${{ env.TEMPLATE_REPO }}
           target-version: ${{ github.event.inputs.target-version }}
           github-token: ${{ steps.octo-sts.outputs.token }}
+          extra-data: ${{ steps.repo-id-data.outputs.extra-data }}
 
       - name: Determine whether to proceed with a PR
         id: should-update
@@ -94,7 +100,7 @@ jobs:
           TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
           # Only set when workflow_dispatch explicitly pins a target version.
           MANUAL_TARGET_VERSION: ${{ github.event.inputs.target-version }}
-          BACKFILLED: ${{ steps.backfill.outputs.backfilled }}
+          BACKFILLED: ${{ steps.repo-id-data.outputs.needed }}
         run: |
           set -euo pipefail
           if [ "${CHANGED}" != "true" ] && [ "${BACKFILLED}" != "true" ]; then
@@ -183,6 +189,8 @@ jobs:
       - name: Create branch
         if: steps.should-update.outputs.value == 'true'
         id: branch
+        env:
+          BACKFILL_NEEDED: ${{ steps.repo-id-data.outputs.needed }}
         run: |
           set -euo pipefail
           # Fixed per template repo (not per version) so repeated runs reuse the
@@ -192,14 +200,25 @@ jobs:
           # copier-update-action leaves unmerged entries in the index when
           # conflicts remain; stage everything so `git checkout -B` succeeds.
           git add -A
-          # Whether copier update produced anything beyond the repo_id backfill
-          # commit (already committed in the `backfill` step, if any). Computed
-          # once here and reused below so the title/commit/PR-body steps agree
-          # on whether this run is backfill-only.
           if git diff --cached --quiet; then
-            echo "has-extra-changes=false" >> "$GITHUB_OUTPUT"
+            has_changes=false
           else
-            echo "has-extra-changes=true" >> "$GITHUB_OUTPUT"
+            has_changes=true
+          fi
+          echo "has-changes=${has_changes}" >> "$GITHUB_OUTPUT"
+          # True only when a repo_id backfill was requested this run, something
+          # actually changed, and every changed/added path is one repo_id
+          # unlocks (`.copier-answers.yml` itself, or a newly-rendered trust
+          # policy under `.github/chainguard/`). Anything else in the same
+          # diff (a template version bump, unrelated formatting drift) means
+          # this run is a real update, not a pure backfill, and the title/PR
+          # body below should describe it as such instead.
+          if [ "${BACKFILL_NEEDED}" = "true" ] &&
+            [ "${has_changes}" = "true" ] &&
+            ! git diff --cached --name-only | grep -qvE '^(\.copier-answers\.yml|\.github/chainguard/.*\.sts\.yaml)$'; then
+            echo "is-backfill-only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is-backfill-only=false" >> "$GITHUB_OUTPUT"
           fi
           git checkout -B "${branch}"
 
@@ -209,14 +228,10 @@ jobs:
         env:
           FROM_VERSION: ${{ steps.current-version.outputs.version }}
           TARGET_VERSION: ${{ steps.copier-update.outputs.target-version }}
-          BACKFILLED: ${{ steps.backfill.outputs.backfilled }}
-          HAS_EXTRA_CHANGES: ${{ steps.branch.outputs.has-extra-changes }}
+          IS_BACKFILL_ONLY: ${{ steps.branch.outputs.is-backfill-only }}
         run: |
           set -euo pipefail
-          if [ "${BACKFILLED}" = "true" ] && [ "${HAS_EXTRA_CHANGES}" != "true" ]; then
-            # copier update produced nothing beyond the repo_id backfill commit
-            # (not just a version-string match — e.g. this rules out an
-            # unrelated YAML quote-style drift landing under this title).
+          if [ "${IS_BACKFILL_ONLY}" = "true" ]; then
             echo "value=chore: backfill repo_id in copier answers" >> "$GITHUB_OUTPUT"
           else
             echo "value=chore: update ${TEMPLATE_REPO} from ${FROM_VERSION} to ${TARGET_VERSION}" >> "$GITHUB_OUTPUT"
@@ -227,13 +242,10 @@ jobs:
         env:
           BRANCH: ${{ steps.branch.outputs.name }}
           COMMIT_MESSAGE: ${{ steps.title.outputs.value }}
-          HAS_EXTRA_CHANGES: ${{ steps.branch.outputs.has-extra-changes }}
+          HAS_CHANGES: ${{ steps.branch.outputs.has-changes }}
         run: |
           set -euo pipefail
-          # Nothing to commit when the only change this run is the repo_id
-          # backfill (already committed in its own step above) and copier
-          # update itself produced no further diff.
-          if [ "${HAS_EXTRA_CHANGES}" = "true" ]; then
+          if [ "${HAS_CHANGES}" = "true" ]; then
             git -c 'user.name=fohte-bot[bot]' \
                 -c 'user.email=139195068+fohte-bot[bot]@users.noreply.github.com' \
                 commit -m "${COMMIT_MESSAGE}"
@@ -259,13 +271,12 @@ jobs:
           HAS_LOCKFILES: ${{ hashFiles('**/pnpm-lock.yaml', '**/Cargo.lock') != '' }}
           BRANCH: ${{ steps.branch.outputs.name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
-          BACKFILLED: ${{ steps.backfill.outputs.backfilled }}
-          HAS_EXTRA_CHANGES: ${{ steps.branch.outputs.has-extra-changes }}
+          IS_BACKFILL_ONLY: ${{ steps.branch.outputs.is-backfill-only }}
         run: |
           set -euo pipefail
 
           release_url="https://github.com/${TEMPLATE_REPO}/releases/tag/${TARGET_VERSION}"
-          if [ "${BACKFILLED}" = "true" ] && [ "${HAS_EXTRA_CHANGES}" != "true" ]; then
+          if [ "${IS_BACKFILL_ONLY}" = "true" ]; then
             summary="Backfill \`repo_id\` in \`.copier-answers.yml\` (template version unchanged at [\`${TARGET_VERSION}\`](${release_url}))."
           else
             summary="Update \`${TEMPLATE_REPO}\` from \`${FROM_VERSION}\` to [\`${TARGET_VERSION}\`](${release_url})."
