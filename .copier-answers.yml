@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier
-_commit: v0.10.6
+_commit: v0.10.7
 _src_path: https://github.com/fohte/generic-boilerplate
 auto_merge_release_pr: false
 binary_name: runok
@@ -11,7 +11,7 @@ release_type: rust
 repo_id: '1147979258'
 repo_language: en
 subpackages:
-  - name: docs
+-   name: docs
     tests: false
     type: node
 type: rust

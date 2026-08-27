@@ -2,5 +2,17 @@
 CHANGELOG.md
 schema/runok.schema.json
 
+<<<<<<< before updating
 # MDX files (Prettier breaks code blocks inside JSX components)
 *.mdx
+||||||| last update
+# Lock files
+pnpm-lock.yaml
+=======
+# Copier rewraps this to a width prettier doesn't agree with, so the two
+# fight over its formatting on every `copier update`.
+.copier-answers.yml
+
+# Lock files
+pnpm-lock.yaml
+>>>>>>> after updating
