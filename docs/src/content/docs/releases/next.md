@@ -300,7 +300,7 @@ For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `RUNO
 
 `exec` never verifies the token's value, only that the env var was set -- it is not a cryptographic proof that a given invocation actually came from the hook, and anyone who can run `runok exec` at all can set it. This is a deliberate, accepted trade-off, not an oversight: it only relaxes `Action::Pass` (a command that matched no rule). A command that matches a `deny` or `ask` rule is still rejected by `exec`'s own re-evaluation regardless of the marker. Spoofing it can therefore only turn "the caller's own permission flow decides, unsandboxed" into "the caller's own permission flow decides, sandboxed" -- a strictly narrower outcome, not a privilege escalation.
 
-### A compound command matching a single sandboxed preset no longer loses its sandbox or forces an `ask` prompt (TODO(pr-link))
+### A compound command matching a single sandboxed preset no longer loses its sandbox or forces an `ask` prompt ([#506](https://github.com/fohte/runok/pull/506))
 
 A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more than one sub-command was always represented internally as a merged policy, even when every sub-command that specified a sandbox actually named the same preset. Two consequences followed: a `pass` resolution (one sub-command matched a sandboxed `allow` rule, another was unmatched) was escalated to `ask` on every invocation, since a `pass` response has no way to carry a merged policy; an `allow` resolution applied no sandbox at all, since `allow`'s `updatedInput` rewriting only understood a named preset, not a merged policy -- so the sandbox was silently dropped while the command still ran.
 
