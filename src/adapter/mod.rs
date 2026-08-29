@@ -283,9 +283,13 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     })
                     .collect();
 
+                let sandbox = match compound_result.sandbox_preset_name {
+                    Some(name) => SandboxInfo::Preset(Some(name)),
+                    None => SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+                };
                 ActionResult {
                     action: compound_result.action,
-                    sandbox: SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
+                    sandbox,
                     evaluations,
                 }
             }

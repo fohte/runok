@@ -862,6 +862,7 @@ fn single_sandbox_preset_via_compound(empty_context: EvalContext) {
 
     let result = evaluate_compound(&config, "python3 script.py", &empty_context).unwrap();
     assert_eq!(result.action, Action::Allow);
+    assert_eq!(result.sandbox_preset_name, Some("restricted".to_string()));
     let policy = result.sandbox_policy.unwrap();
     assert_eq!(policy.writable, vec!["./tmp".to_string()]);
     assert_eq!(policy.deny, vec!["/etc/passwd".to_string()]);

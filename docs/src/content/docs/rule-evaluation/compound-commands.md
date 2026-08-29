@@ -184,6 +184,8 @@ When sub-commands have different sandbox presets, the sandbox policies are merge
 | `fs.deny`       | Union          | Paths denied by **any** sub-command are denied          |
 | `network.allow` | AND            | Network is blocked if **any** sub-command denies it     |
 
+When every sub-command that specifies a sandbox resolves to the **same** preset (after deduplication), that single preset is applied directly instead of a merged policy -- the same way a non-compound command's preset is applied. This works with `defaults.action: pass` and does not force an `ask` prompt. A merge across **two or more distinct** presets has no single preset name to apply this way, so a `pass` decision is escalated to `ask` instead of silently dropping the sandbox.
+
 ### Writable contradiction escalation
 
 If the intersection of `fs.writable` paths is empty — meaning sub-commands require incompatible write access — this is treated as a contradiction. The action is escalated to `ask` (unless it is already `deny`), alerting the user to the conflict.

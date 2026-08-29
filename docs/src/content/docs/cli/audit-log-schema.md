@@ -88,7 +88,7 @@ Final evaluation result for the input as a whole. For compound input, this is th
 
 ### `sandbox_preset`
 
-Name of the sandbox preset that was applied to this evaluation. `null` when no sandbox was applied **or** when multiple presets were merged (compound input where different branches matched different presets -- the merged policy has no single canonical preset name). The preset name, when present, corresponds to a key under [`definitions.sandbox`](/configuration/schema/#definitionssandbox). See [Sandbox merging for compound commands](/sandbox/overview/#sandbox-merging-for-compound-commands).
+Name of the sandbox preset that was applied to this evaluation. `null` when no sandbox was applied **or** when two or more distinct presets were merged (compound input where different branches matched different presets -- the merged policy has no single canonical preset name). A compound input where every matched branch resolves to the same preset (after deduplication) reports that preset's name here, the same as a non-compound input. The preset name, when present, corresponds to a key under [`definitions.sandbox`](/configuration/schema/#definitionssandbox). See [Sandbox merging for compound commands](/sandbox/overview/#sandbox-merging-for-compound-commands).
 
 **Type:** `str | null`\
 **Always present:** Yes (may be `null`)

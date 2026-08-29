@@ -88,6 +88,13 @@ pub struct SubCommandDetail {
 pub struct CompoundEvalResult {
     pub action: Action,
     pub sandbox_policy: Option<MergedSandboxPolicy>,
+    /// Set when exactly one distinct sandbox preset is involved across all
+    /// sub-commands, so the adapter layer can represent it as
+    /// `SandboxInfo::Preset` instead of `SandboxInfo::MergedPolicy`. The hook
+    /// adapter's `updatedInput` re-exec wrapping (used for `allow`/`ask`/
+    /// `pass`) only knows how to apply a named preset, not an arbitrary
+    /// merged policy.
+    pub sandbox_preset_name: Option<String>,
     /// Per-sub-command evaluation results for audit logging.
     pub sub_results: Vec<EvalResult>,
     /// Per-sub-command evaluation details, for verbose logging.

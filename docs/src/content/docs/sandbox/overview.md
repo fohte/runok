@@ -154,6 +154,8 @@ When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-comma
 
 This ensures that a less-restricted command in a pipeline cannot weaken the restrictions of a more-restricted command.
 
+If every sub-command that specifies a sandbox names the **same** preset (after deduplication), that preset is applied directly instead of a merged policy -- the same way a non-compound command's preset is applied, including under `defaults.action: pass`. Merging across two or more distinct presets has no single preset to fall back to this way, so a `pass` resolution is escalated to `ask` in that case instead of silently dropping the sandbox.
+
 If the intersection of `writable` roots becomes empty (a contradiction), runok escalates the action to `ask` so the user can decide whether to proceed.
 
 ## Example: complete configuration
