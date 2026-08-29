@@ -106,6 +106,11 @@ pub fn evaluate_compound(
         None
     };
 
+    // A single distinct preset can be represented as `SandboxInfo::Preset`
+    // and applied via the same re-exec wrapping as a non-compound command;
+    // only a genuine multi-preset merge needs `SandboxInfo::MergedPolicy`.
+    let sandbox_preset_name = (unique_names.len() == 1).then(|| unique_names[0].clone());
+
     let (final_action, final_policy) = match (action, sandbox_policy) {
         (action, Some(policy))
             if has_writable_contradiction(&policy, &unique_names, sandbox_defs) =>
@@ -113,10 +118,11 @@ pub fn evaluate_compound(
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))
         }
-        // A pass response carries no `updatedInput`, so a sandbox
-        // policy merged in from another sub-command's matched rule would be
-        // silently dropped instead of applied -- escalate to `ask` instead.
-        (Action::Pass, Some(policy)) => (
+        // A pass response carries no `updatedInput` unless the sandbox
+        // collapses to a single preset (handled above via
+        // `sandbox_preset_name`); a real multi-preset merge has no
+        // representation pass can carry, so escalate to `ask` instead.
+        (Action::Pass, Some(policy)) if sandbox_preset_name.is_none() => (
             Action::Ask(Some(
                 "a matched rule's sandbox policy cannot be applied via pass".to_string(),
             )),
@@ -128,6 +134,7 @@ pub fn evaluate_compound(
     Ok(CompoundEvalResult {
         action: final_action,
         sandbox_policy: final_policy,
+        sandbox_preset_name,
         sub_results,
         sub_command_details,
     })
@@ -759,14 +766,15 @@ mod tests {
     }
 
     // ========================================
-    // Compound: pass with merged sandbox policy -> ask escalation
+    // Compound: pass with sandbox policy
     // ========================================
 
     #[rstest]
-    fn compound_pass_with_sandbox_escalates_to_ask(empty_context: EvalContext) {
-        // A pass decision carries no `updatedInput`, so a sandbox
-        // policy merged in from another sub-command's matched rule would be
-        // silently dropped instead of applied -- this must escalate to `ask`.
+    fn compound_pass_with_single_preset_not_escalated(empty_context: EvalContext) {
+        // Only one distinct preset is involved, so it can be represented as
+        // `SandboxInfo::Preset` and applied through the same `updatedInput`
+        // re-exec wrapping a single command uses -- no need to escalate to
+        // `ask` just to avoid silently dropping the sandbox.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),
@@ -793,8 +801,66 @@ mod tests {
         };
 
         let result = evaluate_compound(&config, "ls -la; unknown_cmd", &empty_context).unwrap();
+        assert_eq!(result.action, Action::Pass);
+        assert_eq!(result.sandbox_preset_name, Some("only_tmp".to_string()));
+    }
+
+    #[rstest]
+    fn compound_pass_with_multiple_presets_escalates_to_ask(empty_context: EvalContext) {
+        // Two distinct presets are merged, which only `SandboxInfo::MergedPolicy`
+        // can represent -- a pass response carries no `updatedInput`, so the
+        // merged policy would be silently dropped instead of applied. Escalate
+        // to `ask` instead. `unknown_cmd` is unmatched so the merged action is
+        // `Pass` (which outranks the other sub-commands' `Allow`), exercising
+        // the pass-escalation branch rather than the contradiction branch.
+        let config = Config {
+            defaults: Some(Defaults {
+                action: Some(ActionKind::Pass),
+                sandbox: None,
+            }),
+            rules: Some(vec![
+                allow_rule_with_sandbox("ls *", "preset_a"),
+                allow_rule_with_sandbox("cat *", "preset_b"),
+            ]),
+            definitions: Some(Definitions {
+                sandbox: Some(HashMap::from([
+                    (
+                        "preset_a".to_string(),
+                        SandboxPreset {
+                            fs: Some(FsPolicy {
+                                read: None,
+                                write: Some(FsAccessPolicy {
+                                    allow: Some(vec!["/tmp".to_string()]),
+                                    deny: None,
+                                }),
+                            }),
+                            network: None,
+                        },
+                    ),
+                    (
+                        "preset_b".to_string(),
+                        SandboxPreset {
+                            fs: Some(FsPolicy {
+                                read: None,
+                                write: Some(FsAccessPolicy {
+                                    allow: Some(vec!["/tmp".to_string()]),
+                                    deny: None,
+                                }),
+                            }),
+                            network: None,
+                        },
+                    ),
+                ])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result =
+            evaluate_compound(&config, "ls -la; cat -; unknown_cmd", &empty_context).unwrap();
         assert!(matches!(result.action, Action::Ask(_)));
         assert!(result.sandbox_policy.is_some());
+        assert_eq!(result.sandbox_preset_name, None);
     }
 
     #[rstest]
@@ -820,6 +886,7 @@ mod tests {
         );
 
         let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
+        assert_eq!(result.sandbox_preset_name, Some("preset_a".to_string()));
         let policy = result.sandbox_policy.unwrap();
         // Same preset intersected with itself should preserve the values
         assert_eq!(policy.writable, vec!["/tmp"]);
@@ -880,6 +947,7 @@ mod tests {
         let result =
             evaluate_compound(&config, "ls -la | python3 script.py", &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
+        assert_eq!(result.sandbox_preset_name, Some("restricted".to_string()));
         let policy = result.sandbox_policy.unwrap();
         assert_eq!(policy.writable, vec!["/tmp"]);
         assert_eq!(policy.deny, vec!["/etc"]);
@@ -972,6 +1040,9 @@ mod tests {
             &empty_context,
         )
         .unwrap();
+        // Three distinct presets are merged -- there is no single preset name
+        // to represent this as `SandboxInfo::Preset`.
+        assert_eq!(result.sandbox_preset_name, None);
         let policy = result.sandbox_policy.unwrap();
         // Writable: {a,b,c} ∩ {b,c} ∩ {c,d} = {c}
         assert_eq!(policy.writable, vec!["/c"]);
