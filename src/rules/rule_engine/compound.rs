@@ -801,8 +801,10 @@ mod tests {
         };
 
         let result = evaluate_compound(&config, "ls -la; unknown_cmd", &empty_context).unwrap();
-        assert_eq!(result.action, Action::Pass);
-        assert_eq!(result.sandbox_preset_name, Some("only_tmp".to_string()));
+        assert_eq!(
+            (result.action, result.sandbox_preset_name),
+            (Action::Pass, Some("only_tmp".to_string())),
+        );
     }
 
     #[rstest]
@@ -858,9 +860,25 @@ mod tests {
 
         let result =
             evaluate_compound(&config, "ls -la; cat -; unknown_cmd", &empty_context).unwrap();
-        assert!(matches!(result.action, Action::Ask(_)));
-        assert!(result.sandbox_policy.is_some());
-        assert_eq!(result.sandbox_preset_name, None);
+        assert_eq!(
+            (
+                result.action,
+                result.sandbox_preset_name,
+                result.sandbox_policy,
+            ),
+            (
+                Action::Ask(Some(
+                    "a matched rule's sandbox policy cannot be applied via pass".to_string()
+                )),
+                None,
+                Some(MergedSandboxPolicy {
+                    writable: vec!["/tmp".to_string()],
+                    deny: vec![],
+                    read_deny: vec![],
+                    network_allowed: true,
+                }),
+            ),
+        );
     }
 
     #[rstest]
