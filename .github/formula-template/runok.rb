@@ -6,6 +6,11 @@ class Runok < Formula
   version "VERSION_PLACEHOLDER"
   license "MIT"
 
+  head do
+    url "https://github.com/fohte/runok.git", branch: "main"
+    depends_on "rust" => :build
+  end
+
   on_macos do
     on_arm do
       url "https://github.com/fohte/runok/releases/download/v#{version}/runok-aarch64-apple-darwin.tar.gz"
@@ -28,10 +33,15 @@ class Runok < Formula
   end
 
   def install
-    bin.install "runok"
+    if build.head?
+      system "cargo", "install", *std_cargo_args
+    else
+      bin.install "runok"
+    end
   end
 
   test do
-    assert_match "runok #{version}", shell_output("#{bin}/runok --version")
+    expected = build.head? ? "runok " : "runok #{version}"
+    assert_match expected, shell_output("#{bin}/runok --version")
   end
 end
