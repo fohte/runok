@@ -78,10 +78,6 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ## New Features
 
-### The Homebrew formula supports `--HEAD` installs (TODO(pr-link))
-
-`brew install fohte/tap/runok` previously only installed pre-built release tarballs, with no way to reach unreleased `main` changes through Homebrew itself -- that required switching to the separate `cargo install --git` path instead. `brew install --HEAD fohte/tap/runok` now builds and installs from the `main` branch via `cargo install`, requiring a Rust toolchain only for this path -- the default stable install remains a binary download with no Rust dependency. See [Installation -- Homebrew](/getting-started/installation/#homebrew-recommended) for details.
-
 ### `defaults.action: pass` defers to Claude Code's own permission flow ([#496](https://github.com/fohte/runok/pull/496))
 
 An unmatched command previously always resolved to a concrete decision (`allow`, `deny`, or `ask`, per `defaults.action`), even when `ask` meant forcing a permission prompt that Claude Code's own permission flow might have resolved without one. The new `pass` value for `defaults.action` writes nothing to the `PreToolUse` hook's stdout and exits `0` instead, which Claude Code interprets as "no decision to report" -- the tool call falls through to its own permission flow rather than being short-circuited into `ask`:
