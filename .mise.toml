@@ -1,5 +1,5 @@
 [tools]
-lefthook = "2.1.10"
+lefthook = "2.1.11"
 "github:ast-grep/ast-grep" = "0.45.2"
 
 # lefthook hooks
