@@ -1,6 +1,6 @@
 [tools]
 lefthook = "2.1.10"
-"github:ast-grep/ast-grep" = "0.45.1"
+"github:ast-grep/ast-grep" = "0.45.2"
 
 # lefthook hooks
 actionlint = "1.7.12"
