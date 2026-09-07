@@ -107,9 +107,9 @@ This ensures that rules apply to what actually runs, not just the outer wrapper 
 
 ## Sandbox Merge Strategy: Strictest Wins
 
-When a compound command triggers multiple [sandbox](/sandbox/overview/) policies, runok merges them by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
+A compound command applies each sub-command's [sandbox](/sandbox/overview/) to that sub-command alone, so no sub-command is affected by its neighbours' policies. When that is not possible -- the sub-command's own text has no single contiguous range in the input to prefix, or it is nested inside another sub-command -- runok falls back to one sandbox for the whole compound, merging the policies by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
 
-The rationale: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. No sub-command in a pipeline can weaken the sandbox of another.
+The rationale for the fallback direction: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. When one sandbox has to cover both, no sub-command may weaken the sandbox of another.
 
 For the full merge table and contradiction handling, see [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
 

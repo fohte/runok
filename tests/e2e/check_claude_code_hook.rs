@@ -199,6 +199,39 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     );
 }
 
+// --- Sandbox allow: a compound command is wrapped per sub-command ---
+
+#[rstest]
+fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(hook_env: TestEnv) {
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json("echo hello > out.json | git status"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let command_field = &mut json["hookSpecificOutput"]["updatedInput"]["command"];
+    if let Some(command) = command_field.as_str() {
+        *command_field = serde_json::Value::String(normalize_hook_origin_token(command));
+    }
+    // `git status` matched an allow rule with no sandbox, so only `echo` is
+    // prefixed; `> out.json` stays with the outer shell, which is what lets
+    // the redirect target be opened outside the sandbox.
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    "command": "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- echo hello > out.json | git status"
+                }
+            }
+        })
+    );
+}
+
 // --- Bash tool: no matching rule → pass (no output, defers to Claude Code) ---
 
 #[rstest]

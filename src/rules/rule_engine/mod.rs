@@ -82,6 +82,17 @@ pub struct SubCommandDetail {
     pub matched_rules: Vec<RuleMatchInfo>,
 }
 
+/// A sandbox prefix to splice into the original input at byte offset `at`,
+/// so that exactly one sub-command of a compound runs under `preset`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SandboxInsertion {
+    /// Byte offset into the command string `evaluate_compound` was given,
+    /// pointing at the start of the sub-command's own text (after its
+    /// `KEY=VALUE` prefix, before its redirects).
+    pub at: usize,
+    pub preset: String,
+}
+
 /// Result of compound command evaluation: an action and an optional merged
 /// sandbox policy built from all sub-commands' sandbox presets.
 #[derive(Debug, PartialEq)]
@@ -95,6 +106,14 @@ pub struct CompoundEvalResult {
     /// `pass`) only knows how to apply a named preset, not an arbitrary
     /// merged policy.
     pub sandbox_preset_name: Option<String>,
+    /// One sandbox prefix per sub-command that needs one, letting each
+    /// sub-command run under its own preset with the surrounding shell
+    /// semantics (pipes, `&&`, redirects) left outside every sandbox.
+    /// Empty when no sub-command needs a sandbox, and when no insertion
+    /// point can be determined for one that does -- callers then fall back
+    /// to `sandbox_preset_name` / `sandbox_policy`, which wrap the compound
+    /// as a whole.
+    pub sandbox_insertions: Vec<SandboxInsertion>,
     /// Per-sub-command evaluation results for audit logging.
     pub sub_results: Vec<EvalResult>,
     /// Per-sub-command evaluation details, for verbose logging.

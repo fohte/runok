@@ -70,11 +70,9 @@ Then `.git` is protected even though `.` (its parent) is writable. This matches 
 - On macOS, Seatbelt's `(deny file-write*)` rules take priority over `(allow file-write*)` rules
 - On Linux, bubblewrap applies `--ro-bind` **after** `--bind`, so read-only mounts overlay writable mounts
 
-## Strictest Wins for compound commands
+## Isolated sandboxes for compound commands
 
-When multiple sandbox policies apply, runok uses a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules.
-
-This prevents a less-restricted command from weakening the sandbox of a more-restricted command in the same pipeline.
+In a compound command (`|`, `&&`, `||`, `;`, loops), each sub-command that matches a sandboxed rule runs under its own preset -- one sub-command's sandbox never weakens or gets weakened by another's, because they are not the same sandboxed process. When runok cannot isolate a sub-command this way (e.g. it sits inside another sub-command's `$(...)`), it falls back to one sandbox for the whole command, built from all matched presets with a **Strictest Wins** merge. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules.
 
 ## OS-level enforcement
 

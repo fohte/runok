@@ -176,7 +176,40 @@ Without this resolution, unmatched sub-commands would be silently ignored.
 
 ## Sandbox policy aggregation
 
-When sub-commands have different sandbox presets, the sandbox policies are merged using the **strictest intersection**:
+By default, each sub-command that needs a sandbox gets its own preset applied independently: runok inserts a `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> --` prefix directly in front of that sub-command's own text in the original input. No other byte of the input is touched -- the sub-command's own text is never re-quoted, and the pipes, `&&`/`||`/`;`, and redirects that join sub-commands together stay outside every sandbox, handled by the outer shell exactly as they would be for an unsandboxed command.
+
+```yaml
+rules:
+  - allow: 'node *'
+    sandbox: readonly
+  - allow: 'tq task get *'
+```
+
+For the command `node fix.mjs > out.json | tq task get abc123`:
+
+1. `node fix.mjs` matches a rule with sandbox `readonly`.
+2. `tq task get abc123` matches a rule with no `sandbox` field.
+3. runok inserts a prefix only in front of `node`:
+
+   ```
+   RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- node fix.mjs > out.json | tq task get abc123
+   ```
+
+4. `> out.json` and the pipe are handled by the outer shell, outside the sandbox -- `readonly` never sees the redirect, so opening `out.json` for writing can't fail with `Operation not permitted` the way it would if the whole pipeline ran inside `readonly`.
+5. `tq task get abc123` runs unsandboxed, since its own matched rule specified no `sandbox`.
+
+The insertion point is the start of the sub-command's own text: after any `KEY=VALUE` env-assignment prefix, before any redirect. `FOO=1 node x` therefore becomes `FOO=1 RUNOK_HOOK_ORIGIN=... runok exec --sandbox readonly -- node x` -- `FOO=1` stays outside the sandbox wrapper and is passed to `runok exec` as an environment variable, which forwards it to `node`.
+
+When [`defaults.sandbox`](/configuration/schema/#defaultssandbox) is set, it applies the same way it does to a non-compound command: a sub-command with no `sandbox` of its own still gets a prefix for the default preset.
+
+Per-sub-command insertion is what the Claude Code hook's `updatedInput` rewrite uses. `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they always apply a single policy to the whole input instead -- the merged policy described below, or, when every sub-command resolves to the same preset, that preset directly.
+
+### Fallback: merged sandbox policy
+
+Per-sub-command insertion needs to know exactly where each sub-command's own text starts in the original input. Two situations make that impossible, and runok falls back to wrapping the **entire** compound command in one sandbox built from all matched presets, merged using the **strictest intersection**:
+
+- A sub-command's byte range in the original input can't be determined -- e.g. a command re-extracted from a function body at a call site, or a herestring where a redirect sits between two of the command's own arguments.
+- A sub-command's range is contained inside another sub-command's range -- `$(...)`, `<(...)`, or a subshell. Inserting a prefix there would start a sandbox inside a sandbox once the enclosing sub-command is also wrapped.
 
 | Policy field    | Merge strategy | Rationale                                               |
 | --------------- | -------------- | ------------------------------------------------------- |
@@ -188,7 +221,7 @@ When every sub-command that specifies a sandbox resolves to the **same** preset 
 
 ### Writable contradiction escalation
 
-If the intersection of `fs.writable` paths is empty — meaning sub-commands require incompatible write access — this is treated as a contradiction. The action is escalated to `ask` (unless it is already `deny`), alerting the user to the conflict.
+If the intersection of `fs.writable` paths is empty — meaning sub-commands require incompatible write access — this is treated as a contradiction. The action is escalated to `ask` (unless it is already `deny`), alerting the user to the conflict. This can only happen once the fallback above is already in play -- a per-sub-command insertion never merges policies, so there is nothing to contradict.
 
 ```yaml
 definitions:
@@ -207,12 +240,13 @@ rules:
     sandbox: project-b
 ```
 
-For `build-a release && build-b release`:
+`build-a release && build-b release` has a byte range for each sub-command and neither is nested in the other, so runok inserts a prefix per sub-command and runs each under its own preset -- no contradiction. A herestring between one sub-command's own arguments, `build-a release && build-b <<< "$manifest" release`, forces the fallback instead:
 
-1. `build-a release` → `allow` with sandbox `project-a` (writable: `/project-a`)
-2. `build-b release` → `allow` with sandbox `project-b` (writable: `/project-b`)
-3. Writable intersection: empty (contradiction)
-4. Final result: **ask** (escalated from `allow`)
+1. `build-b <<< "$manifest" release` has a redirect sitting between two of its own arguments, so its text is not a single contiguous range of the input and no insertion point can be planned for it; runok falls back to merging.
+2. `build-a release` → `allow` with sandbox `project-a` (writable: `/project-a`)
+3. `build-b <<< "$manifest" release` → `allow` with sandbox `project-b` (writable: `/project-b`)
+4. Writable intersection: empty (contradiction)
+5. Final result: **ask** (escalated from `allow`)
 
 ## Parse failure fallback
 

@@ -143,7 +143,9 @@ rules:
 
 ## Sandbox merging for compound commands
 
-When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-command may match a different sandbox preset. runok merges all matched policies using the **Strictest Wins** rule:
+When a compound command like `cmd1 && cmd2` is evaluated, each sub-command that matches a sandboxed rule runs under exactly the preset its own rule named -- runok inserts a `runok exec --sandbox <preset> --` prefix in front of just that sub-command's own text, leaving the pipe, `&&`, and redirects that join the sub-commands together outside every sandbox. A sub-command whose rule names no sandbox runs unsandboxed, even next to one that does.
+
+Only when a sub-command's own position in the input can't be pinned down -- it sits inside another sub-command's `$(...)`/`<(...)`/subshell, or its byte range otherwise can't be determined -- does runok fall back to wrapping the **entire** command in one sandbox, built by merging every matched preset with the **Strictest Wins** rule:
 
 | Field           | Merge strategy | Effect                                                       |
 | --------------- | -------------- | ------------------------------------------------------------ |
@@ -152,11 +154,13 @@ When a compound command like `sh -c "cmd1 && cmd2"` is evaluated, each sub-comma
 | `read.deny`     | Union          | Read-denied paths from **any** policy are protected          |
 | `network.allow` | AND            | Network is blocked if **any** policy denies it               |
 
-This ensures that a less-restricted command in a pipeline cannot weaken the restrictions of a more-restricted command.
+This ensures that, even in the fallback case, a less-restricted command in a pipeline cannot weaken the restrictions of a more-restricted command.
 
 If every sub-command that specifies a sandbox names the **same** preset (after deduplication), that preset is applied directly instead of a merged policy -- the same way a non-compound command's preset is applied, including under `defaults.action: pass`. Merging across two or more distinct presets has no single preset to fall back to this way, so a `pass` resolution is escalated to `ask` in that case instead of silently dropping the sandbox.
 
-If the intersection of `writable` roots becomes empty (a contradiction), runok escalates the action to `ask` so the user can decide whether to proceed.
+If the intersection of `writable` roots becomes empty (a contradiction), runok escalates the action to `ask` so the user can decide whether to proceed. This can only happen in the merged-fallback case -- per-sub-command prefixes never merge policies, so there is nothing to contradict.
+
+See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics and worked examples.
 
 ## Example: complete configuration
 

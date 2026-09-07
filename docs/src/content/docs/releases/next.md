@@ -305,3 +305,19 @@ For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `RUNO
 A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more than one sub-command was always represented internally as a merged policy, even when every sub-command that specified a sandbox actually named the same preset. Two consequences followed: a `pass` resolution (one sub-command matched a sandboxed `allow` rule, another was unmatched) was escalated to `ask` on every invocation, since a `pass` response has no way to carry a merged policy; an `allow` resolution applied no sandbox at all, since `allow`'s `updatedInput` rewriting only understood a named preset, not a merged policy -- so the sandbox was silently dropped while the command still ran.
 
 A compound command now collapses to the underlying named preset (applied the same way a non-compound command's preset is) whenever every sandboxed sub-command resolves to the same preset after deduplication, fixing both cases. A command that mixes two or more genuinely different presets still merges them and still escalates a `pass` resolution to `ask`, since that case has no single preset to fall back to. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
+
+### A compound command no longer wraps every sub-command in one merged sandbox (TODO(pr-link))
+
+A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. Two problems followed. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside the neighboring sub-command's preset, tightening restrictions the matched rule never asked for. And since the whole compound ran inside the sandbox, a redirect like `node fix.mjs > out.json | tq task get abc123` opened `out.json` from _inside_ the sandbox too -- if `node`'s preset didn't allow writing there, the redirect failed with `Operation not permitted` even though nothing about the rule for `node` was meant to restrict `out.json`.
+
+Each sub-command that needs a sandbox now gets its own `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> --` prefix, inserted directly in front of that sub-command's own text, with every other byte of the input left untouched:
+
+```
+node fix.mjs > out.json | tq task get abc123
+```
+
+```
+RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- node fix.mjs > out.json | tq task get abc123
+```
+
+`tq task get abc123` keeps running unsandboxed, and `> out.json` is opened by the outer shell, outside every sandbox. The two escalations this used to force -- an empty writable-path intersection, and a `pass` decision with no single preset to carry in `updatedInput` -- no longer trigger when each sub-command can run under its own prefix this way, since nothing is merged. runok still falls back to the previous merge-and-wrap behavior (and its escalations) when a sub-command's own position in the input can't be pinned down, e.g. inside another sub-command's `$(...)`/`<(...)`/subshell. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.

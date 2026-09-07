@@ -95,7 +95,7 @@ rules:
     sandbox: restricted-network
 ```
 
-For compound commands, sandbox presets from all sub-commands are merged using a [strictest intersection strategy](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
+For compound commands, each sub-command runs under the preset its own rule asked for; presets are merged using a [strictest intersection strategy](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) only when one sandbox has to cover the whole input.
 
 ## Related
 

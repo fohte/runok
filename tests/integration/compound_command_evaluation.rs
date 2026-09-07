@@ -4,7 +4,9 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
+use runok::rules::rule_engine::{
+    Action, EvalContext, SandboxInsertion, evaluate_command, evaluate_compound,
+};
 
 // ========================================
 // Individual evaluation of each command in a compound expression
@@ -204,6 +206,91 @@ fn sandbox_strictest_wins_aggregation(
 }
 
 // ========================================
+// Per-sub-command sandbox insertions
+// ========================================
+
+#[rstest]
+// `cargo test` matched an allow rule with no sandbox, so only `cargo build`
+// is prefixed, and the redirect stays with the outer shell.
+#[case::only_the_sub_command_asking_for_a_sandbox(
+    "cargo build --release > build.log | cargo test --all",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+    "},
+    vec![(0, "preset_a")],
+)]
+#[case::one_prefix_per_preset(
+    "cargo build --release | cargo test --all",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+            preset_b:
+              fs:
+                writable: [./build]
+    "},
+    vec![(0, "preset_a"), (24, "preset_b")],
+)]
+// The herestring between `cargo test`'s own arguments leaves it without a
+// single byte range to insert a prefix at, so the compound falls back to one
+// merged sandbox covering the whole input.
+#[case::no_insertion_point_falls_back(
+    "cargo build --release | cargo test <<< X --all",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+            preset_b:
+              fs:
+                writable: [./src]
+    "},
+    vec![],
+)]
+fn compound_sandbox_insertions(
+    empty_context: EvalContext,
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: Vec<(usize, &str)>,
+) {
+    let config = parse_config(config_yaml).unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+
+    assert_eq!(
+        result.sandbox_insertions,
+        expected
+            .into_iter()
+            .map(|(at, preset)| SandboxInsertion {
+                at,
+                preset: preset.to_string(),
+            })
+            .collect::<Vec<_>>(),
+    );
+}
+
+// ========================================
 // Sandbox policy contradiction -> ask escalation
 // ========================================
 
@@ -211,7 +298,11 @@ fn sandbox_strictest_wins_aggregation(
 fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
     // preset_a: writable [./src]
     // preset_b: writable [./build]
-    // intersection is empty -> contradicts -> escalate to ask
+    // intersection is empty -> contradicts -> escalate to ask.
+    // The herestring between `cmd_b`'s own arguments leaves it without a
+    // single byte range to insert a per-sub-command sandbox prefix at, so the
+    // compound falls back to one merged sandbox -- the only place a writable
+    // contradiction can arise.
     let config = parse_config(indoc! {"
         rules:
           - allow: 'cmd_a *'
@@ -229,7 +320,8 @@ fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
     "})
     .unwrap();
 
-    let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
+    let result =
+        evaluate_compound(&config, "cmd_a run && cmd_b a <<< X b", &empty_context).unwrap();
 
     // Action escalated from Allow to Ask due to contradiction
     assert!(

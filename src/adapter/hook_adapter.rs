@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapter::{ActionResult, Endpoint, SandboxInfo};
 use crate::audit::{ApprovedToolUse, AuditMetadata, record_approval};
 use crate::config::{ActionKind, Config, Defaults};
-use crate::rules::rule_engine::{Action, DenyResponse};
+use crate::rules::rule_engine::{Action, DenyResponse, SandboxInsertion};
 
 /// Claude Code hook input (stdin JSON), for both PreToolUse and PostToolUse
 /// events. PostToolUse carries extra fields (`tool_response`, `duration_ms`,
@@ -174,7 +174,11 @@ impl ClaudeCodeHookAdapter {
 
         let (decision, reason, updated_input) = match &result.action {
             Action::Allow => {
-                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = Self::sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_insertions,
+                    &bash_input.command,
+                )?;
                 (Some("allow"), None, updated)
             }
             Action::Deny(deny_response) => {
@@ -184,11 +188,19 @@ impl ClaudeCodeHookAdapter {
             Action::Ask(message) => {
                 // When the user approves an ask, Claude Code executes the updatedInput
                 // command, so we need to wrap it with the sandbox just like allow.
-                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = Self::sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_insertions,
+                    &bash_input.command,
+                )?;
                 (Some("ask"), message.clone(), updated)
             }
             Action::Pass => {
-                let updated = Self::sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = Self::sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_insertions,
+                    &bash_input.command,
+                )?;
                 (None, None, updated)
             }
         };
@@ -261,8 +273,14 @@ impl ClaudeCodeHookAdapter {
 
     fn sandbox_updated_input(
         sandbox: &SandboxInfo,
+        insertions: &[SandboxInsertion],
         original_command: &str,
     ) -> Result<Option<UpdatedInput>, anyhow::Error> {
+        if !insertions.is_empty() {
+            return Ok(Some(UpdatedInput {
+                command: Self::insert_sandbox_prefixes(insertions, original_command)?,
+            }));
+        }
         match sandbox {
             SandboxInfo::Preset(Some(preset)) => Ok(Some(UpdatedInput {
                 command: Self::wrap_with_sandbox(preset, original_command)?,
@@ -271,27 +289,62 @@ impl ClaudeCodeHookAdapter {
         }
     }
 
+    /// Splice a sandbox prefix in front of each sub-command that needs one,
+    /// leaving every other byte of the input untouched. The sub-commands
+    /// themselves are never re-quoted, and the shell semantics around them --
+    /// pipes, `&&`, redirects, and the `KEY=VALUE` prefix of a sub-command
+    /// that needs no sandbox -- stay with the outer shell, outside every
+    /// sandbox. Prefixes are applied back-to-front so the offsets of the
+    /// ones still to come stay valid.
+    fn insert_sandbox_prefixes(
+        insertions: &[SandboxInsertion],
+        original_command: &str,
+    ) -> Result<String, anyhow::Error> {
+        let mut command = original_command.to_string();
+        let mut ordered: Vec<&SandboxInsertion> = insertions.iter().collect();
+        ordered.sort_by_key(|insertion| std::cmp::Reverse(insertion.at));
+
+        for insertion in ordered {
+            if !command.is_char_boundary(insertion.at) {
+                return Err(anyhow::anyhow!(
+                    "sandbox insertion point {} does not fall on a character boundary of the command",
+                    insertion.at
+                ));
+            }
+            command.insert_str(insertion.at, &Self::sandbox_prefix(&insertion.preset)?);
+        }
+
+        Ok(command)
+    }
+
     /// Wrap a command with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox
     /// <preset> -- <quoted_command>`. The command is shell-quoted to prevent
     /// shell metacharacters (e.g. `&&`, `||`, `;`, `|`) from being
-    /// interpreted outside the sandbox. The `RUNOK_HOOK_ORIGIN` env var
-    /// (scoped to this one invocation via the shell's assignment-prefix
-    /// syntax) tells `exec` that this invocation came from the hook (not
-    /// typed directly by a user), so that `defaults.action: pass` runs under
-    /// the sandbox instead of being denied. The token changes on every call
-    /// so it can't just be copy-pasted from a doc or a previous run -- `exec`
-    /// never verifies the token's value, only that the env var was set (see
-    /// the doc comment on `ExecAdapter::hook_origin` for why that's still an
-    /// accepted trade-off).
+    /// interpreted outside the sandbox.
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
-        let quoted_preset = shlex::try_quote(preset)
-            .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
         let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+        Ok(format!("{}{quoted_command}", Self::sandbox_prefix(preset)?))
+    }
+
+    /// Build the `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> --`
+    /// prefix, including its trailing space, that makes whatever follows it
+    /// run under `preset`. The `RUNOK_HOOK_ORIGIN` env var (scoped to this
+    /// one invocation via the shell's assignment-prefix syntax) tells `exec`
+    /// that this invocation came from the hook (not typed directly by a
+    /// user), so that `defaults.action: pass` runs under the sandbox instead
+    /// of being denied. The token changes on every call so it can't just be
+    /// copy-pasted from a doc or a previous run -- `exec` never verifies the
+    /// token's value, only that the env var was set (see the doc comment on
+    /// `ExecAdapter::hook_origin` for why that's still an accepted
+    /// trade-off).
+    fn sandbox_prefix(preset: &str) -> Result<String, anyhow::Error> {
+        let quoted_preset = shlex::try_quote(preset)
+            .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
         let token = Self::hook_origin_token();
         let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
         Ok(format!(
-            "{env_var}={token} runok exec --sandbox {quoted_preset} -- {quoted_command}"
+            "{env_var}={token} runok exec --sandbox {quoted_preset} -- "
         ))
     }
 
@@ -411,7 +464,7 @@ mod tests {
     /// assert the wrapped command with a single equality check.
     fn normalize_hook_origin_token(command: &str) -> String {
         let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-        re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
+        re.replace_all(command, "RUNOK_HOOK_ORIGIN=<token>")
             .into_owned()
     }
 
@@ -524,6 +577,7 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox,
+            sandbox_insertions: vec![],
             evaluations: vec![],
         };
         let output = adapter
@@ -548,6 +602,7 @@ mod tests {
         let result = ActionResult {
             action: Action::Pass,
             sandbox,
+            sandbox_insertions: vec![],
             evaluations: vec![],
         };
         let output = adapter
@@ -668,6 +723,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_insertions: vec![],
                 evaluations: vec![],
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
@@ -682,6 +738,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_insertions: vec![],
                 evaluations: vec![],
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
@@ -785,20 +842,59 @@ mod tests {
 
     // --- sandbox_updated_input ---
 
+    fn insertion(at: usize, preset: &str) -> SandboxInsertion {
+        SandboxInsertion {
+            at,
+            preset: preset.to_string(),
+        }
+    }
+
     #[rstest]
     #[case::preset_some(
         SandboxInfo::Preset(Some("restricted".to_string())),
+        vec![],
         "echo hello",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
     )]
-    #[case::preset_none(SandboxInfo::Preset(None), "echo hello", None)]
-    #[case::merged_policy(SandboxInfo::MergedPolicy(None), "echo hello", None)]
+    #[case::preset_none(SandboxInfo::Preset(None), vec![], "echo hello", None)]
+    #[case::merged_policy(SandboxInfo::MergedPolicy(None), vec![], "echo hello", None)]
+    // Only `node` needs the sandbox: the redirect and `tq` stay in the outer
+    // shell, so the file is opened outside the sandbox.
+    #[case::insertions(
+        SandboxInfo::Preset(None),
+        vec![insertion(0, "readonly")],
+        "node fix.mjs > out.json | tq task get abc",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \
+             node fix.mjs > out.json | tq task get abc",
+        ),
+    )]
+    // Applied back-to-front, so the earlier offset is still valid once the
+    // later prefix has been spliced in.
+    #[case::multiple_insertions(
+        SandboxInfo::Preset(None),
+        vec![insertion(0, "readonly"), insertion(16, "writable")],
+        "awk '{print}' | node fix.mjs",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- awk '{print}' | \
+             RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox writable -- node fix.mjs",
+        ),
+    )]
+    // Insertions win over the whole-input preset: they express the same
+    // sandbox per sub-command instead of one sandbox over everything.
+    #[case::insertions_take_precedence_over_preset(
+        SandboxInfo::Preset(Some("restricted".to_string())),
+        vec![insertion(0, "readonly")],
+        "ls | wc -l",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- ls | wc -l"),
+    )]
     fn sandbox_updated_input_resolves_preset(
         #[case] sandbox: SandboxInfo,
+        #[case] insertions: Vec<SandboxInsertion>,
         #[case] command: &str,
         #[case] expected_command: Option<&str>,
     ) {
-        let result = ClaudeCodeHookAdapter::sandbox_updated_input(&sandbox, command)
+        let result = ClaudeCodeHookAdapter::sandbox_updated_input(&sandbox, &insertions, command)
             .unwrap_or_else(|e| panic!("unexpected error: {e}"));
         match expected_command {
             Some(expected) => {
