@@ -60,11 +60,7 @@ pub(crate) fn resolve_function_call_body(
 ) -> Result<Vec<ExtractedCommand>, CommandParseError> {
     let mut var_env = call_info.var_env.clone();
     var_env.bind_positional_params(&call_info.call_args);
-    // `body` is the function definition's own text, not a slice of
-    // whatever input the caller originally passed to
-    // `extract_commands_with_metadata` -- the call site just says `f`,
-    // which never contains the body's text verbatim. So none of these
-    // commands have a byte range that means anything there.
+    // Commands extracted from a function body have no corresponding span in the call site input.
     extract_commands_with_context(
         body,
         var_env,
@@ -100,11 +96,7 @@ fn extract_commands_with_context(
     }
 
     // Workaround for tree-sitter-bash misparses of reserved-word prefixes
-    // (`time <compound>`, `! <compound>`, ...). See
-    // `strip_misparsed_compound_prefix`. `rest` is a suffix of `input`
-    // (no allocation), so the byte offset it starts at doubles as the
-    // amount every span the recursive call produces needs shifting by
-    // to stay relative to `input`.
+    // (`time <compound>`, `! <compound>`, ...). See `strip_misparsed_compound_prefix`.
     if let Some(rest) = strip_misparsed_compound_prefix(trimmed) {
         let offset = rest.as_ptr() as usize - input.as_ptr() as usize;
         return extract_commands_with_context(
@@ -161,11 +153,6 @@ fn extract_commands_with_context(
 }
 
 /// Shift every `Some(span)` in `commands` right by `offset` bytes.
-/// Used when a batch of commands was extracted by re-parsing a
-/// sub-slice of the caller's own coordinate space (a stripped
-/// reserved-word prefix, a swallowed statement tail, ...), so their
-/// spans start relative to that sub-slice's own byte 0 rather than the
-/// caller's.
 fn shift_spans(commands: &mut [ExtractedCommand], offset: usize) {
     for command in commands {
         if let Some(span) = &command.span {
@@ -1898,12 +1885,6 @@ mod tests {
 
     // ========================================
     // extract_commands_with_metadata: span
-    //
-    // Every `ExtractedCommand.span` must be a byte range into the
-    // ORIGINAL input such that slicing the input at that range
-    // reproduces exactly this command's own text -- env prefix and
-    // redirects excluded, expansion ignored (the span always points at
-    // the verbatim source, even when `command` was rewritten).
     // ========================================
 
     #[rstest]
@@ -1932,6 +1913,18 @@ mod tests {
             })
             .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    // A herestring_redirect between two arguments splits the surviving
+    // word nodes into two non-contiguous ranges, so no single `Range`
+    // can reproduce `command`'s text.
+    #[case::herestring_between_arguments("cat a <<< X b")]
+    #[case::herestring_between_arguments_with_flag(r#"grep -F <<< "$x" pattern"#)]
+    fn extract_commands_with_metadata_span_is_none_across_interior_redirect(#[case] input: &str) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].span, None);
     }
 
     // ========================================

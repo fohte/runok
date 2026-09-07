@@ -89,10 +89,6 @@ pub(super) fn handle_assignment_redirect_misparse(
                 let tail_bytes = &source[child.start_byte()..node.end_byte()];
                 if let Ok(tail_str) = std::str::from_utf8(tail_bytes) {
                     let tail_text = tail_str.trim();
-                    // `tail_text` is re-parsed from byte 0 in
-                    // `extract_swallowed_tail`, so any span it produces
-                    // needs shifting back by where `tail_text` actually
-                    // starts within `source` to stay meaningful there.
                     let tail_offset = child.start_byte()
                         + (tail_text.as_ptr() as usize - tail_str.as_ptr() as usize);
                     let before = commands.len();

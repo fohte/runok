@@ -129,28 +129,28 @@ pub(super) fn handle_command(
             }
         }
     }
-    // The children that make up the command word itself, excluding
-    // variable_assignment and redirect children. Redirects (e.g.
-    // herestring_redirect) attached directly to a command node use the
-    // field name "redirect".
-    let word_nodes: Vec<tree_sitter::Node> = (0..node.child_count())
+    // Redirects (e.g. herestring_redirect) attached directly to a command
+    // node use the field name "redirect".
+    let is_excluded_child = |i: u32| {
+        node.child(i).is_some_and(|child| {
+            child.is_named()
+                && (child.kind() == "variable_assignment"
+                    || node.field_name_for_child(i) == Some("redirect"))
+        })
+    };
+    // (original child index, node) for every surviving word, so `span`
+    // below can check whether an excluded child fell *between* two
+    // surviving words rather than just at the ends.
+    let word_nodes: Vec<(u32, tree_sitter::Node)> = (0..node.child_count())
         .filter_map(|i| {
-            let child = node.child(i as u32)?;
-            if !child.is_named() {
-                return None;
-            }
-            if child.kind() == "variable_assignment" {
-                return None;
-            }
-            if node.field_name_for_child(i as u32) == Some("redirect") {
-                return None;
-            }
-            Some(child)
+            let i = i as u32;
+            let child = node.child(i)?;
+            (child.is_named() && !is_excluded_child(i)).then_some((i, child))
         })
         .collect();
     let parts: Vec<&str> = word_nodes
         .iter()
-        .filter_map(|child| {
+        .filter_map(|(_, child)| {
             let text = &source[child.start_byte()..child.end_byte()];
             std::str::from_utf8(text).ok()
         })
@@ -159,9 +159,16 @@ pub(super) fn handle_command(
     let raw_text = raw_text.trim();
     // The original source byte range of the command word, always
     // pointing at the untouched source text even when `text` below
-    // gets rebuilt from the expanded argv.
+    // gets rebuilt from the expanded argv. `None` when an excluded
+    // child (e.g. a herestring_redirect) sits between the first and
+    // last surviving word, since the remaining text is then no longer
+    // contiguous in the source.
     let span = match (word_nodes.first(), word_nodes.last()) {
-        (Some(first), Some(last)) => Some(first.start_byte()..last.end_byte()),
+        (Some((first_i, first)), Some((last_i, last)))
+            if (*first_i..=*last_i).all(|i| !is_excluded_child(i)) =>
+        {
+            Some(first.start_byte()..last.end_byte())
+        }
         _ => None,
     };
     // Only rebuild the command text from the (possibly expanded)

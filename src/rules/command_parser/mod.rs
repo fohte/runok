@@ -150,11 +150,15 @@ pub struct ExtractedCommand {
     pub function_call: Option<FunctionCallInfo>,
     /// The byte range this command's own text occupies in the input
     /// originally passed to [`extract_commands_with_metadata`] (env
-    /// prefix and attached redirects excluded), i.e. the range a
-    /// caller would slice to get exactly this command's text back out
-    /// of that input. `None` when no such range exists there -- e.g.
-    /// a command re-extracted from a function's body text, which
-    /// never appears verbatim at the call site.
+    /// prefix and attached redirects excluded). Slicing that input at
+    /// this range reproduces `original_command`'s text when set, or
+    /// `command`'s text otherwise -- variable expansion rewrites
+    /// `command` but never shifts this range. `None` when no such
+    /// contiguous range exists there: a command re-extracted from a
+    /// function's body text (which never appears verbatim at the call
+    /// site), or a redirect sitting between two of this command's own
+    /// arguments (e.g. a herestring), which splits the surviving text
+    /// into pieces no single range can cover.
     pub span: Option<std::ops::Range<usize>>,
 }
 
