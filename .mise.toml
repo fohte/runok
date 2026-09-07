@@ -5,7 +5,7 @@ lefthook = "2.1.11"
 # lefthook hooks
 actionlint = "1.7.12"
 "github:betterleaks/betterleaks" = "1.7.3"
-node = "24.18.0"
+node = "24.19.0"
 pinact = "4.1.1"
 "github:fohte/basefmt" = "0.1.0"
 "npm:@commitlint/cli" = "21.2.1"
