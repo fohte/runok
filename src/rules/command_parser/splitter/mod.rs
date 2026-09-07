@@ -60,6 +60,11 @@ pub(crate) fn resolve_function_call_body(
 ) -> Result<Vec<ExtractedCommand>, CommandParseError> {
     let mut var_env = call_info.var_env.clone();
     var_env.bind_positional_params(&call_info.call_args);
+    // `body` is the function definition's own text, not a slice of
+    // whatever input the caller originally passed to
+    // `extract_commands_with_metadata` -- the call site just says `f`,
+    // which never contains the body's text verbatim. So none of these
+    // commands have a byte range that means anything there.
     extract_commands_with_context(
         body,
         var_env,
@@ -68,6 +73,12 @@ pub(crate) fn resolve_function_call_body(
         pipe,
         loop_kind,
     )
+    .map(|mut commands| {
+        for command in &mut commands {
+            command.span = None;
+        }
+        commands
+    })
 }
 
 /// Like [`extract_commands_with_metadata`], but seeds the walk with a
@@ -90,8 +101,12 @@ fn extract_commands_with_context(
 
     // Workaround for tree-sitter-bash misparses of reserved-word prefixes
     // (`time <compound>`, `! <compound>`, ...). See
-    // `strip_misparsed_compound_prefix`.
+    // `strip_misparsed_compound_prefix`. `rest` is a suffix of `input`
+    // (no allocation), so the byte offset it starts at doubles as the
+    // amount every span the recursive call produces needs shifting by
+    // to stay relative to `input`.
     if let Some(rest) = strip_misparsed_compound_prefix(trimmed) {
+        let offset = rest.as_ptr() as usize - input.as_ptr() as usize;
         return extract_commands_with_context(
             rest,
             var_env,
@@ -99,7 +114,11 @@ fn extract_commands_with_context(
             redirects,
             pipe,
             loop_kind,
-        );
+        )
+        .map(|mut commands| {
+            shift_spans(&mut commands, offset);
+            commands
+        });
     }
 
     let mut parser = tree_sitter::Parser::new();
@@ -133,7 +152,26 @@ fn extract_commands_with_context(
         false,
     );
 
+    // Spans above are relative to `trimmed`; shift back by however much
+    // leading whitespace `.trim()` stripped so they stay relative to `input`.
+    let leading_offset = trimmed.as_ptr() as usize - input.as_ptr() as usize;
+    shift_spans(&mut commands, leading_offset);
+
     Ok(commands)
+}
+
+/// Shift every `Some(span)` in `commands` right by `offset` bytes.
+/// Used when a batch of commands was extracted by re-parsing a
+/// sub-slice of the caller's own coordinate space (a stripped
+/// reserved-word prefix, a swallowed statement tail, ...), so their
+/// spans start relative to that sub-slice's own byte 0 rather than the
+/// caller's.
+fn shift_spans(commands: &mut [ExtractedCommand], offset: usize) {
+    for command in commands {
+        if let Some(span) = &command.span {
+            command.span = Some(span.start + offset..span.end + offset);
+        }
+    }
 }
 
 /// Split a multi-line shell input into top-level command strings.
@@ -207,6 +245,15 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    /// The byte range `text` occupies in `source`. Panics if not found --
+    /// tests use this to derive an expected `span` without hand-counting bytes.
+    fn span_in(source: &str, text: &str) -> std::ops::Range<usize> {
+        let start = source
+            .find(text)
+            .unwrap_or_else(|| panic!("{text:?} not found in {source:?}"));
+        start..start + text.len()
+    }
 
     // ========================================
     // extract_commands: compound commands
@@ -939,6 +986,7 @@ mod tests {
                 loop_kind: String::new(),
                 original_command: Some("echo $TS".to_string()),
                 function_call: None,
+                span: Some(span_in("TS=foo 2>/dev/null; echo $TS", "echo $TS")),
             }]
         );
     }
@@ -968,6 +1016,7 @@ mod tests {
                 loop_kind: String::new(),
                 original_command: None,
                 function_call: None,
+                span: Some(span_in("FOO=bar echo hi 2>&1", "echo hi")),
             }]
         );
     }
@@ -1020,6 +1069,7 @@ mod tests {
                 loop_kind: String::new(),
                 original_command: None,
                 function_call: None,
+                span: Some(span_in("TS=foo 2>/dev/null | cat", "cat")),
             }]
         );
     }
@@ -1614,7 +1664,7 @@ mod tests {
     // `$X` (`original_command: None`).
     // ========================================
 
-    fn no_expansion(command: &str, argv: &[&str]) -> ExtractedCommand {
+    fn no_expansion(input: &str, command: &str, argv: &[&str]) -> ExtractedCommand {
         ExtractedCommand {
             command: command.to_string(),
             env: vec![],
@@ -1624,6 +1674,7 @@ mod tests {
             loop_kind: String::new(),
             original_command: None,
             function_call: None,
+            span: Some(span_in(input, command)),
         }
     }
 
@@ -1644,6 +1695,7 @@ mod tests {
                 loop_kind: String::new(),
                 original_command: Some("echo $X".to_string()),
                 function_call: None,
+                span: Some(span_in("X=1; echo $X", "echo $X")),
             }]
         );
     }
@@ -1670,6 +1722,7 @@ mod tests {
                 loop_kind: String::new(),
                 original_command: Some("echo $X".to_string()),
                 function_call: None,
+                span: Some(span_in(input, "echo $X")),
             }]
         );
     }
@@ -1677,11 +1730,17 @@ mod tests {
     #[rstest]
     #[case::and_then_reassignment_is_poisoned(
         "X=1; false && X=2; echo $X",
-        vec![no_expansion("false", &["false"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("X=1; false && X=2; echo $X", "false", &["false"]),
+            no_expansion("X=1; false && X=2; echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     #[case::or_then_reassignment_is_poisoned(
         "X=1; true || X=2; echo $X",
-        vec![no_expansion("true", &["true"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("X=1; true || X=2; echo $X", "true", &["true"]),
+            no_expansion("X=1; true || X=2; echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     fn variable_resolution_list_right_hand_side_is_poisoned(
         #[case] input: &str,
@@ -1710,6 +1769,7 @@ mod tests {
             loop_kind: String::new(),
             original_command: Some("$X".to_string()),
             function_call: None,
+            span: Some(span_in(r#"X="git status"; $X"#, "$X")),
         },
     )]
     #[case::command_name_position(
@@ -1723,6 +1783,7 @@ mod tests {
             loop_kind: String::new(),
             original_command: Some("$X -rf /".to_string()),
             function_call: None,
+            span: Some(span_in("X=rm; $X -rf /", "$X -rf /")),
         },
     )]
     // Motivating case: a flag value smuggled through a variable no
@@ -1738,6 +1799,7 @@ mod tests {
             loop_kind: String::new(),
             original_command: Some("git push $F".to_string()),
             function_call: None,
+            span: Some(span_in("F=--force; git push $F", "git push $F")),
         },
     )]
     // `"$X"` is one quoted argument: no IFS splitting, so the whole
@@ -1754,6 +1816,7 @@ mod tests {
             loop_kind: String::new(),
             original_command: Some(r#""$X""#.to_string()),
             function_call: None,
+            span: Some(span_in(r#"X="git status"; "$X""#, r#""$X""#)),
         },
     )]
     fn variable_resolution_resolves_static_value(
@@ -1769,35 +1832,61 @@ mod tests {
     #[rstest]
     #[case::dynamic_command_substitution_value(
         "X=$(cat f); $X",
-        vec![no_expansion("cat f", &["cat", "f"]), no_expansion("$X", &["$X"])],
+        vec![
+            no_expansion("X=$(cat f); $X", "cat f", &["cat", "f"]),
+            no_expansion("X=$(cat f); $X", "$X", &["$X"]),
+        ],
     )]
     #[case::reassigned_via_command_substitution(
         "X=1; X=$(date); echo $X",
-        vec![no_expansion("date", &["date"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("X=1; X=$(date); echo $X", "date", &["date"]),
+            no_expansion("X=1; X=$(date); echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     #[case::operator_expansion_not_resolved(
         "X=default; echo ${X:-fallback}",
-        vec![no_expansion("echo ${X:-fallback}", &["echo", "${X:-fallback}"])],
+        vec![no_expansion(
+            "X=default; echo ${X:-fallback}",
+            "echo ${X:-fallback}",
+            &["echo", "${X:-fallback}"],
+        )],
     )]
     #[case::conditional_assignment_stays_poisoned(
         "if true; then X=rm; fi; $X /",
-        vec![no_expansion("true", &["true"]), no_expansion("$X /", &["$X", "/"])],
+        vec![
+            no_expansion("if true; then X=rm; fi; $X /", "true", &["true"]),
+            no_expansion("if true; then X=rm; fi; $X /", "$X /", &["$X", "/"]),
+        ],
     )]
     #[case::array_subscript_assignment_poisons_base_name(
         "X=1; X[0]=2; echo $X",
-        vec![no_expansion("echo $X", &["echo", "$X"])],
+        vec![no_expansion(
+            "X=1; X[0]=2; echo $X",
+            "echo $X",
+            &["echo", "$X"],
+        )],
     )]
     #[case::function_body_assignment_does_not_leak(
         "f() { local X=1; }; echo $X",
-        vec![no_expansion("local X=1", &["local", "X=1"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("f() { local X=1; }; echo $X", "local X=1", &["local", "X=1"]),
+            no_expansion("f() { local X=1; }; echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     #[case::declaration_command_bare_name_poisons(
         "X=1; export X; echo $X",
-        vec![no_expansion("export X", &["export", "X"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("X=1; export X; echo $X", "export X", &["export", "X"]),
+            no_expansion("X=1; export X; echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     #[case::unset_command_poisons(
         "X=1; unset X; echo $X",
-        vec![no_expansion("unset X", &["unset", "X"]), no_expansion("echo $X", &["echo", "$X"])],
+        vec![
+            no_expansion("X=1; unset X; echo $X", "unset X", &["unset", "X"]),
+            no_expansion("X=1; unset X; echo $X", "echo $X", &["echo", "$X"]),
+        ],
     )]
     fn variable_resolution_falls_back_to_verbatim(
         #[case] input: &str,
@@ -1805,6 +1894,44 @@ mod tests {
     ) {
         let result = extract_commands_with_metadata(input).unwrap();
         assert_eq!(result, expected);
+    }
+
+    // ========================================
+    // extract_commands_with_metadata: span
+    //
+    // Every `ExtractedCommand.span` must be a byte range into the
+    // ORIGINAL input such that slicing the input at that range
+    // reproduces exactly this command's own text -- env prefix and
+    // redirects excluded, expansion ignored (the span always points at
+    // the verbatim source, even when `command` was rewritten).
+    // ========================================
+
+    #[rstest]
+    #[case::pipe("echo foo | grep bar", vec!["echo foo", "grep bar"])]
+    #[case::and_list("echo a && echo b", vec!["echo a", "echo b"])]
+    #[case::redirect_excluded("node script.mjs > out.json", vec!["node script.mjs"])]
+    #[case::env_prefix_excluded(
+        "FOO=1 node fix.mjs \"$1.in\" > out",
+        vec!["node fix.mjs \"$1.in\""],
+    )]
+    #[case::variable_expansion_span_is_verbatim("X=rm; $X -rf /", vec!["$X -rf /"])]
+    #[case::nested_command_substitution("echo $(date)", vec!["date", "echo $(date)"])]
+    fn extract_commands_with_metadata_span_slices_match_expected(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        let actual: Vec<&str> = commands
+            .iter()
+            .map(|c| {
+                let span = c
+                    .span
+                    .clone()
+                    .unwrap_or_else(|| panic!("expected a span for {c:?}"));
+                &input[span]
+            })
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     // ========================================
@@ -1901,5 +2028,25 @@ mod tests {
             env.get("X"),
             Some(&VarValue::Literal("--force".to_string()))
         );
+    }
+
+    #[test]
+    fn resolve_function_call_body_nulls_every_span() {
+        // The body's text never appears verbatim at the call site, so
+        // no byte range in the caller's original input corresponds to
+        // any command re-extracted from it.
+        let call_info = FunctionCallInfo {
+            function_name: "f".to_string(),
+            bodies: vec!["git push".to_string()],
+            call_args: vec![],
+            var_env: VarEnv::new(),
+            function_table: FunctionTable::new(),
+        };
+        let commands =
+            resolve_function_call_body(&call_info, "git push", &[], &PipeInfo::default(), "")
+                .unwrap();
+        let spans: Vec<Option<std::ops::Range<usize>>> =
+            commands.iter().map(|c| c.span.clone()).collect();
+        assert_eq!(spans, vec![None]);
     }
 }

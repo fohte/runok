@@ -9,7 +9,7 @@ use crate::rules::command_parser::{
     EnvAssignment, ExtractedCommand, FunctionCallInfo, PipeInfo, RedirectInfo, shell_quote_join,
 };
 
-use super::collect_commands;
+use super::{collect_commands, trimmed_node_span};
 
 /// `command` node: strip leading variable_assignment children
 /// (environment variable prefixes like `FOO=bar echo hello`), strip
@@ -129,10 +129,11 @@ pub(super) fn handle_command(
             }
         }
     }
-    // Build command text excluding variable_assignment and redirect children.
-    // Redirects (e.g. herestring_redirect) attached directly to a command
-    // node use the field name "redirect".
-    let parts: Vec<&str> = (0..node.child_count())
+    // The children that make up the command word itself, excluding
+    // variable_assignment and redirect children. Redirects (e.g.
+    // herestring_redirect) attached directly to a command node use the
+    // field name "redirect".
+    let word_nodes: Vec<tree_sitter::Node> = (0..node.child_count())
         .filter_map(|i| {
             let child = node.child(i as u32)?;
             if !child.is_named() {
@@ -144,12 +145,25 @@ pub(super) fn handle_command(
             if node.field_name_for_child(i as u32) == Some("redirect") {
                 return None;
             }
+            Some(child)
+        })
+        .collect();
+    let parts: Vec<&str> = word_nodes
+        .iter()
+        .filter_map(|child| {
             let text = &source[child.start_byte()..child.end_byte()];
             std::str::from_utf8(text).ok()
         })
         .collect();
     let raw_text = parts.join(" ");
     let raw_text = raw_text.trim();
+    // The original source byte range of the command word, always
+    // pointing at the untouched source text even when `text` below
+    // gets rebuilt from the expanded argv.
+    let span = match (word_nodes.first(), word_nodes.last()) {
+        (Some(first), Some(last)) => Some(first.start_byte()..last.end_byte()),
+        _ => None,
+    };
     // Only rebuild the command text from the (possibly expanded)
     // argv when an expansion actually happened, so a command with
     // no resolvable variables is emitted byte-for-byte as before.
@@ -187,6 +201,7 @@ pub(super) fn handle_command(
             loop_kind: loop_kind.to_string(),
             original_command,
             function_call,
+            span,
         });
     }
 }
@@ -280,11 +295,9 @@ pub(super) fn handle_declaration_or_unset(
             }
         }
     }
-    let text = &source[node.start_byte()..node.end_byte()];
-    let text = std::str::from_utf8(text).unwrap_or("").trim();
-    if !text.is_empty() {
+    if let Some((text, span)) = trimmed_node_span(node, source) {
         commands.push(ExtractedCommand {
-            command: text.to_string(),
+            command: text,
             env: Vec::new(),
             argv,
             redirects: redirects.to_vec(),
@@ -292,6 +305,7 @@ pub(super) fn handle_declaration_or_unset(
             loop_kind: loop_kind.to_string(),
             original_command: None,
             function_call: None,
+            span: Some(span),
         });
     }
 }

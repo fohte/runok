@@ -148,6 +148,14 @@ pub struct ExtractedCommand {
     /// the call to its body instead of matching rules against the bare
     /// function name.
     pub function_call: Option<FunctionCallInfo>,
+    /// The byte range this command's own text occupies in the input
+    /// originally passed to [`extract_commands_with_metadata`] (env
+    /// prefix and attached redirects excluded), i.e. the range a
+    /// caller would slice to get exactly this command's text back out
+    /// of that input. `None` when no such range exists there -- e.g.
+    /// a command re-extracted from a function's body text, which
+    /// never appears verbatim at the call site.
+    pub span: Option<std::ops::Range<usize>>,
 }
 
 /// Join tokens into a shell-safe string by quoting tokens that contain

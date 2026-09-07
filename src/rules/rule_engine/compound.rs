@@ -34,6 +34,7 @@ pub fn evaluate_compound(
             loop_kind: String::new(),
             original_command: None,
             function_call: None,
+            span: None,
         }]
     });
 
