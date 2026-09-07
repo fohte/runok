@@ -19,6 +19,23 @@ use crate::rules::command_parser::tokenizer::node_text;
 use crate::rules::command_parser::var_env::{VarEnv, record_variable_assignment};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
+/// The trimmed text of `node`'s source range, together with the byte
+/// span (within `source`) that the trimmed text itself occupies.
+/// `None` when the range is empty/whitespace-only or not valid UTF-8.
+pub(super) fn trimmed_node_span(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> Option<(String, std::ops::Range<usize>)> {
+    let bytes = source.get(node.start_byte()..node.end_byte())?;
+    let full_text = std::str::from_utf8(bytes).ok()?;
+    let text = full_text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let start = node.start_byte() + (text.as_ptr() as usize - full_text.as_ptr() as usize);
+    Some((text.to_string(), start..start + text.len()))
+}
+
 /// Recursively walk the tree-sitter AST and collect individual command strings.
 ///
 /// Compound constructs (pipeline, list, subshell, control structures) are split
@@ -346,11 +363,9 @@ pub(in crate::rules::command_parser) fn collect_commands(
                 function_table,
                 poison,
             );
-            let text = &source[node.start_byte()..node.end_byte()];
-            let text = std::str::from_utf8(text).unwrap_or("").trim();
-            if !text.is_empty() {
+            if let Some((text, span)) = trimmed_node_span(node, source) {
                 commands.push(ExtractedCommand {
-                    command: text.to_string(),
+                    command: text,
                     env: Vec::new(),
                     argv: Vec::new(),
                     redirects: redirects.to_vec(),
@@ -358,6 +373,7 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     loop_kind: loop_kind.to_string(),
                     original_command: None,
                     function_call: None,
+                    span: Some(span),
                 });
             }
         }

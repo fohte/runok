@@ -234,6 +234,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             loop_kind: String::new(),
             original_command: None,
             function_call: None,
+            span: None,
         }]
     });
     let commands: Vec<String> = extracted_commands

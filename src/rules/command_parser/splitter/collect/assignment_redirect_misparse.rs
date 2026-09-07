@@ -3,6 +3,7 @@ use crate::rules::command_parser::redirect::{collect_substitutions_recursive, is
 use crate::rules::command_parser::var_env::{VarEnv, record_variable_assignment};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
+use super::super::shift_spans;
 use super::collect_commands;
 
 /// `command` node matched by
@@ -86,9 +87,13 @@ pub(super) fn handle_assignment_redirect_misparse(
                     return;
                 }
                 let tail_bytes = &source[child.start_byte()..node.end_byte()];
-                if let Ok(tail_text) = std::str::from_utf8(tail_bytes) {
+                if let Ok(tail_str) = std::str::from_utf8(tail_bytes) {
+                    let tail_text = tail_str.trim();
+                    let tail_offset = child.start_byte()
+                        + (tail_text.as_ptr() as usize - tail_str.as_ptr() as usize);
+                    let before = commands.len();
                     extract_swallowed_tail(
-                        tail_text.trim(),
+                        tail_text,
                         commands,
                         pipe_info,
                         redirects,
@@ -98,6 +103,7 @@ pub(super) fn handle_assignment_redirect_misparse(
                         poison,
                         last_separator,
                     );
+                    shift_spans(&mut commands[before..], tail_offset);
                 }
                 return;
             }

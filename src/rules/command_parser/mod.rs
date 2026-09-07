@@ -148,6 +148,13 @@ pub struct ExtractedCommand {
     /// the call to its body instead of matching rules against the bare
     /// function name.
     pub function_call: Option<FunctionCallInfo>,
+    /// The byte range this command's own text occupies in the original
+    /// input (env prefix and attached redirects excluded); stable
+    /// across variable-expansion rewrites of `command`. `None` when no
+    /// single contiguous range covers it -- a function-body command
+    /// re-extracted away from its call site, or a redirect between two
+    /// of its own arguments (e.g. a herestring).
+    pub span: Option<std::ops::Range<usize>>,
 }
 
 /// Join tokens into a shell-safe string by quoting tokens that contain
