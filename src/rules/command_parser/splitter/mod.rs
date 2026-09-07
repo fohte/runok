@@ -1897,6 +1897,15 @@ mod tests {
     )]
     #[case::variable_expansion_span_is_verbatim("X=rm; $X -rf /", vec!["$X -rf /"])]
     #[case::nested_command_substitution("echo $(date)", vec!["date", "echo $(date)"])]
+    // `TS=foo 2>/dev/null; echo $TS` is the "swallowed continuation"
+    // misparse shape: `echo $TS` is re-extracted via
+    // `extract_swallowed_tail`, which reparses from byte 0, so this
+    // pins down that `shift_spans` corrects the span back to its
+    // position in the original input.
+    #[case::bare_assignment_redirect_swallowed_tail(
+        "TS=foo 2>/dev/null; echo $TS",
+        vec!["echo $TS"],
+    )]
     fn extract_commands_with_metadata_span_slices_match_expected(
         #[case] input: &str,
         #[case] expected: Vec<&str>,
