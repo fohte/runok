@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/logo-dark.svg">
@@ -142,7 +144,7 @@ Pre-built binaries are also available on [GitHub Releases](https://github.com/fo
 The fastest way to get started is with the interactive setup wizard:
 
 ```sh
-runok init
+runok init --scope user
 ```
 
 This creates a `runok.yml`, and if you have Claude Code configured, migrates your Bash permissions to runok rules and registers the PreToolUse hook automatically.
