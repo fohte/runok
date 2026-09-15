@@ -1,17 +1,17 @@
 [tools]
-lefthook = "2.1.11"
-"github:ast-grep/ast-grep" = "0.45.2"
+lefthook = "2.1.12"
+"github:ast-grep/ast-grep" = "0.45.3"
 
 # lefthook hooks
 actionlint = "1.7.12"
-"github:betterleaks/betterleaks" = "1.7.3"
-node = "24.19.0"
+"github:betterleaks/betterleaks" = "1.8.1"
+node = "24.20.0"
 pinact = "4.1.1"
 "github:fohte/basefmt" = "0.1.0"
-"npm:@commitlint/cli" = "21.2.1"
+"npm:@commitlint/cli" = "21.2.2"
 "npm:prettier" = "3.9.6"
 shellcheck = "0.11.0"
-shfmt = "3.13.1"
+shfmt = "3.14.0"
 
 [env]
 # Share target dir across worktrees to avoid full recompilation
