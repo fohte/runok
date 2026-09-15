@@ -230,7 +230,7 @@ mod tests {
                 remaining.is_empty(),
                 "SequencePrompter has {} unused responses: {:?}",
                 remaining.len(),
-                &*remaining,
+                *remaining,
             );
         }
     }
