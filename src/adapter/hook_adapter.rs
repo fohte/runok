@@ -290,12 +290,10 @@ impl ClaudeCodeHookAdapter {
     }
 
     /// Splice a sandbox prefix in front of each sub-command that needs one,
-    /// leaving every other byte of the input untouched. The sub-commands
-    /// themselves are never re-quoted, and the shell semantics around them --
-    /// pipes, `&&`, redirects, and the `KEY=VALUE` prefix of a sub-command
-    /// that needs no sandbox -- stay with the outer shell, outside every
-    /// sandbox. Prefixes are applied back-to-front so the offsets of the
-    /// ones still to come stay valid.
+    /// leaving every other byte of the input untouched: no sub-command is
+    /// re-quoted, and pipes, `&&`, redirects, and `KEY=VALUE` prefixes stay
+    /// with the outer shell, outside every sandbox. Prefixes are applied
+    /// back-to-front so the offsets still to come stay valid.
     fn insert_sandbox_prefixes(
         insertions: &[SandboxInsertion],
         original_command: &str,

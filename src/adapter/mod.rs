@@ -5,7 +5,7 @@ mod verbose;
 
 /// Environment variable the Claude Code hook wrapper sets on the `runok exec`
 /// invocation it generates, so `exec` can tell that invocation apart from a
-/// user typing `--sandbox` directly. See `hook_adapter::wrap_with_sandbox`
+/// user typing `--sandbox` directly. See `hook_adapter::sandbox_prefix`
 /// and `ExecAdapter::hook_origin` for how it's produced and consumed.
 pub const HOOK_ORIGIN_ENV_VAR: &str = "RUNOK_HOOK_ORIGIN";
 

@@ -105,11 +105,15 @@ runok solves this by recognizing wrapper patterns (defined in [`definitions.wrap
 
 This ensures that rules apply to what actually runs, not just the outer wrapper command.
 
-## Sandbox Merge Strategy: Strictest Wins
+## Per-Sub-Command Sandbox Isolation
 
-A compound command applies each sub-command's [sandbox](/sandbox/overview/) to that sub-command alone, so no sub-command is affected by its neighbours' policies. When that is not possible -- the sub-command's own text has no single contiguous range in the input to prefix, or it is nested inside another sub-command -- runok falls back to one sandbox for the whole compound, merging the policies by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
+A compound command applies each sub-command's [sandbox](/sandbox/overview/) to that sub-command alone, by inserting a `runok exec --sandbox <preset> --` prefix at that sub-command's own position in the input -- no sub-command is affected by its neighbours' policies. Only the Claude Code hook's `updatedInput` rewrite can apply this: `runok exec` and `runok check` each receive the whole input as one process, so they always apply a single policy to the entire compound command instead -- the merged policy below, or, when every sub-command resolves to the same preset, that preset directly.
+
+runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions: its own text has no single contiguous range in the input to prefix (e.g. a command re-extracted from a function body, or a herestring); its range is nested inside another sub-command's range (`$(...)`, `<(...)`, but not a plain subshell `( ... )`); or it is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar) -- prefixing one would run it in a child process, so the state change would never reach the shell running the rest of the compound command. The fallback merges the policies by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
 
 The rationale for the fallback direction: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. When one sandbox has to cover both, no sub-command may weaken the sandbox of another.
+
+Leaving redirects to the outer shell also narrows what the sandbox protects in a compound command -- a redirect's file is opened outside every sandbox, so `fs.read.deny`/`fs.write.allow` don't apply to it. See [Security Model: Redirects are not sandboxed in compound commands](/sandbox/security-model/#redirects-are-not-sandboxed-in-compound-commands) for the trade-off.
 
 For the full merge table and contradiction handling, see [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
 

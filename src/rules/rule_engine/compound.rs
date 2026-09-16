@@ -16,13 +16,14 @@ use super::{
 /// the results.
 ///
 /// - Action aggregation: Explicit Deny Wins (deny > ask > allow > default)
-/// - Sandbox: each sub-command gets its own prefix (`sandbox_insertions`),
-///   so it runs under exactly the preset its own rule asked for
-/// - When a sub-command needing a sandbox has no insertion point, the whole
-///   compound falls back to one sandbox instead: presets are merged
-///   Strictest Wins (writable roots intersected, deny paths unioned,
-///   network access intersected), and an empty writable-root intersection
-///   (contradiction) escalates the action to `Ask`
+/// - Sandbox: each sub-command gets its own prefix (`sandbox_insertions`) so
+///   it runs under exactly the preset its own rule asked for
+/// - Sandbox policy aggregation: Strictest Wins (writable roots intersected,
+///   deny paths unioned, network access intersected), for callers that can
+///   only apply one policy to the whole input, and for a compound where some
+///   sub-command cannot take a prefix
+/// - If sandbox aggregation produces empty writable roots (contradiction),
+///   the action is escalated to `Ask`
 ///
 /// For single (non-compound) commands, this delegates to `evaluate_command`.
 pub fn evaluate_compound(
@@ -123,11 +124,6 @@ pub fn evaluate_compound(
     let sandbox_preset_name = (unique_names.len() == 1).then(|| unique_names[0].clone());
 
     let (final_action, final_policy) = match (action, sandbox_policy) {
-        // Both escalations below exist because one sandbox has to stand in
-        // for every sub-command's preset. Per-sub-command prefixes remove
-        // that constraint: nothing is merged, so there is no contradiction
-        // to report, and a `pass` response can carry them as `updatedInput`.
-        (action, policy) if !sandbox_insertions.is_empty() => (action, policy),
         (action, Some(policy))
             if has_writable_contradiction(&policy, &unique_names, sandbox_defs) =>
         {
@@ -136,14 +132,19 @@ pub fn evaluate_compound(
         }
         // A pass response carries no `updatedInput` unless the sandbox
         // collapses to a single preset (handled above via
-        // `sandbox_preset_name`); a real multi-preset merge has no
-        // representation pass can carry, so escalate to `ask` instead.
-        (Action::Pass, Some(policy)) if sandbox_preset_name.is_none() => (
-            Action::Ask(Some(
-                "a matched rule's sandbox policy cannot be applied via pass".to_string(),
-            )),
-            Some(policy),
-        ),
+        // `sandbox_preset_name`) or to per-sub-command prefixes; a merge
+        // across presets has no representation pass can carry, so escalate
+        // to `ask` instead.
+        (Action::Pass, Some(policy))
+            if sandbox_preset_name.is_none() && sandbox_insertions.is_empty() =>
+        {
+            (
+                Action::Ask(Some(
+                    "a matched rule's sandbox policy cannot be applied via pass".to_string(),
+                )),
+                Some(policy),
+            )
+        }
         (action, policy) => (action, policy),
     };
 
@@ -157,14 +158,23 @@ pub fn evaluate_compound(
     })
 }
 
+/// Builtins that act on the shell running them. A prefix would move one into
+/// a child process, so its effect would no longer reach the rest of the
+/// compound -- `cd build && make` would run `make` in the original directory.
+const SHELL_STATE_BUILTINS: &[&str] = &[
+    ".", "alias", "cd", "declare", "eval", "exec", "export", "local", "popd", "pushd", "read",
+    "readonly", "set", "shift", "shopt", "source", "trap", "typeset", "ulimit", "umask", "unalias",
+    "unset",
+];
+
 /// Plan one sandbox prefix per sub-command that needs one, positioned at the
 /// start of that sub-command's own text in the input.
 ///
-/// Returns `None` when a sub-command that needs a sandbox has no usable
-/// insertion point: it has no `span`, or its span lies inside another
-/// sub-command's span (`$(...)`, `<(...)`, a subshell), where a prefix would
-/// start a sandbox inside a sandbox. The caller then wraps the whole compound
-/// in one sandbox instead.
+/// Returns `None` when a sub-command that needs a sandbox cannot take a prefix:
+/// it has no `span`, its span lies inside another sub-command's span (a command
+/// or process substitution), where a prefix would start a sandbox inside a
+/// sandbox, or it is one of `SHELL_STATE_BUILTINS`. The caller then wraps the
+/// whole compound in one sandbox instead.
 fn plan_sandbox_insertions(
     extracted: &[ExtractedCommand],
     results: &[EvalResult],
@@ -176,6 +186,15 @@ fn plan_sandbox_insertions(
         let Some(preset) = result.sandbox_preset.as_deref().or(default_preset) else {
             continue;
         };
+        let name = ext_cmd
+            .argv
+            .first()
+            .map(String::as_str)
+            .or_else(|| ext_cmd.command.split_whitespace().next())
+            .unwrap_or_default();
+        if SHELL_STATE_BUILTINS.contains(&name) {
+            return None;
+        }
         let span = ext_cmd.span.as_ref()?;
         let contained_in_another = extracted.iter().enumerate().any(|(j, other)| {
             j != i
@@ -768,6 +787,16 @@ mod tests {
         Some("baseline"),
         vec![],
     )]
+    // The prefix goes after the `KEY=VALUE` assignments, so they become
+    // `runok exec`'s own environment and are inherited by the command.
+    #[case::after_the_env_assignment_prefix(
+        "FOO=1 node fix.mjs | tq task get abc",
+        None,
+        vec![(6, "restricted")],
+    )]
+    // Prefixing `cd` would move it into a child process, so `node` would run
+    // in the original directory.
+    #[case::shell_state_builtin_needing_a_sandbox("cd build && node fix.mjs", Some("baseline"), vec![])]
     // Nothing asks for a sandbox, so there is nothing to prefix.
     #[case::no_sandbox_anywhere("tq task get abc | tq task get def", None, vec![])]
     fn compound_plans_one_sandbox_prefix_per_sub_command(
@@ -844,18 +873,15 @@ mod tests {
         ])
     }
 
-    // The herestring between `cat`'s own arguments leaves it without a single
-    // byte range to insert a prefix at, so the compound falls back to one
-    // merged sandbox -- the only place a writable contradiction can arise.
     #[rstest]
-    #[case::allow("ls -la | cat a <<< X b")]
+    #[case::allow("ls -la | cat -")]
     // An unmatched sub-command resolves to Pass (no defaults.action
     // configured), which outranks the other two sub-commands' Allow -- the
     // merged action going into contradiction detection is Pass, not Allow.
     // Pass must still be escalated: it carries no `updatedInput`, so leaving
     // it unescalated would silently drop the sandbox contradiction the same
     // way an unescalated Allow would.
-    #[case::pass("unknown_cmd && ls -la && cat a <<< X b")]
+    #[case::pass("unknown_cmd && ls -la && cat -")]
     fn compound_writable_contradiction_escalates_to_ask(
         empty_context: EvalContext,
         writable_contradiction_presets: HashMap<String, SandboxPreset>,
@@ -956,8 +982,8 @@ mod tests {
         // `Pass` (which outranks the other sub-commands' `Allow`), exercising
         // the pass-escalation branch rather than the contradiction branch.
         // The herestring between `cat`'s own arguments leaves it without a
-        // single byte range to insert a prefix at, which is what forces the
-        // merge.
+        // single byte range to prefix, so no per-sub-command plan is made and
+        // `pass` has nothing but the merged policy to carry.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),

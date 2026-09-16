@@ -72,7 +72,21 @@ Then `.git` is protected even though `.` (its parent) is writable. This matches 
 
 ## Isolated sandboxes for compound commands
 
-In a compound command (`|`, `&&`, `||`, `;`, loops), each sub-command that matches a sandboxed rule runs under its own preset -- one sub-command's sandbox never weakens or gets weakened by another's, because they are not the same sandboxed process. When runok cannot isolate a sub-command this way (e.g. it sits inside another sub-command's `$(...)`), it falls back to one sandbox for the whole command, built from all matched presets with a **Strictest Wins** merge. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules.
+In a compound command (`|`, `&&`, `||`, `;`, loops), runok inserts a `runok exec --sandbox <preset> --` prefix directly in front of each sub-command that needs a sandbox, at that sub-command's own position in the input -- one sub-command's sandbox never weakens or gets weakened by another's, because they are not the same sandboxed process. Only the Claude Code hook's `updatedInput` rewrite applies this per-sub-command insertion; `runok exec` and `runok check` each hand the whole input to a single process, so they always apply one policy to the entire compound command -- the merged policy described below, or, when every sub-command resolves to the same preset, that preset directly.
+
+runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions:
+
+- Its own text has no single contiguous byte range in the input to prefix (a command re-extracted from a function body, or a herestring with a redirect between two of its own arguments).
+- Its range sits inside another sub-command's range (`$(...)`, `<(...)`). A plain subshell `( ... )` does not trigger this: the subshell itself is not extracted as a sub-command, so the commands inside it are not nested in another sub-command's range.
+- It is a shell builtin that changes shell state (`cd`, `export`, `source`, `.`, `eval`, `exec`, `set`, `shift`, `unset`, `readonly`, `local`, `declare`, `typeset`, `alias`, `unalias`, `trap`, `read`, `umask`, `ulimit`, `shopt`, `pushd`, `popd`). Prefixing one would run it in a child process spawned by `runok exec`, so the state change would never reach the shell running the rest of the compound command -- `cd build && make` would run `make` in the original directory, not `build`.
+
+When any of these apply, the whole compound command falls back to one sandbox built from all matched presets with a **Strictest Wins** merge. See [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the merge rules and worked examples.
+
+## Redirects are not sandboxed in compound commands
+
+Per-sub-command insertion leaves pipes, `&&`/`||`/`;`, and redirects with the outer shell -- only a sub-command's own text runs inside its sandbox. A redirect's file is therefore opened by the outer, unsandboxed shell, so `fs.read.deny` and `fs.write.allow` do not apply to it: `cat < secret.txt | cat`, run as a compound command, can read `secret.txt` even if it is listed in `fs.read.deny`. The same command run alone, `cat < secret.txt`, is still blocked, since then the file is opened inside the sandbox.
+
+This is a deliberate trade-off, not an oversight. Opening the redirect target inside the sandbox would make an ordinary `> out.json` fail with `Operation not permitted` whenever the target falls outside the sub-command's own writable paths, which is common once a preset is scoped narrowly. The rule layer still sees redirects independently of the sandbox -- a `when` clause can match on `redirects` -- so a redirect target can still be controlled at the rule level even though the OS-level sandbox no longer reaches it in a compound command.
 
 ## OS-level enforcement
 

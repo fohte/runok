@@ -298,11 +298,7 @@ fn compound_sandbox_insertions(
 fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
     // preset_a: writable [./src]
     // preset_b: writable [./build]
-    // intersection is empty -> contradicts -> escalate to ask.
-    // The herestring between `cmd_b`'s own arguments leaves it without a
-    // single byte range to insert a per-sub-command sandbox prefix at, so the
-    // compound falls back to one merged sandbox -- the only place a writable
-    // contradiction can arise.
+    // intersection is empty -> contradicts -> escalate to ask
     let config = parse_config(indoc! {"
         rules:
           - allow: 'cmd_a *'
@@ -320,8 +316,7 @@ fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
     "})
     .unwrap();
 
-    let result =
-        evaluate_compound(&config, "cmd_a run && cmd_b a <<< X b", &empty_context).unwrap();
+    let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
 
     // Action escalated from Allow to Ask due to contradiction
     assert!(
