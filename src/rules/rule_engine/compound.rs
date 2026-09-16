@@ -765,32 +765,32 @@ mod tests {
 
     #[rstest]
     // Only the sub-command whose own rule asked for a sandbox is prefixed:
-    // `tq ...` matched an allow rule without one, so it stays unwrapped and
+    // `cat ...` matched an allow rule without one, so it stays unwrapped and
     // the `> out.json` redirect is left to the outer shell.
     #[case::only_the_sub_command_asking_for_a_sandbox(
-        "node fix.mjs > out.json | tq task get abc",
+        "node fix.mjs > out.json | cat notes.txt",
         None,
         vec![(0, "restricted")],
     )]
     // `defaults.sandbox` applies per sub-command, exactly as it would if each
     // one were run on its own.
     #[case::defaults_sandbox_covers_the_rest(
-        "node fix.mjs | tq task get abc",
+        "node fix.mjs | cat notes.txt",
         Some("baseline"),
         vec![(0, "restricted"), (15, "baseline")],
     )]
-    // `tq ...` needs `baseline` but sits inside `node`'s own span, where a
+    // `cat ...` needs `baseline` but sits inside `node`'s own span, where a
     // prefix would start a sandbox inside a sandbox -- fall back to wrapping
     // the compound as a whole.
     #[case::nested_sub_command_needing_a_sandbox(
-        "node fix.mjs $(tq task get abc)",
+        "node fix.mjs $(cat notes.txt)",
         Some("baseline"),
         vec![],
     )]
     // The prefix goes after the `KEY=VALUE` assignments, so they become
     // `runok exec`'s own environment and are inherited by the command.
     #[case::after_the_env_assignment_prefix(
-        "FOO=1 node fix.mjs | tq task get abc",
+        "FOO=1 node fix.mjs | cat notes.txt",
         None,
         vec![(6, "restricted")],
     )]
@@ -798,7 +798,7 @@ mod tests {
     // in the original directory.
     #[case::shell_state_builtin_needing_a_sandbox("cd build && node fix.mjs", Some("baseline"), vec![])]
     // Nothing asks for a sandbox, so there is nothing to prefix.
-    #[case::no_sandbox_anywhere("tq task get abc | tq task get def", None, vec![])]
+    #[case::no_sandbox_anywhere("cat notes.txt | cat other.txt", None, vec![])]
     fn compound_plans_one_sandbox_prefix_per_sub_command(
         empty_context: EvalContext,
         #[case] command: &str,
@@ -808,7 +808,7 @@ mod tests {
         let config = Config {
             rules: Some(vec![
                 allow_rule_with_sandbox("node *", "restricted"),
-                allow_rule("tq *"),
+                allow_rule("cat *"),
             ]),
             defaults: Some(Defaults {
                 action: None,

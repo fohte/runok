@@ -861,10 +861,10 @@ mod tests {
     #[case::insertions(
         SandboxInfo::Preset(None),
         vec![insertion(0, "readonly")],
-        "node fix.mjs > out.json | tq task get abc",
+        "node fix.mjs > out.json | cat notes.txt",
         Some(
             "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \
-             node fix.mjs > out.json | tq task get abc",
+             node fix.mjs > out.json | cat notes.txt",
         ),
     )]
     // Applied back-to-front, so the earlier offset is still valid once the
