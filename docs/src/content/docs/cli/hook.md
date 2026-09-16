@@ -1,6 +1,6 @@
 ---
 title: runok hook
-description: Handle Claude Code (and future agent) hook events from stdin.
+description: Handle Claude Code and Codex CLI hook events from stdin.
 sidebar:
   order: 3
 ---
@@ -21,7 +21,7 @@ See [Global Flags](/cli/overview/#global-flags).
 
 ### `--agent <agent>` (required)
 
-Which agent's hook protocol to speak. Currently only `claude-code` is supported; the flag exists so other agent integrations can be added later without a breaking change. A missing or unrecognized value is rejected with an error through runok's own error-handling path (see [Exit codes](#exit-codes)) rather than a raw CLI usage error, so it never triggers Claude Code's blocking exit code 2.
+Which agent's hook protocol to speak: `claude-code` or `codex`. A missing or unrecognized value is rejected with an error through runok's own error-handling path (see [Exit codes](#exit-codes)) rather than a raw CLI usage error, so it never triggers the agent's blocking exit code.
 
 ### `--verbose`
 
@@ -49,6 +49,23 @@ Output detailed rule matching information to stderr.
 ```
 
 `permissionDecisionReason` and `updatedInput` are omitted when not applicable. `updatedInput` is present when a `sandbox` preset applies to the matched rule -- it rewrites the command to `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- <command>` so Claude Code executes it inside the sandbox.
+
+## Codex (`--agent codex`)
+
+Codex CLI speaks two hook events for a Bash tool call: `PreToolUse` and `PermissionRequest`. Both share the same input shape (`PermissionRequest` just omits `tool_use_id`). `runok hook --agent codex` dispatches on `hook_event_name` the same way as `--agent claude-code`, but the two events map differently:
+
+| runok decision                                             | `PreToolUse` response                          | `PermissionRequest` response              |
+| ---------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| `deny`                                                     | `permissionDecision: "deny"` + reason          | `decision: { behavior: "deny", message }` |
+| `allow`, sandbox preset applies                            | `permissionDecision: "allow"` + `updatedInput` | `decision: { behavior: "allow" }`         |
+| `allow`, no sandbox                                        | nothing written                                | `decision: { behavior: "allow" }`         |
+| `ask`                                                      | nothing written                                | nothing written                           |
+| `pass` (no rule matched, or `defaults.action: pass`/unset) | nothing written                                | nothing written                           |
+
+Two points where this differs from `--agent claude-code`:
+
+- Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"` -- so, unlike Claude Code, a `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured. The sandbox wrap only reaches Codex through an explicit `allow`.
+- `PermissionRequest` has no `updatedInput` support at all, so a resolved sandbox preset is irrelevant there -- `allow` always reports plain `{ behavior: "allow" }` regardless of `defaults.sandbox` or a rule's `sandbox` key.
 
 ## Examples
 
@@ -84,6 +101,13 @@ cat hook-input.json | runok hook --agent claude-code
 # {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}
 ```
 
+Same, for a Codex CLI `PreToolUse` payload: since the matched rule has no `sandbox`, `--agent codex` writes nothing (see the table above) and exits `0`, deferring to Codex's own approval flow instead of Claude Code's `allow`:
+
+```sh
+cat hook-input.json | runok hook --agent codex
+# (no output)
+```
+
 ## Exit codes
 
 The following runok-side failures exit with code `1` instead of `2`:
@@ -95,7 +119,7 @@ The following runok-side failures exit with code `1` instead of `2`:
 - `HookInput` schema mismatches (e.g. when Claude Code adds a new required field)
 - A missing or unknown `--agent` value
 
-Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow.
+Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any of these would otherwise block every Bash tool call until runok or the config catches up. Exit `1` is the documented non-blocking failure mode that lets Claude Code fall back to its normal permission flow. Codex CLI treats any non-`0` exit (or non-JSON stdout) as "no decision" and falls back to its own approval flow the same way, so the same exit `1` policy is also safe under `--agent codex`.
 
 | Code | Meaning                                                                                                                             |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------- |

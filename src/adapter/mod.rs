@@ -1,4 +1,5 @@
 pub mod check_adapter;
+pub mod codex_hook_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
 pub mod hook_common;

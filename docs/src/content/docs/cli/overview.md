@@ -31,7 +31,7 @@ Evaluate a command against your rules and report the decision — without execut
 
 ### [`runok hook`](/cli/hook/)
 
-Handle hook events from Claude Code (and, in the future, other coding agents) on stdin — rule evaluation, hook responses, and audit log writes. Registered as the `PreToolUse`/`PostToolUse` hook command in [Claude Code integration](/getting-started/claude-code/).
+Handle hook events from Claude Code or Codex CLI (`--agent claude-code` / `--agent codex`) on stdin — rule evaluation, hook responses, and audit log writes. Registered as the `PreToolUse`/`PostToolUse` hook command in [Claude Code integration](/getting-started/claude-code/).
 
 ### [`runok exec`](/cli/exec/)
 
