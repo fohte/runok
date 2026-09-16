@@ -126,19 +126,21 @@ fn hook_origin_token() -> String {
     format!("{:x}-{:x}", std::process::id(), nanos)
 }
 
+/// `wrap_with_sandbox` embeds a fresh token on every call (see its doc
+/// comment). Replace it with a fixed placeholder so tests -- here and in
+/// the other hook adapters -- can still assert the wrapped command with a
+/// single equality check.
+#[cfg(test)]
+pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
+    let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
+    re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
+        .into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
-
-    /// `wrap_with_sandbox` embeds a fresh token on every call (see its doc
-    /// comment). Replace it with a fixed placeholder so tests can still
-    /// assert the wrapped command with a single equality check.
-    fn normalize_hook_origin_token(command: &str) -> String {
-        let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-        re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
-            .into_owned()
-    }
 
     // --- sandbox_updated_input ---
 

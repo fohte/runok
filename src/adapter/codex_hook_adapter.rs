@@ -55,11 +55,9 @@ impl CodexHookAdapter {
         Ok(serde_json::from_value(self.input.tool_input.clone())?)
     }
 
-    /// PreToolUse: deny with reason, or allow+updatedInput when a sandbox
-    /// preset applies. Nothing else is ever written -- Codex requires
-    /// `updatedInput` to be paired with an explicit `permissionDecision:
-    /// allow`, so a sandbox-less allow or an unresolved (`Ask`/`Pass`)
-    /// action always writes nothing, deferring to Codex's own approval flow.
+    /// Codex requires `updatedInput` to be paired with an explicit
+    /// `permissionDecision: allow` -- so Ask, Pass, and a sandbox-less
+    /// allow all write nothing here, deferring to Codex's own approval flow.
     fn build_pre_tool_use_output(
         &self,
         result: &ActionResult,
@@ -186,6 +184,7 @@ impl Endpoint for CodexHookAdapter {
 mod tests {
     use super::*;
     use crate::adapter::SandboxInfo;
+    use crate::adapter::hook_common::normalize_hook_origin_token;
     use crate::rules::rule_engine::DenyResponse;
     use indoc::indoc;
     use rstest::rstest;
@@ -230,15 +229,6 @@ mod tests {
             sandbox,
             evaluations: vec![],
         }
-    }
-
-    /// `wrap_with_sandbox` embeds a fresh token on every call. Replace it
-    /// with a fixed placeholder so tests can still assert the wrapped
-    /// command with a single equality check.
-    fn normalize_hook_origin_token(command: &str) -> String {
-        let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-        re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
-            .into_owned()
     }
 
     fn normalize_hook_origin_output(output: HookOutput) -> HookOutput {

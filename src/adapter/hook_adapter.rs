@@ -245,7 +245,7 @@ impl Endpoint for ClaudeCodeHookAdapter {
 mod tests {
     use super::*;
     use crate::adapter::SandboxInfo;
-    use crate::adapter::hook_common::HookSpecificOutput;
+    use crate::adapter::hook_common::{HookSpecificOutput, normalize_hook_origin_token};
     use crate::rules::rule_engine::DenyResponse;
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -291,15 +291,6 @@ mod tests {
                 }),
             },
         }
-    }
-
-    /// `wrap_with_sandbox` embeds a fresh token on every call (see its doc
-    /// comment). Replace it with a fixed placeholder so tests can still
-    /// assert the wrapped command with a single equality check.
-    fn normalize_hook_origin_token(command: &str) -> String {
-        let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-        re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
-            .into_owned()
     }
 
     fn normalize_hook_origin_output(output: HookOutput) -> HookOutput {
