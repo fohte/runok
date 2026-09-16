@@ -306,7 +306,7 @@ A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more t
 
 A compound command now collapses to the underlying named preset (applied the same way a non-compound command's preset is) whenever every sandboxed sub-command resolves to the same preset after deduplication, fixing both cases. A command that mixes two or more genuinely different presets still merges them and still escalates a `pass` resolution to `ask`, since that case has no single preset to fall back to. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
 
-### A compound command no longer wraps every sub-command in one merged sandbox (TODO(pr-link))
+### A compound command no longer wraps every sub-command in one merged sandbox ([#516](https://github.com/fohte/runok/pull/516))
 
 A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. Two problems followed. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside the neighboring sub-command's preset, tightening restrictions the matched rule never asked for. And since the whole compound ran inside the sandbox, a redirect like `node fix.mjs > out.json | wc -l` opened `out.json` from _inside_ the sandbox too -- if `node`'s preset didn't allow writing there, the redirect failed with `Operation not permitted` even though nothing about the rule for `node` was meant to restrict `out.json`.
 
