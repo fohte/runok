@@ -1,6 +1,7 @@
 pub mod check_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
+pub mod hook_common;
 mod verbose;
 
 /// Environment variable the Claude Code hook wrapper sets on the `runok exec`
