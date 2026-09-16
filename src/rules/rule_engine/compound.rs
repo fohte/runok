@@ -197,6 +197,11 @@ fn plan_sandbox_wraps(
         if SHELL_STATE_BUILTINS.contains(&name) {
             return None;
         }
+        // The function is defined in the outer shell, so the child process
+        // `runok exec` spawns would not have it.
+        if ext_cmd.function_call.is_some() {
+            return None;
+        }
         let range = ext_cmd.full_span.as_ref()?;
         let contained_in_another = extracted.iter().enumerate().any(|(j, other)| {
             j != i
@@ -795,6 +800,21 @@ mod tests {
         "FOO=1 node fix.mjs | cat notes.txt",
         None,
         vec![(0..18, "restricted")],
+    )]
+    // The substitution is part of `node`'s own text, so it is wrapped along
+    // with it and runs under `restricted` even though `cat *` named no
+    // sandbox of its own.
+    #[case::nested_sub_command_not_needing_a_sandbox(
+        "node fix.mjs > $(cat notes.txt)",
+        None,
+        vec![(0..31, "restricted")],
+    )]
+    // `deploy` resolves to a body needing `restricted`, but the function only
+    // exists in the outer shell, so it cannot be wrapped on its own.
+    #[case::function_call_needing_a_sandbox(
+        "deploy() { node fix.mjs; }; deploy",
+        None,
+        vec![],
     )]
     // Wrapping `cd` would move it into a child process, so `node` would run
     // in the original directory.

@@ -90,9 +90,10 @@ cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readon
 
 runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions:
 
-- Its own text has no single contiguous byte range in the input to replace (a command re-extracted from a function body).
+- It has no byte range of its own in the input to replace (the case after a parse failure, where the whole input is treated as one sub-command).
 - Its range sits inside another sub-command's range (`$(...)`, `<(...)`). A plain subshell `( ... )` does not trigger this: the subshell itself is not extracted as a sub-command, so the commands inside it are not nested in another sub-command's range.
 - It is a shell builtin that changes shell state (`cd`, `export`, `source`, `.`, `eval`, `exec`, `set`, `shift`, `unset`, `readonly`, `local`, `declare`, `typeset`, `alias`, `unalias`, `trap`, `read`, `umask`, `ulimit`, `shopt`, `pushd`, `popd`). Replacing one would run it in a child process spawned by `runok exec`, so the state change would never reach the shell running the rest of the compound command -- `cd build && make` would run `make` in the original directory, not `build`.
+- It calls a shell function defined in the same input. The function exists only in the shell that read the definition, so the child process `runok exec` spawns would not find it.
 
 When any of these apply, the whole compound command falls back to one sandbox built from all matched presets with a **Strictest Wins** merge. See [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the merge rules and worked examples.
 
