@@ -72,6 +72,7 @@ pub(crate) fn resolve_function_call_body(
     .map(|mut commands| {
         for command in &mut commands {
             command.span = None;
+            command.full_span = None;
         }
         commands
     })
@@ -152,11 +153,15 @@ fn extract_commands_with_context(
     Ok(commands)
 }
 
-/// Shift every `Some(span)` in `commands` right by `offset` bytes.
+/// Shift every `Some(span)` / `Some(full_span)` in `commands` right by
+/// `offset` bytes.
 fn shift_spans(commands: &mut [ExtractedCommand], offset: usize) {
     for command in commands {
         if let Some(span) = &command.span {
             command.span = Some(span.start + offset..span.end + offset);
+        }
+        if let Some(full_span) = &command.full_span {
+            command.full_span = Some(full_span.start + offset..full_span.end + offset);
         }
     }
 }
@@ -974,6 +979,7 @@ mod tests {
                 original_command: Some("echo $TS".to_string()),
                 function_call: None,
                 span: Some(span_in("TS=foo 2>/dev/null; echo $TS", "echo $TS")),
+                full_span: Some(span_in("TS=foo 2>/dev/null; echo $TS", "echo $TS")),
             }]
         );
     }
@@ -1004,6 +1010,9 @@ mod tests {
                 original_command: None,
                 function_call: None,
                 span: Some(span_in("FOO=bar echo hi 2>&1", "echo hi")),
+                // The redirected_statement wrapping the command widens
+                // the range to the env prefix and the trailing `2>&1`.
+                full_span: Some(span_in("FOO=bar echo hi 2>&1", "FOO=bar echo hi 2>&1")),
             }]
         );
     }
@@ -1057,6 +1066,7 @@ mod tests {
                 original_command: None,
                 function_call: None,
                 span: Some(span_in("TS=foo 2>/dev/null | cat", "cat")),
+                full_span: Some(span_in("TS=foo 2>/dev/null | cat", "cat")),
             }]
         );
     }
@@ -1662,6 +1672,7 @@ mod tests {
             original_command: None,
             function_call: None,
             span: Some(span_in(input, command)),
+            full_span: Some(span_in(input, command)),
         }
     }
 
@@ -1683,6 +1694,7 @@ mod tests {
                 original_command: Some("echo $X".to_string()),
                 function_call: None,
                 span: Some(span_in("X=1; echo $X", "echo $X")),
+                full_span: Some(span_in("X=1; echo $X", "echo $X")),
             }]
         );
     }
@@ -1710,6 +1722,7 @@ mod tests {
                 original_command: Some("echo $X".to_string()),
                 function_call: None,
                 span: Some(span_in(input, "echo $X")),
+                full_span: Some(span_in(input, "echo $X")),
             }]
         );
     }
@@ -1757,6 +1770,7 @@ mod tests {
             original_command: Some("$X".to_string()),
             function_call: None,
             span: Some(span_in(r#"X="git status"; $X"#, "$X")),
+            full_span: Some(span_in(r#"X="git status"; $X"#, "$X")),
         },
     )]
     #[case::command_name_position(
@@ -1771,6 +1785,7 @@ mod tests {
             original_command: Some("$X -rf /".to_string()),
             function_call: None,
             span: Some(span_in("X=rm; $X -rf /", "$X -rf /")),
+            full_span: Some(span_in("X=rm; $X -rf /", "$X -rf /")),
         },
     )]
     // Motivating case: a flag value smuggled through a variable no
@@ -1787,6 +1802,7 @@ mod tests {
             original_command: Some("git push $F".to_string()),
             function_call: None,
             span: Some(span_in("F=--force; git push $F", "git push $F")),
+            full_span: Some(span_in("F=--force; git push $F", "git push $F")),
         },
     )]
     // `"$X"` is one quoted argument: no IFS splitting, so the whole
@@ -1804,6 +1820,7 @@ mod tests {
             original_command: Some(r#""$X""#.to_string()),
             function_call: None,
             span: Some(span_in(r#"X="git status"; "$X""#, r#""$X""#)),
+            full_span: Some(span_in(r#"X="git status"; "$X""#, r#""$X""#)),
         },
     )]
     fn variable_resolution_resolves_static_value(
@@ -1931,6 +1948,48 @@ mod tests {
     }
 
     // ========================================
+    // extract_commands_with_metadata: full_span
+    //
+    // Unlike `span`, `full_span` covers a sub-command's env-assignment
+    // prefix and every attached redirect, so `&input[full_span]` is
+    // itself a runnable shell fragment for that sub-command alone.
+    // ========================================
+
+    #[rstest]
+    #[case::stdin_redirect_in_pipeline(
+        "cat < secret.txt | wc -l",
+        vec!["cat < secret.txt", "wc -l"],
+    )]
+    #[case::stdout_redirect_in_pipeline(
+        "node fix.mjs > out.json | wc -l",
+        vec!["node fix.mjs > out.json", "wc -l"],
+    )]
+    #[case::env_prefix_included("FOO=1 node x", vec!["FOO=1 node x"])]
+    #[case::herestring_between_arguments("cat a <<< X b", vec!["cat a <<< X b"])]
+    #[case::no_env_or_redirect("ls -la", vec!["ls -la"])]
+    #[case::descriptor_redirect("cmd 2>/dev/null", vec!["cmd 2>/dev/null"])]
+    #[case::append_redirect("cmd >>out", vec!["cmd >>out"])]
+    #[case::ampersand_redirect("cmd &>out", vec!["cmd &>out"])]
+    #[case::multiple_redirects("cmd > out 2>&1", vec!["cmd > out 2>&1"])]
+    fn extract_commands_with_metadata_full_span_slices_match_expected(
+        #[case] input: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let commands = extract_commands_with_metadata(input).unwrap();
+        let actual: Vec<&str> = commands
+            .iter()
+            .map(|c| {
+                let full_span = c
+                    .full_span
+                    .clone()
+                    .unwrap_or_else(|| panic!("expected a full_span for {c:?}"));
+                &input[full_span]
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    // ========================================
     // extract_commands_with_metadata: function call annotation
     // ========================================
 
@@ -2041,8 +2100,10 @@ mod tests {
         let commands =
             resolve_function_call_body(&call_info, "git push", &[], &PipeInfo::default(), "")
                 .unwrap();
-        let spans: Vec<Option<std::ops::Range<usize>>> =
-            commands.iter().map(|c| c.span.clone()).collect();
-        assert_eq!(spans, vec![None]);
+        let spans_are_none: Vec<(bool, bool)> = commands
+            .iter()
+            .map(|c| (c.span.is_none(), c.full_span.is_none()))
+            .collect();
+        assert_eq!(spans_are_none, vec![(true, true)]);
     }
 }

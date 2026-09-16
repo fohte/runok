@@ -82,14 +82,15 @@ pub struct SubCommandDetail {
     pub matched_rules: Vec<RuleMatchInfo>,
 }
 
-/// A sandbox prefix to splice into the original input at byte offset `at`,
-/// so that exactly one sub-command of a compound runs under `preset`.
+/// One sub-command of a compound, to be handed to `runok exec --sandbox
+/// <preset>` so that it -- and nothing around it -- runs under `preset`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SandboxInsertion {
-    /// Byte offset into the command string `evaluate_compound` was given,
-    /// pointing at the start of the sub-command's own text (after its
-    /// `KEY=VALUE` prefix, before its redirects).
-    pub at: usize,
+pub struct SandboxWrap {
+    /// Byte range of the sub-command in the command string
+    /// `evaluate_compound` was given, covering its `KEY=VALUE` prefix and
+    /// its redirects as well as the command itself, so that the redirect's
+    /// file is opened inside the sandbox rather than by the outer shell.
+    pub range: std::ops::Range<usize>,
     pub preset: String,
 }
 
@@ -106,14 +107,14 @@ pub struct CompoundEvalResult {
     /// `pass`) only knows how to apply a named preset, not an arbitrary
     /// merged policy.
     pub sandbox_preset_name: Option<String>,
-    /// One sandbox prefix per sub-command that needs one, letting each
-    /// sub-command run under its own preset with the surrounding shell
-    /// semantics (pipes, `&&`, redirects) left outside every sandbox.
-    /// Empty when no sub-command needs a sandbox, and when no insertion
-    /// point can be determined for one that does -- callers then fall back
-    /// to `sandbox_preset_name` / `sandbox_policy`, which wrap the compound
-    /// as a whole.
-    pub sandbox_insertions: Vec<SandboxInsertion>,
+    /// One entry per sub-command that needs a sandbox, letting each
+    /// sub-command run under its own preset, with only the operators that
+    /// join them (pipes, `&&`, `;`) left to the outer shell.
+    /// Empty when no sub-command needs a sandbox, and when one that does
+    /// cannot be wrapped on its own -- callers then fall back to
+    /// `sandbox_preset_name` / `sandbox_policy`, which wrap the compound as
+    /// a whole.
+    pub sandbox_wraps: Vec<SandboxWrap>,
     /// Per-sub-command evaluation results for audit logging.
     pub sub_results: Vec<EvalResult>,
     /// Per-sub-command evaluation details, for verbose logging.

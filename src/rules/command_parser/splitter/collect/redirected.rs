@@ -8,6 +8,32 @@ use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
 use super::collect_commands;
 
+/// `redirected_statement`'s own `redirect` field(s) live as siblings of
+/// `body`, not as part of `body`'s own node range, so the `full_span`
+/// [`collect_commands`] attached to `body`'s command only covers
+/// `body` itself (see `handle_command`). Since `body` and its
+/// `redirect` sibling(s) are `node`'s only children, `node`'s own byte
+/// range is exactly their union -- widen the one entry among
+/// `body_commands` that came straight from `body` (identified by its
+/// `full_span` still matching `body`'s bare range) to that.
+///
+/// No-op when `body` produced no such entry (e.g. `body` is itself a
+/// compound construct with several inner sub-commands, none of which
+/// alone owns the outer redirect).
+fn widen_full_span_to_own_redirects(
+    node: tree_sitter::Node,
+    body: tree_sitter::Node,
+    body_commands: &mut [ExtractedCommand],
+) {
+    let bare_body_span = body.start_byte()..body.end_byte();
+    if let Some(command) = body_commands
+        .iter_mut()
+        .find(|c| c.full_span == Some(bare_body_span.clone()))
+    {
+        command.full_span = Some(node.start_byte()..node.end_byte());
+    }
+}
+
 /// `redirected_statement`: extract redirect info, then recurse into the
 /// body. Redirect target paths are left to the OS-level sandbox to
 /// enforce. Also recurse into redirect children to extract nested
@@ -51,6 +77,7 @@ pub(super) fn handle_redirected_statement(
         // No swallowed continuation: behave like a plain
         // redirected statement.
         (None, Some(body)) => {
+            let before = commands.len();
             collect_commands(
                 body,
                 source,
@@ -62,6 +89,7 @@ pub(super) fn handle_redirected_statement(
                 function_table,
                 poison,
             );
+            widen_full_span_to_own_redirects(node, body, &mut commands[before..]);
         }
         // Swallowed continuation: synthesize the outer
         // pipeline `[body, *pipe_stages]` and emit each stage

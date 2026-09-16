@@ -208,16 +208,16 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
 
 #[rstest]
 // `git status` matched an allow rule with no sandbox, so only `echo` is
-// prefixed; `> out.json` stays with the outer shell, which is what lets the
-// redirect target be opened outside the sandbox.
-#[case::only_the_sub_command_asking_for_a_sandbox(
+// wrapped -- and `> out.json` goes inside the wrap with it, so the sandbox
+// governs the redirect target.
+#[case::redirect_belongs_to_the_sandboxed_sub_command(
     "echo hello > out.json | git status",
-    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- echo hello > out.json | git status"
+    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello > out.json' | git status"
 )]
-#[case::one_prefix_per_sandboxed_sub_command(
+#[case::one_wrap_per_sandboxed_sub_command(
     "echo hello | grep -c foo",
-    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- echo hello | \
-     RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- grep -c foo"
+    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello' | \
+     RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'grep -c foo'"
 )]
 fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(
     hook_env: TestEnv,

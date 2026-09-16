@@ -64,7 +64,7 @@ If a matching rule specifies a `sandbox` preset name, the adapter resolves it to
 
 1. Look up the preset in `definitions.sandbox`
 2. Resolve CWD-relative paths to absolute paths
-3. For compound commands: the Claude Code hook inserts a sandbox prefix at each sub-command's own position in the input, isolating most sub-commands individually. `runok exec` and `runok check`, and any sub-command the hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
+3. For compound commands: the Claude Code hook replaces each sub-command that needs a sandbox with its own `runok exec --sandbox <preset> --` invocation, wrapping that sub-command's own text (including its redirects) rather than the whole input, isolating most sub-commands individually. `runok exec` and `runok check`, and any sub-command the hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
    - `write.allow` paths: intersection (more restrictive)
    - `write.deny` paths: union (all denied paths combined)
    - `read.deny` paths: union (all denied paths combined)

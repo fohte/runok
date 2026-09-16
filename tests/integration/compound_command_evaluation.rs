@@ -5,7 +5,7 @@ use rstest::rstest;
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
 use runok::rules::rule_engine::{
-    Action, EvalContext, SandboxInsertion, evaluate_command, evaluate_compound,
+    Action, EvalContext, SandboxWrap, evaluate_command, evaluate_compound,
 };
 
 // ========================================
@@ -206,13 +206,14 @@ fn sandbox_strictest_wins_aggregation(
 }
 
 // ========================================
-// Per-sub-command sandbox insertions
+// Per-sub-command sandbox wraps
 // ========================================
 
 #[rstest]
 // `cargo test` matched an allow rule with no sandbox, so only `cargo build`
-// is prefixed, and the redirect stays with the outer shell.
-#[case::only_the_sub_command_asking_for_a_sandbox(
+// is wrapped -- together with its redirect, so `build.log` is opened inside
+// the sandbox.
+#[case::redirect_belongs_to_the_sandboxed_sub_command(
     "cargo build --release > build.log | cargo test --all",
     indoc! {"
         rules:
@@ -225,9 +226,9 @@ fn sandbox_strictest_wins_aggregation(
               fs:
                 writable: [./src]
     "},
-    vec![(0, "preset_a")],
+    vec![(0..33, "preset_a")],
 )]
-#[case::one_prefix_per_preset(
+#[case::one_wrap_per_preset(
     "cargo build --release | cargo test --all",
     indoc! {"
         rules:
@@ -244,13 +245,13 @@ fn sandbox_strictest_wins_aggregation(
               fs:
                 writable: [./build]
     "},
-    vec![(0, "preset_a"), (24, "preset_b")],
+    vec![(0..21, "preset_a"), (24..40, "preset_b")],
 )]
-// The herestring between `cargo test`'s own arguments leaves it without a
-// single byte range to insert a prefix at, so the compound falls back to one
-// merged sandbox covering the whole input.
-#[case::no_insertion_point_falls_back(
-    "cargo build --release | cargo test <<< X --all",
+// `cargo test` sits inside `cargo build`'s own range, so wrapping it would
+// start a sandbox inside a sandbox -- the compound falls back to one merged
+// sandbox covering the whole input.
+#[case::nested_sub_command_falls_back(
+    "cargo build --release $(cargo test --all)",
     indoc! {"
         rules:
           - allow: 'cargo build *'
@@ -268,22 +269,22 @@ fn sandbox_strictest_wins_aggregation(
     "},
     vec![],
 )]
-fn compound_sandbox_insertions(
+fn compound_sandbox_wraps(
     empty_context: EvalContext,
     #[case] command: &str,
     #[case] config_yaml: &str,
-    #[case] expected: Vec<(usize, &str)>,
+    #[case] expected: Vec<(std::ops::Range<usize>, &str)>,
 ) {
     let config = parse_config(config_yaml).unwrap();
 
     let result = evaluate_compound(&config, command, &empty_context).unwrap();
 
     assert_eq!(
-        result.sandbox_insertions,
+        result.sandbox_wraps,
         expected
             .into_iter()
-            .map(|(at, preset)| SandboxInsertion {
-                at,
+            .map(|(range, preset)| SandboxWrap {
+                range,
                 preset: preset.to_string(),
             })
             .collect::<Vec<_>>(),

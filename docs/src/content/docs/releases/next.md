@@ -308,22 +308,22 @@ A compound command now collapses to the underlying named preset (applied the sam
 
 ### A compound command no longer wraps every sub-command in one merged sandbox ([#516](https://github.com/fohte/runok/pull/516))
 
-A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. Two problems followed. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside the neighboring sub-command's preset, tightening restrictions the matched rule never asked for. And since the whole compound ran inside the sandbox, a redirect like `node fix.mjs > out.json | wc -l` opened `out.json` from _inside_ the sandbox too -- if `node`'s preset didn't allow writing there, the redirect failed with `Operation not permitted` even though nothing about the rule for `node` was meant to restrict `out.json`.
+A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside a neighboring sub-command's preset, tightening restrictions the matched rule never asked for.
 
-Each sub-command that needs a sandbox now gets its own `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> --` prefix, inserted directly in front of that sub-command's own text, with every other byte of the input left untouched:
-
-```
-node fix.mjs > out.json | wc -l
-```
+Each sub-command that needs a sandbox is now replaced with its own `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer shell. For example, with `wc *` sandboxed under a `readonly` preset and `cat *` left unsandboxed:
 
 ```
-RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- node fix.mjs > out.json | wc -l
+cat notes.txt > out.json | wc -l
 ```
 
-`wc -l` keeps running unsandboxed, and `> out.json` is opened by the outer shell, outside every sandbox. This is the [Claude Code hook](/getting-started/claude-code/)'s `updatedInput` rewrite specifically -- `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they keep applying a single, merged policy to the whole input.
+```
+cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+```
 
-Of the two escalations a merged sandbox used to force, only one is resolved by this change: a `pass` decision with no single preset to carry in `updatedInput` no longer escalates to `ask` once every sub-command that needs a sandbox can run under its own prefix. The writable-contradiction escalation (an empty intersection of writable paths forcing `ask`) still triggers regardless of whether prefixes could be planned, since `runok exec`/`runok check` always compute the merged policy for their own use, and that computation is what the contradiction check runs against.
+`cat notes.txt > out.json` keeps running unsandboxed, exactly as its own matched rule specified, and `> out.json` is opened by that same unsandboxed process. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to _that_ sub-command is carried inside its sandbox instead of being left to the outer shell. This is the [Claude Code hook](/getting-started/claude-code/)'s `updatedInput` rewrite specifically -- `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they keep applying a single, merged policy to the whole input.
 
-runok still falls back to the previous merge-and-wrap behavior (and both escalations) when a sub-command's own position in the input can't be pinned down -- e.g. inside another sub-command's `$(...)`/`<(...)`, or a herestring -- and, new in this change, when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar): prefixing one of these would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`.
+Of the two escalations a merged sandbox used to force, only one is resolved by this change: a `pass` decision with no single preset to carry in `updatedInput` no longer escalates to `ask` once every sub-command that needs a sandbox can be replaced this way. The writable-contradiction escalation (an empty intersection of writable paths forcing `ask`) still triggers unconditionally, since `runok exec`/`runok check` always compute the merged policy for their own use, and that computation is what the contradiction check runs against.
 
-Leaving redirects with the outer shell also narrows the sandbox's protection in a compound command: a redirect's file is no longer opened inside any sandbox, so `fs.read.deny`/`fs.write.allow` don't reach it there, even though the same redirect is still caught when the command runs alone. This is a deliberate trade-off -- opening redirect targets inside the sandbox would make ordinary output redirects fail whenever the target sits outside the sub-command's own writable paths. See [Security Model -- Redirects are not sandboxed in compound commands](/sandbox/security-model/#redirects-are-not-sandboxed-in-compound-commands) for details, and [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics.
+runok still falls back to the previous merge-and-wrap behavior (and both escalations) when a sub-command's own text has no single contiguous byte range in the input to replace, when its range sits inside another sub-command's range (`$(...)`, `<(...)`), and, new in this change, when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar): replacing one of these would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`.
+
+See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics.

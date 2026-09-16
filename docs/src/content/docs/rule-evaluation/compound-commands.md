@@ -176,43 +176,60 @@ Without this resolution, unmatched sub-commands would be silently ignored.
 
 ## Sandbox policy aggregation
 
-The Claude Code hook applies a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok inserts a `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> --` prefix directly in front of that sub-command's own text in the original input, and returns the rewritten string via `updatedInput`. No other byte of the input is touched -- the sub-command's own text is never re-quoted, and the pipes, `&&`/`||`/`;`, and redirects that join sub-commands together stay outside every sandbox, handled by the outer shell exactly as they would be for an unsandboxed command.
+The Claude Code hook applies a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok replaces that sub-command's own text in the original input -- its `KEY=VALUE` env-assignment prefix and its own redirects included -- with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is the replaced text, shell-quoted, and returns the rewritten string via `updatedInput`. Only the operators that join sub-commands together (`|`, `&&`, `||`, `;`) are left as-is, handled by the outer shell exactly as they would be for an unsandboxed command.
 
 ```yaml
 rules:
-  - allow: 'node *'
+  - allow: 'wc *'
     sandbox: readonly
-  - allow: 'wc -l'
+  - allow: 'cat *'
 ```
 
-For the command `node fix.mjs > out.json | wc -l`:
+For the command `cat notes.txt > out.json | wc -l`:
 
-1. `node fix.mjs` matches a rule with sandbox `readonly`.
-2. `wc -l` matches a rule with no `sandbox` field.
-3. runok inserts a prefix only in front of `node`:
+1. `cat notes.txt > out.json` matches a rule with no `sandbox` field.
+2. `wc -l` matches a rule with sandbox `readonly`.
+3. runok replaces only `wc -l`'s own text:
 
    ```
-   RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- node fix.mjs > out.json | wc -l
+   cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
    ```
 
-4. `> out.json` and the pipe are handled by the outer shell, outside the sandbox -- `readonly` never sees the redirect, so opening `out.json` for writing can't fail with `Operation not permitted` the way it would if the whole pipeline ran inside `readonly`.
-5. `wc -l` runs unsandboxed, since its own matched rule specified no `sandbox`.
+4. `cat notes.txt > out.json` runs unsandboxed, since its own matched rule specified no `sandbox` -- `> out.json` stays with the outer shell.
+5. The pipe also stays with the outer shell, connecting the two processes the same way it would for an unsandboxed pipeline.
 
-The insertion point is the start of the sub-command's own text: after any `KEY=VALUE` env-assignment prefix, before any redirect. `FOO=1 node x` therefore becomes `FOO=1 RUNOK_HOOK_ORIGIN=... runok exec --sandbox readonly -- node x` -- `FOO=1` stays outside the sandbox wrapper and is passed to `runok exec` as an environment variable, which forwards it to `node`.
+A sub-command's own redirect is replaced -- and therefore sandboxed -- along with it:
 
-When [`defaults.sandbox`](/configuration/schema/#defaultssandbox) is set, it applies the same way it does to a non-compound command: a sub-command with no `sandbox` of its own still gets a prefix for the default preset.
+```yaml
+rules:
+  - allow: 'cat *'
+    sandbox: readonly
+  - allow: 'wc *'
+```
 
-Per-sub-command insertion is what the Claude Code hook's `updatedInput` rewrite uses. `runok exec` and `runok check` never use it: each evaluates one command string at a time and has no per-sub-command shell to hand a rewritten string back to, so they always apply a single, merged policy to the whole input instead -- see [Fallback: merged sandbox policy](#fallback-merged-sandbox-policy) below.
+For the command `cat < secret.txt | wc -l`, where `readonly`'s `fs.read.deny` covers `secret.txt`:
+
+```
+RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'cat < secret.txt' | wc -l
+```
+
+`secret.txt` is opened inside the sandbox, so `readonly`'s `fs.read.deny` blocks it -- the same as it would for the equivalent non-compound `cat < secret.txt`.
+
+The replaced range starts at the sub-command's own `KEY=VALUE` env-assignment prefix, if it has one, and ends after its own redirects. `FOO=1 node x` therefore becomes `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'FOO=1 node x'` -- the env assignment is part of the quoted command, re-parsed and applied by the shell `runok exec` runs inside the sandbox.
+
+When [`defaults.sandbox`](/configuration/schema/#defaultssandbox) is set, it applies the same way it does to a non-compound command: a sub-command with no `sandbox` of its own still gets wrapped for the default preset.
+
+Per-sub-command wrapping is what the Claude Code hook's `updatedInput` rewrite uses. `runok exec` and `runok check` never use it: each evaluates one command string at a time and has no per-sub-command shell to hand a rewritten string back to, so they always apply a single, merged policy to the whole input instead -- see [Fallback: merged sandbox policy](#fallback-merged-sandbox-policy) below.
 
 ### Fallback: merged sandbox policy
 
-`runok exec` and `runok check` always apply a single, merged sandbox policy to the whole input, built from every matched preset using the **strictest intersection**. The Claude Code hook normally avoids this by inserting a prefix per sub-command, but falls back to the same merged policy, wrapping the **entire** compound command in one sandbox, when a sub-command that needs a sandbox meets one of these conditions:
+`runok exec` and `runok check` always apply a single, merged sandbox policy to the whole input, built from every matched preset using the **strictest intersection**. The Claude Code hook normally avoids this by wrapping each sub-command on its own, but falls back to the same merged policy, wrapping the **entire** compound command in one sandbox, when a sub-command that needs a sandbox meets one of these conditions:
 
-- **Byte range not contiguous.** The sub-command's own text isn't a single contiguous range of the original input -- e.g. a command re-extracted from a function body at a call site, or a herestring where a redirect sits between two of the command's own arguments (`cmd a <<< X b`).
-- **Byte range nested inside another sub-command's range.** Command substitution (`$(...)`) and process substitution (`<(...)`) extract an inner sub-command whose range sits inside the outer sub-command's own range. Since the outer sub-command is wrapped too, a prefix on the inner one would start a sandbox inside a sandbox.
-- **Shell-state-changing builtin.** A prefix runs the sub-command via `runok exec`, in a child process, so a builtin that mutates the calling shell's own state -- `.`, `alias`, `cd`, `declare`, `eval`, `exec`, `export`, `local`, `popd`, `pushd`, `read`, `readonly`, `set`, `shift`, `shopt`, `source`, `trap`, `typeset`, `ulimit`, `umask`, `unalias`, `unset` -- would have its effect confined to that child process instead of the shell that runs the rest of the compound command: `cd build && make` prefixed on `cd` would run `make` in the original directory, not `build`.
+- **Byte range not contiguous.** The sub-command's own text isn't a single contiguous range of the original input. This happens only for a command re-extracted from a function body at a call site, which has no corresponding range in the original input to replace.
+- **Byte range nested inside another sub-command's range.** Command substitution (`$(...)`) and process substitution (`<(...)`) extract an inner sub-command whose range sits inside the outer sub-command's own range. Since the outer sub-command is wrapped too, wrapping the inner one as well would start a sandbox inside a sandbox.
+- **Shell-state-changing builtin.** A wrap runs the sub-command via `runok exec`, in a child process, so a builtin that mutates the calling shell's own state -- `.`, `alias`, `cd`, `declare`, `eval`, `exec`, `export`, `local`, `popd`, `pushd`, `read`, `readonly`, `set`, `shift`, `shopt`, `source`, `trap`, `typeset`, `ulimit`, `umask`, `unalias`, `unset` -- would have its effect confined to that child process instead of the shell that runs the rest of the compound command: wrapping `cd` in `cd build && make` would run `make` in the original directory, not `build`.
 
-These conditions only trigger the fallback when the affected sub-command **itself** needs a sandbox -- matches a rule with a `sandbox` field, or falls under [`defaults.sandbox`](/configuration/schema/#defaultssandbox) with no rule-level override. A sub-command that doesn't need a sandbox is left untouched regardless of its byte range or builtin status: in `foo $(bar)`, if `bar` matches no sandboxed rule, runok still inserts a prefix in front of `foo` and leaves `$(bar)` as-is.
+These conditions only trigger the fallback when the affected sub-command **itself** needs a sandbox -- matches a rule with a `sandbox` field, or falls under [`defaults.sandbox`](/configuration/schema/#defaultssandbox) with no rule-level override. A sub-command that doesn't need a sandbox is left untouched regardless of its byte range or builtin status: in `foo $(bar)`, if `bar` matches no sandboxed rule, runok still wraps `foo` and leaves `$(bar)` as-is.
 
 | Policy field    | Merge strategy | Rationale                                               |
 | --------------- | -------------- | ------------------------------------------------------- |
@@ -222,11 +239,11 @@ These conditions only trigger the fallback when the affected sub-command **itsel
 
 When every sub-command that specifies a sandbox resolves to the **same** preset (after deduplication), that single preset is applied directly instead of a merged policy -- the same way a non-compound command's preset is applied. This works with `defaults.action: pass` and does not force an `ask` prompt.
 
-A merge across **two or more distinct** presets has no single preset name to apply this way, so a `pass` decision is escalated to `ask` rather than silently dropping the sandbox -- but only when the fallback above was triggered. Once a per-sub-command prefix can be planned for every sub-command that needs a sandbox, a `pass` decision is left alone even with two or more distinct presets, since each prefix already carries its own preset name.
+A merge across **two or more distinct** presets has no single preset name to apply this way, so a `pass` decision is escalated to `ask` rather than silently dropping the sandbox -- but only when the fallback above was triggered. Once every sub-command that needs a sandbox can be wrapped on its own, a `pass` decision is left alone even with two or more distinct presets, since each wrap already carries its own preset name.
 
 ### Writable contradiction escalation
 
-If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction, and the action is escalated to `ask` (unless it is already `deny`). This escalation is unconditional: `runok exec` and `runok check` always evaluate against the merged policy, so it happens whenever the writable intersection is empty, independent of whether the Claude Code hook was also able to plan a per-sub-command prefix for every sub-command.
+If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction, and the action is escalated to `ask` (unless it is already `deny`). This escalation is unconditional: `runok exec` and `runok check` always evaluate against the merged policy, so it happens whenever the writable intersection is empty, independent of whether the Claude Code hook was also able to wrap every sub-command that needs one on its own.
 
 ```yaml
 definitions:
@@ -252,7 +269,7 @@ For the command `build-a release && build-b release`:
 3. Writable intersection: empty (contradiction)
 4. Final result: **ask** (escalated from `allow`)
 
-Both sub-commands have a contiguous byte range and neither is nested in the other, so the Claude Code hook can still plan a per-sub-command prefix for each of them -- but the merged policy it also evaluates against still has an empty writable intersection, so the action still escalates to `ask`.
+Both sub-commands have a contiguous byte range and neither is nested in the other, so the Claude Code hook can still wrap each of them on its own -- but the merged policy it also evaluates against still has an empty writable intersection, so the action still escalates to `ask`.
 
 ## Parse failure fallback
 

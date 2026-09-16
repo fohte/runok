@@ -209,6 +209,16 @@ pub(super) fn handle_command(
             original_command,
             function_call,
             span,
+            // `node`'s own range already covers every child --
+            // variable_assignment prefixes and command-level `redirect`
+            // fields (e.g. a herestring between two arguments) alike --
+            // since those are exactly what the `command` node's start
+            // and end bytes span. An enclosing `redirected_statement`'s
+            // own redirects (the common `cmd > file` shape, where the
+            // redirect is a sibling of `command` rather than its child)
+            // are not visible here; `handle_redirected_statement` widens
+            // this afterward when applicable.
+            full_span: Some(node.start_byte()..node.end_byte()),
         });
     }
 }
@@ -312,6 +322,11 @@ pub(super) fn handle_declaration_or_unset(
             loop_kind: loop_kind.to_string(),
             original_command: None,
             function_call: None,
+            // No env-prefix or command-level redirect field to add on
+            // top of `node`'s own range (see `handle_command`'s
+            // `full_span`); an enclosing `redirected_statement`'s own
+            // redirects are widened in afterward, same as `span` there.
+            full_span: Some(span.clone()),
             span: Some(span),
         });
     }
