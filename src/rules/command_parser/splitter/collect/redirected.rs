@@ -8,18 +8,13 @@ use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
 use super::collect_commands;
 
-/// `redirected_statement`'s own `redirect` field(s) live as siblings of
-/// `body`, not as part of `body`'s own node range, so the `full_span`
-/// [`collect_commands`] attached to `body`'s command only covers
-/// `body` itself (see `handle_command`). Since `body` and its
-/// `redirect` sibling(s) are `node`'s only children, `node`'s own byte
-/// range is exactly their union -- widen the one entry among
-/// `body_commands` that came straight from `body` (identified by its
-/// `full_span` still matching `body`'s bare range) to that.
+/// Widen the entry that came straight from `body` -- identified by its
+/// `full_span` still matching `body`'s bare range -- to cover `node`'s
+/// own `redirect` siblings as well, so the redirect travels with the
+/// command it belongs to.
 ///
-/// No-op when `body` produced no such entry (e.g. `body` is itself a
-/// compound construct with several inner sub-commands, none of which
-/// alone owns the outer redirect).
+/// No-op when `body` is itself a compound construct, since then no
+/// single inner sub-command owns the outer redirect.
 fn widen_full_span_to_own_redirects(
     node: tree_sitter::Node,
     body: tree_sitter::Node,

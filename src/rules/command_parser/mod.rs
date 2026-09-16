@@ -159,11 +159,11 @@ pub struct ExtractedCommand {
     /// the original input, including its env-assignment prefix and
     /// every attached redirect (unlike `span`, which excludes both) --
     /// `&input[full_span]` is itself a runnable shell fragment for this
-    /// sub-command alone. `None` under the same conditions as `span`
-    /// being `None` (a function-body command re-extracted away from its
-    /// call site), and also when a redirect sits inside a heredoc's
-    /// swallowed pipeline/list continuation, since that text belongs to
-    /// a sibling sub-command rather than this one.
+    /// sub-command alone. `None` for a function-body command
+    /// re-extracted away from its call site, which has no range of its
+    /// own in the input. A heredoc redirect is left out when
+    /// tree-sitter attached a trailing `| ...` continuation to it,
+    /// since including it would swallow that sibling sub-command too.
     pub full_span: Option<std::ops::Range<usize>>,
 }
 

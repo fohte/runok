@@ -1971,6 +1971,15 @@ mod tests {
     #[case::append_redirect("cmd >>out", vec!["cmd >>out"])]
     #[case::ampersand_redirect("cmd &>out", vec!["cmd &>out"])]
     #[case::multiple_redirects("cmd > out 2>&1", vec!["cmd > out 2>&1"])]
+    // tree-sitter attaches the trailing `| grep foo` to the heredoc
+    // redirect, so covering the redirect would swallow `grep foo` too.
+    #[case::heredoc_swallowing_a_continuation(
+        indoc! {"
+            cat <<EOF | grep foo
+            body
+            EOF"},
+        vec!["cat", "grep foo"],
+    )]
     fn extract_commands_with_metadata_full_span_slices_match_expected(
         #[case] input: &str,
         #[case] expected: Vec<&str>,
