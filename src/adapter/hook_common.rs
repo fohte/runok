@@ -127,21 +127,10 @@ fn wrap_sub_commands(
     Ok(command)
 }
 
-/// Wrap a command with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox
-/// <preset> -- <quoted_command>`. The command is shell-quoted so that its
-/// own shell syntax -- redirects, and any `&&`/`||`/`;`/`|` when the whole
-/// input is wrapped at once -- is interpreted by the shell `exec` starts
-/// inside the sandbox, not by the one outside it.
-///
-/// The `RUNOK_HOOK_ORIGIN` env var (scoped to this one invocation via the
-/// shell's assignment-prefix syntax) tells `exec` that this invocation
-/// came from the hook (not typed directly by a user), so that
-/// `defaults.action: pass` runs under the sandbox instead of being
-/// denied. The token changes on every call so it can't just be
-/// copy-pasted from a doc or a previous run -- `exec` never verifies the
-/// token's value, only that the env var was set (see the doc comment on
-/// `ExecAdapter::hook_origin` for why that's still an accepted
-/// trade-off).
+/// Shell-quotes `command` and `preset` so the wrapped command's own shell
+/// syntax is interpreted inside the sandbox, not by the outer shell. Sets
+/// `RUNOK_HOOK_ORIGIN` so `exec` treats this as a hook-originated call and
+/// runs `defaults.action: pass` under the sandbox instead of denying it.
 pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
