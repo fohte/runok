@@ -245,7 +245,7 @@ When every sub-command that specifies a sandbox resolves to the **same** preset 
 A merge across **two or more distinct** presets is represented as repeated `--sandbox` flags: the Claude Code hook writes `updatedInput` with one `--sandbox <preset>` flag per distinct preset name --
 
 ```
-RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'
+RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset-a> --sandbox <preset-b> -- '<compound command, re-quoted>'
 ```
 
 -- and `runok exec` resolves and merges the named presets itself, using the same intersection/union merge shown in the table above. This applies for `allow`, `ask`, and `pass` alike: a `pass` decision is no longer escalated to `ask` just because two or more distinct presets are involved, since the merged set can now always be carried through `updatedInput`.

@@ -25,9 +25,11 @@ A single argument after `--` is interpreted as a shell command (passed to the sh
 
 See [Global Flags](/cli/overview/#global-flags).
 
-### `--sandbox <preset>`
+### `--sandbox <preset>...`
 
 Apply a named [sandbox preset](/sandbox/overview/) from your runok configuration. Overrides any sandbox defined in the matching rule.
+
+Repeatable. Passing `--sandbox` more than once merges the named presets using [Strictest Wins](/sandbox/overview/#sandbox-merging-for-compound-commands) (writable roots intersected, deny paths unioned, network access ANDed).
 
 ### `--verbose`
 
@@ -45,6 +47,12 @@ Execute with a sandbox preset:
 
 ```sh
 runok exec --sandbox strict -- npm install
+```
+
+Execute with multiple sandbox presets merged via Strictest Wins:
+
+```sh
+runok exec --sandbox strict --sandbox no-network -- npm install
 ```
 
 Run a shell expression (single argument, passed to shell):

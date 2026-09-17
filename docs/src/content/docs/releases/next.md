@@ -337,10 +337,12 @@ definitions:
   sandbox:
     web-only:
       fs:
-        writable: ['/srv/web']
+        write:
+          allow: ['/srv/web']
     api-only:
       fs:
-        writable: ['/srv/api']
+        write:
+          allow: ['/srv/api']
 
 rules:
   - allow: 'deploy-web *'
