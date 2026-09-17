@@ -477,8 +477,8 @@ mod tests {
     // --- handle_action: Ask (treated as deny) ---
 
     #[rstest]
-    #[case::with_message(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None })]
-    #[case::without_message(AskResponse { message: None, fix_suggestion: None })]
+    #[case::with_message(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None, matched_rule: String::new() })]
+    #[case::without_message(AskResponse { message: None, fix_suggestion: None, matched_rule: String::new() })]
     fn handle_action_ask_returns_exit_3(#[case] ask_response: AskResponse) {
         let adapter = ExecAdapter::new(
             vec!["terraform".into(), "apply".into()],
@@ -510,6 +510,7 @@ mod tests {
                 action: Action::Ask(AskResponse {
                     message: Some("please confirm".to_string()),
                     fix_suggestion: None,
+                    matched_rule: String::new(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
                 sandbox_wraps: vec![],

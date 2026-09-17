@@ -178,6 +178,7 @@ pub(super) fn evaluate_simple_command(
             ActionKind::Ask => Action::Ask(AskResponse {
                 message: most_restrictive.rule.message.clone(),
                 fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
+                matched_rule: most_restrictive.pattern_str.clone(),
             }),
             ActionKind::Allow => Action::Allow,
             ActionKind::Pass => unreachable!(
@@ -541,6 +542,7 @@ mod tests {
             Action::Ask(AskResponse {
                 message: Some("Are you sure?".to_string()),
                 fix_suggestion: None,
+                matched_rule: "git push *".to_string(),
             })
         );
     }

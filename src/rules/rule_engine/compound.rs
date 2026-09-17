@@ -145,6 +145,7 @@ pub fn evaluate_compound(
                         "a matched rule's sandbox policy cannot be applied via pass".to_string(),
                     ),
                     fix_suggestion: None,
+                    matched_rule: String::new(),
                 }),
                 Some(policy),
             )
@@ -260,6 +261,7 @@ fn escalate_to_ask(action: Action) -> Action {
         Action::Allow | Action::Pass => Action::Ask(AskResponse {
             message: Some("sandbox policy conflict: writable roots are contradictory".to_string()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         other => other,
     }
@@ -362,6 +364,7 @@ pub fn default_action(config: &Config) -> Action {
         ActionKind::Ask => Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         ActionKind::Pass => Action::Pass,
     }
@@ -1075,6 +1078,7 @@ mod tests {
                         "a matched rule's sandbox policy cannot be applied via pass".to_string()
                     ),
                     fix_suggestion: None,
+                    matched_rule: String::new(),
                 }),
                 None,
                 Some(MergedSandboxPolicy {

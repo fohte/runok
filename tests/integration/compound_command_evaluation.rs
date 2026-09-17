@@ -325,6 +325,7 @@ fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
         Action::Ask(AskResponse {
             message: Some("sandbox policy conflict: writable roots are contradictory".to_string()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         })
     );
     // Policy still present with empty writable roots

@@ -245,6 +245,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         None,
         indoc! {"
@@ -373,6 +374,7 @@ mod tests {
                 Action::Ask(AskResponse {
                     message: None,
                     fix_suggestion: None,
+                    matched_rule: String::new(),
                 }),
                 vec![],
             ),
@@ -385,6 +387,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         indoc! {"
             ▶ Evaluating: set -a && source .env.runtime && set +a

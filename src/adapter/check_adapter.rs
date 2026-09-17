@@ -247,12 +247,12 @@ mod tests {
         },
     )]
     #[case::ask_with_message(
-        Action::Ask(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None }),
+        Action::Ask(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None, matched_rule: String::new() }),
         SandboxInfo::Preset(None),
         CheckOutput { decision: "ask".to_string(), reason: Some("please confirm".to_string()), fix_suggestion: None, sandbox: None },
     )]
     #[case::ask_without_message(
-        Action::Ask(AskResponse { message: None, fix_suggestion: None }),
+        Action::Ask(AskResponse { message: None, fix_suggestion: None, matched_rule: String::new() }),
         SandboxInfo::Preset(None),
         CheckOutput { decision: "ask".to_string(), reason: None, fix_suggestion: None, sandbox: None },
     )]
@@ -260,6 +260,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: Some("use rm with caution".to_string()),
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(None),
         CheckOutput {
@@ -307,7 +308,7 @@ mod tests {
         fix_suggestion: None,
         matched_rule: "test".to_string(),
     }))]
-    #[case::ask(Action::Ask(AskResponse { message: None, fix_suggestion: None }))]
+    #[case::ask(Action::Ask(AskResponse { message: None, fix_suggestion: None, matched_rule: "test".to_string() }))]
     #[case::pass(Action::Pass)]
     fn handle_action_always_returns_exit_0(#[case] action: Action) {
         let adapter = CheckAdapter::from_command("test".to_string());

@@ -842,6 +842,7 @@ fn ask_response_preserves_message(empty_context: EvalContext) {
         Action::Ask(AskResponse {
             message: Some("Are you sure you want to push?".to_string()),
             fix_suggestion: None,
+            matched_rule: "git push *".to_string(),
         })
     );
 }
@@ -860,6 +861,7 @@ fn ask_without_message_has_none(empty_context: EvalContext) {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: "git push *".to_string(),
         })
     );
 }

@@ -97,6 +97,7 @@ fn deny_or_ask(
             Action::Ask(AskResponse {
                 message: Some(message),
                 fix_suggestion: Some(fix_suggestion),
+                matched_rule: String::new(),
             }),
             Some(command_name.to_owned()),
         ),
@@ -248,6 +249,7 @@ mod tests {
                      an allow rule for it instead. Otherwise, check for a typo."
                         .to_string()
                 ),
+                matched_rule: String::new(),
             }),
             Some("tarraform".to_string()),
         )

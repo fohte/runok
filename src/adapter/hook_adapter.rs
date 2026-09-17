@@ -392,6 +392,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(None),
         make_output(Some("ask"), Some("please confirm"), None),
@@ -400,6 +401,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(None),
         make_output(Some("ask"), None, None)
@@ -408,6 +410,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(Some("restricted".to_string())),
         make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),

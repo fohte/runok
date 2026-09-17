@@ -819,6 +819,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("are you sure?".to_owned()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SerializableAction::Ask {
             message: Some("are you sure?".to_owned()),
@@ -828,6 +829,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SerializableAction::Ask { message: None },
     )]
@@ -837,6 +839,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("are you sure?".to_owned()),
             fix_suggestion: Some("try --dry-run instead".to_owned()),
+            matched_rule: String::new(),
         }),
         SerializableAction::Ask {
             message: Some("are you sure?".to_owned()),

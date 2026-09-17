@@ -983,6 +983,7 @@ mod tests {
         Action::Ask(crate::rules::rule_engine::AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: "test".to_string(),
         }),
         ActionKind::Ask
     )]

@@ -147,6 +147,7 @@ pub struct DenyResponse {
 pub struct AskResponse {
     pub message: Option<String>,
     pub fix_suggestion: Option<String>,
+    pub matched_rule: String,
 }
 
 /// Evaluate a command against all rules in the config, returning the most
