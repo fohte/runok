@@ -424,13 +424,13 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
-            matched_rule: String::new(),
+            matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
         Some(build_output(
             Some("deny"),
             Some(
-                "approval required by default policy. This rule requires a human decision and \
+                "approval required: git push -f *. This rule requires a human decision and \
                  this session has no approval prompt. Stop, report which command needs approval \
                  and why, and let the delegator or the user decide. Do not retry this command \
                  and do not work around the rule."
