@@ -373,6 +373,9 @@ pub(in crate::rules::command_parser) fn collect_commands(
                     loop_kind: loop_kind.to_string(),
                     original_command: None,
                     function_call: None,
+                    // No env-prefix/redirect structure on this leaf node
+                    // to add on top of its own range.
+                    full_span: Some(span.clone()),
                     span: Some(span),
                 });
             }

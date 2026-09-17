@@ -70,11 +70,32 @@ Then `.git` is protected even though `.` (its parent) is writable. This matches 
 - On macOS, Seatbelt's `(deny file-write*)` rules take priority over `(allow file-write*)` rules
 - On Linux, bubblewrap applies `--ro-bind` **after** `--bind`, so read-only mounts overlay writable mounts
 
-## Strictest Wins for compound commands
+## Isolated sandboxes for compound commands
 
-When multiple sandbox policies apply, runok uses a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules.
+In a compound command (`|`, `&&`, `||`, `;`, loops), runok replaces each sub-command that needs a sandbox with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its `KEY=VALUE` env prefix and its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer, unsandboxed shell -- one sub-command's sandbox never weakens or gets weakened by another's, because they run as separate processes. Only the Claude Code hook's `updatedInput` rewrite performs this per-sub-command replacement; `runok exec` and `runok check` each hand the whole input to a single process, so they always apply one policy to the entire compound command -- the merged policy described below, or, when every sub-command resolves to the same preset, that preset directly.
 
-This prevents a less-restricted command from weakening the sandbox of a more-restricted command in the same pipeline.
+For example, with a rule that sandboxes `wc *` under a `readonly` preset and leaves `cat *` unsandboxed:
+
+```
+cat notes.txt > out.json | wc -l
+```
+
+becomes
+
+```
+cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+```
+
+`cat notes.txt > out.json` is untouched and keeps running outside any sandbox, exactly as the rule matching `cat *` specified. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to that sub-command is carried inside its sandbox: with `cat *` sandboxed under `readonly` and `secret.txt` listed in that preset's `fs.read.deny`, `cat < secret.txt | wc -l` becomes `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'cat < secret.txt' | wc -l` -- `secret.txt` is opened inside the sandbox, so the deny rule still applies.
+
+runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions:
+
+- It has no byte range of its own in the input to replace (the case after a parse failure, where the whole input is treated as one sub-command).
+- Its range sits inside another sub-command's range (`$(...)`, `<(...)`). A plain subshell `( ... )` does not trigger this: the subshell itself is not extracted as a sub-command, so the commands inside it are not nested in another sub-command's range.
+- It is a shell builtin that changes shell state (`cd`, `export`, `source`, `.`, `eval`, `exec`, `set`, `shift`, `unset`, `readonly`, `local`, `declare`, `typeset`, `alias`, `unalias`, `trap`, `read`, `umask`, `ulimit`, `shopt`, `pushd`, `popd`). Replacing one would run it in a child process spawned by `runok exec`, so the state change would never reach the shell running the rest of the compound command -- `cd build && make` would run `make` in the original directory, not `build`.
+- It calls a shell function defined in the same input. The function exists only in the shell that read the definition, so the child process `runok exec` spawns would not find it.
+
+When any of these apply, the whole compound command falls back to one sandbox built from all matched presets with a **Strictest Wins** merge. See [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the merge rules and worked examples.
 
 ## OS-level enforcement
 

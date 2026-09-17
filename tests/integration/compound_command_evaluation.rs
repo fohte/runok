@@ -4,7 +4,9 @@ use indoc::indoc;
 use rstest::rstest;
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command, evaluate_compound};
+use runok::rules::rule_engine::{
+    Action, EvalContext, SandboxWrap, evaluate_command, evaluate_compound,
+};
 
 // ========================================
 // Individual evaluation of each command in a compound expression
@@ -201,6 +203,92 @@ fn sandbox_strictest_wins_aggregation(
 
     assert_eq!(result.action, Action::Allow);
     assert_eq!(result.sandbox_policy.unwrap(), expected_policy);
+}
+
+// ========================================
+// Per-sub-command sandbox wraps
+// ========================================
+
+#[rstest]
+// `cargo test` matched an allow rule with no sandbox, so only `cargo build`
+// is wrapped -- together with its redirect, so `build.log` is opened inside
+// the sandbox.
+#[case::redirect_belongs_to_the_sandboxed_sub_command(
+    "cargo build --release > build.log | cargo test --all",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+    "},
+    vec![(0..33, "preset_a")],
+)]
+#[case::one_wrap_per_preset(
+    "cargo build --release | cargo test --all",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+            preset_b:
+              fs:
+                writable: [./build]
+    "},
+    vec![(0..21, "preset_a"), (24..40, "preset_b")],
+)]
+// `cargo test` sits inside `cargo build`'s own range, so wrapping it would
+// start a sandbox inside a sandbox -- the compound falls back to one merged
+// sandbox covering the whole input.
+#[case::nested_sub_command_falls_back(
+    "cargo build --release $(cargo test --all)",
+    indoc! {"
+        rules:
+          - allow: 'cargo build *'
+            sandbox: preset_a
+          - allow: 'cargo test *'
+            sandbox: preset_b
+        definitions:
+          sandbox:
+            preset_a:
+              fs:
+                writable: [./src]
+            preset_b:
+              fs:
+                writable: [./src]
+    "},
+    vec![],
+)]
+fn compound_sandbox_wraps(
+    empty_context: EvalContext,
+    #[case] command: &str,
+    #[case] config_yaml: &str,
+    #[case] expected: Vec<(std::ops::Range<usize>, &str)>,
+) {
+    let config = parse_config(config_yaml).unwrap();
+
+    let result = evaluate_compound(&config, command, &empty_context).unwrap();
+
+    assert_eq!(
+        result.sandbox_wraps,
+        expected
+            .into_iter()
+            .map(|(range, preset)| SandboxWrap {
+                range,
+                preset: preset.to_string(),
+            })
+            .collect::<Vec<_>>(),
+    );
 }
 
 // ========================================

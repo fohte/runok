@@ -70,7 +70,11 @@ impl CodexHookAdapter {
                 None,
             ))),
             Action::Allow => {
-                let updated = sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_wraps,
+                    &bash_input.command,
+                )?;
                 Ok(updated.map(|u| build_output(Some("allow"), None, Some(u))))
             }
             Action::Ask(_) | Action::Pass => Ok(None),
@@ -227,6 +231,7 @@ mod tests {
         ActionResult {
             action,
             sandbox,
+            sandbox_wraps: vec![],
             evaluations: vec![],
         }
     }

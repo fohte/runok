@@ -122,7 +122,11 @@ impl ClaudeCodeHookAdapter {
 
         let (decision, reason, updated_input) = match &result.action {
             Action::Allow => {
-                let updated = sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_wraps,
+                    &bash_input.command,
+                )?;
                 (Some("allow"), None, updated)
             }
             Action::Deny(deny_response) => {
@@ -132,11 +136,19 @@ impl ClaudeCodeHookAdapter {
             Action::Ask(message) => {
                 // When the user approves an ask, Claude Code executes the updatedInput
                 // command, so we need to wrap it with the sandbox just like allow.
-                let updated = sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_wraps,
+                    &bash_input.command,
+                )?;
                 (Some("ask"), message.clone(), updated)
             }
             Action::Pass => {
-                let updated = sandbox_updated_input(&result.sandbox, &bash_input.command)?;
+                let updated = sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_wraps,
+                    &bash_input.command,
+                )?;
                 (None, None, updated)
             }
         };
@@ -402,6 +414,7 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox,
+            sandbox_wraps: vec![],
             evaluations: vec![],
         };
         let output = adapter
@@ -426,6 +439,7 @@ mod tests {
         let result = ActionResult {
             action: Action::Pass,
             sandbox,
+            sandbox_wraps: vec![],
             evaluations: vec![],
         };
         let output = adapter
@@ -546,6 +560,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));
@@ -560,6 +575,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap_or_else(|e| panic!("handle_action failed: {e}"));

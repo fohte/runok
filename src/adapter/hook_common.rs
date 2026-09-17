@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::SandboxInfo;
-use crate::rules::rule_engine::DenyResponse;
+use crate::rules::rule_engine::{DenyResponse, SandboxWrap};
 
 /// Bash tool's tool_input structure.
 #[derive(Debug, Deserialize)]
@@ -81,8 +81,14 @@ pub fn build_output(
 
 pub fn sandbox_updated_input(
     sandbox: &SandboxInfo,
+    wraps: &[SandboxWrap],
     original_command: &str,
 ) -> Result<Option<UpdatedInput>, anyhow::Error> {
+    if !wraps.is_empty() {
+        return Ok(Some(UpdatedInput {
+            command: wrap_sub_commands(wraps, original_command)?,
+        }));
+    }
     match sandbox {
         SandboxInfo::Preset(Some(preset)) => Ok(Some(UpdatedInput {
             command: wrap_with_sandbox(preset, original_command)?,
@@ -91,23 +97,56 @@ pub fn sandbox_updated_input(
     }
 }
 
+/// Replace each sub-command that needs a sandbox with a `runok exec`
+/// invocation carrying that sub-command as one quoted argument, leaving
+/// every byte between them untouched: the operators that join the
+/// sub-commands (`|`, `&&`, `;`) stay with the outer shell, while each
+/// sub-command's own redirects go inside its sandbox along with it.
+/// Replacements are applied back-to-front so the ranges still to come
+/// stay valid.
+fn wrap_sub_commands(
+    wraps: &[SandboxWrap],
+    original_command: &str,
+) -> Result<String, anyhow::Error> {
+    let mut command = original_command.to_string();
+    let mut ordered: Vec<&SandboxWrap> = wraps.iter().collect();
+    ordered.sort_by_key(|wrap| std::cmp::Reverse(wrap.range.start));
+
+    for wrap in ordered {
+        let sub_command = command.get(wrap.range.clone()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "sandbox range {}..{} is not a valid slice of the command",
+                wrap.range.start,
+                wrap.range.end
+            )
+        })?;
+        let wrapped = wrap_with_sandbox(&wrap.preset, sub_command)?;
+        command.replace_range(wrap.range.clone(), &wrapped);
+    }
+
+    Ok(command)
+}
+
 /// Wrap a command with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox
-/// <preset> -- <quoted_command>`. The command is shell-quoted to prevent
-/// shell metacharacters (e.g. `&&`, `||`, `;`, `|`) from being
-/// interpreted outside the sandbox. The `RUNOK_HOOK_ORIGIN` env var
-/// (scoped to this one invocation via the shell's assignment-prefix
-/// syntax) tells `exec` that this invocation came from the hook (not
-/// typed directly by a user), so that `defaults.action: pass` runs under
-/// the sandbox instead of being denied. The token changes on every call
-/// so it can't just be copy-pasted from a doc or a previous run -- `exec`
-/// never verifies the token's value, only that the env var was set (see
-/// the doc comment on `ExecAdapter::hook_origin` for why that's still an
-/// accepted trade-off).
+/// <preset> -- <quoted_command>`. The command is shell-quoted so that its
+/// own shell syntax -- redirects, and any `&&`/`||`/`;`/`|` when the whole
+/// input is wrapped at once -- is interpreted by the shell `exec` starts
+/// inside the sandbox, not by the one outside it.
+///
+/// The `RUNOK_HOOK_ORIGIN` env var (scoped to this one invocation via the
+/// shell's assignment-prefix syntax) tells `exec` that this invocation
+/// came from the hook (not typed directly by a user), so that
+/// `defaults.action: pass` runs under the sandbox instead of being
+/// denied. The token changes on every call so it can't just be
+/// copy-pasted from a doc or a previous run -- `exec` never verifies the
+/// token's value, only that the env var was set (see the doc comment on
+/// `ExecAdapter::hook_origin` for why that's still an accepted
+/// trade-off).
 pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
-    let quoted_preset = shlex::try_quote(preset)
-        .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+    let quoted_preset = shlex::try_quote(preset)
+        .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
     let token = hook_origin_token();
     let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
     Ok(format!(
@@ -133,7 +172,7 @@ fn hook_origin_token() -> String {
 #[cfg(test)]
 pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
     let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-    re.replace(command, "RUNOK_HOOK_ORIGIN=<token>")
+    re.replace_all(command, "RUNOK_HOOK_ORIGIN=<token>")
         .into_owned()
 }
 
@@ -144,20 +183,60 @@ mod tests {
 
     // --- sandbox_updated_input ---
 
+    fn wrap(range: std::ops::Range<usize>, preset: &str) -> SandboxWrap {
+        SandboxWrap {
+            range,
+            preset: preset.to_string(),
+        }
+    }
+
     #[rstest]
     #[case::preset_some(
         SandboxInfo::Preset(Some("restricted".to_string())),
+        vec![],
         "echo hello",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
     )]
-    #[case::preset_none(SandboxInfo::Preset(None), "echo hello", None)]
-    #[case::merged_policy(SandboxInfo::MergedPolicy(None), "echo hello", None)]
+    #[case::preset_none(SandboxInfo::Preset(None), vec![], "echo hello", None)]
+    #[case::merged_policy(SandboxInfo::MergedPolicy(None), vec![], "echo hello", None)]
+    // Only `node` needs the sandbox, and its redirect is inside the wrapped
+    // range, so `out.json` is opened by the shell inside the sandbox while
+    // the pipe and `cat ...` stay outside it.
+    #[case::wraps(
+        SandboxInfo::Preset(None),
+        vec![wrap(0..23, "readonly")],
+        "node fix.mjs > out.json | cat notes.txt",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \
+             'node fix.mjs > out.json' | cat notes.txt",
+        ),
+    )]
+    // Applied back-to-front, so the earlier range is still valid once the
+    // later one has been replaced by a longer string.
+    #[case::multiple_wraps(
+        SandboxInfo::Preset(None),
+        vec![wrap(0..13, "readonly"), wrap(16..28, "writable")],
+        "awk '{print}' | node fix.mjs",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \"awk '{print}'\" | \
+             RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox writable -- 'node fix.mjs'",
+        ),
+    )]
+    // Wraps win over the whole-input preset: they express the same sandbox
+    // per sub-command instead of one sandbox over everything.
+    #[case::wraps_take_precedence_over_preset(
+        SandboxInfo::Preset(Some("restricted".to_string())),
+        vec![wrap(0..2, "readonly")],
+        "ls | wc -l",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- ls | wc -l"),
+    )]
     fn sandbox_updated_input_resolves_preset(
         #[case] sandbox: SandboxInfo,
+        #[case] wraps: Vec<SandboxWrap>,
         #[case] command: &str,
         #[case] expected_command: Option<&str>,
     ) {
-        let result = sandbox_updated_input(&sandbox, command)
+        let result = sandbox_updated_input(&sandbox, &wraps, command)
             .unwrap_or_else(|e| panic!("unexpected error: {e}"));
         match expected_command {
             Some(expected) => {

@@ -309,3 +309,25 @@ For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `RUNO
 A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more than one sub-command was always represented internally as a merged policy, even when every sub-command that specified a sandbox actually named the same preset. Two consequences followed: a `pass` resolution (one sub-command matched a sandboxed `allow` rule, another was unmatched) was escalated to `ask` on every invocation, since a `pass` response has no way to carry a merged policy; an `allow` resolution applied no sandbox at all, since `allow`'s `updatedInput` rewriting only understood a named preset, not a merged policy -- so the sandbox was silently dropped while the command still ran.
 
 A compound command now collapses to the underlying named preset (applied the same way a non-compound command's preset is) whenever every sandboxed sub-command resolves to the same preset after deduplication, fixing both cases. A command that mixes two or more genuinely different presets still merges them and still escalates a `pass` resolution to `ask`, since that case has no single preset to fall back to. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
+
+### A compound command no longer wraps every sub-command in one merged sandbox ([#516](https://github.com/fohte/runok/pull/516))
+
+A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside a neighboring sub-command's preset, tightening restrictions the matched rule never asked for.
+
+Each sub-command that needs a sandbox is now replaced with its own `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer shell. For example, with `wc *` sandboxed under a `readonly` preset and `cat *` left unsandboxed:
+
+```
+cat notes.txt > out.json | wc -l
+```
+
+```
+cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+```
+
+`cat notes.txt > out.json` keeps running unsandboxed, exactly as its own matched rule specified, and `> out.json` is opened by that same unsandboxed process. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to _that_ sub-command is carried inside its sandbox instead of being left to the outer shell. This is the [Claude Code hook](/getting-started/claude-code/)'s `updatedInput` rewrite specifically -- `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they keep applying a single, merged policy to the whole input.
+
+Of the two escalations a merged sandbox used to force, only one is resolved by this change: a `pass` decision with no single preset to carry in `updatedInput` no longer escalates to `ask` once every sub-command that needs a sandbox can be replaced this way. The writable-contradiction escalation (an empty intersection of writable paths forcing `ask`) still triggers unconditionally, since `runok exec`/`runok check` always compute the merged policy for their own use, and that computation is what the contradiction check runs against.
+
+runok still falls back to the previous merge-and-wrap behavior (and both escalations) when a sub-command has no byte range of its own in the input to replace, when its range sits inside another sub-command's range (`$(...)`, `<(...)`), and, new in this change, when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar) or a call to a shell function defined in the same input: replacing either would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`, and a function defined by the command itself would not exist at all.
+
+See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics.

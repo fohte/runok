@@ -275,6 +275,7 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox,
+            sandbox_wraps: vec![],
             evaluations: vec![],
         };
         assert_eq!(build_check_output(&result), expected);
@@ -296,6 +297,7 @@ mod tests {
         let result = ActionResult {
             action,
             sandbox: SandboxInfo::Preset(None),
+            sandbox_wraps: vec![],
             evaluations: vec![],
         };
         assert_eq!(adapter.handle_action(result).ok(), Some(0));

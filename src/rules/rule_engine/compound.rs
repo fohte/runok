@@ -6,15 +6,22 @@ use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_
 
 use super::dispatch::evaluate_command_inner;
 use super::require_command_in_path::command_contains_source_like;
-use super::{Action, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SubCommandDetail};
+use super::{
+    Action, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SandboxWrap,
+    SubCommandDetail,
+};
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
 /// by splitting it into individual commands, evaluating each, and aggregating
 /// the results.
 ///
 /// - Action aggregation: Explicit Deny Wins (deny > ask > allow > default)
+/// - Sandbox: each sub-command is wrapped on its own (`sandbox_wraps`) so
+///   it runs under exactly the preset its own rule asked for
 /// - Sandbox policy aggregation: Strictest Wins (writable roots intersected,
-///   deny paths unioned, network access intersected)
+///   deny paths unioned, network access intersected), for callers that can
+///   only apply one policy to the whole input, and for a compound where some
+///   sub-command cannot be wrapped on its own
 /// - If sandbox aggregation produces empty writable roots (contradiction),
 ///   the action is escalated to `Ask`
 ///
@@ -35,6 +42,7 @@ pub fn evaluate_compound(
             original_command: None,
             function_call: None,
             span: None,
+            full_span: None,
         }]
     });
 
@@ -83,6 +91,10 @@ pub fn evaluate_compound(
 
     let action = merged_action.unwrap_or_else(|| default_action(config));
 
+    let default_preset = config.defaults.as_ref().and_then(|d| d.sandbox.as_deref());
+    let sandbox_wraps =
+        plan_sandbox_wraps(&extracted, &sub_results, default_preset).unwrap_or_default();
+
     // Deduplicate preset names while preserving order
     let mut seen = HashSet::new();
     let unique_names: Vec<&String> = preset_names
@@ -121,14 +133,19 @@ pub fn evaluate_compound(
         }
         // A pass response carries no `updatedInput` unless the sandbox
         // collapses to a single preset (handled above via
-        // `sandbox_preset_name`); a real multi-preset merge has no
-        // representation pass can carry, so escalate to `ask` instead.
-        (Action::Pass, Some(policy)) if sandbox_preset_name.is_none() => (
-            Action::Ask(Some(
-                "a matched rule's sandbox policy cannot be applied via pass".to_string(),
-            )),
-            Some(policy),
-        ),
+        // `sandbox_preset_name`) or to per-sub-command wraps; a merge
+        // across presets has no representation pass can carry, so escalate
+        // to `ask` instead.
+        (Action::Pass, Some(policy))
+            if sandbox_preset_name.is_none() && sandbox_wraps.is_empty() =>
+        {
+            (
+                Action::Ask(Some(
+                    "a matched rule's sandbox policy cannot be applied via pass".to_string(),
+                )),
+                Some(policy),
+            )
+        }
         (action, policy) => (action, policy),
     };
 
@@ -136,9 +153,73 @@ pub fn evaluate_compound(
         action: final_action,
         sandbox_policy: final_policy,
         sandbox_preset_name,
+        sandbox_wraps,
         sub_results,
         sub_command_details,
     })
+}
+
+/// Builtins that act on the shell running them. Wrapping one would move it
+/// into a child process, so its effect would no longer reach the rest of the
+/// compound -- `cd build && make` would run `make` in the original directory.
+const SHELL_STATE_BUILTINS: &[&str] = &[
+    ".", "alias", "cd", "declare", "eval", "exec", "export", "local", "popd", "pushd", "read",
+    "readonly", "set", "shift", "shopt", "source", "trap", "typeset", "ulimit", "umask", "unalias",
+    "unset",
+];
+
+/// Plan one sandbox wrap per sub-command that needs one, covering that
+/// sub-command's own text in the input -- its redirects included, so their
+/// files are opened inside the sandbox.
+///
+/// Returns `None` when a sub-command that needs a sandbox cannot be wrapped on
+/// its own: it has no `full_span`, its range lies inside another sub-command's
+/// range (a command or process substitution), where wrapping it would start a
+/// sandbox inside a sandbox, or it is one of `SHELL_STATE_BUILTINS`. The caller
+/// then wraps the whole compound in one sandbox instead.
+fn plan_sandbox_wraps(
+    extracted: &[ExtractedCommand],
+    results: &[EvalResult],
+    default_preset: Option<&str>,
+) -> Option<Vec<SandboxWrap>> {
+    let mut wraps = Vec::new();
+
+    for (i, (ext_cmd, result)) in extracted.iter().zip(results).enumerate() {
+        let Some(preset) = result.sandbox_preset.as_deref().or(default_preset) else {
+            continue;
+        };
+        let name = ext_cmd
+            .argv
+            .first()
+            .map(String::as_str)
+            .or_else(|| ext_cmd.command.split_whitespace().next())
+            .unwrap_or_default();
+        if SHELL_STATE_BUILTINS.contains(&name) {
+            return None;
+        }
+        // The function is defined in the outer shell, so the child process
+        // `runok exec` spawns would not have it.
+        if ext_cmd.function_call.is_some() {
+            return None;
+        }
+        let range = ext_cmd.full_span.as_ref()?;
+        let contained_in_another = extracted.iter().enumerate().any(|(j, other)| {
+            j != i
+                && other
+                    .full_span
+                    .as_ref()
+                    .is_some_and(|o| o.start <= range.start && range.end <= o.end)
+        });
+        if contained_in_another {
+            return None;
+        }
+        wraps.push(SandboxWrap {
+            range: range.clone(),
+            preset: preset.to_string(),
+        });
+    }
+
+    Some(wraps)
 }
 
 /// Check if the merged policy has a writable roots contradiction:
@@ -673,6 +754,112 @@ mod tests {
     }
 
     // ========================================
+    // Compound: per-sub-command sandbox insertions
+    // ========================================
+
+    fn sandbox_preset_writing(path: &str) -> SandboxPreset {
+        SandboxPreset {
+            fs: Some(FsPolicy {
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(vec![path.to_string()]),
+                    deny: None,
+                }),
+            }),
+            network: None,
+        }
+    }
+
+    #[rstest]
+    // The range covers `> out.json`, so the redirect is opened by the shell
+    // inside the sandbox. `cat ...` matched an allow rule with no sandbox, so
+    // it is left alone.
+    #[case::redirect_belongs_to_the_sandboxed_sub_command(
+        "node fix.mjs > out.json | cat notes.txt",
+        None,
+        vec![(0..23, "restricted")],
+    )]
+    // `defaults.sandbox` applies per sub-command, exactly as it would if each
+    // one were run on its own.
+    #[case::defaults_sandbox_covers_the_rest(
+        "node fix.mjs | cat notes.txt",
+        Some("baseline"),
+        vec![(0..12, "restricted"), (15..28, "baseline")],
+    )]
+    // `cat ...` needs `baseline` but sits inside `node`'s own range, where
+    // wrapping it would start a sandbox inside a sandbox -- fall back to
+    // wrapping the compound as a whole.
+    #[case::nested_sub_command_needing_a_sandbox(
+        "node fix.mjs $(cat notes.txt)",
+        Some("baseline"),
+        vec![],
+    )]
+    // The `KEY=VALUE` assignments belong to the command they prefix, so they
+    // go inside the sandbox with it.
+    #[case::env_assignment_is_wrapped_with_the_command(
+        "FOO=1 node fix.mjs | cat notes.txt",
+        None,
+        vec![(0..18, "restricted")],
+    )]
+    // The substitution is part of `node`'s own text, so it is wrapped along
+    // with it and runs under `restricted` even though `cat *` named no
+    // sandbox of its own.
+    #[case::nested_sub_command_not_needing_a_sandbox(
+        "node fix.mjs > $(cat notes.txt)",
+        None,
+        vec![(0..31, "restricted")],
+    )]
+    // `deploy` resolves to a body needing `restricted`, but the function only
+    // exists in the outer shell, so it cannot be wrapped on its own.
+    #[case::function_call_needing_a_sandbox(
+        "deploy() { node fix.mjs; }; deploy",
+        None,
+        vec![],
+    )]
+    // Wrapping `cd` would move it into a child process, so `node` would run
+    // in the original directory.
+    #[case::shell_state_builtin_needing_a_sandbox("cd build && node fix.mjs", Some("baseline"), vec![])]
+    // Nothing asks for a sandbox, so there is nothing to wrap.
+    #[case::no_sandbox_anywhere("cat notes.txt | cat other.txt", None, vec![])]
+    fn compound_plans_one_sandbox_wrap_per_sub_command(
+        empty_context: EvalContext,
+        #[case] command: &str,
+        #[case] default_sandbox: Option<&str>,
+        #[case] expected: Vec<(std::ops::Range<usize>, &str)>,
+    ) {
+        let config = Config {
+            rules: Some(vec![
+                allow_rule_with_sandbox("node *", "restricted"),
+                allow_rule("cat *"),
+            ]),
+            defaults: Some(Defaults {
+                action: None,
+                sandbox: default_sandbox.map(str::to_string),
+            }),
+            definitions: Some(Definitions {
+                sandbox: Some(HashMap::from([
+                    ("restricted".to_string(), sandbox_preset_writing("/tmp")),
+                    ("baseline".to_string(), sandbox_preset_writing("/tmp")),
+                ])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = evaluate_compound(&config, command, &empty_context).unwrap();
+        assert_eq!(
+            result.sandbox_wraps,
+            expected
+                .into_iter()
+                .map(|(range, preset)| SandboxWrap {
+                    range,
+                    preset: preset.to_string(),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    // ========================================
     // Compound: writable roots contradiction -> ask escalation
     // ========================================
 
@@ -816,6 +1003,9 @@ mod tests {
         // to `ask` instead. `unknown_cmd` is unmatched so the merged action is
         // `Pass` (which outranks the other sub-commands' `Allow`), exercising
         // the pass-escalation branch rather than the contradiction branch.
+        // `cd` changes the calling shell's own state, so it cannot be wrapped
+        // on its own -- no per-sub-command plan is made and `pass` has nothing
+        // but the merged policy to carry.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),
@@ -824,6 +1014,7 @@ mod tests {
             rules: Some(vec![
                 allow_rule_with_sandbox("ls *", "preset_a"),
                 allow_rule_with_sandbox("cat *", "preset_b"),
+                allow_rule_with_sandbox("cd *", "preset_a"),
             ]),
             definitions: Some(Definitions {
                 sandbox: Some(HashMap::from([
@@ -859,8 +1050,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result =
-            evaluate_compound(&config, "ls -la; cat -; unknown_cmd", &empty_context).unwrap();
+        let result = evaluate_compound(
+            &config,
+            "ls -la; cat notes.txt; cd build; unknown_cmd",
+            &empty_context,
+        )
+        .unwrap();
         assert_eq!(
             (
                 result.action,
