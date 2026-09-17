@@ -306,7 +306,7 @@ A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more t
 
 A compound command now collapses to the underlying named preset (applied the same way a non-compound command's preset is) whenever every sandboxed sub-command resolves to the same preset after deduplication, fixing both cases. A command that mixes two or more genuinely different presets still merges them and still escalates a `pass` resolution to `ask`, since that case has no single preset to fall back to. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
 
-### A compound command wraps each sub-command in its own sandbox instead of merging them into one ([#516](https://github.com/fohte/runok/pull/516), TODO(pr-link))
+### A compound command wraps each sub-command in its own sandbox instead of merging them into one ([#516](https://github.com/fohte/runok/pull/516), [#518](https://github.com/fohte/runok/pull/518))
 
 A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside a neighboring sub-command's preset, tightening restrictions the matched rule never asked for.
 
