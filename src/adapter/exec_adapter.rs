@@ -354,116 +354,72 @@ mod tests {
         assert_eq!(result, exit_code);
     }
 
-    #[rstest]
-    fn handle_action_allow_falls_back_to_cli_sandbox_preset() {
-        let mut sandbox_definitions = HashMap::new();
-        sandbox_definitions.insert(
-            "default-preset".to_string(),
-            SandboxPreset {
-                fs: None,
-                network: None,
-            },
-        );
-        let adapter = ExecAdapter::new(
-            vec!["git".into(), "status".into()],
-            vec!["default-preset".into()],
-            Box::new(MockExecutor::new(0)),
-        )
-        .with_sandbox_definitions(sandbox_definitions);
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Allow,
-                sandbox: SandboxInfo::Preset(vec![]),
-                sandbox_wraps: vec![],
-                evaluations: vec![],
+    /// Builds a `sandbox_definitions` map with the given preset names, each
+    /// mapped to an empty (no fs/network restriction) `SandboxPreset`.
+    fn sandbox_definitions(names: &[&str]) -> HashMap<String, SandboxPreset> {
+        names
+            .iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    SandboxPreset {
+                        fs: None,
+                        network: None,
+                    },
+                )
             })
-            .unwrap();
-        assert_eq!(result, 0);
+            .collect()
     }
 
     #[rstest]
-    fn handle_action_allow_errors_on_undefined_sandbox_preset() {
+    #[case::falls_back_to_cli_sandbox_preset(
+        vec!["default-preset".into()],
+        vec![],
+        &["default-preset"],
+        Ok(0)
+    )]
+    #[case::errors_on_undefined_sandbox_preset(vec!["nonexistent".into()], vec![], &[], Err("nonexistent"))]
+    #[case::merges_multiple_sandbox_presets(
+        vec![],
+        vec!["preset_a".to_string(), "preset_b".to_string()],
+        &["preset_a", "preset_b"],
+        Ok(0)
+    )]
+    #[case::errors_on_undefined_preset_among_multiple(
+        vec![],
+        vec!["preset_a".to_string(), "nonexistent".to_string()],
+        &["preset_a"],
+        Err("nonexistent")
+    )]
+    fn handle_action_allow_with_sandbox_presets(
+        #[case] cli_sandbox_presets: Vec<String>,
+        #[case] action_sandbox_presets: Vec<String>,
+        #[case] defined_presets: &[&str],
+        #[case] expected: Result<i32, &str>,
+    ) {
         let adapter = ExecAdapter::new(
             vec!["echo".into(), "hello".into()],
-            vec!["nonexistent".into()],
+            cli_sandbox_presets,
             Box::new(MockExecutor::new(0)),
-        );
+        )
+        .with_sandbox_definitions(sandbox_definitions(defined_presets));
         let result = adapter.handle_action(ActionResult {
             action: Action::Allow,
-            sandbox: SandboxInfo::Preset(vec![]),
+            sandbox: SandboxInfo::Preset(action_sandbox_presets),
             sandbox_wraps: vec![],
             evaluations: vec![],
         });
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("nonexistent"),
-            "error should mention the preset name: {}",
-            err
-        );
-    }
-
-    #[rstest]
-    fn handle_action_allow_merges_multiple_sandbox_presets() {
-        let mut sandbox_definitions = HashMap::new();
-        sandbox_definitions.insert(
-            "preset_a".to_string(),
-            SandboxPreset {
-                fs: None,
-                network: None,
-            },
-        );
-        sandbox_definitions.insert(
-            "preset_b".to_string(),
-            SandboxPreset {
-                fs: None,
-                network: None,
-            },
-        );
-        let adapter = ExecAdapter::new(
-            vec!["echo".into(), "hello".into()],
-            vec![],
-            Box::new(MockExecutor::new(0)),
-        )
-        .with_sandbox_definitions(sandbox_definitions);
-        let result = adapter
-            .handle_action(ActionResult {
-                action: Action::Allow,
-                sandbox: SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
-                sandbox_wraps: vec![],
-                evaluations: vec![],
-            })
-            .unwrap();
-        assert_eq!(result, 0);
-    }
-
-    #[rstest]
-    fn handle_action_allow_errors_on_undefined_preset_among_multiple() {
-        let mut sandbox_definitions = HashMap::new();
-        sandbox_definitions.insert(
-            "preset_a".to_string(),
-            SandboxPreset {
-                fs: None,
-                network: None,
-            },
-        );
-        let adapter = ExecAdapter::new(
-            vec!["echo".into(), "hello".into()],
-            vec![],
-            Box::new(MockExecutor::new(0)),
-        )
-        .with_sandbox_definitions(sandbox_definitions);
-        let result = adapter.handle_action(ActionResult {
-            action: Action::Allow,
-            sandbox: SandboxInfo::Preset(vec!["preset_a".to_string(), "nonexistent".to_string()]),
-            sandbox_wraps: vec![],
-            evaluations: vec![],
-        });
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("nonexistent"),
-            "error should mention the undefined preset name: {}",
-            err
-        );
+        match expected {
+            Ok(exit_code) => assert_eq!(result.unwrap(), exit_code),
+            Err(substring) => {
+                let err = result.unwrap_err();
+                assert!(
+                    err.to_string().contains(substring),
+                    "error should mention the undefined preset name: {}",
+                    err
+                );
+            }
+        }
     }
 
     // --- handle_action: Deny ---
