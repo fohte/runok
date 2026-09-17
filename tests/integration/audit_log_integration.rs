@@ -93,7 +93,7 @@ fn allow_echo_audit_config(audit_dir: TempDir) -> AuditTestConfig {
 fn echo_hello_endpoint() -> ExecAdapter {
     ExecAdapter::new(
         vec!["echo".into(), "hello".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     )
 }
@@ -150,7 +150,7 @@ fn exec_generates_audit_log(
     let config = parse_config(&config_template.replace("{}", &audit_path))
         .unwrap_or_else(|e| panic!("failed to parse config: {e}"));
 
-    let endpoint = ExecAdapter::new(command_args, None, Box::new(MockExecutor::new(0)));
+    let endpoint = ExecAdapter::new(command_args, vec![], Box::new(MockExecutor::new(0)));
     let options = RunOptions::default();
 
     let exit_code = adapter::run_with_options(&endpoint, &config, &options);
@@ -200,7 +200,7 @@ fn compound_command_records_command_evaluations(audit_dir: TempDir) {
     // Pass compound command as a single string so the parser detects &&
     let endpoint = ExecAdapter::new(
         vec!["echo hello && rm -rf /tmp".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     );
     let options = RunOptions::default();
@@ -308,7 +308,7 @@ fn audit_log_records_argv_for_single_command(audit_dir: TempDir) {
     // tokens together (mirrors how Bash hooks pass the command).
     let endpoint = ExecAdapter::new(
         vec!["FOO=x helmfile -l name=alloy template".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     );
 
@@ -348,7 +348,7 @@ fn audit_log_records_argv_per_compound_branch(audit_dir: TempDir) {
 
     let endpoint = ExecAdapter::new(
         vec!["FOO=x echo hi && BAR=y cat /tmp/f".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     );
 
@@ -396,7 +396,7 @@ fn comment_only_input_yields_empty_command_evaluations(audit_dir: TempDir) {
 
     let endpoint = ExecAdapter::new(
         vec!["# only a comment".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     );
 
@@ -427,7 +427,7 @@ fn audit_log_records_original_command_when_variable_resolved(audit_dir: TempDir)
 
     let endpoint = ExecAdapter::new(
         vec!["F=--force; git push $F".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(3)),
     );
 
@@ -477,7 +477,7 @@ fn audit_log_records_require_command_in_path_trigger(audit_dir: TempDir) {
 
     let endpoint = ExecAdapter::new(
         vec!["runok-test-definitely-not-a-real-command-xyz".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(3)),
     );
 
@@ -552,7 +552,7 @@ fn audit_log_records_default_action(audit_dir: TempDir) {
 
     let endpoint = ExecAdapter::new(
         vec!["ls".into(), "-la".into()],
-        None,
+        vec![],
         Box::new(MockExecutor::new(0)),
     );
     let options = RunOptions::default();

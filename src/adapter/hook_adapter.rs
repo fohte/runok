@@ -281,12 +281,13 @@ impl ClaudeCodeHookAdapter {
                 command: Self::wrap_sub_commands(wraps, original_command)?,
             }));
         }
-        match sandbox {
-            SandboxInfo::Preset(Some(preset)) => Ok(Some(UpdatedInput {
-                command: Self::wrap_with_sandbox(preset, original_command)?,
-            })),
-            _ => Ok(None),
+        let SandboxInfo::Preset(names) = sandbox;
+        if names.is_empty() {
+            return Ok(None);
         }
+        Ok(Some(UpdatedInput {
+            command: Self::wrap_with_sandboxes(names, original_command)?,
+        }))
     }
 
     /// Replace each sub-command that needs a sandbox with a `runok exec`
@@ -335,14 +336,28 @@ impl ClaudeCodeHookAdapter {
     /// `ExecAdapter::hook_origin` for why that's still an accepted
     /// trade-off).
     fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
+        Self::wrap_with_sandboxes(std::slice::from_ref(&preset.to_string()), command)
+    }
+
+    /// Same as [`Self::wrap_with_sandbox`], but for two or more distinct
+    /// preset names -- as happens when a compound command couldn't be
+    /// wrapped per sub-command (see `sandbox_wraps` on `CompoundEvalResult`)
+    /// and matched more than one preset across its sub-commands. Each name
+    /// becomes its own `--sandbox` flag; the re-exec'd `runok exec` resolves
+    /// and merges them itself via `SandboxPreset::merge_strictest`.
+    fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
         let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
-        let quoted_preset = shlex::try_quote(preset)
-            .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
+        let mut flags = String::new();
+        for preset in presets {
+            let quoted_preset = shlex::try_quote(preset)
+                .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
+            flags.push_str(&format!(" --sandbox {quoted_preset}"));
+        }
         let token = Self::hook_origin_token();
         let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
         Ok(format!(
-            "{env_var}={token} runok exec --sandbox {quoted_preset} -- {quoted_command}"
+            "{env_var}={token} runok exec{flags} -- {quoted_command}"
         ))
     }
 
@@ -510,13 +525,18 @@ mod tests {
     #[rstest]
     #[case::allow(
         Action::Allow,
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("allow"), None, None)
     )]
     #[case::allow_with_sandbox(
         Action::Allow,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+    )]
+    #[case::allow_with_multiple_sandboxes(
+        Action::Allow,
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -524,7 +544,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm -rf /".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: rm -rf / (not allowed)"), None),
     )]
     #[case::deny_without_message(
@@ -533,7 +553,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: rm *"), None),
     )]
     #[case::deny_with_message_and_suggestion(
@@ -542,28 +562,33 @@ mod tests {
             fix_suggestion: Some("git push --force-with-lease".to_string()),
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
     )]
     #[case::ask_with_message(
         Action::Ask(Some("please confirm".to_string())),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("ask"), Some("please confirm"), None),
     )]
     #[case::ask_without_message(
         Action::Ask(None),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("ask"), None, None)
     )]
     #[case::ask_with_sandbox(
         Action::Ask(Some("please confirm".to_string())),
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::pass_with_sandbox(
         Action::Pass,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+    )]
+    #[case::pass_with_multiple_sandboxes(
+        Action::Pass,
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -586,14 +611,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::preset_none(SandboxInfo::Preset(None))]
-    #[case::merged_policy_none(SandboxInfo::MergedPolicy(None))]
-    #[case::merged_policy_some(SandboxInfo::MergedPolicy(Some(crate::config::MergedSandboxPolicy {
-        writable: vec!["/tmp".to_string()],
-        deny: vec![],
-        read_deny: vec![],
-        network_allowed: false,
-    })))]
+    #[case::preset_none(SandboxInfo::Preset(vec![]))]
     fn build_action_output_pass_without_preset_returns_none(#[case] sandbox: SandboxInfo) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
@@ -720,7 +738,7 @@ mod tests {
         let exit_code = adapter
             .handle_action(ActionResult {
                 action: Action::Allow,
-                sandbox: SandboxInfo::Preset(None),
+                sandbox: SandboxInfo::Preset(vec![]),
                 sandbox_wraps: vec![],
                 evaluations: vec![],
             })
@@ -735,7 +753,7 @@ mod tests {
         let exit_code = adapter
             .handle_action(ActionResult {
                 action: Action::Pass,
-                sandbox: SandboxInfo::Preset(None),
+                sandbox: SandboxInfo::Preset(vec![]),
                 sandbox_wraps: vec![],
                 evaluations: vec![],
             })
@@ -849,18 +867,23 @@ mod tests {
 
     #[rstest]
     #[case::preset_some(
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![],
         "echo hello",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
     )]
-    #[case::preset_none(SandboxInfo::Preset(None), vec![], "echo hello", None)]
-    #[case::merged_policy(SandboxInfo::MergedPolicy(None), vec![], "echo hello", None)]
+    #[case::preset_none(SandboxInfo::Preset(vec![]), vec![], "echo hello", None)]
+    #[case::multiple_presets(
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        vec![],
+        "echo hello",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'echo hello'"),
+    )]
     // Only `node` needs the sandbox, and its redirect is inside the wrapped
     // range, so `out.json` is opened by the shell inside the sandbox while
     // the pipe and `cat ...` stay outside it.
     #[case::wraps(
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         vec![wrap(0..23, "readonly")],
         "node fix.mjs > out.json | cat notes.txt",
         Some(
@@ -871,7 +894,7 @@ mod tests {
     // Applied back-to-front, so the earlier range is still valid once the
     // later one has been replaced by a longer string.
     #[case::multiple_wraps(
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         vec![wrap(0..13, "readonly"), wrap(16..28, "writable")],
         "awk '{print}' | node fix.mjs",
         Some(
@@ -882,7 +905,7 @@ mod tests {
     // Wraps win over the whole-input preset: they express the same sandbox
     // per sub-command instead of one sandbox over everything.
     #[case::wraps_take_precedence_over_preset(
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![wrap(0..2, "readonly")],
         "ls | wc -l",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- ls | wc -l"),
@@ -958,6 +981,19 @@ mod tests {
     fn wrap_with_sandbox_rejects_nul_byte() {
         let command = "echo \0hello";
         assert!(ClaudeCodeHookAdapter::wrap_with_sandbox("restricted", command).is_err());
+    }
+
+    #[rstest]
+    fn wrap_with_sandboxes_emits_one_flag_per_preset() {
+        let actual = ClaudeCodeHookAdapter::wrap_with_sandboxes(
+            &["preset_a".to_string(), "preset_b".to_string()],
+            "git status",
+        )
+        .unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert_eq!(
+            normalize_hook_origin_token(&actual),
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'",
+        );
     }
 
     // --- audit metadata ---

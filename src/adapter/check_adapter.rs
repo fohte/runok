@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ActionKind, Defaults, MergedSandboxPolicy};
+use crate::config::{ActionKind, Defaults};
 use crate::rules::rule_engine::Action;
 
 use super::{ActionResult, Endpoint, SandboxInfo};
@@ -170,29 +170,15 @@ impl CheckAdapter {
 
 /// Convert `SandboxInfo` into the informational `CheckSandboxInfo` for the response.
 fn build_sandbox_info(info: &SandboxInfo) -> Option<CheckSandboxInfo> {
-    match info {
-        SandboxInfo::Preset(Some(preset)) => Some(CheckSandboxInfo {
-            preset: preset.clone(),
-            writable_roots: None,
-            network_allowed: None,
-        }),
-        SandboxInfo::MergedPolicy(Some(policy)) => Some(merged_policy_to_sandbox_info(policy)),
-        SandboxInfo::Preset(None) | SandboxInfo::MergedPolicy(None) => None,
+    let SandboxInfo::Preset(names) = info;
+    if names.is_empty() {
+        return None;
     }
-}
-
-fn merged_policy_to_sandbox_info(policy: &MergedSandboxPolicy) -> CheckSandboxInfo {
-    let writable_roots = if policy.writable.is_empty() {
-        None
-    } else {
-        Some(policy.writable.clone())
-    };
-
-    CheckSandboxInfo {
-        preset: "merged".to_string(),
-        writable_roots,
-        network_allowed: Some(policy.network_allowed),
-    }
+    Some(CheckSandboxInfo {
+        preset: names.join(", "),
+        writable_roots: None,
+        network_allowed: None,
+    })
 }
 
 #[cfg(test)]
@@ -225,7 +211,7 @@ mod tests {
     #[rstest]
     #[case::allow(
         Action::Allow,
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         CheckOutput { decision: "allow".to_string(), reason: None, fix_suggestion: None, sandbox: None },
     )]
     #[case::deny(
@@ -234,7 +220,7 @@ mod tests {
             fix_suggestion: Some("use rm with caution".to_string()),
             matched_rule: "rm -rf *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         CheckOutput {
             decision: "deny".to_string(),
             reason: Some("dangerous command".to_string()),
@@ -244,17 +230,17 @@ mod tests {
     )]
     #[case::ask_with_message(
         Action::Ask(Some("please confirm".to_string())),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         CheckOutput { decision: "ask".to_string(), reason: Some("please confirm".to_string()), fix_suggestion: None, sandbox: None },
     )]
     #[case::ask_without_message(
         Action::Ask(None),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         CheckOutput { decision: "ask".to_string(), reason: None, fix_suggestion: None, sandbox: None },
     )]
     #[case::with_sandbox_preset(
         Action::Allow,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         CheckOutput {
             decision: "allow".to_string(),
             reason: None,
@@ -262,9 +248,19 @@ mod tests {
             sandbox: Some(CheckSandboxInfo { preset: "restricted".to_string(), writable_roots: None, network_allowed: None }),
         },
     )]
+    #[case::with_multiple_sandbox_presets(
+        Action::Allow,
+        SandboxInfo::Preset(vec!["a".to_string(), "b".to_string()]),
+        CheckOutput {
+            decision: "allow".to_string(),
+            reason: None,
+            fix_suggestion: None,
+            sandbox: Some(CheckSandboxInfo { preset: "a, b".to_string(), writable_roots: None, network_allowed: None }),
+        },
+    )]
     #[case::pass(
         Action::Pass,
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         CheckOutput { decision: "pass".to_string(), reason: None, fix_suggestion: None, sandbox: None },
     )]
     fn build_check_output_maps_action_to_output(
@@ -296,7 +292,7 @@ mod tests {
         let adapter = CheckAdapter::from_command("test".to_string());
         let result = ActionResult {
             action,
-            sandbox: SandboxInfo::Preset(None),
+            sandbox: SandboxInfo::Preset(vec![]),
             sandbox_wraps: vec![],
             evaluations: vec![],
         };
@@ -347,8 +343,7 @@ mod tests {
     // --- build_sandbox_info ---
 
     #[rstest]
-    #[case::no_preset(SandboxInfo::Preset(None), None)]
-    #[case::no_merged_policy(SandboxInfo::MergedPolicy(None), None)]
+    #[case::no_preset(SandboxInfo::Preset(vec![]), None)]
     fn build_sandbox_info_returns_none_for_empty(
         #[case] info: SandboxInfo,
         #[case] expected: Option<CheckSandboxInfo>,
@@ -358,7 +353,7 @@ mod tests {
 
     #[rstest]
     fn build_sandbox_info_from_preset() {
-        let info = SandboxInfo::Preset(Some("restricted".to_string()));
+        let info = SandboxInfo::Preset(vec!["restricted".to_string()]);
         let result = build_sandbox_info(&info);
         assert_eq!(
             result,
@@ -371,41 +366,15 @@ mod tests {
     }
 
     #[rstest]
-    fn build_sandbox_info_from_merged_policy_network_allowed() {
-        let policy = MergedSandboxPolicy {
-            writable: vec!["/tmp".to_string(), "/home".to_string()],
-            deny: vec!["/etc".to_string()],
-            read_deny: vec![],
-            network_allowed: true,
-        };
-        let info = SandboxInfo::MergedPolicy(Some(policy));
+    fn build_sandbox_info_from_multiple_presets_joins_names() {
+        let info = SandboxInfo::Preset(vec!["a".to_string(), "b".to_string()]);
         let result = build_sandbox_info(&info);
         assert_eq!(
             result,
             Some(CheckSandboxInfo {
-                preset: "merged".to_string(),
-                writable_roots: Some(vec!["/tmp".to_string(), "/home".to_string()]),
-                network_allowed: Some(true),
-            })
-        );
-    }
-
-    #[rstest]
-    fn build_sandbox_info_from_merged_policy_network_denied() {
-        let policy = MergedSandboxPolicy {
-            writable: vec!["/workspace".to_string()],
-            deny: vec![],
-            read_deny: vec![],
-            network_allowed: false,
-        };
-        let info = SandboxInfo::MergedPolicy(Some(policy));
-        let result = build_sandbox_info(&info);
-        assert_eq!(
-            result,
-            Some(CheckSandboxInfo {
-                preset: "merged".to_string(),
-                writable_roots: Some(vec!["/workspace".to_string()]),
-                network_allowed: Some(false),
+                preset: "a, b".to_string(),
+                writable_roots: None,
+                network_allowed: None,
             })
         );
     }

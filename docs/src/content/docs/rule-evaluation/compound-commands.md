@@ -242,7 +242,13 @@ The nesting condition is one-directional. A substitution that needs **no** sandb
 
 When every sub-command that specifies a sandbox resolves to the **same** preset (after deduplication), that single preset is applied directly instead of a merged policy -- the same way a non-compound command's preset is applied. This works with `defaults.action: pass` and does not force an `ask` prompt.
 
-A merge across **two or more distinct** presets has no single preset name to apply this way, so a `pass` decision is escalated to `ask` rather than silently dropping the sandbox -- but only when the fallback above was triggered. Once every sub-command that needs a sandbox can be wrapped on its own, a `pass` decision is left alone even with two or more distinct presets, since each wrap already carries its own preset name.
+A merge across **two or more distinct** presets is represented as repeated `--sandbox` flags: the Claude Code hook writes `updatedInput` with one `--sandbox <preset>` flag per distinct preset name --
+
+```
+RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'
+```
+
+-- and `runok exec` resolves and merges the named presets itself, using the same intersection/union merge shown in the table above. This applies for `allow`, `ask`, and `pass` alike: a `pass` decision is no longer escalated to `ask` just because two or more distinct presets are involved, since the merged set can now always be carried through `updatedInput`.
 
 ### Writable contradiction escalation
 
