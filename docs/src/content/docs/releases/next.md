@@ -306,7 +306,7 @@ A compound command (`|`, `&&`, `;`, loops) whose sandbox policy came from more t
 
 A compound command now collapses to the underlying named preset (applied the same way a non-compound command's preset is) whenever every sandboxed sub-command resolves to the same preset after deduplication, fixing both cases. A command that mixes two or more genuinely different presets still merges them and still escalates a `pass` resolution to `ask`, since that case has no single preset to fall back to. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
 
-### A compound command no longer wraps every sub-command in one merged sandbox ([#516](https://github.com/fohte/runok/pull/516))
+### A compound command wraps each sub-command in its own sandbox instead of merging them into one ([#516](https://github.com/fohte/runok/pull/516), TODO(pr-link))
 
 A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside a neighboring sub-command's preset, tightening restrictions the matched rule never asked for.
 
@@ -322,37 +322,8 @@ cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readon
 
 `cat notes.txt > out.json` keeps running unsandboxed, exactly as its own matched rule specified, and `> out.json` is opened by that same unsandboxed process. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to _that_ sub-command is carried inside its sandbox instead of being left to the outer shell. This is the [Claude Code hook](/getting-started/claude-code/)'s `updatedInput` rewrite specifically -- `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they keep applying a single, merged policy to the whole input.
 
-Of the two escalations a merged sandbox used to force, only one is resolved by this change: a `pass` decision with no single preset to carry in `updatedInput` no longer escalates to `ask` once every sub-command that needs a sandbox can be replaced this way. The writable-contradiction escalation (an empty intersection of writable paths forcing `ask`) still triggers unconditionally, since `runok exec`/`runok check` always compute the merged policy for their own use, and that computation is what the contradiction check runs against.
+runok falls back to that merge-and-wrap behavior when a sub-command has no byte range of its own in the input to replace, when its range sits inside another sub-command's range (`$(...)`, `<(...)`), or when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar) or a call to a shell function defined in the same input: replacing either would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`, and a function defined by the command itself would not exist at all.
 
-runok still falls back to the previous merge-and-wrap behavior (and both escalations) when a sub-command has no byte range of its own in the input to replace, when its range sits inside another sub-command's range (`$(...)`, `<(...)`), and, new in this change, when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar) or a call to a shell function defined in the same input: replacing either would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`, and a function defined by the command itself would not exist at all.
+That fallback merges every distinct preset matched across the compound's sub-commands using [Strictest Wins](/sandbox/overview/#sandbox-merging-for-compound-commands). `runok exec --sandbox` accepts the flag repeatably, and `runok exec` resolves and merges the named presets itself; the hook writes `updatedInput` as one `--sandbox <preset>` flag per distinct preset, e.g. `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'`. This applies for `allow`, `ask`, and `pass` alike -- a `pass` decision is never escalated to `ask` just to avoid dropping the sandbox, since the merged set can always be carried through `updatedInput`. The writable-contradiction escalation (an empty intersection of writable roots forcing `ask`) is unrelated and unchanged.
 
 See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics.
-
-### The whole-compound sandbox fallback no longer drops the sandbox or forces an unnecessary `ask` prompt (TODO(pr-link))
-
-[#516](https://github.com/fohte/runok/pull/516) replaced whole-compound sandbox wrapping with per-sub-command wrapping for most compound commands, but a compound command that needs **two or more distinct** sandbox presets and can't be wrapped per-sub-command (see [Fallback: merged sandbox policy](/rule-evaluation/compound-commands/#fallback-merged-sandbox-policy)) still fell back to wrapping the entire compound command in one merged sandbox. The Claude Code hook's `updatedInput` had no way to represent more than one preset name for that fallback: an `allow` or `ask` resolution wrote `updatedInput` with no `--sandbox` flag at all, silently running the command with no sandbox applied; a `pass` resolution avoided that silent drop only by escalating to `ask`, forcing a prompt purely because the merged policy had no single preset name to carry.
-
-```yaml
-definitions:
-  sandbox:
-    web-only:
-      fs:
-        write:
-          allow: ['/srv/web']
-    api-only:
-      fs:
-        write:
-          allow: ['/srv/api']
-
-rules:
-  - allow: 'deploy-web *'
-    sandbox: web-only
-  - allow: 'deploy-api *'
-    sandbox: api-only
-```
-
-For `cd /srv && deploy-web release && deploy-api release`, `cd` is a shell-state-changing builtin, so per-sub-command wrapping can't apply and the command falls back to one merged sandbox drawing on both `web-only` and `api-only`. An `allow` resolution here used to run the command completely unsandboxed.
-
-`runok exec --sandbox` now accepts the flag repeatably, and `runok exec` resolves and merges the named presets itself, reusing the strictest-wins merge (`SandboxPreset::merge_strictest`) that already backed the merged-policy fallback internally. The hook now always writes `updatedInput` as `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'` whenever the whole-compound fallback applies, for `allow`, `ask`, and `pass` alike.
-
-As a result, `pass` is no longer escalated to `ask` just because two or more distinct presets are involved -- the merged set can now always be carried through `updatedInput`. The writable-contradiction escalation (an empty intersection of writable paths forcing `ask`) is unrelated and unchanged. See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for details.
