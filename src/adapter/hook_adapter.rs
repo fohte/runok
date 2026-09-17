@@ -141,6 +141,10 @@ impl ClaudeCodeHookAdapter {
                     &result.sandbox_wraps,
                     &bash_input.command,
                 )?;
+                // fix_suggestion is deliberately not appended here: unlike Codex's
+                // PreToolUse (which has no ask concept and reports it via a deny
+                // reason), Claude Code shows this string in its own native ask
+                // prompt, and that prompt has always been message-only.
                 (Some("ask"), ask_response.message.clone(), updated)
             }
             Action::Pass => {
