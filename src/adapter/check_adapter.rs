@@ -82,7 +82,11 @@ fn build_check_output(result: &ActionResult) -> CheckOutput {
             deny.message.clone(),
             deny.fix_suggestion.clone(),
         ),
-        Action::Ask(message) => ("ask".to_string(), message.clone(), None),
+        Action::Ask(ask) => (
+            "ask".to_string(),
+            ask.message.clone(),
+            ask.fix_suggestion.clone(),
+        ),
         Action::Pass => ("pass".to_string(), None, None),
     };
 
@@ -198,7 +202,7 @@ fn merged_policy_to_sandbox_info(policy: &MergedSandboxPolicy) -> CheckSandboxIn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::rule_engine::DenyResponse;
+    use crate::rules::rule_engine::{AskResponse, DenyResponse};
     use rstest::rstest;
 
     // --- CheckAdapter construction ---
@@ -243,14 +247,27 @@ mod tests {
         },
     )]
     #[case::ask_with_message(
-        Action::Ask(Some("please confirm".to_string())),
+        Action::Ask(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None }),
         SandboxInfo::Preset(None),
         CheckOutput { decision: "ask".to_string(), reason: Some("please confirm".to_string()), fix_suggestion: None, sandbox: None },
     )]
     #[case::ask_without_message(
-        Action::Ask(None),
+        Action::Ask(AskResponse { message: None, fix_suggestion: None }),
         SandboxInfo::Preset(None),
         CheckOutput { decision: "ask".to_string(), reason: None, fix_suggestion: None, sandbox: None },
+    )]
+    #[case::ask_with_fix_suggestion(
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: Some("use rm with caution".to_string()),
+        }),
+        SandboxInfo::Preset(None),
+        CheckOutput {
+            decision: "ask".to_string(),
+            reason: Some("please confirm".to_string()),
+            fix_suggestion: Some("use rm with caution".to_string()),
+            sandbox: None,
+        },
     )]
     #[case::with_sandbox_preset(
         Action::Allow,
@@ -290,7 +307,7 @@ mod tests {
         fix_suggestion: None,
         matched_rule: "test".to_string(),
     }))]
-    #[case::ask(Action::Ask(None))]
+    #[case::ask(Action::Ask(AskResponse { message: None, fix_suggestion: None }))]
     #[case::pass(Action::Pass)]
     fn handle_action_always_returns_exit_0(#[case] action: Action) {
         let adapter = CheckAdapter::from_command("test".to_string());

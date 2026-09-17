@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ActionKind;
 use crate::rules::command_parser::{EnvAssignment, ExtractedCommand, PipeInfo, RedirectInfo};
-use crate::rules::rule_engine::{Action, DenyResponse, RuleMatchInfo};
+use crate::rules::rule_engine::{Action, AskResponse, DenyResponse, RuleMatchInfo};
 
 /// A complete record of a single command evaluation.
 ///
@@ -354,7 +354,11 @@ impl From<Action> for SerializableAction {
                 message,
                 fix_suggestion,
             },
-            Action::Ask(message) => SerializableAction::Ask { message },
+            // `fix_suggestion` is dropped here: the audit-log schema
+            // documents `ask` detail as message-only (see
+            // docs/src/content/docs/cli/audit-log-schema.md), so widening
+            // it is a separate, deliberate schema change.
+            Action::Ask(AskResponse { message, .. }) => SerializableAction::Ask { message },
             Action::Pass => SerializableAction::Pass,
         }
     }
@@ -812,14 +816,31 @@ mod tests {
         },
     )]
     #[case::ask_with_message(
-        Action::Ask(Some("are you sure?".to_owned())),
+        Action::Ask(AskResponse {
+            message: Some("are you sure?".to_owned()),
+            fix_suggestion: None,
+        }),
         SerializableAction::Ask {
             message: Some("are you sure?".to_owned()),
         },
     )]
     #[case::ask_without_message(
-        Action::Ask(None),
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
         SerializableAction::Ask { message: None },
+    )]
+    // fix_suggestion is intentionally dropped: the audit-log schema
+    // documents `ask` detail as message-only.
+    #[case::ask_with_fix_suggestion_is_dropped(
+        Action::Ask(AskResponse {
+            message: Some("are you sure?".to_owned()),
+            fix_suggestion: Some("try --dry-run instead".to_owned()),
+        }),
+        SerializableAction::Ask {
+            message: Some("are you sure?".to_owned()),
+        },
     )]
     #[case::pass(Action::Pass, SerializableAction::Pass)]
     fn action_to_serializable(#[case] action: Action, #[case] expected: SerializableAction) {

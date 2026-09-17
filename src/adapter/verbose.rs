@@ -204,7 +204,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rules::rule_engine::DenyResponse;
+    use crate::rules::rule_engine::{AskResponse, DenyResponse};
 
     fn rule(action_kind: ActionKind, pattern: &str, tokens: &[&str]) -> RuleMatchInfo {
         RuleMatchInfo {
@@ -242,7 +242,10 @@ mod tests {
         "rm -rf /",
         None,
         vec![],
-        Action::Ask(None),
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
         None,
         indoc! {"
             ▶ Evaluating: rm -rf /
@@ -365,14 +368,24 @@ mod tests {
                 Action::Allow,
                 vec![rule(ActionKind::Allow, "set *", &["-a"])],
             ),
-            sub("source .env.runtime", Action::Ask(None), vec![]),
+            sub(
+                "source .env.runtime",
+                Action::Ask(AskResponse {
+                    message: None,
+                    fix_suggestion: None,
+                }),
+                vec![],
+            ),
             sub(
                 "set +a",
                 Action::Allow,
                 vec![rule(ActionKind::Allow, "set *", &["+a"])],
             ),
         ],
-        Action::Ask(None),
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
         indoc! {"
             ▶ Evaluating: set -a && source .env.runtime && set +a
               Compound command (3 sub-commands)

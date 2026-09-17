@@ -4,7 +4,7 @@ use crate::rules::command_parser::{
 };
 
 use super::compound::default_action;
-use super::{Action, CommandResolution, DenyResponse, EvalContext};
+use super::{Action, AskResponse, CommandResolution, DenyResponse, EvalContext};
 
 /// Commands whose static analysis is incomplete: a script they load, or a
 /// string they evaluate, can define shell functions this check cannot see.
@@ -79,20 +79,27 @@ fn deny_or_ask(
     let message = format!(
         "command '{command_name}' not found in PATH (experimental.require_command_in_path)"
     );
+    let fix_suggestion = format!(
+        "if '{command_name}' is a shell function or alias defined in your shell \
+         profile, add it to experimental.require_command_in_path.ignore, or add an \
+         allow rule for it instead. Otherwise, check for a typo."
+    );
     match check.resolved_action() {
         ActionKind::Deny => (
             Action::Deny(DenyResponse {
                 message: Some(message),
-                fix_suggestion: Some(format!(
-                    "if '{command_name}' is a shell function or alias defined in your shell \
-                     profile, add it to experimental.require_command_in_path.ignore, or add an \
-                     allow rule for it instead. Otherwise, check for a typo."
-                )),
+                fix_suggestion: Some(fix_suggestion),
                 matched_rule: String::new(),
             }),
             Some(command_name.to_owned()),
         ),
-        ActionKind::Ask => (Action::Ask(Some(message)), Some(command_name.to_owned())),
+        ActionKind::Ask => (
+            Action::Ask(AskResponse {
+                message: Some(message),
+                fix_suggestion: Some(fix_suggestion),
+            }),
+            Some(command_name.to_owned()),
+        ),
         // Both rejected by config validation (neither `allow` nor
         // `pass` would enforce anything here); treated as absent
         // rather than panicking on a config that skipped validation.
@@ -230,10 +237,18 @@ mod tests {
     #[case::ask(
         ActionKind::Ask,
         (
-            Action::Ask(Some(
-                "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
-                    .to_string()
-            )),
+            Action::Ask(AskResponse {
+                message: Some(
+                    "command 'tarraform' not found in PATH (experimental.require_command_in_path)"
+                        .to_string()
+                ),
+                fix_suggestion: Some(
+                    "if 'tarraform' is a shell function or alias defined in your shell \
+                     profile, add it to experimental.require_command_in_path.ignore, or add \
+                     an allow rule for it instead. Otherwise, check for a typo."
+                        .to_string()
+                ),
+            }),
             Some("tarraform".to_string()),
         )
     )]

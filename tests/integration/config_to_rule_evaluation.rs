@@ -838,8 +838,11 @@ fn ask_response_preserves_message(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
     match &result.action {
-        Action::Ask(msg) => {
-            assert_eq!(msg.as_deref(), Some("Are you sure you want to push?"));
+        Action::Ask(ask_response) => {
+            assert_eq!(
+                ask_response.message.as_deref(),
+                Some("Are you sure you want to push?")
+            );
         }
         other => panic!("expected Ask, got {:?}", other),
     }
@@ -855,8 +858,12 @@ fn ask_without_message_has_none(empty_context: EvalContext) {
 
     let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
     match &result.action {
-        Action::Ask(msg) => {
-            assert!(msg.is_none(), "expected None message, got {:?}", msg);
+        Action::Ask(ask_response) => {
+            assert!(
+                ask_response.message.is_none(),
+                "expected None message, got {:?}",
+                ask_response.message
+            );
         }
         other => panic!("expected Ask, got {:?}", other),
     }

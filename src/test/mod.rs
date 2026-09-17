@@ -979,7 +979,13 @@ mod tests {
         }),
         ActionKind::Deny
     )]
-    #[case::ask(Action::Ask(None), ActionKind::Ask)]
+    #[case::ask(
+        Action::Ask(crate::rules::rule_engine::AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
+        ActionKind::Ask
+    )]
     #[case::pass(Action::Pass, ActionKind::Pass)]
     fn test_action_to_kind(#[case] action: Action, #[case] expected: ActionKind) {
         assert_eq!(action_to_kind(&action), expected);

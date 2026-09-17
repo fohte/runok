@@ -126,7 +126,7 @@ pub struct CompoundEvalResult {
 pub enum Action {
     Allow,
     Deny(DenyResponse),
-    Ask(Option<String>),
+    Ask(AskResponse),
     /// No decision: resolved from `defaults.action: pass` when no
     /// rule matched. Endpoints that have a caller to defer to (the Claude
     /// Code hook) report nothing; endpoints that must pick a concrete
@@ -140,6 +140,13 @@ pub struct DenyResponse {
     pub message: Option<String>,
     pub fix_suggestion: Option<String>,
     pub matched_rule: String,
+}
+
+/// Details included when a command requires human approval.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskResponse {
+    pub message: Option<String>,
+    pub fix_suggestion: Option<String>,
 }
 
 /// Evaluate a command against all rules in the config, returning the most

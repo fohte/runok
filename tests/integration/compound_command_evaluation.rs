@@ -321,7 +321,11 @@ fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
 
     // Action escalated from Allow to Ask due to contradiction
     assert!(
-        matches!(result.action, Action::Ask(Some(ref msg)) if msg.contains("contradictory")),
+        matches!(
+            result.action,
+            Action::Ask(ref ask_response)
+                if ask_response.message.as_deref().is_some_and(|msg| msg.contains("contradictory"))
+        ),
         "expected Ask with contradiction message, got {:?}",
         result.action
     );

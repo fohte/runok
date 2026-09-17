@@ -133,7 +133,7 @@ impl ClaudeCodeHookAdapter {
                 let reason = build_deny_reason(deny_response);
                 (Some("deny"), Some(reason), None)
             }
-            Action::Ask(message) => {
+            Action::Ask(ask_response) => {
                 // When the user approves an ask, Claude Code executes the updatedInput
                 // command, so we need to wrap it with the sandbox just like allow.
                 let updated = sandbox_updated_input(
@@ -141,7 +141,7 @@ impl ClaudeCodeHookAdapter {
                     &result.sandbox_wraps,
                     &bash_input.command,
                 )?;
-                (Some("ask"), message.clone(), updated)
+                (Some("ask"), ask_response.message.clone(), updated)
             }
             Action::Pass => {
                 let updated = sandbox_updated_input(
@@ -258,7 +258,7 @@ mod tests {
     use super::*;
     use crate::adapter::SandboxInfo;
     use crate::adapter::hook_common::{HookSpecificOutput, normalize_hook_origin_token};
-    use crate::rules::rule_engine::DenyResponse;
+    use crate::rules::rule_engine::{AskResponse, DenyResponse};
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use serde_json::json;
@@ -385,17 +385,26 @@ mod tests {
         make_output(Some("deny"), Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
     )]
     #[case::ask_with_message(
-        Action::Ask(Some("please confirm".to_string())),
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: None,
+        }),
         SandboxInfo::Preset(None),
         make_output(Some("ask"), Some("please confirm"), None),
     )]
     #[case::ask_without_message(
-        Action::Ask(None),
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
         SandboxInfo::Preset(None),
         make_output(Some("ask"), None, None)
     )]
     #[case::ask_with_sandbox(
-        Action::Ask(Some("please confirm".to_string())),
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: None,
+        }),
         SandboxInfo::Preset(Some("restricted".to_string())),
         make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
