@@ -75,14 +75,9 @@ pub struct CommandEvalResult {
 /// Sandbox information from rule evaluation.
 #[derive(Debug)]
 pub enum SandboxInfo {
-    /// Preset name(s) to be resolved by the adapter. Empty when no sandbox
-    /// applies, one name for a single preset, and multiple names when two
-    /// or more distinct presets matched (across a compound's sub-commands)
-    /// and must be merged -- the resolving endpoint does that merge itself
-    /// via `SandboxPreset::merge_strictest` (`runok exec` resolves names
-    /// against `definitions.sandbox`; the Claude Code hook's `updatedInput`
-    /// rewrite passes them through as repeated `--sandbox` flags to a
-    /// re-exec'd `runok exec`, which then does the same resolution).
+    /// Preset name(s) to be resolved by the adapter. Empty when none apply;
+    /// multiple names mean the resolving endpoint merges them via
+    /// `SandboxPreset::merge_strictest`.
     Preset(Vec<String>),
 }
 
