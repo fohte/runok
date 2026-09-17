@@ -23,6 +23,10 @@ pub struct BashToolInput {
 #[cfg_attr(test, derive(Deserialize))]
 pub struct HookOutput {
     pub hook_specific_output: HookSpecificOutput,
+    /// Shown to the human user (as opposed to `additional_context`, which
+    /// only the model sees).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -38,6 +42,10 @@ pub struct HookSpecificOutput {
     pub permission_decision_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<UpdatedInput>,
+    /// Shown to the model only (as opposed to `HookOutput::system_message`,
+    /// which the human sees).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -75,7 +83,9 @@ pub fn build_output(
             permission_decision: decision.map(str::to_string),
             permission_decision_reason: reason,
             updated_input,
+            additional_context: None,
         },
+        system_message: None,
     }
 }
 
