@@ -18,7 +18,6 @@ pub struct CodexHookInput {
     pub session_id: String,
     pub cwd: String,
     pub hook_event_name: String,
-    pub permission_mode: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     #[serde(default)]
@@ -57,16 +56,8 @@ impl CodexHookAdapter {
     }
 
     /// Codex requires `updatedInput` to be paired with an explicit
-    /// `permissionDecision: allow` -- so Pass and a sandbox-less allow both
-    /// write nothing here, deferring to Codex's own approval flow.
-    ///
-    /// Ask never sets `permissionDecision` either -- whether a prompt
-    /// actually appears is Codex's/the human's call (their `approval_policy`),
-    /// not runok's -- but it still leaves an `additionalContext` note so the
-    /// model knows the command matched an `ask` rule. Under `bypassPermissions`
-    /// (`approval_policy: never`), Codex's `PermissionRequest` hook never
-    /// fires, so no prompt follows; a `systemMessage` says so explicitly,
-    /// since staying silent there could otherwise look like nothing happened.
+    /// `permissionDecision: allow` -- so Ask, Pass, and a sandbox-less
+    /// allow all write nothing here, deferring to Codex's own approval flow.
     fn build_pre_tool_use_output(
         &self,
         result: &ActionResult,
@@ -86,16 +77,7 @@ impl CodexHookAdapter {
                 )?;
                 Ok(updated.map(|u| build_output(Some("allow"), None, Some(u))))
             }
-            Action::Ask(message) => {
-                let mut output = build_output(None, None, None);
-                output.hook_specific_output.additional_context =
-                    Some(ask_additional_context(message.as_deref()));
-                if self.input.permission_mode == "bypassPermissions" {
-                    output.system_message = Some(ASK_BYPASS_SYSTEM_MESSAGE.to_string());
-                }
-                Ok(Some(output))
-            }
-            Action::Pass => Ok(None),
+            Action::Ask(_) | Action::Pass => Ok(None),
         }
     }
 
@@ -122,18 +104,6 @@ impl CodexHookAdapter {
                 decision,
             },
         }))
-    }
-}
-
-const ASK_BYPASS_SYSTEM_MESSAGE: &str = "runok: no approval prompt will appear for this command \
-    because approval is currently disabled (bypassPermissions / approval_policy: never)";
-
-/// Note shown to the model (`hookSpecificOutput.additionalContext`) for an
-/// `Action::Ask` match, including the configured ask message when there is one.
-fn ask_additional_context(message: Option<&str>) -> String {
-    match message {
-        Some(message) => format!("runok: this command matched an ask rule ({message})"),
-        None => "runok: this command matched an ask rule".to_string(),
     }
 }
 
@@ -218,9 +188,7 @@ impl Endpoint for CodexHookAdapter {
 mod tests {
     use super::*;
     use crate::adapter::SandboxInfo;
-    use crate::adapter::hook_common::{
-        HookSpecificOutput, UpdatedInput, normalize_hook_origin_token,
-    };
+    use crate::adapter::hook_common::normalize_hook_origin_token;
     use crate::rules::rule_engine::DenyResponse;
     use indoc::indoc;
     use rstest::rstest;
@@ -231,45 +199,28 @@ mod tests {
         tool_name: &str,
         tool_input: serde_json::Value,
         tool_use_id: Option<&str>,
-        permission_mode: &str,
     ) -> CodexHookInput {
         CodexHookInput {
             session_id: "test-session".to_string(),
             cwd: "/tmp".to_string(),
             hook_event_name: hook_event_name.to_string(),
-            permission_mode: permission_mode.to_string(),
             tool_name: tool_name.to_string(),
             tool_input,
             tool_use_id: tool_use_id.map(str::to_string),
         }
     }
 
-    fn pre_tool_use_input(
-        tool_name: &str,
-        tool_input: serde_json::Value,
-        permission_mode: &str,
-    ) -> CodexHookInput {
+    fn pre_tool_use_input(tool_name: &str, tool_input: serde_json::Value) -> CodexHookInput {
         make_hook_input(
             "PreToolUse",
             tool_name,
             tool_input,
             Some("test-tool-use-id"),
-            permission_mode,
         )
     }
 
-    fn permission_request_input(
-        tool_name: &str,
-        tool_input: serde_json::Value,
-        permission_mode: &str,
-    ) -> CodexHookInput {
-        make_hook_input(
-            "PermissionRequest",
-            tool_name,
-            tool_input,
-            None,
-            permission_mode,
-        )
+    fn permission_request_input(tool_name: &str, tool_input: serde_json::Value) -> CodexHookInput {
+        make_hook_input("PermissionRequest", tool_name, tool_input, None)
     }
 
     fn bash_tool_input(command: &str) -> serde_json::Value {
@@ -286,18 +237,15 @@ mod tests {
     }
 
     fn normalize_hook_origin_output(output: HookOutput) -> HookOutput {
-        HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                updated_input: output
-                    .hook_specific_output
-                    .updated_input
-                    .map(|u| UpdatedInput {
-                        command: normalize_hook_origin_token(&u.command),
-                    }),
-                ..output.hook_specific_output
-            },
-            ..output
-        }
+        build_output(
+            output.hook_specific_output.permission_decision.as_deref(),
+            output.hook_specific_output.permission_decision_reason,
+            output.hook_specific_output.updated_input.map(|u| {
+                crate::adapter::hook_common::UpdatedInput {
+                    command: normalize_hook_origin_token(&u.command),
+                }
+            }),
+        )
     }
 
     // --- extract_command ---
@@ -310,7 +258,7 @@ mod tests {
         #[case] tool_input: serde_json::Value,
         #[case] expected: Option<String>,
     ) {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(tool_name, tool_input, "default"));
+        let adapter = CodexHookAdapter::new(pre_tool_use_input(tool_name, tool_input));
         let result = adapter
             .extract_command()
             .unwrap_or_else(|e| panic!("unexpected error: {e}"));
@@ -327,7 +275,7 @@ mod tests {
         #[case] hook_event_name: &str,
         #[case] expected: CodexHookEventKind,
     ) {
-        let mut input = pre_tool_use_input("Bash", bash_tool_input("git status"), "default");
+        let mut input = pre_tool_use_input("Bash", bash_tool_input("git status"));
         input.hook_event_name = hook_event_name.to_string();
         let adapter = CodexHookAdapter::new(input);
         assert_eq!(adapter.event_kind(), expected);
@@ -343,7 +291,6 @@ mod tests {
             matched_rule: "rm -rf /".to_string(),
         }),
         SandboxInfo::Preset(None),
-        "default",
         Some(build_output(Some("deny"), Some("denied: rm -rf / (not allowed)".to_string()), None)),
     )]
     #[case::deny_without_message(
@@ -353,7 +300,6 @@ mod tests {
             matched_rule: "rm *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        "default",
         Some(build_output(Some("deny"), Some("denied: rm *".to_string()), None)),
     )]
     #[case::deny_with_message_and_suggestion(
@@ -363,7 +309,6 @@ mod tests {
             matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
-        "default",
         Some(build_output(
             Some("deny"),
             Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]".to_string()),
@@ -373,83 +318,25 @@ mod tests {
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(Some("restricted".to_string())),
-        "default",
         Some(build_output(
             Some("allow"),
             None,
-            Some(UpdatedInput {
+            Some(crate::adapter::hook_common::UpdatedInput {
                 command: "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'".to_string(),
             }),
         )),
     )]
-    #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(None), "default", None)]
-    #[case::ask_default_with_message(
-        Action::Ask(Some("please confirm".to_string())),
-        SandboxInfo::Preset(None),
-        "default",
-        Some(HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: None,
-                permission_decision_reason: None,
-                updated_input: None,
-                additional_context: Some(
-                    "runok: this command matched an ask rule (please confirm)".to_string(),
-                ),
-            },
-            system_message: None,
-        }),
-    )]
-    #[case::ask_bypass_with_message(
-        Action::Ask(Some("please confirm".to_string())),
-        SandboxInfo::Preset(None),
-        "bypassPermissions",
-        Some(HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: None,
-                permission_decision_reason: None,
-                updated_input: None,
-                additional_context: Some(
-                    "runok: this command matched an ask rule (please confirm)".to_string(),
-                ),
-            },
-            system_message: Some(ASK_BYPASS_SYSTEM_MESSAGE.to_string()),
-        }),
-    )]
-    #[case::ask_default_no_message(
-        Action::Ask(None),
-        SandboxInfo::Preset(None),
-        "default",
-        Some(HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: None,
-                permission_decision_reason: None,
-                updated_input: None,
-                additional_context: Some("runok: this command matched an ask rule".to_string()),
-            },
-            system_message: None,
-        }),
-    )]
-    #[case::pass(Action::Pass, SandboxInfo::Preset(None), "default", None)]
-    #[case::pass_with_sandbox(
-        Action::Pass,
-        SandboxInfo::Preset(Some("restricted".to_string())),
-        "default",
-        None
-    )]
+    #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(None), None)]
+    #[case::ask(Action::Ask(Some("please confirm".to_string())), SandboxInfo::Preset(None), None)]
+    #[case::pass(Action::Pass, SandboxInfo::Preset(None), None)]
+    #[case::pass_with_sandbox(Action::Pass, SandboxInfo::Preset(Some("restricted".to_string())), None)]
     fn build_pre_tool_use_output_maps_action(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
-        #[case] permission_mode: &str,
         #[case] expected: Option<HookOutput>,
     ) {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(
-            "Bash",
-            bash_tool_input("git status"),
-            permission_mode,
-        ));
+        let adapter =
+            CodexHookAdapter::new(pre_tool_use_input("Bash", bash_tool_input("git status")));
         let result = action_result(action, sandbox);
         let output = adapter
             .build_pre_tool_use_output(&result)
@@ -490,7 +377,6 @@ mod tests {
         let adapter = CodexHookAdapter::new(permission_request_input(
             "Bash",
             bash_tool_input("git status"),
-            "default",
         ));
         let result = action_result(action, sandbox);
         let output = adapter
@@ -526,7 +412,6 @@ mod tests {
             "Bash",
             bash_tool_input("git status"),
             Some("test-tool-use-id"),
-            "default",
         );
         let adapter = CodexHookAdapter::new(input);
         let exit_code = adapter
@@ -539,11 +424,8 @@ mod tests {
 
     #[rstest]
     fn handle_no_match_returns_exit_0() {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(
-            "Read",
-            json!({"path": "/tmp/file"}),
-            "default",
-        ));
+        let adapter =
+            CodexHookAdapter::new(pre_tool_use_input("Read", json!({"path": "/tmp/file"})));
         let exit_code = adapter
             .handle_no_match(&Defaults::default())
             .unwrap_or_else(|e| panic!("handle_no_match failed: {e}"));
@@ -554,11 +436,8 @@ mod tests {
 
     #[rstest]
     fn handle_error_returns_exit_1() {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(
-            "Bash",
-            bash_tool_input("git status"),
-            "default",
-        ));
+        let adapter =
+            CodexHookAdapter::new(pre_tool_use_input("Bash", bash_tool_input("git status")));
         let exit_code = adapter.handle_error(anyhow::anyhow!("test error"));
         assert_eq!(exit_code, 1);
     }
@@ -567,11 +446,8 @@ mod tests {
 
     #[rstest]
     fn audit_metadata_pre_tool_use_includes_tool_use_id() {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(
-            "Bash",
-            bash_tool_input("git status"),
-            "default",
-        ));
+        let adapter =
+            CodexHookAdapter::new(pre_tool_use_input("Bash", bash_tool_input("git status")));
         assert_eq!(
             adapter.audit_metadata(),
             AuditMetadata {
@@ -590,7 +466,6 @@ mod tests {
         let adapter = CodexHookAdapter::new(permission_request_input(
             "Bash",
             bash_tool_input("git status"),
-            "default",
         ));
         assert_eq!(
             adapter.audit_metadata(),
@@ -607,11 +482,8 @@ mod tests {
 
     #[rstest]
     fn is_auditable_returns_true() {
-        let adapter = CodexHookAdapter::new(pre_tool_use_input(
-            "Bash",
-            bash_tool_input("git status"),
-            "default",
-        ));
+        let adapter =
+            CodexHookAdapter::new(pre_tool_use_input("Bash", bash_tool_input("git status")));
         assert!(adapter.is_auditable());
     }
 
@@ -641,7 +513,6 @@ mod tests {
                 session_id: "sess-123".to_string(),
                 cwd: "/home/user".to_string(),
                 hook_event_name: "PreToolUse".to_string(),
-                permission_mode: "default".to_string(),
                 tool_name: "Bash".to_string(),
                 tool_input: json!({"command": "git status"}),
                 tool_use_id: Some("use-456".to_string()),
@@ -656,7 +527,6 @@ mod tests {
                 "session_id": "sess-123",
                 "cwd": "/home/user",
                 "hook_event_name": "PermissionRequest",
-                "permission_mode": "default",
                 "tool_name": "Bash",
                 "tool_input": {"command": "git status"}
             }

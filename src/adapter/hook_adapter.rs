@@ -301,9 +301,7 @@ mod tests {
                 updated_input: updated_command.map(|c| UpdatedInput {
                     command: c.to_string(),
                 }),
-                additional_context: None,
             },
-            system_message: None,
         }
     }
 
@@ -318,7 +316,6 @@ mod tests {
                     }),
                 ..output.hook_specific_output
             },
-            ..output
         }
     }
 

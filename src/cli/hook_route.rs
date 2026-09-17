@@ -100,7 +100,6 @@ mod tests {
             "session_id": "s",
             "cwd": "/tmp",
             "hook_event_name": hook_event_name,
-            "permission_mode": "default",
             "tool_name": "Bash",
             "tool_input": {"command": command},
             "tool_use_id": "123"

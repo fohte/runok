@@ -54,19 +54,18 @@ Output detailed rule matching information to stderr.
 
 Codex CLI speaks two hook events for a Bash tool call: `PreToolUse` and `PermissionRequest`. Both share the same input shape (`PermissionRequest` just omits `tool_use_id`). `runok hook --agent codex` dispatches on `hook_event_name` the same way as `--agent claude-code`, but the two events map differently:
 
-| runok decision                                             | `PreToolUse` response                                                  | `PermissionRequest` response              |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------- |
-| `deny`                                                     | `permissionDecision: "deny"` + reason                                  | `decision: { behavior: "deny", message }` |
-| `allow`, sandbox preset applies                            | `permissionDecision: "allow"` + `updatedInput`                         | `decision: { behavior: "allow" }`         |
-| `allow`, no sandbox                                        | nothing written                                                        | `decision: { behavior: "allow" }`         |
-| `ask`                                                      | `additionalContext` note (+ `systemMessage` under `bypassPermissions`) | nothing written                           |
-| `pass` (no rule matched, or `defaults.action: pass`/unset) | nothing written                                                        | nothing written                           |
+| runok decision                                             | `PreToolUse` response                          | `PermissionRequest` response              |
+| ---------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| `deny`                                                     | `permissionDecision: "deny"` + reason          | `decision: { behavior: "deny", message }` |
+| `allow`, sandbox preset applies                            | `permissionDecision: "allow"` + `updatedInput` | `decision: { behavior: "allow" }`         |
+| `allow`, no sandbox                                        | nothing written                                | `decision: { behavior: "allow" }`         |
+| `ask`                                                      | nothing written                                | nothing written                           |
+| `pass` (no rule matched, or `defaults.action: pass`/unset) | nothing written                                | nothing written                           |
 
-Three points where this differs from `--agent claude-code`:
+Two points where this differs from `--agent claude-code`:
 
 - Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"` -- so, unlike Claude Code, a `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured. The sandbox wrap only reaches Codex through an explicit `allow`.
 - `PermissionRequest` has no `updatedInput` support at all, so a resolved sandbox preset is irrelevant there -- `allow` always reports plain `{ behavior: "allow" }` regardless of `defaults.sandbox` or a rule's `sandbox` key.
-- For `ask`, `permissionDecision` is never set -- whether a prompt actually appears is Codex's/the human's `approval_policy`, not runok's. `hookSpecificOutput.additionalContext` always notes that the command matched an `ask` rule, including the rule's configured message when it has one. When `permission_mode` is `bypassPermissions` (i.e. `approval_policy: never`), Codex's `PermissionRequest` hook never fires, so a top-level `systemMessage` additionally tells the human that no approval prompt will follow for this command.
 
 ## Examples
 
