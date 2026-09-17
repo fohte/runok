@@ -328,7 +328,7 @@ Whether network access is allowed.
 
 ##### Sandbox Merge Strategy (Strictest Wins)
 
-When multiple sandbox presets apply to a command, they are merged using a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules and examples.
+When multiple sandbox presets apply to a single command, they are merged using a **Strictest Wins** strategy. See [Sandbox Overview](/sandbox/overview/#sandbox-merging-for-compound-commands) for the merge rules, the examples, and when a compound command uses one sandbox per sub-command instead.
 
 #### `definitions.wrappers`
 

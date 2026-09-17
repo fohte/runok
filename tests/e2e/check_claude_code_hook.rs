@@ -12,6 +12,8 @@ fn hook_env() -> TestEnv {
           - allow: 'git status'
           - allow: 'echo *'
             sandbox: restricted
+          - allow: 'grep *'
+            sandbox: readonly
         definitions:
           sandbox:
             restricted:
@@ -19,6 +21,9 @@ fn hook_env() -> TestEnv {
                 writable: [./tmp]
               network:
                 allow: true
+            readonly:
+              fs:
+                writable: [./tmp]
     "})
 }
 
@@ -196,6 +201,50 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
     assert_eq!(
         normalize_hook_origin_token(rewritten_command),
         "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"
+    );
+}
+
+// --- Sandbox allow: a compound command is wrapped per sub-command ---
+
+#[rstest]
+// `git status` matched an allow rule with no sandbox, so only `echo` is
+// wrapped -- and `> out.json` goes inside the wrap with it, so the sandbox
+// governs the redirect target.
+#[case::redirect_belongs_to_the_sandboxed_sub_command(
+    "echo hello > out.json | git status",
+    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello > out.json' | git status"
+)]
+#[case::one_wrap_per_sandboxed_sub_command(
+    "echo hello | grep -c foo",
+    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello' | \
+     RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'grep -c foo'"
+)]
+fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(
+    hook_env: TestEnv,
+    #[case] command: &str,
+    #[case] expected_command: &str,
+) {
+    let assert = hook_env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json(command))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let command_field = &mut json["hookSpecificOutput"]["updatedInput"]["command"];
+    if let Some(command) = command_field.as_str() {
+        *command_field = serde_json::Value::String(normalize_hook_origin_token(command));
+    }
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {"command": expected_command}
+            }
+        })
     );
 }
 

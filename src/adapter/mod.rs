@@ -17,8 +17,8 @@ use crate::audit::{
 use crate::config::{Config, Defaults, MergedSandboxPolicy};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 use crate::rules::rule_engine::{
-    Action, EvalContext, RuleMatchInfo, default_action, evaluate_command_with_metadata,
-    evaluate_compound,
+    Action, EvalContext, RuleMatchInfo, SandboxWrap, default_action,
+    evaluate_command_with_metadata, evaluate_compound,
 };
 
 /// Unified evaluation result for the adapter layer.
@@ -29,6 +29,14 @@ use crate::rules::rule_engine::{
 pub struct ActionResult {
     pub action: Action,
     pub sandbox: SandboxInfo,
+    /// Byte ranges of the original command text to hand to `runok exec`
+    /// individually, one per sub-command of a compound that needs a sandbox.
+    /// Only endpoints that hand the command back to a shell they do not
+    /// control (the Claude Code hook, via `updatedInput`) can apply these;
+    /// the others fall back to `sandbox`, which covers the whole input.
+    /// Empty when the compound has no per-sub-command plan, or when the
+    /// input is not compound at all.
+    pub sandbox_wraps: Vec<SandboxWrap>,
     /// Per-branch evaluation records, ready to be serialised into
     /// `AuditEntry::command_evaluations`. A non-compound input
     /// produces one entry; a compound or pipelined input produces
@@ -114,6 +122,9 @@ pub trait Endpoint {
 /// no sandbox information. This ensures that `defaults.sandbox` acts as a
 /// true default: it is used whenever the matched rule does not specify its
 /// own sandbox, and also when no rule matched at all.
+///
+/// `sandbox_wraps` is left alone: it already resolved the fallback
+/// per sub-command, since each one needs its own preset name.
 fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) -> ActionResult {
     let fallback = match &defaults.sandbox {
         Some(s) => s.clone(),
@@ -235,6 +246,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
             original_command: None,
             function_call: None,
             span: None,
+            full_span: None,
         }]
     });
     let commands: Vec<String> = extracted_commands
@@ -291,6 +303,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 ActionResult {
                     action: compound_result.action,
                     sandbox,
+                    sandbox_wraps: compound_result.sandbox_wraps,
                     evaluations,
                 }
             }
@@ -306,6 +319,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         ActionResult {
             action: default_action(config),
             sandbox: SandboxInfo::Preset(None),
+            sandbox_wraps: Vec::new(),
             evaluations: Vec::new(),
         }
     } else {
@@ -364,6 +378,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 ActionResult {
                     action: result.action,
                     sandbox: SandboxInfo::Preset(result.sandbox_preset),
+                    sandbox_wraps: Vec::new(),
                     evaluations,
                 }
             }
@@ -1183,6 +1198,7 @@ mod tests {
         let action_result = ActionResult {
             action: Action::Allow,
             sandbox,
+            sandbox_wraps: vec![],
             evaluations: vec![],
         };
         let defaults = Defaults {

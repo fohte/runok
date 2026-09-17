@@ -209,6 +209,10 @@ pub(super) fn handle_command(
             original_command,
             function_call,
             span,
+            // A `cmd > file` redirect is a sibling of `node`, not a
+            // child, so it falls outside this range;
+            // `handle_redirected_statement` widens it back in.
+            full_span: Some(node.start_byte()..node.end_byte()),
         });
     }
 }
@@ -312,6 +316,9 @@ pub(super) fn handle_declaration_or_unset(
             loop_kind: loop_kind.to_string(),
             original_command: None,
             function_call: None,
+            // A `declaration_command` / `unset_command` takes no env
+            // prefix, so its full span is just `span`.
+            full_span: Some(span.clone()),
             span: Some(span),
         });
     }

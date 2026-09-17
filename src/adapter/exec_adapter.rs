@@ -347,6 +347,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -364,6 +365,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::MergedPolicy(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -380,6 +382,7 @@ mod tests {
         let result = adapter.handle_action(ActionResult {
             action: Action::Allow,
             sandbox: SandboxInfo::Preset(None),
+            sandbox_wraps: vec![],
             evaluations: vec![],
         });
         let err = result.unwrap_err();
@@ -407,6 +410,7 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -430,6 +434,7 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -457,6 +462,7 @@ mod tests {
                     matched_rule: "rm -rf /".to_string(),
                 }),
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -478,6 +484,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Ask(message),
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -497,6 +504,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Ask(Some("please confirm".to_string())),
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -516,6 +524,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -539,6 +548,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Pass,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();
@@ -556,6 +566,7 @@ mod tests {
         let result = adapter.handle_action(ActionResult {
             action: Action::Pass,
             sandbox: SandboxInfo::Preset(None),
+            sandbox_wraps: vec![],
             evaluations: vec![],
         });
         let err = result.unwrap_err();
@@ -678,6 +689,7 @@ mod tests {
             .handle_action(ActionResult {
                 action: Action::Allow,
                 sandbox: SandboxInfo::Preset(None),
+                sandbox_wraps: vec![],
                 evaluations: vec![],
             })
             .unwrap();

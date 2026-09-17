@@ -82,6 +82,18 @@ pub struct SubCommandDetail {
     pub matched_rules: Vec<RuleMatchInfo>,
 }
 
+/// One sub-command of a compound, to be handed to `runok exec --sandbox
+/// <preset>` so that it -- and nothing around it -- runs under `preset`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SandboxWrap {
+    /// Byte range of the sub-command in the command string
+    /// `evaluate_compound` was given, covering its `KEY=VALUE` prefix and
+    /// its redirects as well as the command itself, so that the redirect's
+    /// file is opened inside the sandbox rather than by the outer shell.
+    pub range: std::ops::Range<usize>,
+    pub preset: String,
+}
+
 /// Result of compound command evaluation: an action and an optional merged
 /// sandbox policy built from all sub-commands' sandbox presets.
 #[derive(Debug, PartialEq)]
@@ -95,6 +107,14 @@ pub struct CompoundEvalResult {
     /// `pass`) only knows how to apply a named preset, not an arbitrary
     /// merged policy.
     pub sandbox_preset_name: Option<String>,
+    /// One entry per sub-command that needs a sandbox, letting each
+    /// sub-command run under its own preset, with only the operators that
+    /// join them (pipes, `&&`, `;`) left to the outer shell.
+    /// Empty when no sub-command needs a sandbox, and when one that does
+    /// cannot be wrapped on its own -- callers then fall back to
+    /// `sandbox_preset_name` / `sandbox_policy`, which wrap the compound as
+    /// a whole.
+    pub sandbox_wraps: Vec<SandboxWrap>,
     /// Per-sub-command evaluation results for audit logging.
     pub sub_results: Vec<EvalResult>,
     /// Per-sub-command evaluation details, for verbose logging.

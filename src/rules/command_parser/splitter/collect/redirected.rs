@@ -8,6 +8,27 @@ use crate::rules::command_parser::{ExtractedCommand, PipeInfo, RedirectInfo};
 
 use super::collect_commands;
 
+/// Widen the entry that came straight from `body` -- identified by its
+/// `full_span` still matching `body`'s bare range -- to cover `node`'s
+/// own `redirect` siblings as well, so the redirect travels with the
+/// command it belongs to.
+///
+/// No-op when `body` is itself a compound construct, since then no
+/// single inner sub-command owns the outer redirect.
+fn widen_full_span_to_own_redirects(
+    node: tree_sitter::Node,
+    body: tree_sitter::Node,
+    body_commands: &mut [ExtractedCommand],
+) {
+    let bare_body_span = body.start_byte()..body.end_byte();
+    if let Some(command) = body_commands
+        .iter_mut()
+        .find(|c| c.full_span == Some(bare_body_span.clone()))
+    {
+        command.full_span = Some(node.start_byte()..node.end_byte());
+    }
+}
+
 /// `redirected_statement`: extract redirect info, then recurse into the
 /// body. Redirect target paths are left to the OS-level sandbox to
 /// enforce. Also recurse into redirect children to extract nested
@@ -51,6 +72,7 @@ pub(super) fn handle_redirected_statement(
         // No swallowed continuation: behave like a plain
         // redirected statement.
         (None, Some(body)) => {
+            let before = commands.len();
             collect_commands(
                 body,
                 source,
@@ -62,6 +84,7 @@ pub(super) fn handle_redirected_statement(
                 function_table,
                 poison,
             );
+            widen_full_span_to_own_redirects(node, body, &mut commands[before..]);
         }
         // Swallowed continuation: synthesize the outer
         // pipeline `[body, *pipe_stages]` and emit each stage

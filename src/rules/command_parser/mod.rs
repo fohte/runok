@@ -155,6 +155,16 @@ pub struct ExtractedCommand {
     /// re-extracted away from its call site, or a redirect between two
     /// of its own arguments (e.g. a herestring).
     pub span: Option<std::ops::Range<usize>>,
+    /// The byte range covering this sub-command's *entire* own text in
+    /// the original input, including its env-assignment prefix and
+    /// every attached redirect (unlike `span`, which excludes both) --
+    /// `&input[full_span]` is itself a runnable shell fragment for this
+    /// sub-command alone. `None` for a function-body command
+    /// re-extracted away from its call site, which has no range of its
+    /// own in the input. A heredoc redirect is left out when
+    /// tree-sitter attached a trailing `| ...` continuation to it,
+    /// since including it would swallow that sibling sub-command too.
+    pub full_span: Option<std::ops::Range<usize>>,
 }
 
 /// Join tokens into a shell-safe string by quoting tokens that contain

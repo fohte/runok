@@ -105,11 +105,13 @@ runok solves this by recognizing wrapper patterns (defined in [`definitions.wrap
 
 This ensures that rules apply to what actually runs, not just the outer wrapper command.
 
-## Sandbox Merge Strategy: Strictest Wins
+## Per-Sub-Command Sandbox Isolation
 
-When a compound command triggers multiple [sandbox](/sandbox/overview/) policies, runok merges them by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
+A compound command applies each sub-command's [sandbox](/sandbox/overview/) to that sub-command alone. The Claude Code hook's `updatedInput` rewrite replaces each sub-command that needs a sandbox with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its `KEY=VALUE` env prefix and its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) remain in the outer shell, so no sub-command is affected by its neighbours' policies, and a redirect belonging to the sandboxed sub-command is carried inside its sandbox along with it. Only the hook can apply this: `runok exec` and `runok check` each receive the whole input as one process, so they always apply a single policy to the entire compound command instead -- the merged policy below, or, when every sub-command resolves to the same preset, that preset directly.
 
-The rationale: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. No sub-command in a pipeline can weaken the sandbox of another.
+runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions: it has no byte range of its own in the input to replace (the case after a parse failure); its range is nested inside another sub-command's range (`$(...)`, `<(...)`, but not a plain subshell `( ... )`); it is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar); or it calls a shell function defined in the same input -- replacing either would run it in a child process, which neither carries the state change back to the shell running the rest of the compound command nor has the function definition. The fallback merges the policies by taking the strictest combination: intersection for writable paths, union for denied paths, and AND for network access.
+
+The rationale for the fallback direction: a compound command like `npm install && curl https://example.com` should not gain filesystem access from the `npm install` policy when `curl` has a more restrictive sandbox. When one sandbox has to cover both, no sub-command may weaken the sandbox of another.
 
 For the full merge table and contradiction handling, see [Compound Commands: Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation).
 
