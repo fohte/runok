@@ -154,10 +154,10 @@ fn hook_origin_token() -> String {
     format!("{:x}-{:x}", std::process::id(), nanos)
 }
 
-/// `wrap_with_sandbox` embeds a fresh token on every call (see its doc
-/// comment). Replace it with a fixed placeholder so tests -- here and in
-/// the other hook adapters -- can still assert the wrapped command with a
-/// single equality check.
+/// `wrap_with_sandbox` embeds a fresh token from `hook_origin_token` on
+/// every call (see that function's doc comment). Replace it with a fixed
+/// placeholder so tests -- here and in the other hook adapters -- can
+/// still assert the wrapped command with a single equality check.
 #[cfg(test)]
 pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
     let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
