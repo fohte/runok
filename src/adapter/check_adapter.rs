@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ActionKind, Defaults};
+use crate::config::{ActionKind, Defaults, SandboxPreset};
 use crate::rules::rule_engine::Action;
 
 use super::{ActionResult, Endpoint, SandboxInfo};
@@ -47,6 +48,7 @@ pub struct CheckSandboxInfo {
 pub struct CheckAdapter {
     command: String,
     output_format: OutputFormat,
+    sandbox_definitions: HashMap<String, SandboxPreset>,
 }
 
 impl CheckAdapter {
@@ -55,6 +57,7 @@ impl CheckAdapter {
         Self {
             command,
             output_format: OutputFormat::default(),
+            sandbox_definitions: HashMap::new(),
         }
     }
 
@@ -63,6 +66,7 @@ impl CheckAdapter {
         Self {
             command: input.command,
             output_format: OutputFormat::default(),
+            sandbox_definitions: HashMap::new(),
         }
     }
 
@@ -71,10 +75,19 @@ impl CheckAdapter {
         self.output_format = output_format;
         self
     }
+
+    /// Set sandbox preset definitions for resolving preset names to policies.
+    pub fn with_sandbox_definitions(mut self, definitions: HashMap<String, SandboxPreset>) -> Self {
+        self.sandbox_definitions = definitions;
+        self
+    }
 }
 
 /// Build a `CheckOutput` from an `ActionResult`.
-fn build_check_output(result: &ActionResult) -> CheckOutput {
+fn build_check_output(
+    result: &ActionResult,
+    sandbox_definitions: &HashMap<String, SandboxPreset>,
+) -> CheckOutput {
     let (decision, reason, fix_suggestion) = match &result.action {
         Action::Allow => ("allow".to_string(), None, None),
         Action::Deny(deny) => (
@@ -86,7 +99,7 @@ fn build_check_output(result: &ActionResult) -> CheckOutput {
         Action::Pass => ("pass".to_string(), None, None),
     };
 
-    let sandbox = build_sandbox_info(&result.sandbox);
+    let sandbox = build_sandbox_info(&result.sandbox, sandbox_definitions);
 
     CheckOutput {
         decision,
@@ -136,7 +149,7 @@ impl Endpoint for CheckAdapter {
     }
 
     fn handle_action(&self, result: ActionResult) -> Result<i32, anyhow::Error> {
-        let output = build_check_output(&result);
+        let output = build_check_output(&result, &self.sandbox_definitions);
         self.print_output(&output)?;
         Ok(0)
     }
@@ -169,21 +182,56 @@ impl CheckAdapter {
 }
 
 /// Convert `SandboxInfo` into the informational `CheckSandboxInfo` for the response.
-fn build_sandbox_info(info: &SandboxInfo) -> Option<CheckSandboxInfo> {
+///
+/// Resolves each preset name against `sandbox_definitions` and merges them via
+/// `SandboxPreset::merge_strictest` ("Strictest Wins") to populate the actual
+/// writable roots and network-allowed flag -- this works uniformly whether
+/// `names` has one entry or several. Falls back to `writable_roots: None,
+/// network_allowed: None` if any name is missing from `sandbox_definitions`
+/// (e.g. the caller never called `with_sandbox_definitions`).
+fn build_sandbox_info(
+    info: &SandboxInfo,
+    sandbox_definitions: &HashMap<String, SandboxPreset>,
+) -> Option<CheckSandboxInfo> {
     let SandboxInfo::Preset(names) = info;
     if names.is_empty() {
         return None;
     }
+
+    let preset = names.join(", ");
+
+    let presets: Option<Vec<&SandboxPreset>> = names
+        .iter()
+        .map(|name| sandbox_definitions.get(name))
+        .collect();
+    let Some(presets) = presets else {
+        return Some(CheckSandboxInfo {
+            preset,
+            writable_roots: None,
+            network_allowed: None,
+        });
+    };
+
+    // `merge_strictest` with a non-empty slice always returns `Some` (`names` is non-empty).
+    let Some(merged) = SandboxPreset::merge_strictest(&presets) else {
+        unreachable!("merge_strictest with a non-empty slice always returns Some");
+    };
+
     Some(CheckSandboxInfo {
-        preset: names.join(", "),
-        writable_roots: None,
-        network_allowed: None,
+        preset,
+        writable_roots: if merged.writable.is_empty() {
+            None
+        } else {
+            Some(merged.writable)
+        },
+        network_allowed: Some(merged.network_allowed),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{FsAccessPolicy, FsPolicy, NetworkPolicy};
     use crate::rules::rule_engine::DenyResponse;
     use rstest::rstest;
 
@@ -274,7 +322,7 @@ mod tests {
             sandbox_wraps: vec![],
             evaluations: vec![],
         };
-        assert_eq!(build_check_output(&result), expected);
+        assert_eq!(build_check_output(&result, &HashMap::new()), expected);
     }
 
     // --- handle_action: exit code ---
@@ -348,13 +396,15 @@ mod tests {
         #[case] info: SandboxInfo,
         #[case] expected: Option<CheckSandboxInfo>,
     ) {
-        assert_eq!(build_sandbox_info(&info), expected);
+        assert_eq!(build_sandbox_info(&info, &HashMap::new()), expected);
     }
 
+    // No `sandbox_definitions` provided -- falls back to `writable_roots: None,
+    // network_allowed: None` rather than resolving the preset.
     #[rstest]
-    fn build_sandbox_info_from_preset() {
+    fn build_sandbox_info_from_preset_without_definitions() {
         let info = SandboxInfo::Preset(vec!["restricted".to_string()]);
-        let result = build_sandbox_info(&info);
+        let result = build_sandbox_info(&info, &HashMap::new());
         assert_eq!(
             result,
             Some(CheckSandboxInfo {
@@ -366,9 +416,9 @@ mod tests {
     }
 
     #[rstest]
-    fn build_sandbox_info_from_multiple_presets_joins_names() {
+    fn build_sandbox_info_from_multiple_presets_joins_names_without_definitions() {
         let info = SandboxInfo::Preset(vec!["a".to_string(), "b".to_string()]);
-        let result = build_sandbox_info(&info);
+        let result = build_sandbox_info(&info, &HashMap::new());
         assert_eq!(
             result,
             Some(CheckSandboxInfo {
@@ -377,6 +427,68 @@ mod tests {
                 network_allowed: None,
             })
         );
+    }
+
+    /// Build a `SandboxPreset` with the given write-allow roots and network policy,
+    /// for exercising `SandboxPreset::merge_strictest` through `build_sandbox_info`.
+    fn preset(writable: &[&str], network_allow: Option<bool>) -> SandboxPreset {
+        SandboxPreset {
+            fs: Some(FsPolicy {
+                read: None,
+                write: Some(FsAccessPolicy {
+                    allow: Some(writable.iter().map(|s| s.to_string()).collect()),
+                    deny: None,
+                }),
+            }),
+            network: network_allow.map(|allow| NetworkPolicy { allow: Some(allow) }),
+        }
+    }
+
+    #[rstest]
+    #[case::single_preset(
+        vec!["restricted"],
+        vec![("restricted", preset(&["/tmp", "/home"], Some(true)))],
+        CheckSandboxInfo {
+            preset: "restricted".to_string(),
+            writable_roots: Some(vec!["/home".to_string(), "/tmp".to_string()]),
+            network_allowed: Some(true),
+        },
+    )]
+    #[case::multiple_presets_merge_strictest(
+        vec!["a", "b"],
+        vec![
+            ("a", preset(&["/tmp", "/home"], Some(true))),
+            ("b", preset(&["/tmp", "/var"], Some(false))),
+        ],
+        CheckSandboxInfo {
+            preset: "a, b".to_string(),
+            // writable: intersection of {/tmp, /home} and {/tmp, /var} -> {/tmp}
+            writable_roots: Some(vec!["/tmp".to_string()]),
+            // network: AND -> denied because "b" denies it
+            network_allowed: Some(false),
+        },
+    )]
+    #[case::missing_definition_degrades_gracefully(
+        vec!["a", "b"],
+        vec![("a", preset(&["/tmp"], Some(true)))],
+        CheckSandboxInfo {
+            preset: "a, b".to_string(),
+            writable_roots: None,
+            network_allowed: None,
+        },
+    )]
+    fn build_sandbox_info_resolves_with_definitions(
+        #[case] names: Vec<&str>,
+        #[case] definitions: Vec<(&str, SandboxPreset)>,
+        #[case] expected: CheckSandboxInfo,
+    ) {
+        let sandbox_definitions: HashMap<String, SandboxPreset> = definitions
+            .into_iter()
+            .map(|(name, preset)| (name.to_string(), preset))
+            .collect();
+        let info = SandboxInfo::Preset(names.into_iter().map(String::from).collect());
+        let result = build_sandbox_info(&info, &sandbox_definitions);
+        assert_eq!(result, Some(expected));
     }
 
     // --- audit ---

@@ -344,7 +344,12 @@ fn run_command(
             let options = RunOptions {
                 verbose: args.verbose,
             };
-            match route_check(&args, stdin) {
+            let sandbox_defs = config
+                .definitions
+                .as_ref()
+                .and_then(|d| d.sandbox.clone())
+                .unwrap_or_default();
+            match route_check(&args, stdin, &sandbox_defs) {
                 Ok(CheckRoute::Single(endpoint)) => {
                     adapter::run_with_options(endpoint.as_ref(), &config, &options)
                 }
