@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::hook_common::{
-    BashToolInput, HookOutput, build_deny_reason, build_output, sandbox_updated_input,
+    BashToolInput, HookOutput, build_ask_reason, build_deny_reason, build_output,
+    sandbox_updated_input,
 };
 use crate::adapter::{ActionResult, Endpoint};
 use crate::audit::AuditMetadata;
@@ -65,8 +66,9 @@ impl CodexHookAdapter {
     /// `permissionDecision` is the only value that actually stops the tool
     /// from running -- silence or an annotation lets it execute regardless
     /// of `permission_mode`. The reason text carries the "ask" semantics
-    /// (why human judgment is needed, and how to retry) rather than reading
-    /// like a hard rejection.
+    /// (why human judgment is needed) and tells the model to stop and report
+    /// back instead of retrying, since this session has no way to re-run the
+    /// call with elevated permission.
     fn build_pre_tool_use_output(
         &self,
         result: &ActionResult,
@@ -123,20 +125,19 @@ impl CodexHookAdapter {
 
 /// Build the `permissionDecisionReason` for an Ask action reported through
 /// `PreToolUse`'s `deny`. Codex treats an empty (post-trim) reason as an
-/// invalid `deny`, so the fixed trailing clause is unconditional -- it's
-/// the only part guaranteed to be there when `ask_response` carries neither
-/// a message nor a fix suggestion.
+/// invalid `deny` and silently continues instead of blocking (see
+/// `codex-rs/core/src/hook_runtime.rs`'s `block_reason` handling), so the
+/// fixed trailing instruction is unconditional -- it's the only part
+/// guaranteed to be there when `ask_response` carries neither a message nor
+/// a fix suggestion. The instruction tells the model to stop rather than
+/// retry: this session has no mechanism to re-run a call with elevated
+/// permission, so retrying just repeats the same deny.
 fn build_ask_deny_reason(ask_response: &AskResponse) -> String {
-    let mut reason = "ask".to_string();
-    if let Some(ref message) = ask_response.message {
-        reason.push_str(&format!(": {message}"));
-    }
-    if let Some(ref suggestion) = ask_response.fix_suggestion {
-        reason.push_str(&format!(" [suggestion: {suggestion}]"));
-    }
+    let mut reason = build_ask_reason(ask_response);
     reason.push_str(
-        " -- Codex's PreToolUse hook cannot open an approval prompt, so this is reported as \
-         deny; ask the user directly in the conversation and retry the command if they approve.",
+        ". This rule requires a human decision and this session has no approval prompt. Stop, \
+         report which command needs approval and why, and let the delegator or the user decide. \
+         Do not retry this command and do not work around the rule.",
     );
     reason
 }
@@ -365,15 +366,17 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: Some("git push --force-with-lease".to_string()),
+            matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
         Some(build_output(
             Some("deny"),
             Some(
-                "ask: please confirm [suggestion: git push --force-with-lease] -- Codex's \
-                 PreToolUse hook cannot open an approval prompt, so this is reported as deny; \
-                 ask the user directly in the conversation and retry the command if they \
-                 approve."
+                "approval required: git push -f * (please confirm) [suggestion: git push \
+                 --force-with-lease]. This rule requires a human decision and this session has \
+                 no approval prompt. Stop, report which command needs approval and why, and let \
+                 the delegator or the user decide. Do not retry this command and do not work \
+                 around the rule."
                     .to_string(),
             ),
             None,
@@ -383,14 +386,16 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
+            matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
         Some(build_output(
             Some("deny"),
             Some(
-                "ask: please confirm -- Codex's PreToolUse hook cannot open an approval \
-                 prompt, so this is reported as deny; ask the user directly in the \
-                 conversation and retry the command if they approve."
+                "approval required: git push -f * (please confirm). This rule requires a human \
+                 decision and this session has no approval prompt. Stop, report which command \
+                 needs approval and why, and let the delegator or the user decide. Do not retry \
+                 this command and do not work around the rule."
                     .to_string(),
             ),
             None,
@@ -400,14 +405,16 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: Some("git push --force-with-lease".to_string()),
+            matched_rule: "git push -f *".to_string(),
         }),
         SandboxInfo::Preset(None),
         Some(build_output(
             Some("deny"),
             Some(
-                "ask [suggestion: git push --force-with-lease] -- Codex's PreToolUse hook \
-                 cannot open an approval prompt, so this is reported as deny; ask the user \
-                 directly in the conversation and retry the command if they approve."
+                "approval required: git push -f * [suggestion: git push --force-with-lease]. \
+                 This rule requires a human decision and this session has no approval prompt. \
+                 Stop, report which command needs approval and why, and let the delegator or \
+                 the user decide. Do not retry this command and do not work around the rule."
                     .to_string(),
             ),
             None,
@@ -417,14 +424,38 @@ mod tests {
         Action::Ask(AskResponse {
             message: None,
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(None),
         Some(build_output(
             Some("deny"),
             Some(
-                "ask -- Codex's PreToolUse hook cannot open an approval prompt, so this is \
-                 reported as deny; ask the user directly in the conversation and retry the \
-                 command if they approve."
+                "approval required by default policy. This rule requires a human decision and \
+                 this session has no approval prompt. Stop, report which command needs approval \
+                 and why, and let the delegator or the user decide. Do not retry this command \
+                 and do not work around the rule."
+                    .to_string(),
+            ),
+            None,
+        )),
+    )]
+    // Exercises the synthetic-ask code path (`default_action`/`escalate_to_ask`)
+    // where no specific rule pattern matched -- `matched_rule` is empty, unlike
+    // the pattern-derived cases above.
+    #[case::ask_with_empty_matched_rule(
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
+        SandboxInfo::Preset(None),
+        Some(build_output(
+            Some("deny"),
+            Some(
+                "approval required by default policy. This rule requires a human decision and \
+                 this session has no approval prompt. Stop, report which command needs approval \
+                 and why, and let the delegator or the user decide. Do not retry this command \
+                 and do not work around the rule."
                     .to_string(),
             ),
             None,
@@ -473,6 +504,7 @@ mod tests {
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
+            matched_rule: String::new(),
         }),
         SandboxInfo::Preset(None),
         None

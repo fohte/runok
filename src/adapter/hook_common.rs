@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::SandboxInfo;
-use crate::rules::rule_engine::{DenyResponse, SandboxWrap};
+use crate::rules::rule_engine::{AskResponse, DenyResponse, SandboxWrap};
 
 /// Bash tool's tool_input structure.
 #[derive(Debug, Deserialize)]
@@ -46,21 +46,56 @@ pub struct UpdatedInput {
     pub command: String,
 }
 
+/// Shared assembly for `build_deny_reason` and `build_ask_reason`:
+/// `<prefix>: <matched_rule>` (or `default_policy_text` when `matched_rule`
+/// is empty), followed by an optional `(<message>)` and an optional
+/// `[suggestion: <fix_suggestion>]`.
+fn build_reason(
+    prefix: &str,
+    default_policy_text: &str,
+    matched_rule: &str,
+    message: Option<&str>,
+    fix_suggestion: Option<&str>,
+) -> String {
+    let mut reason = if matched_rule.is_empty() {
+        default_policy_text.to_string()
+    } else {
+        format!("{prefix}: {matched_rule}")
+    };
+    if let Some(message) = message {
+        reason.push_str(&format!(" ({message})"));
+    }
+    if let Some(suggestion) = fix_suggestion {
+        reason.push_str(&format!(" [suggestion: {suggestion}]"));
+    }
+    reason
+}
+
 /// Build a combined reason string from a `DenyResponse`, including
 /// the matched rule, optional message, and optional fix suggestion.
 pub fn build_deny_reason(deny: &DenyResponse) -> String {
-    let mut reason = if deny.matched_rule.is_empty() {
-        "command denied by default policy".to_string()
-    } else {
-        format!("denied: {}", deny.matched_rule)
-    };
-    if let Some(ref message) = deny.message {
-        reason.push_str(&format!(" ({})", message));
-    }
-    if let Some(ref suggestion) = deny.fix_suggestion {
-        reason.push_str(&format!(" [suggestion: {}]", suggestion));
-    }
-    reason
+    build_reason(
+        "denied",
+        "command denied by default policy",
+        &deny.matched_rule,
+        deny.message.as_deref(),
+        deny.fix_suggestion.as_deref(),
+    )
+}
+
+/// Build the same shape of reason string as `build_deny_reason`, but for an
+/// `AskResponse`, with an "approval required" prefix instead of "denied" --
+/// Codex's `PreToolUse` hook (see `codex_hook_adapter::build_ask_deny_reason`)
+/// needs this distinct wording so the model can tell "forbidden" apart from
+/// "needs a human's judgment" and react differently.
+pub fn build_ask_reason(ask: &AskResponse) -> String {
+    build_reason(
+        "approval required",
+        "approval required by default policy",
+        &ask.matched_rule,
+        ask.message.as_deref(),
+        ask.fix_suggestion.as_deref(),
+    )
 }
 
 /// Build a `HookOutput` with a fixed `hookEventName: "PreToolUse"`.
@@ -169,6 +204,56 @@ pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    // --- build_ask_reason ---
+
+    #[rstest]
+    #[case::matched_rule_message_and_suggestion(
+        AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: Some("git push --force-with-lease".to_string()),
+            matched_rule: "git push -f *".to_string(),
+        },
+        "approval required: git push -f * (please confirm) [suggestion: git push --force-with-lease]",
+    )]
+    #[case::matched_rule_and_message_only(
+        AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: None,
+            matched_rule: "git push -f *".to_string(),
+        },
+        "approval required: git push -f * (please confirm)",
+    )]
+    #[case::matched_rule_and_suggestion_only(
+        AskResponse {
+            message: None,
+            fix_suggestion: Some("git push --force-with-lease".to_string()),
+            matched_rule: "git push -f *".to_string(),
+        },
+        "approval required: git push -f * [suggestion: git push --force-with-lease]",
+    )]
+    #[case::matched_rule_alone(
+        AskResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: "git push -f *".to_string(),
+        },
+        "approval required: git push -f *",
+    )]
+    #[case::empty_matched_rule_falls_back_to_default_policy(
+        AskResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        },
+        "approval required by default policy",
+    )]
+    fn build_ask_reason_assembles_the_reason_string(
+        #[case] ask: AskResponse,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(build_ask_reason(&ask), expected);
+    }
 
     // --- sandbox_updated_input ---
 
