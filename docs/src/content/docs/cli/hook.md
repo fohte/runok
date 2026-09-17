@@ -59,13 +59,18 @@ Codex CLI speaks two hook events for a Bash tool call: `PreToolUse` and `Permiss
 | `deny`                                                     | `permissionDecision: "deny"` + reason          | `decision: { behavior: "deny", message }` |
 | `allow`, sandbox preset applies                            | `permissionDecision: "allow"` + `updatedInput` | `decision: { behavior: "allow" }`         |
 | `allow`, no sandbox                                        | nothing written                                | `decision: { behavior: "allow" }`         |
-| `ask`                                                      | nothing written                                | nothing written                           |
+| `ask`                                                      | `permissionDecision: "deny"` + reason          | nothing written                           |
 | `pass` (no rule matched, or `defaults.action: pass`/unset) | nothing written                                | nothing written                           |
 
 Two points where this differs from `--agent claude-code`:
 
 - Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"` -- so, unlike Claude Code, a `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured. The sandbox wrap only reaches Codex through an explicit `allow`.
 - `PermissionRequest` has no `updatedInput` support at all, so a resolved sandbox preset is irrelevant there -- `allow` always reports plain `{ behavior: "allow" }` regardless of `defaults.sandbox` or a rule's `sandbox` key.
+
+`ask` is handled differently by the two events:
+
+- **`PreToolUse`**: Codex has no way to open an approval prompt mid-call here, and `permissionDecision` is the only value that actually stops the tool from running -- so `ask` always reports `permissionDecision: "deny"`, with the reason explaining that human judgment is needed (not a hard rejection) and that the model should ask the user in conversation and retry if approved.
+- **`PermissionRequest`**: unchanged -- nothing is written, deferring to Codex's own approval UI, which this event was built to drive.
 
 ## Examples
 
