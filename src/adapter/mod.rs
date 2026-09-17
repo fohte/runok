@@ -72,7 +72,7 @@ pub struct CommandEvalResult {
     pub require_command_in_path: Option<String>,
 }
 
-/// Sandbox information from rule evaluation, varying by command type.
+/// Sandbox information from rule evaluation.
 #[derive(Debug)]
 pub enum SandboxInfo {
     /// Preset name(s) to be resolved by the adapter. Empty when no sandbox

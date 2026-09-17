@@ -941,10 +941,6 @@ mod tests {
 
     #[rstest]
     fn compound_pass_with_single_preset_not_escalated(empty_context: EvalContext) {
-        // A single distinct preset is representable via `SandboxInfo::Preset`
-        // and applied through the same `updatedInput` re-exec wrapping a
-        // single command uses -- no need to escalate to `ask` just to avoid
-        // silently dropping the sandbox.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),
@@ -979,14 +975,7 @@ mod tests {
 
     #[rstest]
     fn compound_pass_with_multiple_presets_not_escalated(empty_context: EvalContext) {
-        // Two distinct presets are both carried in `sandbox_preset_names`, so
-        // a `pass` response's `updatedInput` can still apply both (via
-        // repeated `--sandbox` flags) -- no need to escalate to `ask` to
-        // avoid silently dropping the sandbox. `unknown_cmd` is unmatched so
-        // the merged action is `Pass` (which outranks the other
-        // sub-commands' `Allow`). `cd` changes the calling shell's own
-        // state, so it cannot be wrapped on its own -- no per-sub-command
-        // plan is made and the whole-compound fallback carries both names.
+        // `cd` prevents per-sub-command wrapping to test the whole-compound fallback.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),

@@ -105,8 +105,8 @@ pub struct TestArgs {}
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct ExecArgs {
-    /// Sandbox preset name. Repeat to merge multiple presets ("Strictest
-    /// Wins" via `SandboxPreset::merge_strictest`).
+    /// Sandbox preset name. Repeat to merge multiple presets (strictest
+    /// restrictions win).
     #[arg(long)]
     pub sandbox: Vec<String>,
 

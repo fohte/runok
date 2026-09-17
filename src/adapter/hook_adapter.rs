@@ -339,12 +339,8 @@ impl ClaudeCodeHookAdapter {
         Self::wrap_with_sandboxes(std::slice::from_ref(&preset.to_string()), command)
     }
 
-    /// Same as [`Self::wrap_with_sandbox`], but for two or more distinct
-    /// preset names -- as happens when a compound command couldn't be
-    /// wrapped per sub-command (see `sandbox_wraps` on `CompoundEvalResult`)
-    /// and matched more than one preset across its sub-commands. Each name
-    /// becomes its own `--sandbox` flag; the re-exec'd `runok exec` resolves
-    /// and merges them itself via `SandboxPreset::merge_strictest`.
+    /// Wrap `command` with `runok exec`, passing each preset in `presets` as a
+    /// `--sandbox` flag.
     fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
         let quoted_command = shlex::try_quote(command)
             .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
