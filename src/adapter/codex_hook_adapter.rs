@@ -6,7 +6,7 @@ use crate::adapter::hook_common::{
 use crate::adapter::{ActionResult, Endpoint};
 use crate::audit::AuditMetadata;
 use crate::config::Defaults;
-use crate::rules::rule_engine::Action;
+use crate::rules::rule_engine::{Action, AskResponse};
 
 /// Codex `PreToolUse`/`PermissionRequest` hook input (stdin JSON). Both events
 /// share this shape; PreToolUse additionally carries `tool_use_id`, which
@@ -56,8 +56,17 @@ impl CodexHookAdapter {
     }
 
     /// Codex requires `updatedInput` to be paired with an explicit
-    /// `permissionDecision: allow` -- so Ask, Pass, and a sandbox-less
-    /// allow all write nothing here, deferring to Codex's own approval flow.
+    /// `permissionDecision: allow` -- so Pass and a sandbox-less allow both
+    /// write nothing here, deferring to Codex's own approval flow.
+    ///
+    /// Ask always maps to `deny` instead of deferring: Codex's `PreToolUse`
+    /// hook has no way to open an approval prompt mid-call (unlike
+    /// `PermissionRequest`, see `build_permission_request_output`), and
+    /// `permissionDecision` is the only value that actually stops the tool
+    /// from running -- silence or an annotation lets it execute regardless
+    /// of `permission_mode`. The reason text carries the "ask" semantics
+    /// (why human judgment is needed, and how to retry) rather than reading
+    /// like a hard rejection.
     fn build_pre_tool_use_output(
         &self,
         result: &ActionResult,
@@ -77,7 +86,12 @@ impl CodexHookAdapter {
                 )?;
                 Ok(updated.map(|u| build_output(Some("allow"), None, Some(u))))
             }
-            Action::Ask(_) | Action::Pass => Ok(None),
+            Action::Ask(ask_response) => Ok(Some(build_output(
+                Some("deny"),
+                Some(build_ask_deny_reason(ask_response)),
+                None,
+            ))),
+            Action::Pass => Ok(None),
         }
     }
 
@@ -105,6 +119,26 @@ impl CodexHookAdapter {
             },
         }))
     }
+}
+
+/// Build the `permissionDecisionReason` for an Ask action reported through
+/// `PreToolUse`'s `deny`. Codex treats an empty (post-trim) reason as an
+/// invalid `deny`, so the fixed trailing clause is unconditional -- it's
+/// the only part guaranteed to be there when `ask_response` carries neither
+/// a message nor a fix suggestion.
+fn build_ask_deny_reason(ask_response: &AskResponse) -> String {
+    let mut reason = "ask".to_string();
+    if let Some(ref message) = ask_response.message {
+        reason.push_str(&format!(": {message}"));
+    }
+    if let Some(ref suggestion) = ask_response.fix_suggestion {
+        reason.push_str(&format!(" [suggestion: {suggestion}]"));
+    }
+    reason.push_str(
+        " -- Codex's PreToolUse hook cannot open an approval prompt, so this is reported as \
+         deny; ask the user directly in the conversation and retry the command if they approve.",
+    );
+    reason
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -189,7 +223,7 @@ mod tests {
     use super::*;
     use crate::adapter::SandboxInfo;
     use crate::adapter::hook_common::normalize_hook_origin_token;
-    use crate::rules::rule_engine::DenyResponse;
+    use crate::rules::rule_engine::{AskResponse, DenyResponse};
     use indoc::indoc;
     use rstest::rstest;
     use serde_json::json;
@@ -327,7 +361,75 @@ mod tests {
         )),
     )]
     #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(None), None)]
-    #[case::ask(Action::Ask(Some("please confirm".to_string())), SandboxInfo::Preset(None), None)]
+    #[case::ask_with_message_and_fix_suggestion(
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: Some("git push --force-with-lease".to_string()),
+        }),
+        SandboxInfo::Preset(None),
+        Some(build_output(
+            Some("deny"),
+            Some(
+                "ask: please confirm [suggestion: git push --force-with-lease] -- Codex's \
+                 PreToolUse hook cannot open an approval prompt, so this is reported as deny; \
+                 ask the user directly in the conversation and retry the command if they \
+                 approve."
+                    .to_string(),
+            ),
+            None,
+        )),
+    )]
+    #[case::ask_with_message_only(
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: None,
+        }),
+        SandboxInfo::Preset(None),
+        Some(build_output(
+            Some("deny"),
+            Some(
+                "ask: please confirm -- Codex's PreToolUse hook cannot open an approval \
+                 prompt, so this is reported as deny; ask the user directly in the \
+                 conversation and retry the command if they approve."
+                    .to_string(),
+            ),
+            None,
+        )),
+    )]
+    #[case::ask_with_fix_suggestion_only(
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: Some("git push --force-with-lease".to_string()),
+        }),
+        SandboxInfo::Preset(None),
+        Some(build_output(
+            Some("deny"),
+            Some(
+                "ask [suggestion: git push --force-with-lease] -- Codex's PreToolUse hook \
+                 cannot open an approval prompt, so this is reported as deny; ask the user \
+                 directly in the conversation and retry the command if they approve."
+                    .to_string(),
+            ),
+            None,
+        )),
+    )]
+    #[case::ask_with_neither(
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+        }),
+        SandboxInfo::Preset(None),
+        Some(build_output(
+            Some("deny"),
+            Some(
+                "ask -- Codex's PreToolUse hook cannot open an approval prompt, so this is \
+                 reported as deny; ask the user directly in the conversation and retry the \
+                 command if they approve."
+                    .to_string(),
+            ),
+            None,
+        )),
+    )]
     #[case::pass(Action::Pass, SandboxInfo::Preset(None), None)]
     #[case::pass_with_sandbox(Action::Pass, SandboxInfo::Preset(Some("restricted".to_string())), None)]
     fn build_pre_tool_use_output_maps_action(
@@ -367,7 +469,14 @@ mod tests {
         SandboxInfo::Preset(Some("restricted".to_string())),
         Some(PermissionRequestDecision { behavior: "allow".to_string(), message: None }),
     )]
-    #[case::ask(Action::Ask(Some("please confirm".to_string())), SandboxInfo::Preset(None), None)]
+    #[case::ask(
+        Action::Ask(AskResponse {
+            message: Some("please confirm".to_string()),
+            fix_suggestion: None,
+        }),
+        SandboxInfo::Preset(None),
+        None
+    )]
     #[case::pass(Action::Pass, SandboxInfo::Preset(None), None)]
     fn build_permission_request_output_maps_action(
         #[case] action: Action,
