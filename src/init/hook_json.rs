@@ -1,4 +1,4 @@
-/// Check whether a PreToolUse entry already contains the runok hook command.
+/// Check whether a hook entry already contains the specified command.
 pub fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
     // Plain string format: "runok check --input-format claude-code-hook"
     if entry.as_str() == Some(command) {
