@@ -84,7 +84,7 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 `ask` is handled differently by the two events, since Codex's `PreToolUse` hook has no way to open an approval prompt mid-call: it always reports `permissionDecision: "deny"`, with the reason text explaining that human judgment is needed (not a hard rejection) and instructing the model to stop, report which command needs approval and why, and let the delegator or the user decide, rather than retrying -- this session has no way to re-run the call with elevated permission. `PermissionRequest` is unchanged -- an `ask` decision writes nothing, deferring to Codex's own approval UI. See [`runok hook`](/cli/hook/#codex---agent-codex) for the full decision mapping.
 
-### `runok init` registers the Codex hook automatically (TODO(pr-link))
+### `runok init` registers the Codex hook automatically ([#520](https://github.com/fohte/runok/pull/520))
 
 Following up on `runok hook --agent codex` ([#517](https://github.com/fohte/runok/pull/517)), the `runok init --scope user` wizard now also detects a Codex config directory (`$CODEX_HOME`, or `~/.codex` when that variable is unset) and registers `runok hook --agent codex` for both the `PreToolUse` and `PermissionRequest` events in `<codex_home>/hooks.json`:
 
