@@ -1,6 +1,7 @@
 use super::super::claude_code;
 use super::super::codex;
 use super::super::error::InitError;
+use super::super::hook_json;
 
 /// Simulate removing Bash permission entries from settings.json content.
 ///
@@ -66,7 +67,7 @@ fn preview_register_hook_for_event(
         .and_then(|p| p.as_array())
     {
         for entry in arr {
-            if claude_code::entry_has_runok_hook(entry, claude_code::HOOK_COMMAND) {
+            if hook_json::entry_has_runok_hook(entry, claude_code::HOOK_COMMAND) {
                 return Ok(None);
             }
         }

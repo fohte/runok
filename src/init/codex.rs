@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use super::claude_code;
 use super::error::InitError;
+use super::hook_json;
 
 /// The hook command registered in Codex's hooks.json for both the
 /// `PreToolUse` and `PermissionRequest` events.
@@ -39,7 +39,7 @@ pub(super) fn register_hook_for_event(
         .and_then(|p| p.as_array())
     {
         for entry in arr {
-            if claude_code::entry_has_runok_hook(entry, HOOK_COMMAND) {
+            if hook_json::entry_has_runok_hook(entry, HOOK_COMMAND) {
                 return Ok(false);
             }
         }
