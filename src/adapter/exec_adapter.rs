@@ -155,10 +155,15 @@ impl Endpoint for ExecAdapter {
                 }
                 Ok(3)
             }
-            Action::Ask(message) => {
+            Action::Ask(ask_response) => {
                 // Ask is treated as deny in exec mode
-                let msg = message.unwrap_or_else(|| "command requires confirmation".to_string());
+                let msg = ask_response
+                    .message
+                    .unwrap_or_else(|| "command requires confirmation".to_string());
                 eprintln!("runok: {}", msg);
+                if let Some(ref suggestion) = ask_response.fix_suggestion {
+                    eprintln!("  suggestion: {}", suggestion);
+                }
                 Ok(3)
             }
             Action::Pass => {
@@ -237,7 +242,7 @@ mod tests {
     use super::*;
     use crate::exec::ExecError;
     use crate::exec::command_executor::{CommandInput, ExecMode, SandboxPolicy};
-    use crate::rules::rule_engine::DenyResponse;
+    use crate::rules::rule_engine::{AskResponse, DenyResponse};
     use rstest::rstest;
     use std::cell::RefCell;
 
@@ -472,9 +477,9 @@ mod tests {
     // --- handle_action: Ask (treated as deny) ---
 
     #[rstest]
-    #[case::with_message(Some("please confirm".to_string()))]
-    #[case::without_message(None)]
-    fn handle_action_ask_returns_exit_3(#[case] message: Option<String>) {
+    #[case::with_message(AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None, matched_rule: String::new() })]
+    #[case::without_message(AskResponse { message: None, fix_suggestion: None, matched_rule: String::new() })]
+    fn handle_action_ask_returns_exit_3(#[case] ask_response: AskResponse) {
         let adapter = ExecAdapter::new(
             vec!["terraform".into(), "apply".into()],
             None,
@@ -482,7 +487,7 @@ mod tests {
         );
         let result = adapter
             .handle_action(ActionResult {
-                action: Action::Ask(message),
+                action: Action::Ask(ask_response),
                 sandbox: SandboxInfo::Preset(None),
                 sandbox_wraps: vec![],
                 evaluations: vec![],
@@ -502,7 +507,11 @@ mod tests {
         .with_hook_origin(true);
         let result = adapter
             .handle_action(ActionResult {
-                action: Action::Ask(Some("please confirm".to_string())),
+                action: Action::Ask(AskResponse {
+                    message: Some("please confirm".to_string()),
+                    fix_suggestion: None,
+                    matched_rule: String::new(),
+                }),
                 sandbox: SandboxInfo::Preset(None),
                 sandbox_wraps: vec![],
                 evaluations: vec![],

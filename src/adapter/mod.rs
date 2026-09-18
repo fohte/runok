@@ -1,6 +1,8 @@
 pub mod check_adapter;
+pub mod codex_hook_adapter;
 pub mod exec_adapter;
 pub mod hook_adapter;
+pub mod hook_common;
 mod verbose;
 
 /// Environment variable the Claude Code hook wrapper sets on the `runok exec`
@@ -616,7 +618,7 @@ mod tests {
     #[rstest]
     #[case::allow("git status", allow_rule("git status"), Action::Allow)]
     #[case::deny("rm -rf /", deny_rule("rm -rf /"), Action::Deny(crate::rules::rule_engine::DenyResponse { message: None, fix_suggestion: None, matched_rule: "rm -rf /".to_string() }))]
-    #[case::ask("terraform apply", ask_rule("terraform apply"), Action::Ask(Some("please confirm".to_string())))]
+    #[case::ask("terraform apply", ask_rule("terraform apply"), Action::Ask(crate::rules::rule_engine::AskResponse { message: Some("please confirm".to_string()), fix_suggestion: None, matched_rule: "terraform apply".to_string() }))]
     fn rule_match_calls_handle_action(
         #[case] command: &str,
         #[case] rule: RuleEntry,
