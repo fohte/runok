@@ -1,6 +1,7 @@
 use std::io::Read;
 
 use crate::adapter::Endpoint;
+use crate::adapter::codex_hook_adapter::{CodexHookAdapter, CodexHookEventKind, CodexHookInput};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookEventKind, HookInput};
 
 use super::HookArgs;
@@ -21,32 +22,49 @@ pub enum HookRoute {
 
 /// Route `runok hook` stdin input by its `hook_event_name`.
 pub fn route_hook(args: &HookArgs, mut stdin: impl Read) -> Result<HookRoute, anyhow::Error> {
-    match args.agent.as_deref() {
-        Some("claude-code") => {}
+    let agent = match args.agent.as_deref() {
+        Some(agent @ ("claude-code" | "codex")) => agent,
         Some(agent) => {
             return Err(anyhow::anyhow!(
-                "Unknown agent: '{agent}'. Valid agents: claude-code"
+                "Unknown agent: '{agent}'. Valid agents: claude-code, codex"
             ));
         }
         None => {
             return Err(anyhow::anyhow!(
-                "Missing required --agent flag. Valid agents: claude-code"
+                "Missing required --agent flag. Valid agents: claude-code, codex"
             ));
         }
-    }
+    };
 
     let mut stdin_input = String::new();
     stdin.read_to_string(&mut stdin_input)?;
 
-    let hook_input: HookInput =
-        serde_json::from_str(&stdin_input).map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
+    match agent {
+        "claude-code" => {
+            let hook_input: HookInput = serde_json::from_str(&stdin_input)
+                .map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
 
-    let adapter = ClaudeCodeHookAdapter::new(hook_input);
-    Ok(match adapter.event_kind() {
-        HookEventKind::PreToolUse => HookRoute::Single(Box::new(adapter)),
-        HookEventKind::PostToolUse => HookRoute::PostToolUseHook(adapter),
-        HookEventKind::Unknown => HookRoute::NoOp,
-    })
+            let adapter = ClaudeCodeHookAdapter::new(hook_input);
+            Ok(match adapter.event_kind() {
+                HookEventKind::PreToolUse => HookRoute::Single(Box::new(adapter)),
+                HookEventKind::PostToolUse => HookRoute::PostToolUseHook(adapter),
+                HookEventKind::Unknown => HookRoute::NoOp,
+            })
+        }
+        "codex" => {
+            let hook_input: CodexHookInput = serde_json::from_str(&stdin_input)
+                .map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
+
+            let adapter = CodexHookAdapter::new(hook_input);
+            Ok(match adapter.event_kind() {
+                CodexHookEventKind::PreToolUse | CodexHookEventKind::PermissionRequest => {
+                    HookRoute::Single(Box::new(adapter))
+                }
+                CodexHookEventKind::Unknown => HookRoute::NoOp,
+            })
+        }
+        _ => unreachable!("agent already validated above"),
+    }
 }
 
 #[cfg(test)]
@@ -69,6 +87,18 @@ mod tests {
             "transcript_path": "/tmp",
             "cwd": "/tmp",
             "permission_mode": "default",
+            "hook_event_name": hook_event_name,
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_use_id": "123"
+        })
+        .to_string()
+    }
+
+    fn codex_hook_json(hook_event_name: &str, command: &str) -> String {
+        serde_json::json!({
+            "session_id": "s",
+            "cwd": "/tmp",
             "hook_event_name": hook_event_name,
             "tool_name": "Bash",
             "tool_input": {"command": command},
@@ -141,7 +171,7 @@ mod tests {
         match result {
             Err(e) => assert_eq!(
                 e.to_string(),
-                "Missing required --agent flag. Valid agents: claude-code"
+                "Missing required --agent flag. Valid agents: claude-code, codex"
             ),
             Ok(_) => panic!("expected an error"),
         }
@@ -155,7 +185,7 @@ mod tests {
         match result {
             Err(e) => assert_eq!(
                 e.to_string(),
-                "Unknown agent: 'other-agent'. Valid agents: claude-code"
+                "Unknown agent: 'other-agent'. Valid agents: claude-code, codex"
             ),
             Ok(_) => panic!("expected an error"),
         }
@@ -172,5 +202,54 @@ mod tests {
             ),
             Ok(_) => panic!("expected an error"),
         }
+    }
+
+    // --- --agent codex routing ---
+
+    #[rstest]
+    fn route_hook_codex_pre_tool_use_routes_to_single() {
+        let args = hook_args(Some("codex"));
+        let stdin = codex_hook_json("PreToolUse", "git status");
+        let route =
+            route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        let endpoint = match route {
+            HookRoute::Single(ep) => ep,
+            _ => panic!("expected Single"),
+        };
+        assert_eq!(
+            endpoint
+                .extract_command()
+                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
+            Some("git status".to_string())
+        );
+    }
+
+    #[rstest]
+    fn route_hook_codex_permission_request_routes_to_single() {
+        let args = hook_args(Some("codex"));
+        let stdin = codex_hook_json("PermissionRequest", "git status");
+        let route =
+            route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        let endpoint = match route {
+            HookRoute::Single(ep) => ep,
+            _ => panic!("expected Single"),
+        };
+        assert_eq!(
+            endpoint
+                .extract_command()
+                .unwrap_or_else(|e| panic!("unexpected error: {e}")),
+            Some("git status".to_string())
+        );
+    }
+
+    #[rstest]
+    #[case::session_start("SessionStart")]
+    #[case::post_tool_use("PostToolUse")]
+    fn route_hook_codex_unknown_event_routes_to_noop(#[case] hook_event_name: &str) {
+        let args = hook_args(Some("codex"));
+        let stdin = codex_hook_json(hook_event_name, "git status");
+        let route =
+            route_hook(&args, stdin.as_bytes()).unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert!(matches!(route, HookRoute::NoOp));
     }
 }

@@ -7,7 +7,7 @@ use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_
 use super::dispatch::evaluate_command_inner;
 use super::require_command_in_path::command_contains_source_like;
 use super::{
-    Action, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SandboxWrap,
+    Action, AskResponse, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SandboxWrap,
     SubCommandDetail,
 };
 
@@ -236,9 +236,11 @@ fn has_writable_contradiction(
 /// the same way an unescalated Allow would.
 fn escalate_to_ask(action: Action) -> Action {
     match action {
-        Action::Allow | Action::Pass => Action::Ask(Some(
-            "sandbox policy conflict: writable roots are contradictory".to_string(),
-        )),
+        Action::Allow | Action::Pass => Action::Ask(AskResponse {
+            message: Some("sandbox policy conflict: writable roots are contradictory".to_string()),
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
         other => other,
     }
 }
@@ -337,7 +339,11 @@ pub fn default_action(config: &Config) -> Action {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        ActionKind::Ask => Action::Ask(None),
+        ActionKind::Ask => Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        }),
         ActionKind::Pass => Action::Pass,
     }
 }
@@ -1281,8 +1287,8 @@ mod tests {
         let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
         // Action is Ask from the rule itself; escalation should not change it
         match &result.action {
-            Action::Ask(msg) => {
-                assert_eq!(msg.as_deref(), Some("confirm ls"));
+            Action::Ask(ask_response) => {
+                assert_eq!(ask_response.message.as_deref(), Some("confirm ls"));
             }
             other => panic!("expected Ask, got {:?}", other),
         }

@@ -3,7 +3,7 @@ use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass,
 use indoc::{formatdoc, indoc};
 use rstest::rstest;
 use runok::config::{Config, ConfigError, RuleEntry, parse_config};
-use runok::rules::rule_engine::{Action, EvalContext, evaluate_command};
+use runok::rules::rule_engine::{Action, AskResponse, EvalContext, evaluate_command};
 
 // ========================================
 // YAML config loading and rule evaluation
@@ -837,12 +837,14 @@ fn ask_response_preserves_message(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
-    match &result.action {
-        Action::Ask(msg) => {
-            assert_eq!(msg.as_deref(), Some("Are you sure you want to push?"));
-        }
-        other => panic!("expected Ask, got {:?}", other),
-    }
+    assert_eq!(
+        result.action,
+        Action::Ask(AskResponse {
+            message: Some("Are you sure you want to push?".to_string()),
+            fix_suggestion: None,
+            matched_rule: "git push *".to_string(),
+        })
+    );
 }
 
 #[rstest]
@@ -854,12 +856,14 @@ fn ask_without_message_has_none(empty_context: EvalContext) {
     .unwrap();
 
     let result = evaluate_command(&config, "git push origin main", &empty_context).unwrap();
-    match &result.action {
-        Action::Ask(msg) => {
-            assert!(msg.is_none(), "expected None message, got {:?}", msg);
-        }
-        other => panic!("expected Ask, got {:?}", other),
-    }
+    assert_eq!(
+        result.action,
+        Action::Ask(AskResponse {
+            message: None,
+            fix_suggestion: None,
+            matched_rule: "git push *".to_string(),
+        })
+    );
 }
 
 // ========================================

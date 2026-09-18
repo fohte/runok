@@ -185,7 +185,7 @@ And add runok as a PreToolUse hook in `.claude/settings.json`:
 }
 ```
 
-See [Claude Code Integration](https://runok.fohte.net/getting-started/claude-code/) for sandbox setup and advanced configuration.
+See [Claude Code Integration](https://runok.fohte.net/getting-started/claude-code/) for sandbox setup and advanced configuration. Codex CLI is also supported via `runok hook --agent codex` -- see [`runok hook`](https://runok.fohte.net/cli/hook/#codex---agent-codex) for the event mapping.
 
 ### Verify
 

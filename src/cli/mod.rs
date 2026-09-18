@@ -144,7 +144,7 @@ pub struct CheckArgs {
 pub struct HookArgs {
     /// Agent to integrate with (required, validated at runtime so a missing
     /// or unknown value never triggers clap's blocking exit code 2). Valid
-    /// values: "claude-code"
+    /// values: "claude-code", "codex"
     #[arg(long)]
     pub agent: Option<String>,
 

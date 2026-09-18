@@ -11,7 +11,7 @@ use super::flag_schema::{build_expr_context, build_flag_schema};
 use super::function::try_unwrap_function_call;
 use super::require_command_in_path::resolve_unmatched;
 use super::wrapper::try_unwrap_wrapper;
-use super::{Action, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
+use super::{Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
 
 /// Evaluate a single (non-compound) command against rules, function
 /// calls, and wrappers.
@@ -175,7 +175,11 @@ pub(super) fn evaluate_simple_command(
                 fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
                 matched_rule: most_restrictive.pattern_str.clone(),
             }),
-            ActionKind::Ask => Action::Ask(most_restrictive.rule.message.clone()),
+            ActionKind::Ask => Action::Ask(AskResponse {
+                message: most_restrictive.rule.message.clone(),
+                fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
+                matched_rule: most_restrictive.pattern_str.clone(),
+            }),
             ActionKind::Allow => Action::Allow,
             ActionKind::Pass => unreachable!(
                 "RuleEntry has no `pass` field (only deny/allow/ask); \
@@ -535,7 +539,11 @@ mod tests {
         let result = evaluate_command(&config, "git push origin", &empty_context).unwrap();
         assert_eq!(
             result.action,
-            Action::Ask(Some("Are you sure?".to_string()))
+            Action::Ask(AskResponse {
+                message: Some("Are you sure?".to_string()),
+                fix_suggestion: None,
+                matched_rule: "git push *".to_string(),
+            })
         );
     }
 

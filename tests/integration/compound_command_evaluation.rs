@@ -5,7 +5,7 @@ use rstest::rstest;
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
 use runok::rules::rule_engine::{
-    Action, EvalContext, SandboxWrap, evaluate_command, evaluate_compound,
+    Action, AskResponse, EvalContext, SandboxWrap, evaluate_command, evaluate_compound,
 };
 
 // ========================================
@@ -320,10 +320,13 @@ fn writable_contradiction_escalates_to_ask(empty_context: EvalContext) {
     let result = evaluate_compound(&config, "cmd_a run && cmd_b run", &empty_context).unwrap();
 
     // Action escalated from Allow to Ask due to contradiction
-    assert!(
-        matches!(result.action, Action::Ask(Some(ref msg)) if msg.contains("contradictory")),
-        "expected Ask with contradiction message, got {:?}",
-        result.action
+    assert_eq!(
+        result.action,
+        Action::Ask(AskResponse {
+            message: Some("sandbox policy conflict: writable roots are contradictory".to_string()),
+            fix_suggestion: None,
+            matched_rule: String::new(),
+        })
     );
     // Policy still present with empty writable roots
     let policy = result.sandbox_policy.unwrap();
