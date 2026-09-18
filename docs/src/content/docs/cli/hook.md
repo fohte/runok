@@ -72,6 +72,8 @@ Two points where this differs from `--agent claude-code`:
 - **`PreToolUse`**: Codex has no way to open an approval prompt mid-call here, and `permissionDecision` is the only value that actually stops the tool from running -- so `ask` always reports `permissionDecision: "deny"`, with the reason explaining that human judgment is needed (not a hard rejection) and instructing the model to stop, report which command needs approval and why, and let the delegator or the user decide, rather than retrying -- this session has no way to re-run the call with elevated permission.
 - **`PermissionRequest`**: unchanged -- nothing is written, deferring to Codex's own approval UI, which this event was built to drive.
 
+Codex also fires both hooks for `apply_patch` (file edits) and `spawn_agent`, and a `deny` from either hook would actually block those calls too -- but `runok hook --agent codex` only evaluates `Bash` tool calls; for any other tool name it writes nothing, the same as a `pass` decision. `apply_patch` and `spawn_agent` calls are entirely up to Codex's own judgment and sandbox, not `runok`'s rules.
+
 ## Examples
 
 Register both events in `.claude/settings.json`:
