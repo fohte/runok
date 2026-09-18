@@ -124,12 +124,13 @@ pub fn sandbox_updated_input(
             command: wrap_sub_commands(wraps, original_command)?,
         }));
     }
-    match sandbox {
-        SandboxInfo::Preset(Some(preset)) => Ok(Some(UpdatedInput {
-            command: wrap_with_sandbox(preset, original_command)?,
-        })),
-        _ => Ok(None),
+    let SandboxInfo::Preset(names) = sandbox;
+    if names.is_empty() {
+        return Ok(None);
     }
+    Ok(Some(UpdatedInput {
+        command: wrap_with_sandboxes(names, original_command)?,
+    }))
 }
 
 /// Replace each sub-command that needs a sandbox with a `runok exec`
@@ -167,14 +168,24 @@ fn wrap_sub_commands(
 /// `RUNOK_HOOK_ORIGIN` so `exec` treats this as a hook-originated call and
 /// runs `defaults.action: pass` under the sandbox instead of denying it.
 pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
+    wrap_with_sandboxes(std::slice::from_ref(&preset.to_string()), command)
+}
+
+/// Wrap `command` with `runok exec`, passing each preset in `presets` as a
+/// `--sandbox` flag.
+pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
-    let quoted_preset = shlex::try_quote(preset)
-        .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
+    let mut flags = String::new();
+    for preset in presets {
+        let quoted_preset = shlex::try_quote(preset)
+            .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
+        flags.push_str(&format!(" --sandbox {quoted_preset}"));
+    }
     let token = hook_origin_token();
     let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
     Ok(format!(
-        "{env_var}={token} runok exec --sandbox {quoted_preset} -- {quoted_command}"
+        "{env_var}={token} runok exec{flags} -- {quoted_command}"
     ))
 }
 
@@ -266,18 +277,23 @@ mod tests {
 
     #[rstest]
     #[case::preset_some(
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![],
         "echo hello",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
     )]
-    #[case::preset_none(SandboxInfo::Preset(None), vec![], "echo hello", None)]
-    #[case::merged_policy(SandboxInfo::MergedPolicy(None), vec![], "echo hello", None)]
+    #[case::preset_none(SandboxInfo::Preset(vec![]), vec![], "echo hello", None)]
+    #[case::multiple_presets(
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        vec![],
+        "echo hello",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'echo hello'"),
+    )]
     // Only `node` needs the sandbox, and its redirect is inside the wrapped
     // range, so `out.json` is opened by the shell inside the sandbox while
     // the pipe and `cat ...` stay outside it.
     #[case::wraps(
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         vec![wrap(0..23, "readonly")],
         "node fix.mjs > out.json | cat notes.txt",
         Some(
@@ -288,7 +304,7 @@ mod tests {
     // Applied back-to-front, so the earlier range is still valid once the
     // later one has been replaced by a longer string.
     #[case::multiple_wraps(
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         vec![wrap(0..13, "readonly"), wrap(16..28, "writable")],
         "awk '{print}' | node fix.mjs",
         Some(
@@ -299,7 +315,7 @@ mod tests {
     // Wraps win over the whole-input preset: they express the same sandbox
     // per sub-command instead of one sandbox over everything.
     #[case::wraps_take_precedence_over_preset(
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![wrap(0..2, "readonly")],
         "ls | wc -l",
         Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- ls | wc -l"),
@@ -375,5 +391,18 @@ mod tests {
     fn wrap_with_sandbox_rejects_nul_byte() {
         let command = "echo \0hello";
         assert!(wrap_with_sandbox("restricted", command).is_err());
+    }
+
+    #[rstest]
+    fn wrap_with_sandboxes_emits_one_flag_per_preset() {
+        let actual = wrap_with_sandboxes(
+            &["preset_a".to_string(), "preset_b".to_string()],
+            "git status",
+        )
+        .unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert_eq!(
+            normalize_hook_origin_token(&actual),
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'",
+        );
     }
 }

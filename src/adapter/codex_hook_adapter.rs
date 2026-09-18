@@ -328,7 +328,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm -rf /".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(Some("deny"), Some("denied: rm -rf / (not allowed)".to_string()), None)),
     )]
     #[case::deny_without_message(
@@ -337,7 +337,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(Some("deny"), Some("denied: rm *".to_string()), None)),
     )]
     #[case::deny_with_message_and_suggestion(
@@ -346,7 +346,7 @@ mod tests {
             fix_suggestion: Some("git push --force-with-lease".to_string()),
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]".to_string()),
@@ -355,7 +355,7 @@ mod tests {
     )]
     #[case::allow_with_sandbox(
         Action::Allow,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         Some(build_output(
             Some("allow"),
             None,
@@ -364,14 +364,14 @@ mod tests {
             }),
         )),
     )]
-    #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(None), None)]
+    #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(vec![]), None)]
     #[case::ask_with_message_and_fix_suggestion(
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
             fix_suggestion: Some("git push --force-with-lease".to_string()),
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some(
@@ -391,7 +391,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some(
@@ -410,7 +410,7 @@ mod tests {
             fix_suggestion: Some("git push --force-with-lease".to_string()),
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some(
@@ -429,7 +429,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some(
@@ -451,7 +451,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(build_output(
             Some("deny"),
             Some(
@@ -464,8 +464,8 @@ mod tests {
             None,
         )),
     )]
-    #[case::pass(Action::Pass, SandboxInfo::Preset(None), None)]
-    #[case::pass_with_sandbox(Action::Pass, SandboxInfo::Preset(Some("restricted".to_string())), None)]
+    #[case::pass(Action::Pass, SandboxInfo::Preset(vec![]), None)]
+    #[case::pass_with_sandbox(Action::Pass, SandboxInfo::Preset(vec!["restricted".to_string()]), None)]
     fn build_pre_tool_use_output_maps_action(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
@@ -490,17 +490,17 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm -rf /".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(PermissionRequestDecision { behavior: "deny".to_string(), message: Some("denied: rm -rf / (not allowed)".to_string()) }),
     )]
     #[case::allow_without_sandbox(
         Action::Allow,
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         Some(PermissionRequestDecision { behavior: "allow".to_string(), message: None }),
     )]
     #[case::allow_with_sandbox_is_still_plain_allow(
         Action::Allow,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         Some(PermissionRequestDecision { behavior: "allow".to_string(), message: None }),
     )]
     #[case::ask(
@@ -509,10 +509,10 @@ mod tests {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         None
     )]
-    #[case::pass(Action::Pass, SandboxInfo::Preset(None), None)]
+    #[case::pass(Action::Pass, SandboxInfo::Preset(vec![]), None)]
     fn build_permission_request_output_maps_action(
         #[case] action: Action,
         #[case] sandbox: SandboxInfo,
@@ -538,14 +538,14 @@ mod tests {
     // --- handle_action exit code ---
 
     #[rstest]
-    #[case::pre_tool_use_allow("PreToolUse", Action::Allow, SandboxInfo::Preset(None))]
+    #[case::pre_tool_use_allow("PreToolUse", Action::Allow, SandboxInfo::Preset(vec![]))]
     #[case::pre_tool_use_deny(
         "PreToolUse",
         Action::Deny(DenyResponse { message: None, fix_suggestion: None, matched_rule: "rm *".to_string() }),
-        SandboxInfo::Preset(None)
+        SandboxInfo::Preset(vec![])
     )]
-    #[case::permission_request_allow("PermissionRequest", Action::Allow, SandboxInfo::Preset(None))]
-    #[case::unknown_event("SessionStart", Action::Allow, SandboxInfo::Preset(None))]
+    #[case::permission_request_allow("PermissionRequest", Action::Allow, SandboxInfo::Preset(vec![]))]
+    #[case::unknown_event("SessionStart", Action::Allow, SandboxInfo::Preset(vec![]))]
     fn handle_action_returns_exit_0(
         #[case] hook_event_name: &str,
         #[case] action: Action,

@@ -105,9 +105,10 @@ pub struct TestArgs {}
 #[derive(clap::Args)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct ExecArgs {
-    /// Sandbox preset name
+    /// Sandbox preset name. Repeat to merge multiple presets (strictest
+    /// restrictions win).
     #[arg(long)]
-    pub sandbox: Option<String>,
+    pub sandbox: Vec<String>,
 
     /// Output detailed rule matching information to stderr
     #[arg(long)]
@@ -203,15 +204,19 @@ mod tests {
     #[rstest]
     #[case::exec_simple(
         &["runok", "exec", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], verbose: false }),
     )]
     #[case::exec_with_sandbox(
         &["runok", "exec", "--sandbox", "strict", "--", "ls"],
-        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: Some("strict".into()), verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into()], verbose: false }),
+    )]
+    #[case::exec_with_multiple_sandboxes(
+        &["runok", "exec", "--sandbox", "strict", "--sandbox", "readonly", "--", "ls"],
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into(), "readonly".into()], verbose: false }),
     )]
     #[case::exec_with_verbose(
         &["runok", "exec", "--verbose", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: None, verbose: true }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], verbose: true }),
     )]
     #[case::check_with_command(
         &["runok", "check", "--", "git", "status"],

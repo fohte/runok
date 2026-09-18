@@ -119,10 +119,7 @@ pub fn evaluate_compound(
         None
     };
 
-    // A single distinct preset can be represented as `SandboxInfo::Preset`
-    // and applied via the same re-exec wrapping as a non-compound command;
-    // only a genuine multi-preset merge needs `SandboxInfo::MergedPolicy`.
-    let sandbox_preset_name = (unique_names.len() == 1).then(|| unique_names[0].clone());
+    let sandbox_preset_names: Vec<String> = unique_names.iter().map(|n| n.to_string()).collect();
 
     let (final_action, final_policy) = match (action, sandbox_policy) {
         (action, Some(policy))
@@ -131,32 +128,13 @@ pub fn evaluate_compound(
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))
         }
-        // A pass response carries no `updatedInput` unless the sandbox
-        // collapses to a single preset (handled above via
-        // `sandbox_preset_name`) or to per-sub-command wraps; a merge
-        // across presets has no representation pass can carry, so escalate
-        // to `ask` instead.
-        (Action::Pass, Some(policy))
-            if sandbox_preset_name.is_none() && sandbox_wraps.is_empty() =>
-        {
-            (
-                Action::Ask(AskResponse {
-                    message: Some(
-                        "a matched rule's sandbox policy cannot be applied via pass".to_string(),
-                    ),
-                    fix_suggestion: None,
-                    matched_rule: String::new(),
-                }),
-                Some(policy),
-            )
-        }
         (action, policy) => (action, policy),
     };
 
     Ok(CompoundEvalResult {
         action: final_action,
         sandbox_policy: final_policy,
-        sandbox_preset_name,
+        sandbox_preset_names,
         sandbox_wraps,
         sub_results,
         sub_command_details,
@@ -969,10 +947,6 @@ mod tests {
 
     #[rstest]
     fn compound_pass_with_single_preset_not_escalated(empty_context: EvalContext) {
-        // Only one distinct preset is involved, so it can be represented as
-        // `SandboxInfo::Preset` and applied through the same `updatedInput`
-        // re-exec wrapping a single command uses -- no need to escalate to
-        // `ask` just to avoid silently dropping the sandbox.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),
@@ -1000,22 +974,14 @@ mod tests {
 
         let result = evaluate_compound(&config, "ls -la; unknown_cmd", &empty_context).unwrap();
         assert_eq!(
-            (result.action, result.sandbox_preset_name),
-            (Action::Pass, Some("only_tmp".to_string())),
+            (result.action, result.sandbox_preset_names),
+            (Action::Pass, vec!["only_tmp".to_string()]),
         );
     }
 
     #[rstest]
-    fn compound_pass_with_multiple_presets_escalates_to_ask(empty_context: EvalContext) {
-        // Two distinct presets are merged, which only `SandboxInfo::MergedPolicy`
-        // can represent -- a pass response carries no `updatedInput`, so the
-        // merged policy would be silently dropped instead of applied. Escalate
-        // to `ask` instead. `unknown_cmd` is unmatched so the merged action is
-        // `Pass` (which outranks the other sub-commands' `Allow`), exercising
-        // the pass-escalation branch rather than the contradiction branch.
-        // `cd` changes the calling shell's own state, so it cannot be wrapped
-        // on its own -- no per-sub-command plan is made and `pass` has nothing
-        // but the merged policy to carry.
+    fn compound_pass_with_multiple_presets_not_escalated(empty_context: EvalContext) {
+        // `cd` prevents per-sub-command wrapping to test the whole-compound fallback.
         let config = Config {
             defaults: Some(Defaults {
                 action: Some(ActionKind::Pass),
@@ -1069,18 +1035,12 @@ mod tests {
         assert_eq!(
             (
                 result.action,
-                result.sandbox_preset_name,
+                result.sandbox_preset_names,
                 result.sandbox_policy,
             ),
             (
-                Action::Ask(AskResponse {
-                    message: Some(
-                        "a matched rule's sandbox policy cannot be applied via pass".to_string()
-                    ),
-                    fix_suggestion: None,
-                    matched_rule: String::new(),
-                }),
-                None,
+                Action::Pass,
+                vec!["preset_a".to_string(), "preset_b".to_string()],
                 Some(MergedSandboxPolicy {
                     writable: vec!["/tmp".to_string()],
                     deny: vec![],
@@ -1114,7 +1074,7 @@ mod tests {
         );
 
         let result = evaluate_compound(&config, "ls -la | cat -", &empty_context).unwrap();
-        assert_eq!(result.sandbox_preset_name, Some("preset_a".to_string()));
+        assert_eq!(result.sandbox_preset_names, vec!["preset_a".to_string()]);
         let policy = result.sandbox_policy.unwrap();
         // Same preset intersected with itself should preserve the values
         assert_eq!(policy.writable, vec!["/tmp"]);
@@ -1175,7 +1135,7 @@ mod tests {
         let result =
             evaluate_compound(&config, "ls -la | python3 script.py", &empty_context).unwrap();
         assert_eq!(result.action, Action::Allow);
-        assert_eq!(result.sandbox_preset_name, Some("restricted".to_string()));
+        assert_eq!(result.sandbox_preset_names, vec!["restricted".to_string()]);
         let policy = result.sandbox_policy.unwrap();
         assert_eq!(policy.writable, vec!["/tmp"]);
         assert_eq!(policy.deny, vec!["/etc"]);
@@ -1268,9 +1228,11 @@ mod tests {
             &empty_context,
         )
         .unwrap();
-        // Three distinct presets are merged -- there is no single preset name
-        // to represent this as `SandboxInfo::Preset`.
-        assert_eq!(result.sandbox_preset_name, None);
+        // All three distinct preset names are carried, in first-seen order.
+        assert_eq!(
+            result.sandbox_preset_names,
+            vec!["p1".to_string(), "p2".to_string(), "p3".to_string()]
+        );
         let policy = result.sandbox_policy.unwrap();
         // Writable: {a,b,c} ∩ {b,c} ∩ {c,d} = {c}
         assert_eq!(policy.writable, vec!["/c"]);

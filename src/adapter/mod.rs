@@ -16,7 +16,7 @@ use crate::audit::{
     SerializableEnvVar, SerializablePipe, SerializableRedirect, SerializableRuleMatch,
     parse_fields_from_extracted,
 };
-use crate::config::{Config, Defaults, MergedSandboxPolicy};
+use crate::config::{Config, Defaults};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 use crate::rules::rule_engine::{
     Action, EvalContext, RuleMatchInfo, SandboxWrap, default_action,
@@ -74,13 +74,13 @@ pub struct CommandEvalResult {
     pub require_command_in_path: Option<String>,
 }
 
-/// Sandbox information from rule evaluation, varying by command type.
+/// Sandbox information from rule evaluation.
 #[derive(Debug)]
 pub enum SandboxInfo {
-    /// Single command: preset name to be resolved by the adapter.
-    Preset(Option<String>),
-    /// Compound command: already-merged policy from `evaluate_compound`.
-    MergedPolicy(Option<MergedSandboxPolicy>),
+    /// Preset name(s) to be resolved by the adapter. Empty when none apply;
+    /// multiple names mean the resolving endpoint merges them via
+    /// `SandboxPreset::merge_strictest`.
+    Preset(Vec<String>),
 }
 
 /// Options that modify the behavior of `run()`.
@@ -133,11 +133,10 @@ fn apply_sandbox_fallback(mut action_result: ActionResult, defaults: &Defaults) 
         None => return action_result,
     };
 
-    action_result.sandbox = match action_result.sandbox {
-        SandboxInfo::Preset(None) => SandboxInfo::Preset(Some(fallback)),
-        SandboxInfo::MergedPolicy(None) => SandboxInfo::Preset(Some(fallback)),
-        other => other,
-    };
+    let SandboxInfo::Preset(names) = &mut action_result.sandbox;
+    if names.is_empty() {
+        names.push(fallback);
+    }
     action_result
 }
 
@@ -158,9 +157,11 @@ fn write_audit_log(
     let writer = AuditWriter::new(audit_config);
     let metadata = endpoint.audit_metadata();
 
+    // `None` both when no sandbox applied and when two or more distinct
+    // presets were merged -- the merged case has no single canonical name.
     let sandbox_preset = match &action_result.sandbox {
-        SandboxInfo::Preset(p) => p.clone(),
-        SandboxInfo::MergedPolicy(_) => None,
+        SandboxInfo::Preset(names) if names.len() == 1 => Some(names[0].clone()),
+        SandboxInfo::Preset(_) => None,
     };
 
     let default_action = defaults.action.map(|a| match a {
@@ -298,13 +299,9 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                     })
                     .collect();
 
-                let sandbox = match compound_result.sandbox_preset_name {
-                    Some(name) => SandboxInfo::Preset(Some(name)),
-                    None => SandboxInfo::MergedPolicy(compound_result.sandbox_policy),
-                };
                 ActionResult {
                     action: compound_result.action,
-                    sandbox,
+                    sandbox: SandboxInfo::Preset(compound_result.sandbox_preset_names),
                     sandbox_wraps: compound_result.sandbox_wraps,
                     evaluations,
                 }
@@ -320,7 +317,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         // No executable commands (e.g. comment-only input) — use default action
         ActionResult {
             action: default_action(config),
-            sandbox: SandboxInfo::Preset(None),
+            sandbox: SandboxInfo::Preset(Vec::new()),
             sandbox_wraps: Vec::new(),
             evaluations: Vec::new(),
         }
@@ -379,7 +376,7 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
                 }];
                 ActionResult {
                     action: result.action,
-                    sandbox: SandboxInfo::Preset(result.sandbox_preset),
+                    sandbox: SandboxInfo::Preset(result.sandbox_preset.into_iter().collect()),
                     sandbox_wraps: Vec::new(),
                     evaluations,
                 }
@@ -694,10 +691,10 @@ mod tests {
             *endpoint.last_action.borrow(),
             Some(Action::Deny(_))
         ));
-        // Compound commands carry MergedPolicy sandbox info
+        // Neither sub-command's rule names a sandbox.
         assert!(matches!(
-            *endpoint.last_sandbox.borrow(),
-            Some(SandboxInfo::MergedPolicy(_))
+            &*endpoint.last_sandbox.borrow(),
+            Some(SandboxInfo::Preset(names)) if names.is_empty()
         ));
     }
 
@@ -834,10 +831,10 @@ mod tests {
             Some(Action::Allow)
         ));
         match &*endpoint.last_sandbox.borrow() {
-            Some(SandboxInfo::Preset(Some(preset))) => {
-                assert_eq!(preset, "restricted");
+            Some(SandboxInfo::Preset(names)) => {
+                assert_eq!(names, &vec!["restricted".to_string()]);
             }
-            other => panic!("expected SandboxInfo::Preset(Some(\"restricted\")), got {other:?}"),
+            other => panic!("expected SandboxInfo::Preset([\"restricted\"]), got {other:?}"),
         }
     }
 
@@ -868,11 +865,11 @@ mod tests {
 
         assert!(*endpoint.called_handle_action.borrow());
         match &*endpoint.last_sandbox.borrow() {
-            Some(SandboxInfo::Preset(Some(preset))) => {
-                assert_eq!(preset, "default-sandbox");
+            Some(SandboxInfo::Preset(names)) => {
+                assert_eq!(names, &vec!["default-sandbox".to_string()]);
             }
             other => {
-                panic!("expected SandboxInfo::Preset(Some(\"default-sandbox\")), got {other:?}")
+                panic!("expected SandboxInfo::Preset([\"default-sandbox\"]), got {other:?}")
             }
         }
     }
@@ -898,10 +895,10 @@ mod tests {
 
         assert!(*endpoint.called_handle_action.borrow());
         match &*endpoint.last_sandbox.borrow() {
-            Some(SandboxInfo::Preset(Some(preset))) => {
-                assert_eq!(preset, "restricted");
+            Some(SandboxInfo::Preset(names)) => {
+                assert_eq!(names, &vec!["restricted".to_string()]);
             }
-            other => panic!("expected SandboxInfo::Preset(Some(\"restricted\")), got {other:?}"),
+            other => panic!("expected SandboxInfo::Preset([\"restricted\"]), got {other:?}"),
         }
     }
 
@@ -1176,21 +1173,21 @@ mod tests {
     // --- apply_sandbox_fallback unit tests ---
 
     #[rstest]
-    #[case::preset_none_with_default(
-        SandboxInfo::Preset(None),
+    #[case::empty_with_default(
+        SandboxInfo::Preset(vec![]),
         Some("fallback".to_string()),
-        "Preset(Some(\"fallback\"))"
+        "Preset([\"fallback\"])"
     )]
-    #[case::preset_some_with_default(
-        SandboxInfo::Preset(Some("explicit".to_string())),
+    #[case::single_with_default(
+        SandboxInfo::Preset(vec!["explicit".to_string()]),
         Some("fallback".to_string()),
-        "Preset(Some(\"explicit\"))"
+        "Preset([\"explicit\"])"
     )]
-    #[case::preset_none_without_default(SandboxInfo::Preset(None), None, "Preset(None)")]
-    #[case::merged_none_with_default(
-        SandboxInfo::MergedPolicy(None),
+    #[case::empty_without_default(SandboxInfo::Preset(vec![]), None, "Preset([])")]
+    #[case::multiple_with_default(
+        SandboxInfo::Preset(vec!["a".to_string(), "b".to_string()]),
         Some("fallback".to_string()),
-        "Preset(Some(\"fallback\"))"
+        "Preset([\"a\", \"b\"])"
     )]
     fn apply_sandbox_fallback_works(
         #[case] sandbox: SandboxInfo,

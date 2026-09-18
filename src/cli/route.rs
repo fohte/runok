@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::adapter::Endpoint;
 use crate::adapter::check_adapter::{CheckAdapter, CheckInput, OutputFormat};
 use crate::adapter::hook_adapter::{ClaudeCodeHookAdapter, HookInput};
+use runok::config::SandboxPreset;
 use runok::rules::CommandParseError;
 use runok::rules::command_parser::{shell_quote_join, split_top_level_commands};
 
@@ -39,6 +42,7 @@ fn route_hook_input(hook_input: HookInput) -> CheckRoute {
 pub fn route_check(
     args: &CheckArgs,
     mut stdin: impl std::io::Read,
+    sandbox_definitions: &HashMap<String, SandboxPreset>,
 ) -> Result<CheckRoute, anyhow::Error> {
     let output_format = to_adapter_output_format(&args.output_format);
 
@@ -52,7 +56,9 @@ pub fn route_check(
             shell_quote_join(&args.command)?
         };
         return Ok(CheckRoute::Single(Box::new(
-            CheckAdapter::from_command(command).with_output_format(output_format),
+            CheckAdapter::from_command(command)
+                .with_output_format(output_format)
+                .with_sandbox_definitions(sandbox_definitions.clone()),
         )));
     }
 
@@ -66,7 +72,7 @@ pub fn route_check(
     if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&stdin_input)
         && json_value.is_object()
     {
-        return route_json(args, json_value);
+        return route_json(args, json_value, sandbox_definitions);
     }
 
     // 4. --input-format requires JSON; plaintext fallback is not allowed when --input-format is specified
@@ -97,14 +103,19 @@ pub fn route_check(
     if commands.len() == 1 {
         return Ok(CheckRoute::Single(Box::new(
             CheckAdapter::from_command(commands.into_iter().next().unwrap_or_default())
-                .with_output_format(output_format),
+                .with_output_format(output_format)
+                .with_sandbox_definitions(sandbox_definitions.clone()),
         )));
     }
 
     Ok(CheckRoute::Multi(
         commands
             .into_iter()
-            .map(|cmd| CheckAdapter::from_command(cmd).with_output_format(output_format))
+            .map(|cmd| {
+                CheckAdapter::from_command(cmd)
+                    .with_output_format(output_format)
+                    .with_sandbox_definitions(sandbox_definitions.clone())
+            })
             .collect(),
     ))
 }
@@ -113,6 +124,7 @@ pub fn route_check(
 fn route_json(
     args: &CheckArgs,
     json_value: serde_json::Value,
+    sandbox_definitions: &HashMap<String, SandboxPreset>,
 ) -> Result<CheckRoute, anyhow::Error> {
     // --input-format is explicitly specified → use that format
     if let Some(format) = &args.input_format {
@@ -136,7 +148,9 @@ fn route_json(
         let output_format = to_adapter_output_format(&args.output_format);
         let check_input: CheckInput = serde_json::from_value(json_value)?;
         Ok(CheckRoute::Single(Box::new(
-            CheckAdapter::from_stdin(check_input).with_output_format(output_format),
+            CheckAdapter::from_stdin(check_input)
+                .with_output_format(output_format)
+                .with_sandbox_definitions(sandbox_definitions.clone()),
         )))
     } else {
         Err(anyhow::anyhow!(
@@ -187,7 +201,7 @@ mod tests {
     #[case::arg_with_spaces(&["echo", "hello world"], "echo 'hello world'")]
     fn route_check_with_command_arg(#[case] cmd: &[&str], #[case] expected: &str) {
         let args = check_args(cmd.to_vec(), None);
-        let route = route_check(&args, std::io::empty());
+        let route = route_check(&args, std::io::empty(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -221,7 +235,7 @@ mod tests {
         #[case] expected_command: Option<&str>,
     ) {
         let args = check_args(vec![], None);
-        let route = route_check(&args, stdin_json.as_bytes());
+        let route = route_check(&args, stdin_json.as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -234,7 +248,11 @@ mod tests {
     #[rstest]
     fn route_check_stdin_unknown_json_format_returns_error() {
         let args = check_args(vec![], None);
-        let result = route_check(&args, r#"{"unknown_field": "value"}"#.as_bytes());
+        let result = route_check(
+            &args,
+            r#"{"unknown_field": "value"}"#.as_bytes(),
+            &HashMap::new(),
+        );
         match result {
             Err(e) => assert!(
                 e.to_string().contains("Unknown input format"),
@@ -249,7 +267,7 @@ mod tests {
     #[rstest]
     fn route_check_format_with_non_json_stdin_returns_error() {
         let args = check_args(vec![], Some("claude-code-hook"));
-        let result = route_check(&args, "not valid json".as_bytes());
+        let result = route_check(&args, "not valid json".as_bytes(), &HashMap::new());
         match result {
             Err(e) => assert!(
                 e.to_string().contains("JSON parse error")
@@ -271,7 +289,7 @@ mod tests {
         #[case] expected_command: &str,
     ) {
         let args = check_args(vec![], None);
-        let route = route_check(&args, input.as_bytes());
+        let route = route_check(&args, input.as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -286,7 +304,7 @@ mod tests {
     #[rstest]
     fn route_check_plaintext_single_line() {
         let args = check_args(vec![], None);
-        let route = route_check(&args, "git status\n".as_bytes());
+        let route = route_check(&args, "git status\n".as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -304,7 +322,7 @@ mod tests {
             ls -la
             echo hello
         "};
-        let route = route_check(&args, input.as_bytes());
+        let route = route_check(&args, input.as_bytes(), &HashMap::new());
         let adapters = unwrap_multi(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         let commands: Vec<String> = adapters
             .iter()
@@ -325,7 +343,7 @@ mod tests {
             ls -la
 
         "};
-        let route = route_check(&args, input.as_bytes());
+        let route = route_check(&args, input.as_bytes(), &HashMap::new());
         let adapters = unwrap_multi(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         let commands: Vec<String> = adapters
             .iter()
@@ -340,7 +358,7 @@ mod tests {
     #[rstest]
     fn route_check_plaintext_trims_whitespace() {
         let args = check_args(vec![], None);
-        let route = route_check(&args, "  git status  \n".as_bytes());
+        let route = route_check(&args, "  git status  \n".as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -353,7 +371,7 @@ mod tests {
     #[rstest]
     fn route_check_empty_stdin_returns_error() {
         let args = check_args(vec![], None);
-        let result = route_check(&args, "".as_bytes());
+        let result = route_check(&args, "".as_bytes(), &HashMap::new());
         match result {
             Err(e) => assert!(
                 e.to_string().contains("no commands provided"),
@@ -366,7 +384,7 @@ mod tests {
     #[rstest]
     fn route_check_only_empty_lines_returns_error() {
         let args = check_args(vec![], None);
-        let result = route_check(&args, "\n\n  \n".as_bytes());
+        let result = route_check(&args, "\n\n  \n".as_bytes(), &HashMap::new());
         match result {
             Err(e) => assert!(
                 e.to_string().contains("no commands provided"),
@@ -390,7 +408,7 @@ mod tests {
             EOF
             )\"
         "};
-        let route = route_check(&args, input.as_bytes());
+        let route = route_check(&args, input.as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         let command = endpoint
             .extract_command()
@@ -415,7 +433,7 @@ mod tests {
               hello \\
               world
         "};
-        let route = route_check(&args, input.as_bytes());
+        let route = route_check(&args, input.as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         let command = endpoint
             .extract_command()
@@ -427,7 +445,7 @@ mod tests {
     #[rstest]
     fn route_check_plaintext_unclosed_quote_returns_parse_error() {
         let args = check_args(vec![], None);
-        let result = route_check(&args, "echo \"unterminated\n".as_bytes());
+        let result = route_check(&args, "echo \"unterminated\n".as_bytes(), &HashMap::new());
         match result {
             Err(e) => assert!(
                 e.to_string().contains("stdin parse error"),
@@ -442,7 +460,7 @@ mod tests {
     #[rstest]
     fn route_check_command_flag_takes_precedence_over_stdin() {
         let args = check_args(vec!["echo", "hello"], Some("claude-code-hook"));
-        let route = route_check(&args, std::io::empty());
+        let route = route_check(&args, std::io::empty(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -469,7 +487,7 @@ mod tests {
                 "tool_use_id": "456"
             }
         "#};
-        let route = route_check(&args, stdin_json.as_bytes());
+        let route = route_check(&args, stdin_json.as_bytes(), &HashMap::new());
         let endpoint = unwrap_single(route.unwrap_or_else(|e| panic!("unexpected error: {e}")));
         assert_eq!(
             endpoint
@@ -499,7 +517,7 @@ mod tests {
                 "tool_use_id": "toolu_01"
             }
         "#};
-        let route = route_check(&args, stdin_json.as_bytes());
+        let route = route_check(&args, stdin_json.as_bytes(), &HashMap::new());
         assert!(matches!(
             route.unwrap_or_else(|e| panic!("unexpected error: {e}")),
             CheckRoute::PostToolUseHook(_)
@@ -509,7 +527,7 @@ mod tests {
     #[rstest]
     fn route_check_unknown_format_returns_error() {
         let args = check_args(vec![], Some("invalid-format"));
-        let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes());
+        let result = route_check(&args, r#"{"command": "ls"}"#.as_bytes(), &HashMap::new());
         match result {
             Err(e) => assert!(
                 e.to_string()

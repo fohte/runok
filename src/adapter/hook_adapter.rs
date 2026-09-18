@@ -353,13 +353,18 @@ mod tests {
     #[rstest]
     #[case::allow(
         Action::Allow,
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("allow"), None, None)
     )]
     #[case::allow_with_sandbox(
         Action::Allow,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+    )]
+    #[case::allow_with_multiple_sandboxes(
+        Action::Allow,
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -367,7 +372,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm -rf /".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: rm -rf / (not allowed)"), None),
     )]
     #[case::deny_without_message(
@@ -376,7 +381,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: "rm *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: rm *"), None),
     )]
     #[case::deny_with_message_and_suggestion(
@@ -385,7 +390,7 @@ mod tests {
             fix_suggestion: Some("git push --force-with-lease".to_string()),
             matched_rule: "git push -f *".to_string(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("deny"), Some("denied: git push -f * (force push is not allowed) [suggestion: git push --force-with-lease]"), None),
     )]
     #[case::ask_with_message(
@@ -394,7 +399,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("ask"), Some("please confirm"), None),
     )]
     #[case::ask_without_message(
@@ -403,7 +408,7 @@ mod tests {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        SandboxInfo::Preset(None),
+        SandboxInfo::Preset(vec![]),
         make_output(Some("ask"), None, None)
     )]
     #[case::ask_with_sandbox(
@@ -412,13 +417,18 @@ mod tests {
             fix_suggestion: None,
             matched_rule: String::new(),
         }),
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
     )]
     #[case::pass_with_sandbox(
         Action::Pass,
-        SandboxInfo::Preset(Some("restricted".to_string())),
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
         make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+    )]
+    #[case::pass_with_multiple_sandboxes(
+        Action::Pass,
+        SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
+        make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -441,14 +451,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::preset_none(SandboxInfo::Preset(None))]
-    #[case::merged_policy_none(SandboxInfo::MergedPolicy(None))]
-    #[case::merged_policy_some(SandboxInfo::MergedPolicy(Some(crate::config::MergedSandboxPolicy {
-        writable: vec!["/tmp".to_string()],
-        deny: vec![],
-        read_deny: vec![],
-        network_allowed: false,
-    })))]
+    #[case::preset_none(SandboxInfo::Preset(vec![]))]
     fn build_action_output_pass_without_preset_returns_none(#[case] sandbox: SandboxInfo) {
         let adapter =
             ClaudeCodeHookAdapter::new(make_hook_input("Bash", bash_tool_input("git status")));
@@ -575,7 +578,7 @@ mod tests {
         let exit_code = adapter
             .handle_action(ActionResult {
                 action: Action::Allow,
-                sandbox: SandboxInfo::Preset(None),
+                sandbox: SandboxInfo::Preset(vec![]),
                 sandbox_wraps: vec![],
                 evaluations: vec![],
             })
@@ -590,7 +593,7 @@ mod tests {
         let exit_code = adapter
             .handle_action(ActionResult {
                 action: Action::Pass,
-                sandbox: SandboxInfo::Preset(None),
+                sandbox: SandboxInfo::Preset(vec![]),
                 sandbox_wraps: vec![],
                 evaluations: vec![],
             })

@@ -100,20 +100,20 @@ pub struct SandboxWrap {
 pub struct CompoundEvalResult {
     pub action: Action,
     pub sandbox_policy: Option<MergedSandboxPolicy>,
-    /// Set when exactly one distinct sandbox preset is involved across all
-    /// sub-commands, so the adapter layer can represent it as
-    /// `SandboxInfo::Preset` instead of `SandboxInfo::MergedPolicy`. The hook
-    /// adapter's `updatedInput` re-exec wrapping (used for `allow`/`ask`/
-    /// `pass`) only knows how to apply a named preset, not an arbitrary
-    /// merged policy.
-    pub sandbox_preset_name: Option<String>,
+    /// Every distinct sandbox preset name matched across all sub-commands,
+    /// deduplicated, in first-seen order. Empty when no sub-command matched
+    /// a sandboxed rule. The adapter layer carries these into
+    /// `SandboxInfo::Preset` regardless of count -- the endpoint that
+    /// resolves it (`runok exec`, or the hook's `updatedInput` re-exec
+    /// wrapping via repeated `--sandbox` flags) merges multiple names
+    /// itself via `SandboxPreset::merge_strictest`.
+    pub sandbox_preset_names: Vec<String>,
     /// One entry per sub-command that needs a sandbox, letting each
     /// sub-command run under its own preset, with only the operators that
     /// join them (pipes, `&&`, `;`) left to the outer shell.
     /// Empty when no sub-command needs a sandbox, and when one that does
     /// cannot be wrapped on its own -- callers then fall back to
-    /// `sandbox_preset_name` / `sandbox_policy`, which wrap the compound as
-    /// a whole.
+    /// `sandbox_preset_names`, which wraps the compound as a whole.
     pub sandbox_wraps: Vec<SandboxWrap>,
     /// Per-sub-command evaluation results for audit logging.
     pub sub_results: Vec<EvalResult>,
