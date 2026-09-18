@@ -54,7 +54,6 @@ pub(super) fn setup_scope(
     let mut has_hook_change = false;
     let mut has_hook_migration = false;
     let mut wants_post_hook = false;
-    let mut should_write_config = false;
     let mut detected_conflict_count: usize = 0;
 
     if let Some(cd) = claude_dir
@@ -80,14 +79,19 @@ pub(super) fn setup_scope(
 
         // Determine what changes are available
         let (allow, deny) = claude_code::read_permissions(cd)?;
-        let has_permissions = !allow.is_empty() || !deny.is_empty();
+        let has_migratable_permissions = !claude_code::convert_permissions(&allow, &deny)
+            .rules
+            .is_empty();
         // Rule migration is only offered into a not-yet-existing runok.yml.
-        let has_migratable_rules = if has_permissions && !config_exists {
-            let conversion = claude_code::convert_permissions(&allow, &deny);
-            !conversion.rules.is_empty()
-        } else {
-            false
-        };
+        let has_migratable_rules = has_migratable_permissions && !config_exists;
+
+        if has_migratable_permissions && config_exists {
+            eprintln!(
+                "\x1b[33m{} already exists; leaving Claude Code Bash permissions in settings.json for you to migrate by hand.\x1b[0m",
+                config_path.display()
+            );
+            eprintln!();
+        }
 
         // Check if hook registration would change anything
         let would_add_hook = if hook_policy == HookPolicy::Register {
@@ -174,8 +178,7 @@ pub(super) fn setup_scope(
             // Only ever populate a not-yet-existing runok.yml. Re-running
             // init on an existing config (whether to add a hook or to
             // migrate rules) must not touch it.
-            should_write_config = !config_exists;
-            if should_write_config {
+            if !config_exists {
                 let config_content = config_gen::build_config_content(converted_rules.as_deref());
                 eprintln!("\x1b[1mCreate {config_path_display}\x1b[0m");
                 eprintln!();
@@ -296,7 +299,7 @@ pub(super) fn setup_scope(
     // populates a fresh config for first-time setup; it never rewrites an
     // existing one, migration or not, `-y` or not.
     let config_path = if !config_exists {
-        if approved && should_write_config {
+        if approved {
             let content = config_gen::build_config_content(converted_rules.as_deref());
             Some(config_gen::write_config(config_dir, &content)?)
         } else if !detected_claude_config {

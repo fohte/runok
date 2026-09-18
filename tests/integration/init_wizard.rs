@@ -604,7 +604,7 @@ fn no() -> Response {
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-fn wizard_creates_fresh_config(#[case] case: Case) -> Result<(), Box<dyn std::error::Error>> {
+fn wizard_first_time_setup_result(#[case] case: Case) -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
 
     if let Some(settings) = case.settings {

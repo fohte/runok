@@ -31,7 +31,7 @@ Accept all defaults without prompting. Useful for scripted setups.
 ## What the wizard does
 
 1. **Scope selection** — Choose `user` or `project` scope (skipped if `--scope` is given).
-2. **Claude Code detection** — If a `.claude/settings.json` exists with Bash permissions, a missing runok hook, or a hook entry registered under the pre-[`runok hook`](/cli/hook/) command, the wizard offers to:
+2. **Claude Code detection** — If a `.claude/settings.json` exists with a missing runok hook or a hook entry registered under the pre-[`runok hook`](/cli/hook/) command, the wizard offers to act on it. Bash permissions only trigger this step when `runok.yml` doesn't already exist yet at the selected scope (see below); if `runok.yml` already exists and that's the only thing settings.json has to offer, the wizard prints a note that it's leaving the permissions in place instead. Where triggered, the wizard offers to:
    - **Migrate Bash permissions** — Convert `permissions.allow` and `permissions.deny` entries for `Bash(...)` patterns into runok rules, and remove them from `settings.json`. Only offered when `runok.yml` doesn't already exist yet at the selected scope — init never writes to an existing one, so this step doesn't appear if you already have a `runok.yml` there; migrate the rules into it by hand instead.
    - **Register the hook** — Add the [`runok hook`](/cli/hook/) PreToolUse hook to `settings.json` (user scope only).
    - **Migrate the hook command** — Rewrite an existing `runok check --input-format claude-code-hook` entry (registered before `runok hook` existed) to `runok hook --agent claude-code`, in place.
