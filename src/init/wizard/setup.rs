@@ -42,6 +42,11 @@ pub(super) fn setup_scope(
     hook_policy: HookPolicy,
     migration_default: bool,
 ) -> Result<ScopeResult, InitError> {
+    // init only populates a fresh runok.yml; an existing one (hand-written,
+    // possibly built with `extends`) is never touched, migration or not.
+    let config_path = config_dir.join("runok.yml");
+    let config_exists = config_path.exists();
+
     let mut converted_rules = None;
     let mut approved = false;
     let mut detected_claude_config = false;
@@ -76,7 +81,8 @@ pub(super) fn setup_scope(
         // Determine what changes are available
         let (allow, deny) = claude_code::read_permissions(cd)?;
         let has_permissions = !allow.is_empty() || !deny.is_empty();
-        let has_migratable_rules = if has_permissions {
+        // Rule migration is only offered into a not-yet-existing runok.yml.
+        let has_migratable_rules = if has_permissions && !config_exists {
             let conversion = claude_code::convert_permissions(&allow, &deny);
             !conversion.rules.is_empty()
         } else {
@@ -151,7 +157,6 @@ pub(super) fn setup_scope(
                 has_hook_change = hook_preview.is_some();
             }
 
-            let config_path = config_dir.join("runok.yml");
             let config_path_display = config_path.display();
 
             // Show all diffs together
@@ -166,30 +171,15 @@ pub(super) fn setup_scope(
                 eprintln!();
             }
 
-            // Show the runok.yml diff only when the file would actually
-            // change: created fresh, or replaced with migrated rules.
-            // Re-running init just to add a hook must not touch an
-            // existing config.
-            should_write_config = has_rules || !config_path.exists();
+            // Only ever populate a not-yet-existing runok.yml. Re-running
+            // init on an existing config (whether to add a hook or to
+            // migrate rules) must not touch it.
+            should_write_config = !config_exists;
             if should_write_config {
                 let config_content = config_gen::build_config_content(converted_rules.as_deref());
-                let existing_config = if config_path.exists() {
-                    std::fs::read_to_string(&config_path)?
-                } else {
-                    String::new()
-                };
-                let verb = if config_path.exists() {
-                    "Update"
-                } else {
-                    "Create"
-                };
-                eprintln!("\x1b[1m{verb} {config_path_display}\x1b[0m");
+                eprintln!("\x1b[1mCreate {config_path_display}\x1b[0m");
                 eprintln!();
-                print_diff(
-                    &config_path_display.to_string(),
-                    &existing_config,
-                    &config_content,
-                );
+                print_diff(&config_path_display.to_string(), "", &config_content);
                 eprintln!();
             }
 
@@ -302,31 +292,18 @@ pub(super) fn setup_scope(
         false
     };
 
-    // Create config file:
-    // - User approved changes in "Detected" block: create with converted rules
-    //   (skipped when an existing config would be replaced with boilerplate)
-    // - No Claude Code config detected: create boilerplate (ask if file exists)
-    // - User declined all changes: skip (don't create silently)
-    let config_path = if approved {
-        if should_write_config {
+    // Create config file, but only when runok.yml doesn't exist yet. init
+    // populates a fresh config for first-time setup; it never rewrites an
+    // existing one, migration or not, `-y` or not.
+    let config_path = if !config_exists {
+        if approved && should_write_config {
             let content = config_gen::build_config_content(converted_rules.as_deref());
+            Some(config_gen::write_config(config_dir, &content)?)
+        } else if !detected_claude_config {
+            let content = config_gen::build_config_content(None);
             Some(config_gen::write_config(config_dir, &content)?)
         } else {
             None
-        }
-    } else if !detected_claude_config {
-        let config_path = config_dir.join("runok.yml");
-        if config_path.exists() {
-            let overwrite = prompter.confirm("runok.yml already exists. Overwrite?", false)?;
-            if overwrite {
-                let content = config_gen::build_config_content(None);
-                Some(config_gen::write_config(config_dir, &content)?)
-            } else {
-                None
-            }
-        } else {
-            let content = config_gen::build_config_content(None);
-            Some(config_gen::write_config(config_dir, &content)?)
         }
     } else {
         None

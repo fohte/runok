@@ -55,15 +55,20 @@ fn init_project_scope_creates_config() {
 }
 
 #[rstest]
-fn init_project_scope_overwrites_existing() {
+fn init_project_scope_preserves_existing_config() {
     let env = InitTestEnv::new();
-    // TestEnv already creates runok.yml — should be overwritten
+    // TestEnv already creates runok.yml — `-y` must not overwrite it.
+    let existing = std::fs::read_to_string(env.cwd().join("runok.yml"))
+        .unwrap_or_else(|e| panic!("failed to read pre-seeded runok.yml: {e}"));
 
     env.command()
         .args(["init", "--scope", "project", "-y"])
         .assert()
-        .success()
-        .stderr(predicates::str::contains("Project config created"));
+        .success();
+
+    let after = std::fs::read_to_string(env.cwd().join("runok.yml"))
+        .unwrap_or_else(|e| panic!("failed to read runok.yml: {e}"));
+    assert_eq!(after, existing, "runok.yml should be preserved by -y");
 }
 
 #[rstest]

@@ -5,7 +5,7 @@ use rstest::rstest;
 use tempfile::TempDir;
 
 use runok::init::error::InitError;
-use runok::init::prompt::Prompter;
+use runok::init::prompt::{AutoYesPrompter, Prompter};
 use runok::init::{InitScope, run_wizard_with_paths};
 
 /// Queued response for SequencePrompter.
@@ -257,8 +257,16 @@ fn config_with_bash_rules() -> String {
 }
 
 // ============================================================
-// Exhaustive 51-pattern test
+// Matrix A: wizard behavior when runok.yml does not exist yet
 // ============================================================
+//
+// This is init's "first-time setup" path: it is unaffected by whether an
+// existing runok.yml would need to be protected, so it is exercised
+// exhaustively across settings.json / Bash perms / hook / scope / migrate
+// / apply combinations. Whether an existing runok.yml survives init is a
+// single, orthogonal guard covered separately in Matrix B below — init
+// never writes into an existing runok.yml, full stop, so that axis does
+// not need to be crossed with all of these.
 //
 // Condition axes, grouped into State / Response / Result:
 //
@@ -266,79 +274,42 @@ fn config_with_bash_rules() -> String {
 // PostToolUse opt-in ("Track ask approvals in the audit log?") between
 // Migrate? and Apply?. Every case in this matrix answers it No so the
 // original axes stay comparable; the opt-in behavior itself is covered by
-// dedicated tests in src/init/wizard and tests/e2e/init.rs. Because that
-// question makes the "Detected" block trigger for user scope whenever the
-// PostToolUse hook is missing, the standalone Overwrite? prompt is not
-// reachable in those cases (rows 11-13), and an existing runok.yml is
-// only rewritten by an accepted migration (Migrate? = yes) — never
-// replaced with boilerplate (rows 8, 12, 25, 33, 41, 49).
+// dedicated tests in src/init/wizard and tests/e2e/init.rs.
 //
-// |    |                           State                                |          Response              |               Result               |
-// | #  | settings.json | Bash perms | Hook exists | Scope   | runok.yml | Migrate? | Apply? | Overwrite? | runok.yml   | settings.json change |
-// |----|---------------|------------|-------------|---------|-----------|----------|--------|------------|-------------|----------------------|
-// |  1 | no            | N/A        | N/A         | user    | no        | N/A      | N/A    | N/A        | boilerplate | N/A                  |
-// |  2 | no            | N/A        | N/A         | user    | yes       | N/A      | N/A    | yes        | boilerplate | N/A                  |
-// |  3 | no            | N/A        | N/A         | user    | yes       | N/A      | N/A    | no         | preserved   | N/A                  |
-// |  4 | no            | N/A        | N/A         | project | no        | N/A      | N/A    | N/A        | boilerplate | N/A                  |
-// |  5 | no            | N/A        | N/A         | project | yes       | N/A      | N/A    | yes        | boilerplate | N/A                  |
-// |  6 | no            | N/A        | N/A         | project | yes       | N/A      | N/A    | no         | preserved   | N/A                  |
-// |  7 | yes           | no         | no          | user    | no        | N/A      | yes    | N/A        | boilerplate | hook added           |
-// |  8 | yes           | no         | no          | user    | yes       | N/A      | yes    | N/A        | preserved   | hook added           |
-// |  9 | yes           | no         | no          | user    | no        | N/A      | no     | N/A        | none        | none                 |
-// | 10 | yes           | no         | no          | user    | yes       | N/A      | no     | N/A        | preserved   | none                 |
-// | 11 | yes           | no         | yes         | user    | no        | N/A      | yes    | N/A        | boilerplate | none                 |
-// | 12 | yes           | no         | yes         | user    | yes       | N/A      | yes    | N/A        | preserved   | none                 |
-// | 13 | yes           | no         | yes         | user    | yes       | N/A      | no     | N/A        | preserved   | none                 |
-// | 14 | yes           | no         | no          | project | no        | N/A      | N/A    | N/A        | boilerplate | none                 |
-// | 15 | yes           | no         | no          | project | yes       | N/A      | N/A    | yes        | boilerplate | none                 |
-// | 16 | yes           | no         | no          | project | yes       | N/A      | N/A    | no         | preserved   | none                 |
-// | 17 | yes           | no         | yes         | project | no        | N/A      | N/A    | N/A        | boilerplate | none                 |
-// | 18 | yes           | no         | yes         | project | yes       | N/A      | N/A    | yes        | boilerplate | none                 |
-// | 19 | yes           | no         | yes         | project | yes       | N/A      | N/A    | no         | preserved   | none                 |
-// | 20 | yes           | yes        | no          | user    | no        | yes      | yes    | N/A        | with rules  | perms removed + hook |
-// | 21 | yes           | yes        | no          | user    | yes       | yes      | yes    | N/A        | with rules  | perms removed + hook |
-// | 22 | yes           | yes        | no          | user    | no        | yes      | no     | N/A        | none        | none                 |
-// | 23 | yes           | yes        | no          | user    | yes       | yes      | no     | N/A        | preserved   | none                 |
-// | 24 | yes           | yes        | no          | user    | no        | no       | yes    | N/A        | boilerplate | hook added           |
-// | 25 | yes           | yes        | no          | user    | yes       | no       | yes    | N/A        | preserved   | hook added           |
-// | 26 | yes           | yes        | no          | user    | no        | no       | no     | N/A        | none        | none                 |
-// | 27 | yes           | yes        | no          | user    | yes       | no       | no     | N/A        | preserved   | none                 |
-// | 28 | yes           | yes        | yes         | user    | no        | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 29 | yes           | yes        | yes         | user    | yes       | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 30 | yes           | yes        | yes         | user    | no        | yes      | no     | N/A        | none        | none                 |
-// | 31 | yes           | yes        | yes         | user    | yes       | yes      | no     | N/A        | preserved   | none                 |
-// | 32 | yes           | yes        | yes         | user    | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 33 | yes           | yes        | yes         | user    | yes       | no       | yes    | N/A        | preserved   | none                 |
-// | 34 | yes           | yes        | yes         | user    | no        | no       | no     | N/A        | none        | none                 |
-// | 35 | yes           | yes        | yes         | user    | yes       | no       | no     | N/A        | preserved   | none                 |
-// | 36 | yes           | yes        | no          | project | no        | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 37 | yes           | yes        | no          | project | yes       | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 38 | yes           | yes        | no          | project | no        | yes      | no     | N/A        | none        | none                 |
-// | 39 | yes           | yes        | no          | project | yes       | yes      | no     | N/A        | preserved   | none                 |
-// | 40 | yes           | yes        | no          | project | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 41 | yes           | yes        | no          | project | yes       | no       | yes    | N/A        | preserved   | none                 |
-// | 42 | yes           | yes        | no          | project | no        | no       | no     | N/A        | none        | none                 |
-// | 43 | yes           | yes        | no          | project | yes       | no       | no     | N/A        | preserved   | none                 |
-// | 44 | yes           | yes        | yes         | project | no        | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 45 | yes           | yes        | yes         | project | yes       | yes      | yes    | N/A        | with rules  | perms removed        |
-// | 46 | yes           | yes        | yes         | project | no        | yes      | no     | N/A        | none        | none                 |
-// | 47 | yes           | yes        | yes         | project | yes       | yes      | no     | N/A        | preserved   | none                 |
-// | 48 | yes           | yes        | yes         | project | no        | no       | yes    | N/A        | boilerplate | none                 |
-// | 49 | yes           | yes        | yes         | project | yes       | no       | yes    | N/A        | preserved   | none                 |
-// | 50 | yes           | yes        | yes         | project | no        | no       | no     | N/A        | none        | none                 |
-// | 51 | yes           | yes        | yes         | project | yes       | no       | no     | N/A        | preserved   | none                 |
-//
-// "preserved" in Result means the existing runok.yml is left unchanged (wizard does not touch it)
-// "none" in Result means runok.yml does not exist after the wizard
-// Overwrite? is only asked when there is no "Detected" block and runok.yml already exists
+// |    |                     State                 |    Response      |          Result          |
+// | #  | settings.json | Bash perms | Hook exists | Scope   | Migrate? | Apply? | runok.yml   | settings.json change |
+// |----|---------------|------------|-------------|---------|----------|--------|-------------|----------------------|
+// | 01 | no            | N/A        | N/A         | user    | N/A      | N/A    | boilerplate | N/A                  |
+// | 04 | no            | N/A        | N/A         | project | N/A      | N/A    | boilerplate | N/A                  |
+// | 07 | yes           | no         | no          | user    | N/A      | yes    | boilerplate | hook added            |
+// | 09 | yes           | no         | no          | user    | N/A      | no     | none        | none                 |
+// | 11 | yes           | no         | yes         | user    | N/A      | yes    | boilerplate | none                 |
+// | 14 | yes           | no         | no          | project | N/A      | N/A    | boilerplate | none                 |
+// | 17 | yes           | no         | yes         | project | N/A      | N/A    | boilerplate | none                 |
+// | 20 | yes           | yes        | no          | user    | yes      | yes    | with rules  | perms removed + hook |
+// | 22 | yes           | yes        | no          | user    | yes      | no     | none        | none                 |
+// | 24 | yes           | yes        | no          | user    | no       | yes    | boilerplate | hook added           |
+// | 26 | yes           | yes        | no          | user    | no       | no     | none        | none                 |
+// | 28 | yes           | yes        | yes         | user    | yes      | yes    | with rules  | perms removed        |
+// | 30 | yes           | yes        | yes         | user    | yes      | no     | none        | none                 |
+// | 32 | yes           | yes        | yes         | user    | no       | yes    | boilerplate | none                 |
+// | 34 | yes           | yes        | yes         | user    | no       | no     | none        | none                 |
+// | 36 | yes           | yes        | no          | project | yes      | yes    | with rules  | perms removed        |
+// | 38 | yes           | yes        | no          | project | yes      | no     | none        | none                 |
+// | 40 | yes           | yes        | no          | project | no       | yes    | boilerplate | none                 |
+// | 42 | yes           | yes        | no          | project | no       | no     | none        | none                 |
+// | 44 | yes           | yes        | yes         | project | yes      | yes    | with rules  | perms removed        |
+// | 46 | yes           | yes        | yes         | project | yes      | no     | none        | none                 |
+// | 48 | yes           | yes        | yes         | project | no       | yes    | boilerplate | none                 |
+// | 50 | yes           | yes        | yes         | project | no       | no     | none        | none                 |
 
 /// Expected runok.yml content after the wizard runs.
 enum ExpectedConfig {
-    /// runok.yml is created/overwritten with the given content.
+    /// runok.yml is created with the given content.
     Content(&'static str),
-    /// runok.yml is created/overwritten with a computed String.
+    /// runok.yml is created with a computed String.
     ContentOwned(String),
-    /// runok.yml does not exist (was not created, and none existed before).
+    /// runok.yml does not exist (was not created).
     None,
     /// runok.yml is preserved as-is (wizard did not touch it).
     Preserved,
@@ -389,14 +360,12 @@ fn assert_wizard_result(
 
 // --- test case parameter struct ---
 
-/// All parameters for a single exhaustive wizard test case.
+/// All parameters for a single Matrix A wizard test case.
 struct Case {
     /// Content of settings.json before the wizard runs, or None to skip creating it.
     settings: Option<&'static str>,
     /// Scope to pass to the wizard.
     scope: InitScope,
-    /// Whether to pre-seed runok.yml with EXISTING_CONFIG.
-    existing_config: bool,
     /// Responses the prompter will return.
     responses: Vec<Response>,
     /// Expected runok.yml state after the wizard.
@@ -465,380 +434,181 @@ fn no() -> Response {
 }
 
 #[rstest]
-// --- No settings.json (cases 1-6) ---
+// --- No settings.json ---
 #[case::p01_no_settings_user(Case {
-    settings: None, scope: InitScope::User, existing_config: false,
+    settings: None, scope: InitScope::User,
     responses: vec![],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: None,
     assert_no_settings_created: true,
-})]
-#[case::p02_no_settings_user_existing_overwrite_yes(Case {
-    settings: None, scope: InitScope::User, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
-    expected_settings: None,
-    assert_no_settings_created: false,
-})]
-#[case::p03_no_settings_user_existing_overwrite_no(Case {
-    settings: None, scope: InitScope::User, existing_config: true,
-    responses: vec![no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: None,
-    assert_no_settings_created: false,
 })]
 #[case::p04_no_settings_project(Case {
-    settings: None, scope: InitScope::Project, existing_config: false,
+    settings: None, scope: InitScope::Project,
     responses: vec![],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: None,
     assert_no_settings_created: true,
 })]
-#[case::p05_no_settings_project_existing_overwrite_yes(Case {
-    settings: None, scope: InitScope::Project, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
-    expected_settings: None,
-    assert_no_settings_created: false,
-})]
-#[case::p06_no_settings_project_existing_overwrite_no(Case {
-    settings: None, scope: InitScope::Project, existing_config: true,
-    responses: vec![no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: None,
-    assert_no_settings_created: false,
-})]
-// --- No Bash perms, no hook (cases 7-10) ---
+// --- No Bash perms, no hook (user) ---
 #[case::p07_no_bash_no_hook_user_apply_yes(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: false,
+    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User,
     responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
-    expected_settings: Some(no_bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p08_no_bash_no_hook_user_existing_apply_yes(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p09_no_bash_no_hook_user_apply_no(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: false,
+    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User,
     responses: vec![no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(no_bash_perms()),
     assert_no_settings_created: false,
 })]
-#[case::p10_no_bash_no_hook_user_existing_apply_no(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(no_bash_perms()),
-    assert_no_settings_created: false,
-})]
-// --- No Bash perms, hook exists (cases 11-13) ---
+// --- No Bash perms, hook exists (user) ---
 #[case::p11_no_bash_hook_exists_user(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: false,
+    settings: Some(settings_no_bash_with_hook()), scope: InitScope::User,
     responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
-#[case::p12_no_bash_hook_exists_user_existing_apply_yes(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(no_bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p13_no_bash_hook_exists_user_existing_apply_no(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(no_bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
-// --- No Bash perms, no hook, project (cases 14-16) ---
+// --- No Bash perms, no hook (project) ---
 #[case::p14_no_bash_no_hook_project(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::Project, existing_config: false,
+    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::Project,
     responses: vec![],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(no_bash_perms()),
     assert_no_settings_created: false,
 })]
-#[case::p15_no_bash_no_hook_project_existing_overwrite_yes(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::Project, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
-    expected_settings: Some(no_bash_perms()),
-    assert_no_settings_created: false,
-})]
-#[case::p16_no_bash_no_hook_project_existing_overwrite_no(Case {
-    settings: Some(SETTINGS_NO_BASH_NO_HOOK), scope: InitScope::Project, existing_config: true,
-    responses: vec![no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(no_bash_perms()),
-    assert_no_settings_created: false,
-})]
-// --- No Bash perms, hook exists, project (cases 17-19) ---
+// --- No Bash perms, hook exists (project) ---
 #[case::p17_no_bash_hook_exists_project(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::Project, existing_config: false,
+    settings: Some(settings_no_bash_with_hook()), scope: InitScope::Project,
     responses: vec![],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(no_bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
-#[case::p18_no_bash_hook_exists_project_existing_overwrite_yes(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::Project, existing_config: true,
-    responses: vec![yes()],
-    expected_config: ExpectedConfig::Content(BOILERPLATE),
-    expected_settings: Some(no_bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p19_no_bash_hook_exists_project_existing_overwrite_no(Case {
-    settings: Some(settings_no_bash_with_hook()), scope: InitScope::Project, existing_config: true,
-    responses: vec![no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(no_bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
-// --- Bash perms, no hook, user (cases 20-27) ---
+// --- Bash perms, no hook (user) ---
 #[case::p20_bash_no_hook_user_mig_yes_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), no(), yes()],
-    expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
-    expected_settings: Some(perms_removed_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p21_bash_no_hook_user_existing_mig_yes_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User,
     responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p22_bash_no_hook_user_mig_yes_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User,
     responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
-#[case::p23_bash_no_hook_user_existing_mig_yes_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_unchanged()),
-    assert_no_settings_created: false,
-})]
 #[case::p24_bash_no_hook_user_mig_no_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User,
     responses: vec![no(), no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_perms_with_hook()),
     assert_no_settings_created: false,
 })]
-#[case::p25_bash_no_hook_user_existing_mig_no_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_with_hook()),
-    assert_no_settings_created: false,
-})]
 #[case::p26_bash_no_hook_user_mig_no_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User,
     responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
-#[case::p27_bash_no_hook_user_existing_mig_no_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_unchanged()),
-    assert_no_settings_created: false,
-})]
-// --- Bash perms, hook exists, user (cases 28-35) ---
+// --- Bash perms, hook exists (user) ---
 #[case::p28_bash_hook_user_mig_yes_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
-    responses: vec![yes(), no(), yes()],
-    expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
-    expected_settings: Some(perms_removed_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p29_bash_hook_user_existing_mig_yes_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User,
     responses: vec![yes(), no(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p30_bash_hook_user_mig_yes_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User,
     responses: vec![yes(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p31_bash_hook_user_existing_mig_yes_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![yes(), no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
 #[case::p32_bash_hook_user_mig_no_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User,
     responses: vec![no(), no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p33_bash_hook_user_existing_mig_no_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
 #[case::p34_bash_hook_user_mig_no_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User,
     responses: vec![no(), no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p35_bash_hook_user_existing_mig_no_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::User, existing_config: true,
-    responses: vec![no(), no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
-// --- Bash perms, no hook, project (cases 36-43) ---
+// --- Bash perms, no hook (project) ---
 #[case::p36_bash_no_hook_project_mig_yes_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: false,
-    responses: vec![yes(), yes()],
-    expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
-    expected_settings: Some(perms_removed_no_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p37_bash_no_hook_project_existing_mig_yes_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: true,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project,
     responses: vec![yes(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_no_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p38_bash_no_hook_project_mig_yes_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project,
     responses: vec![yes(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
-#[case::p39_bash_no_hook_project_existing_mig_yes_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: true,
-    responses: vec![yes(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_unchanged()),
-    assert_no_settings_created: false,
-})]
 #[case::p40_bash_no_hook_project_mig_no_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project,
     responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
-#[case::p41_bash_no_hook_project_existing_mig_no_app_yes(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_unchanged()),
-    assert_no_settings_created: false,
-})]
 #[case::p42_bash_no_hook_project_mig_no_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: false,
+    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project,
     responses: vec![no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_perms_unchanged()),
     assert_no_settings_created: false,
 })]
-#[case::p43_bash_no_hook_project_existing_mig_no_app_no(Case {
-    settings: Some(SETTINGS_BASH_ONLY), scope: InitScope::Project, existing_config: true,
-    responses: vec![no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_perms_unchanged()),
-    assert_no_settings_created: false,
-})]
-// --- Bash perms, hook exists, project (cases 44-51) ---
+// --- Bash perms, hook exists (project) ---
 #[case::p44_bash_hook_project_mig_yes_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: false,
-    responses: vec![yes(), yes()],
-    expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
-    expected_settings: Some(perms_removed_with_hook()),
-    assert_no_settings_created: false,
-})]
-#[case::p45_bash_hook_project_existing_mig_yes_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: true,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project,
     responses: vec![yes(), yes()],
     expected_config: ExpectedConfig::ContentOwned(config_with_bash_rules()),
     expected_settings: Some(perms_removed_with_hook()),
     assert_no_settings_created: false,
 })]
 #[case::p46_bash_hook_project_mig_yes_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project,
     responses: vec![yes(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p47_bash_hook_project_existing_mig_yes_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: true,
-    responses: vec![yes(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
 #[case::p48_bash_hook_project_mig_no_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project,
     responses: vec![no(), yes()],
     expected_config: ExpectedConfig::Content(BOILERPLATE),
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p49_bash_hook_project_existing_mig_no_app_yes(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: true,
-    responses: vec![no(), yes()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
 #[case::p50_bash_hook_project_mig_no_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: false,
+    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project,
     responses: vec![no(), no()],
     expected_config: ExpectedConfig::None,
     expected_settings: Some(bash_hook_original()),
     assert_no_settings_created: false,
 })]
-#[case::p51_bash_hook_project_existing_mig_no_app_no(Case {
-    settings: Some(settings_bash_only_with_hook()), scope: InitScope::Project, existing_config: true,
-    responses: vec![no(), no()],
-    expected_config: ExpectedConfig::Preserved,
-    expected_settings: Some(bash_hook_original()),
-    assert_no_settings_created: false,
-})]
-fn exhaustive_wizard_test(#[case] case: Case) -> Result<(), Box<dyn std::error::Error>> {
+fn wizard_creates_fresh_config(#[case] case: Case) -> Result<(), Box<dyn std::error::Error>> {
     let env = InitTestEnv::new()?;
 
     if let Some(settings) = case.settings {
         env.setup_claude_settings(&case.scope, settings)?;
-    }
-    if case.existing_config {
-        env.setup_existing_config(&case.scope)?;
     }
 
     let prompter = SequencePrompter::new(case.responses);
@@ -862,7 +632,77 @@ fn exhaustive_wizard_test(#[case] case: Case) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-// --- scope selection (separate from exhaustive patterns) ---
+// ============================================================
+// Matrix B: an existing runok.yml is never touched by init
+// ============================================================
+//
+// `-y` (AutoYesPrompter, which answers every confirmation with "yes") is
+// used deliberately here: it is the strongest form of this guarantee,
+// since `-y` means "skip confirmations", not "permit destructive
+// overwrites". Regardless of Claude Code settings.json state or scope,
+// an existing runok.yml must survive `-y`.
+
+#[rstest]
+#[case::no_settings_user(None, InitScope::User)]
+#[case::no_settings_project(None, InitScope::Project)]
+#[case::no_bash_perms_user(Some(SETTINGS_NO_BASH_NO_HOOK), InitScope::User)]
+#[case::no_bash_perms_project(Some(SETTINGS_NO_BASH_NO_HOOK), InitScope::Project)]
+#[case::bash_perms_no_hook_user(Some(SETTINGS_BASH_ONLY), InitScope::User)]
+#[case::bash_perms_no_hook_project(Some(SETTINGS_BASH_ONLY), InitScope::Project)]
+#[case::bash_perms_hook_exists_user(Some(settings_bash_only_with_hook()), InitScope::User)]
+#[case::bash_perms_hook_exists_project(Some(settings_bash_only_with_hook()), InitScope::Project)]
+fn existing_config_survives_auto_yes(
+    #[case] settings: Option<&str>,
+    #[case] scope: InitScope,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    if let Some(settings) = settings {
+        env.setup_claude_settings(&scope, settings)?;
+    }
+    env.setup_existing_config(&scope)?;
+
+    env.run(Some(&scope), &AutoYesPrompter)?;
+
+    let config = std::fs::read_to_string(env.config_path_for_scope(&scope))?;
+    assert_eq!(
+        config, EXISTING_CONFIG,
+        "runok.yml should be preserved but was modified"
+    );
+
+    Ok(())
+}
+
+/// When Bash permissions exist but runok.yml already exists, migration must
+/// not run at all: permissions stay in settings.json (nothing to migrate
+/// them into) rather than being silently dropped, while hook registration
+/// -- an independent, non-destructive change to settings.json -- still
+/// happens.
+#[rstest]
+fn existing_config_blocks_migration_but_not_hook_registration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = InitTestEnv::new()?;
+    env.setup_claude_settings(&InitScope::User, SETTINGS_BASH_ONLY)?;
+    env.setup_existing_config(&InitScope::User)?;
+
+    env.run(Some(&InitScope::User), &AutoYesPrompter)?;
+
+    assert_wizard_result(
+        &env,
+        &InitScope::User,
+        &ExpectedConfig::Preserved,
+        Some(serde_json::json!({
+            "permissions": { "allow": ["Bash(cargo test)", "Bash(cargo build)"], "deny": ["Bash(rm -rf /)"] },
+            "hooks": {
+                "PreToolUse": hook_json()["PreToolUse"].clone(),
+                "PostToolUse": hook_json()["PreToolUse"].clone(),
+            }
+        })),
+    )?;
+
+    Ok(())
+}
+
+// --- scope selection (separate from Matrix A) ---
 
 #[rstest]
 #[case::select_user(0, true, false)]

@@ -308,6 +308,10 @@ rules:
 
 ## Bug Fixes
 
+### `runok init` no longer overwrites an existing `runok.yml` with migrated Claude Code rules ([#TODO(pr-link)](<TODO(pr-link)>))
+
+`runok init` used to silently overwrite an existing hand-written `runok.yml` (e.g. one built with `extends`) in two cases: accepting the "Migrate Claude Code Bash permissions to runok rules?" prompt replaced it with the migrated rules, and a separate "`runok.yml` already exists. Overwrite?" prompt could be bypassed since `-y` auto-answers every prompt "yes" -- even though `-y` is documented as only skipping confirmations, not permitting destructive overwrites. `runok init` now never touches an existing `runok.yml`: the migration offer isn't shown once one already exists at the target scope, the overwrite prompt has been removed entirely, and init only ever populates a fresh, not-yet-existing `runok.yml`.
+
 ### `runok init` no longer replaces an existing `runok.yml` with boilerplate ([#468](https://github.com/fohte/runok/pull/468))
 
 Applying Claude Code integration changes in `runok init` used to rewrite an existing `runok.yml` with the boilerplate template when no permission migration happened. The wizard now only rewrites an existing config when a migration was accepted; re-running init just to register hooks leaves the file untouched.
