@@ -19,7 +19,7 @@ runok init [options]
 
 Configuration scope. Available values:
 
-- `user` — Create `~/.config/runok/runok.yml` for global rules that apply to all projects. Also registers the runok PreToolUse hook in `~/.claude/settings.json` if Claude Code is detected.
+- `user` — Create `~/.config/runok/runok.yml` for global rules that apply to all projects. Also registers the runok PreToolUse hook in `~/.claude/settings.json` if Claude Code is detected, and the `runok hook --agent codex` hook in `<codex_home>/hooks.json` if a Codex config directory is detected.
 - `project` — Create `runok.yml` in the current directory for project-specific rules.
 
 When omitted, the wizard prompts you to choose.
@@ -36,9 +36,10 @@ Accept all defaults without prompting. Useful for scripted setups.
    - **Register the hook** — Add the [`runok hook`](/cli/hook/) PreToolUse hook to `settings.json` (user scope only).
    - **Migrate the hook command** — Rewrite an existing `runok check --input-format claude-code-hook` entry (registered before `runok hook` existed) to `runok hook --agent claude-code`, in place.
    - **Track ask approvals** (opt-in) — Also register the same command as a PostToolUse hook so approvals of `ask` decisions are recorded in the audit log (user scope only). See [Track ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
-3. **Preview and confirm** — Show a unified diff of all proposed changes and ask for confirmation.
-4. **Create `runok.yml`** — Write the configuration file with migrated rules (if any) or a boilerplate template. An existing `runok.yml` is only rewritten when a migration was accepted; re-running init just to register hooks leaves it untouched.
-5. **Conflicting hook detection** — The wizard checks for other PreToolUse hooks that also match `Bash`. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), runok's sandbox may not work when multiple PreToolUse hooks match Bash — commands that should be sandboxed could run without any restrictions. If conflicts are found, a warning is displayed advising you to merge all Bash-matching hooks into a single entry.
+3. **Codex detection** — If a Codex config directory exists (`$CODEX_HOME`, or `~/.codex` when that variable is unset), the wizard registers the [`runok hook --agent codex`](/cli/hook/#codex---agent-codex) command for both the `PreToolUse` and `PermissionRequest` events in `<codex_home>/hooks.json` (user scope only). Skipped entirely -- without asking or writing anything -- if the directory doesn't exist, since that means Codex isn't installed or used. Re-running `runok init` is idempotent and won't duplicate an already-registered entry. Codex still requires its own one-time hook-trust approval before it actually runs a newly-registered hook.
+4. **Preview and confirm** — Show a unified diff of all proposed changes and ask for confirmation.
+5. **Create `runok.yml`** — Write the configuration file with migrated rules (if any) or a boilerplate template. An existing `runok.yml` is only rewritten when a migration was accepted; re-running init just to register hooks leaves it untouched.
+6. **Conflicting hook detection** — The wizard checks for other PreToolUse hooks that also match `Bash`. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), runok's sandbox may not work when multiple PreToolUse hooks match Bash — commands that should be sandboxed could run without any restrictions. If conflicts are found, a warning is displayed advising you to merge all Bash-matching hooks into a single entry.
 
 ## Examples
 

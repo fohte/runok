@@ -1,4 +1,5 @@
 pub(crate) mod claude_code;
+pub(crate) mod codex;
 mod config_gen;
 pub mod error;
 pub mod prompt;

@@ -1,8 +1,10 @@
+mod codex_setup;
 mod preview;
 mod setup;
 
 use std::path::{Path, PathBuf};
 
+use codex_setup::setup_codex_scope;
 use setup::{HookPolicy, ScopeResult, setup_scope};
 
 use super::error::InitError;
@@ -18,6 +20,7 @@ struct Summary {
     converted_rules: Option<String>,
     permissions_removed: bool,
     conflicting_hook_count: usize,
+    codex_hook_registered: bool,
 }
 
 /// Scope for init configuration.
@@ -66,6 +69,9 @@ fn print_summary(summary: &Summary) {
     }
     if summary.hook_registered {
         eprintln!("  - Claude Code hook registered");
+    }
+    if summary.codex_hook_registered {
+        eprintln!("  - Codex hook registered");
     }
     if summary.post_hook_registered {
         eprintln!("  - Claude Code PostToolUse hook registered (ask approval tracking)");
@@ -138,6 +144,7 @@ pub fn run_wizard_with_paths(
         converted_rules: None,
         permissions_removed: false,
         conflicting_hook_count: 0,
+        codex_hook_registered: false,
     };
 
     match scope {
@@ -151,6 +158,8 @@ pub fn run_wizard_with_paths(
                 true,
             )?;
             apply_scope_result(&mut summary, result, true);
+            let codex_result = setup_codex_scope(home_dir, prompter)?;
+            summary.codex_hook_registered = codex_result.hook_registered;
         }
         Some(InitScope::Project) => {
             let claude_dir = cwd.join(".claude");
@@ -178,6 +187,8 @@ pub fn run_wizard_with_paths(
                         true,
                     )?;
                     apply_scope_result(&mut summary, result, true);
+                    let codex_result = setup_codex_scope(home_dir, prompter)?;
+                    summary.codex_hook_registered = codex_result.hook_registered;
                 }
                 _ => {
                     let project_claude_dir = cwd.join(".claude");
@@ -995,5 +1006,96 @@ mod tests {
                 "hooks": hook_json()
             }),
         );
+    }
+
+    // --- Codex hook registration ---
+
+    /// The Codex runok hook entry as registered in hooks.json.
+    fn codex_runok_hook_entry() -> serde_json::Value {
+        serde_json::json!({
+            "matcher": "^Bash$",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "runok hook --agent codex"
+                }
+            ]
+        })
+    }
+
+    fn codex_hook_json() -> serde_json::Value {
+        serde_json::json!({
+            "hooks": {
+                "PreToolUse": [codex_runok_hook_entry()],
+                "PermissionRequest": [codex_runok_hook_entry()]
+            }
+        })
+    }
+
+    fn read_codex_hooks(codex_home: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(codex_home.join("hooks.json")).unwrap())
+            .unwrap()
+    }
+
+    #[rstest]
+    fn wizard_user_scope_registers_codex_hook_when_codex_home_exists() {
+        let env = TestEnv::new();
+        let codex_home = env.home.join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(read_codex_hooks(&codex_home), codex_hook_json());
+    }
+
+    #[rstest]
+    fn wizard_skips_codex_hook_when_codex_home_missing() {
+        let env = TestEnv::new();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert!(!env.home.join(".codex").exists());
+    }
+
+    #[rstest]
+    fn wizard_project_scope_does_not_register_codex_hook() {
+        let env = TestEnv::new();
+        let codex_home = env.home.join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(codex_home.join("hooks.json"), "{}").unwrap();
+
+        env.run(Some(&InitScope::Project), &AutoYesPrompter)
+            .unwrap();
+
+        assert_eq!(read_codex_hooks(&codex_home), serde_json::json!({}));
+    }
+
+    #[rstest]
+    fn wizard_codex_hook_registration_is_idempotent() {
+        let env = TestEnv::new();
+        let codex_home = env.home.join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(read_codex_hooks(&codex_home), codex_hook_json());
+    }
+
+    #[rstest]
+    fn wizard_declines_codex_hook_registration_leaves_hooks_json_untouched() {
+        let env = TestEnv::new();
+        let codex_home = env.home.join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+
+        // No user .claude dir exists and no runok.yml exists yet, so
+        // setup_scope's User-scope path makes zero prompt calls (it writes
+        // boilerplate config directly). The only queued response is
+        // consumed by setup_codex_scope's confirm.
+        let prompter = SequencePrompter::new(vec![Response::Confirm(false)]);
+        env.run(Some(&InitScope::User), &prompter).unwrap();
+        prompter.assert_exhausted();
+
+        assert!(!codex_home.join("hooks.json").exists());
     }
 }

@@ -1,4 +1,5 @@
 use super::super::claude_code;
+use super::super::codex;
 use super::super::error::InitError;
 
 /// Simulate removing Bash permission entries from settings.json content.
@@ -106,6 +107,83 @@ fn preview_register_hook_for_event(
         .push(hook_entry);
 
     Ok(Some(serde_json::to_string_pretty(&root)?))
+}
+
+/// Simulate registering the runok hook for both Codex hook events
+/// (`PreToolUse`, `PermissionRequest`) in hooks.json content. Returns `None`
+/// when both events already have a matching entry.
+pub(super) fn preview_register_codex_hook(content: &str) -> Result<Option<String>, InitError> {
+    let mut root = if content.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str::<serde_json::Value>(content)?
+    };
+
+    let mut changed = false;
+    for event in codex::EVENTS {
+        if preview_register_codex_hook_for_event(&mut root, event)? {
+            changed = true;
+        }
+    }
+
+    if changed {
+        Ok(Some(serde_json::to_string_pretty(&root)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn preview_register_codex_hook_for_event(
+    root: &mut serde_json::Value,
+    event: &str,
+) -> Result<bool, InitError> {
+    if let Some(arr) = root
+        .get("hooks")
+        .and_then(|h| h.get(event))
+        .and_then(|p| p.as_array())
+    {
+        for entry in arr {
+            if claude_code::entry_has_runok_hook(entry, codex::HOOK_COMMAND) {
+                return Ok(false);
+            }
+        }
+    }
+
+    let hook_entry = serde_json::json!({
+        "matcher": codex::MATCHER,
+        "hooks": [{"type": "command", "command": codex::HOOK_COMMAND}]
+    });
+
+    let hooks = root
+        .as_object_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "hooks.json root is not an object",
+            )
+        })?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let event_hooks = hooks
+        .as_object_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "hooks is not an object")
+        })?
+        .entry(event)
+        .or_insert_with(|| serde_json::json!([]));
+
+    event_hooks
+        .as_array_mut()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{event} is not an array"),
+            )
+        })?
+        .push(hook_entry);
+
+    Ok(true)
 }
 
 /// Re-format JSON through serde to normalize indentation.
@@ -413,6 +491,79 @@ mod tests {
             }"#};
         let result = preview_register_post_tool_use_hook(input).unwrap();
         assert_eq!(result, None);
+    }
+
+    // --- preview_register_codex_hook ---
+
+    fn codex_runok_hook_entry() -> serde_json::Value {
+        serde_json::json!({
+            "matcher": "^Bash$",
+            "hooks": [{"type": "command", "command": "runok hook --agent codex"}]
+        })
+    }
+
+    #[rstest]
+    fn preview_register_codex_hook_empty_input() {
+        let result = preview_register_codex_hook("").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [codex_runok_hook_entry()],
+                    "PermissionRequest": [codex_runok_hook_entry()]
+                }
+            })
+        );
+    }
+
+    #[rstest]
+    fn preview_register_codex_hook_returns_none_when_already_registered_for_both_events() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "^Bash$",
+                    "hooks": [{"type": "command", "command": "runok hook --agent codex"}]
+                  }
+                ],
+                "PermissionRequest": [
+                  {
+                    "matcher": "^Bash$",
+                    "hooks": [{"type": "command", "command": "runok hook --agent codex"}]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_register_codex_hook(input).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[rstest]
+    fn preview_register_codex_hook_fills_in_missing_event_only() {
+        let input = indoc! {r#"
+            {
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "^Bash$",
+                    "hooks": [{"type": "command", "command": "runok hook --agent codex"}]
+                  }
+                ]
+              }
+            }"#};
+        let result = preview_register_codex_hook(input).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [codex_runok_hook_entry()],
+                    "PermissionRequest": [codex_runok_hook_entry()]
+                }
+            })
+        );
     }
 
     #[rstest]
