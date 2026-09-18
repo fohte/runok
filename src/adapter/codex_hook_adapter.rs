@@ -112,9 +112,9 @@ impl CodexHookAdapter {
                 behavior: "allow".to_string(),
                 message: None,
             }),
-            // `Ask` never actually reaches this arm: `build_pre_tool_use_output`
-            // runs first for the same tool call and already reports `Ask` as
-            // `deny`, so Codex never gets far enough to fire PermissionRequest.
+            // `build_pre_tool_use_output` runs first for the same tool call and
+            // already reports `Ask` as `deny`, so Codex never reaches
+            // PermissionRequest with an unresolved `Ask`.
             Action::Ask(_) | Action::Pass => None,
         };
         Ok(decision.map(|decision| PermissionRequestOutput {
