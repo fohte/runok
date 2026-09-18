@@ -29,7 +29,10 @@ pub fn resolve_codex_home(home_dir: &Path) -> PathBuf {
 
 /// Register the runok hook for a single event within an in-memory
 /// hooks.json value. Returns `true` if the value changed.
-fn register_hook_for_event(root: &mut serde_json::Value, event: &str) -> Result<bool, InitError> {
+pub(super) fn register_hook_for_event(
+    root: &mut serde_json::Value,
+    event: &str,
+) -> Result<bool, InitError> {
     if let Some(arr) = root
         .get("hooks")
         .and_then(|h| h.get(event))
@@ -93,7 +96,11 @@ pub fn register_hook(codex_home: &Path) -> Result<bool, InitError> {
 
     let mut root = if path.exists() {
         let content = std::fs::read_to_string(&path)?;
-        serde_json::from_str::<serde_json::Value>(&content)?
+        if content.is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str::<serde_json::Value>(&content)?
+        }
     } else {
         serde_json::json!({})
     };
@@ -188,6 +195,30 @@ mod tests {
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert_eq!(after, before);
+    }
+
+    #[rstest]
+    fn register_hook_treats_preexisting_empty_file_as_empty_object() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(codex_home.join("hooks.json"), "").unwrap();
+
+        let registered = register_hook(&codex_home).unwrap();
+        assert!(registered);
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(codex_home.join("hooks.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [runok_hook_entry()],
+                    "PermissionRequest": [runok_hook_entry()]
+                }
+            })
+        );
     }
 
     #[rstest]

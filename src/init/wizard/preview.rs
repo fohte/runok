@@ -121,7 +121,7 @@ pub(super) fn preview_register_codex_hook(content: &str) -> Result<Option<String
 
     let mut changed = false;
     for event in codex::EVENTS {
-        if preview_register_codex_hook_for_event(&mut root, event)? {
+        if codex::register_hook_for_event(&mut root, event)? {
             changed = true;
         }
     }
@@ -131,59 +131,6 @@ pub(super) fn preview_register_codex_hook(content: &str) -> Result<Option<String
     } else {
         Ok(None)
     }
-}
-
-fn preview_register_codex_hook_for_event(
-    root: &mut serde_json::Value,
-    event: &str,
-) -> Result<bool, InitError> {
-    if let Some(arr) = root
-        .get("hooks")
-        .and_then(|h| h.get(event))
-        .and_then(|p| p.as_array())
-    {
-        for entry in arr {
-            if claude_code::entry_has_runok_hook(entry, codex::HOOK_COMMAND) {
-                return Ok(false);
-            }
-        }
-    }
-
-    let hook_entry = serde_json::json!({
-        "matcher": codex::MATCHER,
-        "hooks": [{"type": "command", "command": codex::HOOK_COMMAND}]
-    });
-
-    let hooks = root
-        .as_object_mut()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "hooks.json root is not an object",
-            )
-        })?
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
-
-    let event_hooks = hooks
-        .as_object_mut()
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "hooks is not an object")
-        })?
-        .entry(event)
-        .or_insert_with(|| serde_json::json!([]));
-
-    event_hooks
-        .as_array_mut()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{event} is not an array"),
-            )
-        })?
-        .push(hook_entry);
-
-    Ok(true)
 }
 
 /// Re-format JSON through serde to normalize indentation.

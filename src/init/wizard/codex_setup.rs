@@ -12,14 +12,13 @@ pub(super) struct CodexScopeResult {
 
 /// Register the runok hook in Codex's hooks.json.
 ///
-/// If Codex isn't installed (`$CODEX_HOME`/`~/.codex` doesn't exist), this is
-/// a silent no-op: no prompts, no directory creation, no file writes. If the
-/// hook is already registered for both events, this is also a silent no-op.
+/// If Codex isn't installed (`codex_home` doesn't exist), this is a silent
+/// no-op: no prompts, no directory creation, no file writes. If the hook is
+/// already registered for both events, this is also a silent no-op.
 pub(super) fn setup_codex_scope(
-    home_dir: &Path,
+    codex_home: &Path,
     prompter: &dyn Prompter,
 ) -> Result<CodexScopeResult, InitError> {
-    let codex_home = codex::resolve_codex_home(home_dir);
     if !codex_home.exists() {
         return Ok(CodexScopeResult {
             hook_registered: false,
@@ -57,6 +56,6 @@ pub(super) fn setup_codex_scope(
         });
     }
 
-    let hook_registered = codex::register_hook(&codex_home)?;
+    let hook_registered = codex::register_hook(codex_home)?;
     Ok(CodexScopeResult { hook_registered })
 }

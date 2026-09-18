@@ -84,7 +84,7 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 `ask` is handled differently by the two events, since Codex's `PreToolUse` hook has no way to open an approval prompt mid-call: it always reports `permissionDecision: "deny"`, with the reason text explaining that human judgment is needed (not a hard rejection) and instructing the model to stop, report which command needs approval and why, and let the delegator or the user decide, rather than retrying -- this session has no way to re-run the call with elevated permission. `PermissionRequest` is unchanged -- an `ask` decision writes nothing, deferring to Codex's own approval UI. See [`runok hook`](/cli/hook/#codex---agent-codex) for the full decision mapping.
 
-### `runok init` registers the Codex hook automatically ([TODO(pr-link)](<TODO(pr-link)>))
+### `runok init` registers the Codex hook automatically (TODO(pr-link))
 
 Following up on `runok hook --agent codex` ([#517](https://github.com/fohte/runok/pull/517)), the `runok init --scope user` wizard now also detects a Codex config directory (`$CODEX_HOME`, or `~/.codex` when that variable is unset) and registers `runok hook --agent codex` for both the `PreToolUse` and `PermissionRequest` events in `<codex_home>/hooks.json`:
 
@@ -107,7 +107,7 @@ Following up on `runok hook --agent codex` ([#517](https://github.com/fohte/runo
 }
 ```
 
-Unlike Claude Code's plain-string matchers, Codex's `hooks.json` matchers are regexes, hence `"^Bash$"`. The step is skipped entirely when no Codex config directory exists, and re-running `runok init` won't duplicate an already-registered entry. As with the existing Claude Code integration, the wizard shows a diff and asks for confirmation before writing -- previously this required hand-editing `~/.codex/hooks.json`. Codex still requires its own one-time hook-trust approval before it runs a newly-registered hook. See [`runok init`](/cli/init/#what-the-wizard-does) for details.
+Unlike Claude Code's plain-string matchers, Codex's `hooks.json` matchers are regexes, hence `"^Bash$"`. The step is skipped entirely when no Codex config directory exists, and re-running `runok init` won't duplicate an already-registered entry. As with the existing Claude Code integration, the wizard shows a diff and asks for confirmation before writing -- previously this required hand-editing `~/.codex/hooks.json`. You may need to approve the newly-registered hook in Codex before it takes effect. See [`runok init`](/cli/init/#what-the-wizard-does) for details.
 
 ### `defaults.action: pass` defers to Claude Code's own permission flow ([#496](https://github.com/fohte/runok/pull/496))
 
