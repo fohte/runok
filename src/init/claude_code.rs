@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::error::InitError;
+use super::hook_json::entry_has_runok_hook;
 
 /// Result of converting Claude Code permissions to runok rules.
 #[derive(Debug, Default)]
@@ -117,31 +118,6 @@ pub fn read_permissions(claude_dir: &Path) -> Result<(Vec<String>, Vec<String>),
     Ok((allow_entries, deny_entries))
 }
 
-/// Check whether a PreToolUse entry already contains the runok hook command.
-pub fn entry_has_runok_hook(entry: &serde_json::Value, command: &str) -> bool {
-    // Plain string format: "runok check --input-format claude-code-hook"
-    if entry.as_str() == Some(command) {
-        return true;
-    }
-    // Current format: {"matcher": "Bash", "hooks": [{"type": "command", "command": "runok check ..."}]}
-    // Also handles string hooks: {"hooks": ["runok check --input-format claude-code-hook"]}
-    if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array())
-        && hooks.iter().any(|h| {
-            h.get("command").and_then(|c| c.as_str()) == Some(command)
-                || h.as_str() == Some(command)
-        })
-    {
-        return true;
-    }
-    // Legacy format: {"type": "command", "command": "runok check ..."} (top-level command)
-    if entry.get("command").and_then(|c| c.as_str()) == Some(command)
-        && entry.get("hooks").is_none()
-    {
-        return true;
-    }
-    false
-}
-
 /// Check whether a PreToolUse entry matches the Bash tool.
 ///
 /// An entry matches Bash if:
@@ -202,7 +178,8 @@ fn try_set_command(val: &mut serde_json::Value, old: &str, new: &str) -> bool {
 
 /// Rewrite `old_command` to `new_command` in place within a single
 /// PreToolUse/PostToolUse hook entry, across every wire format
-/// [`entry_has_runok_hook`] recognizes. Returns `true` if the entry changed.
+/// [`crate::init::hook_json::entry_has_runok_hook`] recognizes. Returns `true`
+/// if the entry changed.
 fn rewrite_entry_command(
     entry: &mut serde_json::Value,
     old_command: &str,
@@ -1175,54 +1152,6 @@ mod tests {
         #[case] expected: Vec<usize>,
     ) {
         assert_eq!(detect_conflicting_hooks(&entries), expected);
-    }
-
-    // --- entry_has_runok_hook ---
-
-    #[rstest]
-    #[case::current_format(
-        serde_json::json!({
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "runok check --input-format claude-code-hook"}]
-        }),
-        true,
-    )]
-    #[case::legacy_format(
-        serde_json::json!({
-            "type": "command",
-            "command": "runok check --input-format claude-code-hook"
-        }),
-        true,
-    )]
-    #[case::plain_string(
-        serde_json::json!("runok check --input-format claude-code-hook"),
-        true,
-    )]
-    #[case::string_hooks_in_object(
-        serde_json::json!({
-            "matcher": "Bash",
-            "hooks": ["runok check --input-format claude-code-hook"]
-        }),
-        true,
-    )]
-    #[case::no_match_different_command(
-        serde_json::json!({
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "other-tool"}]
-        }),
-        false,
-    )]
-    #[case::no_match_different_string(
-        serde_json::json!("some-other-command"),
-        false,
-    )]
-    #[case::no_match_empty_object(
-        serde_json::json!({}),
-        false,
-    )]
-    fn test_entry_has_runok_hook(#[case] entry: serde_json::Value, #[case] expected: bool) {
-        let command = "runok check --input-format claude-code-hook";
-        assert_eq!(entry_has_runok_hook(&entry, command), expected);
     }
 
     // --- rewrite_entry_command ---

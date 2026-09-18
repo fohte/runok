@@ -98,6 +98,10 @@ impl InitTestEnv {
         self.cwd.join(".claude")
     }
 
+    fn codex_home_dir(&self) -> std::path::PathBuf {
+        self.home.join(".codex")
+    }
+
     fn claude_dir_for_scope(&self, scope: &InitScope) -> std::path::PathBuf {
         match scope {
             InitScope::User => self.user_claude_dir(),
@@ -139,6 +143,7 @@ impl InitTestEnv {
             &self.cwd,
             &self.user_config_dir,
             &self.home,
+            &self.codex_home_dir(),
         )
     }
 }

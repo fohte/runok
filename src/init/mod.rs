@@ -1,6 +1,8 @@
 pub(crate) mod claude_code;
+pub(crate) mod codex;
 mod config_gen;
 pub mod error;
+pub(crate) mod hook_json;
 pub mod prompt;
 mod wizard;
 
