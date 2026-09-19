@@ -61,6 +61,28 @@ jobs:
           name: docs-dist
           path: docs/dist
 
+  # AGENTS.md allows a `TODO(pr-link)` placeholder in next.md only until the PR
+  # number is known. On `pull_request` the number is always known, so a
+  # placeholder added by this PR must already have been replaced. Only added
+  # lines are inspected so placeholders that predate this PR don't fail it.
+  check-release-note-pr-link:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check next.md for newly added TODO(pr-link) placeholders
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          patch=$(gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | select(.filename == "docs/src/content/docs/releases/next.md") | .patch // ""')
+
+          if added=$(grep -E '^\+.*TODO\(pr-link\)' <<< "$patch"); then
+            echo "::error file=docs/src/content/docs/releases/next.md::Replace TODO(pr-link) with the link to this PR (#${PR_NUMBER}), e.g. ([#${PR_NUMBER}](https://github.com/${{ github.repository }}/pull/${PR_NUMBER}))."
+            echo "$added"
+            exit 1
+          fi
+
   # Determines whether the pushed commit(s) touch only docs/**, using the
   # GitHub compare API instead of a local `git diff` so the default shallow
   # checkout (fetch-depth: 1) elsewhere in this workflow doesn't need widening.
