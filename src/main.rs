@@ -336,6 +336,7 @@ fn run_command(
                 executor,
             )
             .with_sandbox_definitions(sandbox_defs)
+            .with_ask(args.ask)
             .with_hook_origin(hook_origin);
             adapter::run_with_options(&endpoint, &config, &options)
         }

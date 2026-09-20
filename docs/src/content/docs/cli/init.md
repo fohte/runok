@@ -19,7 +19,7 @@ runok init [options]
 
 Configuration scope. Available values:
 
-- `user` — Create `~/.config/runok/runok.yml` for global rules that apply to all projects. Also registers the runok PreToolUse hook in `~/.claude/settings.json` if Claude Code is detected, and the `runok hook --agent codex` hook in the Codex config directory's `hooks.json` (`$CODEX_HOME`, or `~/.codex` when that variable is unset) if one is detected.
+- `user` — Create `~/.config/runok/runok.yml` for global rules that apply to all projects. Also registers the runok PreToolUse hook in `~/.claude/settings.json` if Claude Code is detected, and the `runok hook --agent codex` hooks plus the required exec policy in the Codex config directory (`$CODEX_HOME`, or `~/.codex` when that variable is unset) if one is detected.
 - `project` — Create `runok.yml` in the current directory for project-specific rules.
 
 When omitted, the wizard prompts you to choose.
@@ -36,7 +36,15 @@ Accept all defaults without prompting. Useful for scripted setups.
    - **Register the hook** — Add the [`runok hook`](/cli/hook/) PreToolUse hook to `settings.json` (user scope only).
    - **Migrate the hook command** — Rewrite an existing `runok check --input-format claude-code-hook` entry (registered before `runok hook` existed) to `runok hook --agent claude-code`, in place.
    - **Track ask approvals** (opt-in) — Also register the same command as a PostToolUse hook so approvals of `ask` decisions are recorded in the audit log (user scope only). See [Track ask approvals](/getting-started/claude-code/#track-ask-approvals-optional).
-3. **Codex detection** — If a Codex config directory exists (`$CODEX_HOME`, or `~/.codex` when that variable is unset), the wizard registers the [`runok hook --agent codex`](/cli/hook/#codex---agent-codex) command for both the `PreToolUse` and `PermissionRequest` events in `<codex_home>/hooks.json` (user scope only). Skipped entirely -- without asking or writing anything -- if the directory doesn't exist, since that means Codex isn't installed or used. Re-running `runok init` is idempotent and won't duplicate an already-registered entry. You may need to approve the newly-registered hook in Codex before it takes effect.
+3. **Codex detection** — If a Codex config directory exists (`$CODEX_HOME`, or `~/.codex` when that variable is unset), the wizard registers the [`runok hook --agent codex`](/cli/hook/#codex---agent-codex) command for both the `PreToolUse` and `PermissionRequest` events in `<codex_home>/hooks.json` and adds the following rules to `<codex_home>/rules/runok.rules` (user scope only):
+
+   ```text
+   prefix_rule(pattern = ["runok", "exec"], decision = "allow")
+   prefix_rule(pattern = ["runok", "exec", "--ask"], decision = "prompt")
+   ```
+
+   These rules make Codex allow `runok exec` without another prompt and request approval for `runok exec --ask`. They are used by integrations that route commands through these wrappers. The step is skipped entirely -- without asking or writing anything -- if the directory doesn't exist, since that means Codex isn't installed or used. Re-running `runok init` is idempotent and won't duplicate the hook or policy entries. You may need to approve the newly-registered hook in Codex before it takes effect.
+
 4. **Preview and confirm** — Show a unified diff of all proposed changes and ask for confirmation.
 5. **Create `runok.yml`** — Write a fresh configuration file with migrated rules (if any) or a boilerplate template, but only when `runok.yml` doesn't already exist yet at the selected scope. An existing `runok.yml` — hand-written or otherwise — is never overwritten or modified by init, with or without `-y`.
 6. **Conflicting hook detection** — The wizard checks for other PreToolUse hooks that also match `Bash`. Due to a [known Claude Code issue](https://github.com/anthropics/claude-code/issues/15897), runok's sandbox may not work when multiple PreToolUse hooks match Bash — commands that should be sandboxed could run without any restrictions. If conflicts are found, a warning is displayed advising you to merge all Bash-matching hooks into a single entry.

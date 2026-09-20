@@ -134,6 +134,11 @@ pub(super) fn preview_register_codex_hook(content: &str) -> Result<Option<String
     }
 }
 
+/// Simulate adding the Codex exec policy rules to `rules/runok.rules`.
+pub(super) fn preview_register_codex_exec_policy(content: &str) -> Option<String> {
+    codex::add_exec_policy_rules(content)
+}
+
 /// Re-format JSON through serde to normalize indentation.
 pub(super) fn normalize_json(content: &str) -> Result<String, InitError> {
     let value: serde_json::Value = serde_json::from_str(content)?;
@@ -512,6 +517,20 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[rstest]
+    fn preview_register_codex_exec_policy_adds_both_rules() {
+        let result = preview_register_codex_exec_policy("")
+            .unwrap_or_else(|| panic!("expected Codex exec policy rules to be added"));
+        assert_eq!(result, codex::EXEC_POLICY_RULES.join("\n") + "\n");
+    }
+
+    #[rstest]
+    fn preview_register_codex_exec_policy_returns_none_when_rules_exist() {
+        let rules = codex::EXEC_POLICY_RULES.join("\n");
+        let input = ["# existing", rules.as_str()].join("\n") + "\n";
+        assert_eq!(preview_register_codex_exec_policy(&input), None);
     }
 
     #[rstest]

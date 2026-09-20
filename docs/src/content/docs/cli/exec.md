@@ -7,7 +7,9 @@ sidebar:
 
 `runok exec` evaluates a command against your runok rules and, if allowed, executes it — [optionally within a sandbox](/sandbox/overview/). If the command is denied (or requires confirmation), it is not executed and exit code `3` is returned.
 
-[`defaults.action: pass`](/configuration/schema/#defaultsaction) has no effect when `runok exec` is invoked directly: unlike the Claude Code hook, it has no underlying permission flow to defer to, so it falls back to the same behavior as `ask` (exit code `3`). The one exception is the sandbox-wrapped command the Claude Code hook itself generates for a `pass` decision (see [`defaults.action`](/configuration/schema/#defaultsaction)) -- that invocation runs under the resolved sandbox, since the hook has already deferred the permission decision to Claude Code's own flow.
+The internal `--ask` flag executes a command whose rule result is `ask`. Callers should use it only after their outer approval flow has approved the command; `deny` and `pass` remain blocked even with this flag.
+
+[`defaults.action: pass`](/configuration/schema/#defaultsaction) has no effect when `runok exec` is invoked directly: unlike the Claude Code hook, it has no underlying permission flow to defer to, so without `--ask` it falls back to the same behavior as `ask` (exit code `3`). The one exception is the sandbox-wrapped command the Claude Code hook itself generates for a `pass` decision (see [`defaults.action`](/configuration/schema/#defaultsaction)) -- that invocation runs under the resolved sandbox, since the hook has already deferred the permission decision to Claude Code's own flow.
 
 ## Usage
 
@@ -30,6 +32,12 @@ See [Global Flags](/cli/overview/#global-flags).
 Apply a named [sandbox preset](/sandbox/overview/) from your runok configuration. Overrides any sandbox defined in the matching rule.
 
 Repeatable. Passing `--sandbox` more than once merges the named presets using [Strictest Wins](/sandbox/overview/#sandbox-merging-for-compound-commands) (writable roots intersected, deny paths unioned, network access ANDed).
+
+### `--ask`
+
+Execute a command resolved as `ask` after an outer approval flow has approved it. It does not override `deny` or `pass` rules. The Codex exec policy installed by `runok init --scope user` uses this flag as its prompt boundary.
+
+This must be the first option after `exec` so the Codex `prompt` policy rule matches it.
 
 ### `--verbose`
 
@@ -61,13 +69,19 @@ Run a shell expression (single argument, passed to shell):
 runok exec -- 'echo hello && echo world'
 ```
 
+Execute an approved `ask` result:
+
+```sh
+runok exec --ask -- terraform apply
+```
+
 ## Exit codes
 
-| Code | Meaning                                                        |
-| ---- | -------------------------------------------------------------- |
-| _N_  | Command's own exit code (on successful execution).             |
-| `1`  | An error occurred (config error, sandbox setup failure, etc.). |
-| `3`  | Command was denied or requires confirmation (ask or pass).     |
+| Code | Meaning                                                                    |
+| ---- | -------------------------------------------------------------------------- |
+| _N_  | Command's own exit code (on successful execution).                         |
+| `1`  | An error occurred (config error, sandbox setup failure, etc.).             |
+| `3`  | Command was denied or requires confirmation (ask or pass without `--ask`). |
 
 The `pass` row above applies when `runok exec` is invoked directly. The one exception is the sandbox-wrapped command the Claude Code hook generates for a `pass` decision (see above) -- that invocation runs under the resolved sandbox and can exit `0` instead of `3`.
 

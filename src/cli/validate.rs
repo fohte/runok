@@ -109,6 +109,11 @@ const EXEC_FLAGS: &[FlagDef] = &[
         takes_value: true,
     },
     FlagDef {
+        name: "--ask",
+        short: None,
+        takes_value: false,
+    },
+    FlagDef {
         name: "--verbose",
         short: None,
         takes_value: false,
@@ -195,6 +200,16 @@ pub fn validate_no_unknown_flags(
         None => after_sub,
     };
 
+    // The Codex prompt policy matches `runok exec --ask` by argv prefix. Keep
+    // `--ask` in that position so another exec flag cannot downgrade it to
+    // the broader allow rule.
+    if subcommand == "exec"
+        && let Some(ask_pos) = region.iter().position(|token| token == "--ask")
+        && ask_pos != 0
+    {
+        return Err("--ask must appear immediately after 'exec'".to_string());
+    }
+
     // Walk the region using an iterator, skipping values of known flags.
     // Once we see a non-flag token (the command name), stop checking.
     let mut tokens = region.iter();
@@ -248,6 +263,7 @@ mod tests {
     #[case::exec_sandbox_with_value("runok exec --sandbox strict -- ls")]
     #[case::exec_sandbox_eq_form("runok exec --sandbox=strict -- ls")]
     #[case::exec_all_flags("runok exec --sandbox strict --verbose -- ls")]
+    #[case::exec_ask_first("runok exec --ask --sandbox strict -- ls")]
     #[case::exec_command_without_double_dash("runok exec ls -la")]
     #[case::exec_command_with_flag_args("runok exec git log --oneline")]
     #[case::check_with_double_dash("runok check -- ls -la")]
@@ -376,6 +392,20 @@ mod tests {
         assert_eq!(
             err,
             format!("unknown flag '{expected_flag}' for 'runok hook'")
+        );
+    }
+
+    #[rstest]
+    #[case::after_sandbox("runok exec --sandbox strict --ask -- ls")]
+    #[case::after_verbose("runok exec --verbose --ask -- ls")]
+    fn ask_must_be_first_exec_flag(#[case] input: &str) {
+        let raw = args(input);
+        let (subcommand, sub_pos) = find_subcommand(&raw).unwrap_or_else(|| {
+            panic!("expected to find a subcommand in: {input}");
+        });
+        assert_eq!(
+            validate_no_unknown_flags(&raw, subcommand, sub_pos),
+            Err("--ask must appear immediately after 'exec'".to_string())
         );
     }
 

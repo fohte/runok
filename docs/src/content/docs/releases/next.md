@@ -78,6 +78,10 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ## New Features
 
+### `runok exec --ask` supports execution after an outer approval ([#526](https://github.com/fohte/runok/pull/526))
+
+`runok exec --ask` executes commands whose runok rule result is `ask`, while `deny` and `pass` remain blocked. `runok init --scope user` installs the Codex exec policy rules that allow `runok exec` and prompt for `runok exec --ask`, preparing integrations to request approval before executing the wrapper. See [`runok exec`](/cli/exec/) and [`runok init`](/cli/init/#what-the-wizard-does).
+
 ### `runok hook --agent codex` integrates with Codex CLI's hook protocol ([#517](https://github.com/fohte/runok/pull/517))
 
 `runok hook` now accepts `--agent codex` alongside the existing `--agent claude-code`, dispatching Codex CLI's `PreToolUse` and `PermissionRequest` hook events. The mapping mirrors `--agent claude-code` for `deny`/`allow`, with one Codex-specific constraint: Codex rejects `updatedInput` unless it is paired with an explicit `permissionDecision: "allow"`, so a `pass` decision never emits `updatedInput` under `--agent codex`, even when `defaults.sandbox` is configured -- the sandbox wrap only reaches Codex through an explicit `allow`. `PermissionRequest` has no `updatedInput` support at all, so it always reports a plain `{ behavior: "allow" }` or `{ behavior: "deny", message }`, ignoring sandbox presets entirely.

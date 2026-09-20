@@ -48,6 +48,12 @@ The sandbox permits read access by default. Most development commands need to re
 
 However, specific paths can be denied for reading via `fs.read.deny`. This is useful for protecting highly sensitive files like private keys (`~/.ssh`) or credential stores (`~/.gnupg`) that sandboxed commands should never access. Paths listed in `fs.read.deny` become completely inaccessible (both read and write are blocked).
 
+### Codex execution path
+
+When a Codex integration routes a Bash command through [`runok exec`](/cli/exec/), Codex's exec policy treats `runok exec` as trusted and `runok exec --ask` as a prompt. `runok init` installs these policy rules so the final command can be evaluated by runok before it runs.
+
+Codex's `allow` exec policy is a trusted execution path and can bypass Codex's normal workspace sandbox. Commands routed through this integration therefore rely on the sandbox preset selected by runok. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer.
+
 ### Unix domain sockets are always permitted
 
 Unix domain sockets (`AF_UNIX`) are never blocked, even when `network.allow` is `false`. Many development tools (package managers, build tools, language servers) use Unix sockets for local inter-process communication. Blocking them would break basic tool functionality without meaningful security benefit, since Unix sockets cannot be used for network exfiltration.

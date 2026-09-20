@@ -110,6 +110,10 @@ pub struct ExecArgs {
     #[arg(long)]
     pub sandbox: Vec<String>,
 
+    /// Execute commands resolved as `ask` after an outer approval.
+    #[arg(long)]
+    pub ask: bool,
+
     /// Output detailed rule matching information to stderr
     #[arg(long)]
     pub verbose: bool,
@@ -204,19 +208,23 @@ mod tests {
     #[rstest]
     #[case::exec_simple(
         &["runok", "exec", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], ask: false, verbose: false }),
     )]
     #[case::exec_with_sandbox(
         &["runok", "exec", "--sandbox", "strict", "--", "ls"],
-        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into()], verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into()], ask: false, verbose: false }),
     )]
     #[case::exec_with_multiple_sandboxes(
         &["runok", "exec", "--sandbox", "strict", "--sandbox", "readonly", "--", "ls"],
-        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into(), "readonly".into()], verbose: false }),
+        Commands::Exec(ExecArgs { command: vec!["ls".into()], sandbox: vec!["strict".into(), "readonly".into()], ask: false, verbose: false }),
+    )]
+    #[case::exec_with_ask(
+        &["runok", "exec", "--ask", "--", "git", "push"],
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "push".into()], sandbox: vec![], ask: true, verbose: false }),
     )]
     #[case::exec_with_verbose(
         &["runok", "exec", "--verbose", "--", "git", "status"],
-        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], verbose: true }),
+        Commands::Exec(ExecArgs { command: vec!["git".into(), "status".into()], sandbox: vec![], ask: false, verbose: true }),
     )]
     #[case::check_with_command(
         &["runok", "check", "--", "git", "status"],

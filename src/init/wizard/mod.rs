@@ -22,6 +22,7 @@ struct Summary {
     permissions_removed: bool,
     conflicting_hook_count: usize,
     codex_hook_registered: bool,
+    codex_exec_policy_registered: bool,
 }
 
 /// Scope for init configuration.
@@ -73,6 +74,9 @@ fn print_summary(summary: &Summary) {
     }
     if summary.codex_hook_registered {
         eprintln!("  - Codex hook registered");
+    }
+    if summary.codex_exec_policy_registered {
+        eprintln!("  - Codex exec policy registered");
     }
     if summary.post_hook_registered {
         eprintln!("  - Claude Code PostToolUse hook registered (ask approval tracking)");
@@ -151,6 +155,7 @@ pub fn run_wizard_with_paths(
         permissions_removed: false,
         conflicting_hook_count: 0,
         codex_hook_registered: false,
+        codex_exec_policy_registered: false,
     };
 
     match scope {
@@ -166,6 +171,7 @@ pub fn run_wizard_with_paths(
             apply_scope_result(&mut summary, result, true);
             let codex_result = setup_codex_scope(codex_home, prompter)?;
             summary.codex_hook_registered = codex_result.hook_registered;
+            summary.codex_exec_policy_registered = codex_result.exec_policy_registered;
         }
         Some(InitScope::Project) => {
             let claude_dir = cwd.join(".claude");
@@ -195,6 +201,7 @@ pub fn run_wizard_with_paths(
                     apply_scope_result(&mut summary, result, true);
                     let codex_result = setup_codex_scope(codex_home, prompter)?;
                     summary.codex_hook_registered = codex_result.hook_registered;
+                    summary.codex_exec_policy_registered = codex_result.exec_policy_registered;
                 }
                 _ => {
                     let project_claude_dir = cwd.join(".claude");
@@ -1048,6 +1055,14 @@ mod tests {
             .unwrap()
     }
 
+    fn read_codex_exec_policy(codex_home: &Path) -> String {
+        std::fs::read_to_string(codex_home.join(codex::EXEC_POLICY_PATH)).unwrap()
+    }
+
+    fn codex_exec_policy() -> String {
+        codex::EXEC_POLICY_RULES.join("\n") + "\n"
+    }
+
     #[rstest]
     fn wizard_user_scope_registers_codex_hook_when_codex_home_exists() {
         let env = TestEnv::new();
@@ -1056,7 +1071,13 @@ mod tests {
 
         env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
-        assert_eq!(read_codex_hooks(&codex_home), codex_hook_json());
+        assert_eq!(
+            (
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
+        );
     }
 
     #[rstest]
@@ -1090,7 +1111,57 @@ mod tests {
         env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
         env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
 
-        assert_eq!(read_codex_hooks(&codex_home), codex_hook_json());
+        assert_eq!(
+            (
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
+        );
+    }
+
+    #[rstest]
+    fn wizard_registers_missing_codex_exec_policy_when_hook_exists() {
+        let env = TestEnv::new();
+        let codex_home = env.codex_home_dir();
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(
+            codex_home.join("hooks.json"),
+            serde_json::to_string(&codex_hook_json()).unwrap(),
+        )
+        .unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(
+            (
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
+        );
+    }
+
+    #[rstest]
+    fn wizard_registers_missing_codex_hook_when_exec_policy_exists() {
+        let env = TestEnv::new();
+        let codex_home = env.codex_home_dir();
+        std::fs::create_dir_all(codex_home.join("rules")).unwrap();
+        std::fs::write(
+            codex_home.join(codex::EXEC_POLICY_PATH),
+            codex_exec_policy(),
+        )
+        .unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(
+            (
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
+        );
     }
 
     #[rstest]
@@ -1104,6 +1175,12 @@ mod tests {
         env.run(Some(&InitScope::User), &prompter).unwrap();
         prompter.assert_exhausted();
 
-        assert!(!codex_home.join("hooks.json").exists());
+        assert_eq!(
+            (
+                codex_home.join("hooks.json").exists(),
+                codex_home.join(codex::EXEC_POLICY_PATH).exists()
+            ),
+            (false, false)
+        );
     }
 }

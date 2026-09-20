@@ -15,6 +15,15 @@ pub const MATCHER: &str = "^Bash$";
 /// Codex has no opt-in PostToolUse equivalent.
 pub const EVENTS: [&str; 2] = ["PreToolUse", "PermissionRequest"];
 
+/// Relative path of the exec policy file managed by runok.
+pub const EXEC_POLICY_PATH: &str = "rules/runok.rules";
+
+/// Exec policy rules required for Codex to apply runok's allow/ask decisions.
+pub const EXEC_POLICY_RULES: [&str; 2] = [
+    "prefix_rule(pattern = [\"runok\", \"exec\"], decision = \"allow\")",
+    "prefix_rule(pattern = [\"runok\", \"exec\", \"--ask\"], decision = \"prompt\")",
+];
+
 fn resolve_codex_home_with(codex_home_env: Option<String>, home_dir: &Path) -> PathBuf {
     codex_home_env
         .filter(|v| !v.is_empty())
@@ -119,6 +128,50 @@ pub fn register_hook(codex_home: &Path) -> Result<bool, InitError> {
     }
 
     Ok(changed)
+}
+
+/// Return an exec policy file with all rules required by the Codex adapter.
+/// Existing rules and formatting are preserved; only missing runok rules are
+/// appended.
+pub(super) fn add_exec_policy_rules(content: &str) -> Option<String> {
+    let missing: Vec<&str> = EXEC_POLICY_RULES
+        .iter()
+        .filter(|rule| !content.lines().any(|line| line.trim() == **rule))
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+
+    let mut output = content.to_string();
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    for rule in missing {
+        output.push_str(rule);
+        output.push('\n');
+    }
+    Some(output)
+}
+
+/// Register the exec policy rules in `<codex_home>/rules/runok.rules`.
+/// Existing rules are kept intact and missing runok rules are appended.
+pub fn register_exec_policy(codex_home: &Path) -> Result<bool, InitError> {
+    let path = codex_home.join(EXEC_POLICY_PATH);
+    let content = if path.exists() {
+        std::fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+    let Some(output) = add_exec_policy_rules(&content) else {
+        return Ok(false);
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, output)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -296,6 +349,70 @@ mod tests {
                     "PermissionRequest": [runok_hook_entry()]
                 }
             })
+        );
+    }
+
+    fn lines_with_trailing_newline(lines: &[&str]) -> String {
+        lines.join("\n") + "\n"
+    }
+
+    #[rstest]
+    fn register_exec_policy_creates_rules_file() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+
+        let registered = register_exec_policy(&codex_home).unwrap();
+
+        assert_eq!(
+            (
+                registered,
+                std::fs::read_to_string(codex_home.join(EXEC_POLICY_PATH)).unwrap()
+            ),
+            (true, lines_with_trailing_newline(&EXEC_POLICY_RULES))
+        );
+    }
+
+    #[rstest]
+    fn register_exec_policy_preserves_existing_rules_and_appends_missing_rules() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        let rules_path = codex_home.join(EXEC_POLICY_PATH);
+        std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &rules_path,
+            lines_with_trailing_newline(&["# existing", EXEC_POLICY_RULES[0]]),
+        )
+        .unwrap();
+
+        let registered = register_exec_policy(&codex_home).unwrap();
+
+        assert_eq!(
+            (registered, std::fs::read_to_string(rules_path).unwrap()),
+            (
+                true,
+                lines_with_trailing_newline(&[
+                    "# existing",
+                    EXEC_POLICY_RULES[0],
+                    EXEC_POLICY_RULES[1],
+                ])
+            )
+        );
+    }
+
+    #[rstest]
+    fn register_exec_policy_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+
+        let first_registered = register_exec_policy(&codex_home).unwrap();
+        let before = std::fs::read_to_string(codex_home.join(EXEC_POLICY_PATH)).unwrap();
+        let second_registered = register_exec_policy(&codex_home).unwrap();
+        let after = std::fs::read_to_string(codex_home.join(EXEC_POLICY_PATH)).unwrap();
+
+        assert_eq!(
+            (first_registered, second_registered, after),
+            (true, false, before)
         );
     }
 }
