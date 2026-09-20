@@ -339,7 +339,7 @@ For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `runo
 
 `exec` never verifies the token's value, only that the flag was set -- it is not a cryptographic proof that a given invocation actually came from the hook, and anyone who can run `runok exec` at all can set it. This is a deliberate, accepted trade-off, not an oversight: it only relaxes `Action::Pass` (a command that matched no rule). A command that matches a `deny` or `ask` rule is still rejected by `exec`'s own re-evaluation regardless of the marker. Spoofing it can therefore only turn "the caller's own permission flow decides, unsandboxed" into "the caller's own permission flow decides, sandboxed" -- a strictly narrower outcome, not a privilege escalation.
 
-### Codex hook wrappers now reach the registered exec policy (TODO(pr-link))
+### Codex hook wrappers now reach the registered exec policy ([#528](https://github.com/fohte/runok/pull/528))
 
 Codex does not evaluate exec policies for shell commands prefixed with an environment-variable assignment, so the hook-generated wrapper could bypass the `runok exec` and `runok exec --ask` rules. Hook wrappers now pass the hook-origin marker as the hidden `--hook-origin <token>` flag while keeping `--ask` immediately after `exec`, so `ask` decisions reach Codex's approval UI:
 
