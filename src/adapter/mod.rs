@@ -5,10 +5,10 @@ pub mod hook_adapter;
 pub mod hook_common;
 mod verbose;
 
-/// Environment variable the Claude Code hook wrapper sets on the `runok exec`
-/// invocation it generates, so `exec` can tell that invocation apart from a
-/// user typing `--sandbox` directly. See `hook_adapter::wrap_with_sandbox`
-/// and `ExecAdapter::hook_origin` for how it's produced and consumed.
+/// Environment variable a hook wrapper sets on the `runok exec` invocation it
+/// generates, so `exec` can tell that invocation apart from a user typing
+/// `--sandbox` directly. See the `hook_common::wrap_with_*` helpers and
+/// `ExecAdapter::hook_origin` for how it is produced and consumed.
 pub const HOOK_ORIGIN_ENV_VAR: &str = "RUNOK_HOOK_ORIGIN";
 
 use crate::audit::{
@@ -33,9 +33,9 @@ pub struct ActionResult {
     pub sandbox: SandboxInfo,
     /// Byte ranges of the original command text to hand to `runok exec`
     /// individually, one per sub-command of a compound that needs a sandbox.
-    /// Only endpoints that hand the command back to a shell they do not
-    /// control (the Claude Code hook, via `updatedInput`) can apply these;
-    /// the others fall back to `sandbox`, which covers the whole input.
+    /// Only hook endpoints that hand the command back to a shell they do not
+    /// control (via `updatedInput`) can apply these; the others fall back to
+    /// `sandbox`, which covers the whole input.
     /// Empty when the compound has no per-sub-command plan, or when the
     /// input is not compound at all.
     pub sandbox_wraps: Vec<SandboxWrap>,

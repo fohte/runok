@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::SandboxInfo;
-use crate::rules::rule_engine::{AskResponse, DenyResponse, SandboxWrap};
+use crate::rules::rule_engine::{DenyResponse, SandboxWrap};
 
 /// Bash tool's tool_input structure.
 #[derive(Debug, Deserialize)]
@@ -46,7 +46,7 @@ pub struct UpdatedInput {
     pub command: String,
 }
 
-/// Shared assembly for `build_deny_reason` and `build_ask_reason`:
+/// Shared assembly for reason strings:
 /// `<prefix>: <matched_rule>` (or `default_policy_text` when `matched_rule`
 /// is empty), followed by an optional `(<message>)` and an optional
 /// `[suggestion: <fix_suggestion>]`.
@@ -83,21 +83,6 @@ pub fn build_deny_reason(deny: &DenyResponse) -> String {
     )
 }
 
-/// Build the same shape of reason string as `build_deny_reason`, but for an
-/// `AskResponse`, with an "approval required" prefix instead of "denied" --
-/// Codex's `PreToolUse` hook (see `codex_hook_adapter::build_ask_deny_reason`)
-/// needs this distinct wording so the model can tell "forbidden" apart from
-/// "needs a human's judgment" and react differently.
-pub fn build_ask_reason(ask: &AskResponse) -> String {
-    build_reason(
-        "approval required",
-        "approval required by default policy",
-        &ask.matched_rule,
-        ask.message.as_deref(),
-        ask.fix_suggestion.as_deref(),
-    )
-}
-
 /// Build a `HookOutput` with a fixed `hookEventName: "PreToolUse"`.
 pub fn build_output(
     decision: Option<&str>,
@@ -119,9 +104,20 @@ pub fn sandbox_updated_input(
     wraps: &[SandboxWrap],
     original_command: &str,
 ) -> Result<Option<UpdatedInput>, anyhow::Error> {
+    sandbox_updated_input_with_mode(sandbox, wraps, original_command, false)
+}
+
+/// Build an `updatedInput` through `runok exec`, optionally retaining the
+/// `--ask` flag so Codex's prefix rule requests approval.
+pub(crate) fn sandbox_updated_input_with_mode(
+    sandbox: &SandboxInfo,
+    wraps: &[SandboxWrap],
+    original_command: &str,
+    ask: bool,
+) -> Result<Option<UpdatedInput>, anyhow::Error> {
     if !wraps.is_empty() {
         return Ok(Some(UpdatedInput {
-            command: wrap_sub_commands(wraps, original_command)?,
+            command: wrap_sub_commands(wraps, original_command, ask)?,
         }));
     }
     let SandboxInfo::Preset(names) = sandbox;
@@ -129,7 +125,7 @@ pub fn sandbox_updated_input(
         return Ok(None);
     }
     Ok(Some(UpdatedInput {
-        command: wrap_with_sandboxes(names, original_command)?,
+        command: wrap_with_exec(names, original_command, ask)?,
     }))
 }
 
@@ -143,6 +139,7 @@ pub fn sandbox_updated_input(
 fn wrap_sub_commands(
     wraps: &[SandboxWrap],
     original_command: &str,
+    ask: bool,
 ) -> Result<String, anyhow::Error> {
     let mut command = original_command.to_string();
     let mut ordered: Vec<&SandboxWrap> = wraps.iter().collect();
@@ -156,7 +153,7 @@ fn wrap_sub_commands(
                 wrap.range.end
             )
         })?;
-        let wrapped = wrap_with_sandbox(&wrap.preset, sub_command)?;
+        let wrapped = wrap_with_exec(std::slice::from_ref(&wrap.preset), sub_command, ask)?;
         command.replace_range(wrap.range.clone(), &wrapped);
     }
 
@@ -174,8 +171,19 @@ pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::
 /// Wrap `command` with `runok exec`, passing each preset in `presets` as a
 /// `--sandbox` flag.
 pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
+    wrap_with_exec(presets, command, false)
+}
+
+/// Wrap `command` with `runok exec`, optionally retaining `--ask`, and pass
+/// each preset in `presets` as a `--sandbox` flag.
+pub(crate) fn wrap_with_exec(
+    presets: &[String],
+    command: &str,
+    ask: bool,
+) -> Result<String, anyhow::Error> {
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+    let ask_flag = if ask { " --ask" } else { "" };
     let mut flags = String::new();
     for preset in presets {
         let quoted_preset = shlex::try_quote(preset)
@@ -185,7 +193,7 @@ pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, 
     let token = hook_origin_token();
     let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
     Ok(format!(
-        "{env_var}={token} runok exec{flags} -- {quoted_command}"
+        "{env_var}={token} runok exec{ask_flag}{flags} -- {quoted_command}"
     ))
 }
 
@@ -215,56 +223,6 @@ pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
 mod tests {
     use super::*;
     use rstest::rstest;
-
-    // --- build_ask_reason ---
-
-    #[rstest]
-    #[case::matched_rule_message_and_suggestion(
-        AskResponse {
-            message: Some("please confirm".to_string()),
-            fix_suggestion: Some("git push --force-with-lease".to_string()),
-            matched_rule: "git push -f *".to_string(),
-        },
-        "approval required: git push -f * (please confirm) [suggestion: git push --force-with-lease]",
-    )]
-    #[case::matched_rule_and_message_only(
-        AskResponse {
-            message: Some("please confirm".to_string()),
-            fix_suggestion: None,
-            matched_rule: "git push -f *".to_string(),
-        },
-        "approval required: git push -f * (please confirm)",
-    )]
-    #[case::matched_rule_and_suggestion_only(
-        AskResponse {
-            message: None,
-            fix_suggestion: Some("git push --force-with-lease".to_string()),
-            matched_rule: "git push -f *".to_string(),
-        },
-        "approval required: git push -f * [suggestion: git push --force-with-lease]",
-    )]
-    #[case::matched_rule_alone(
-        AskResponse {
-            message: None,
-            fix_suggestion: None,
-            matched_rule: "git push -f *".to_string(),
-        },
-        "approval required: git push -f *",
-    )]
-    #[case::empty_matched_rule_falls_back_to_default_policy(
-        AskResponse {
-            message: None,
-            fix_suggestion: None,
-            matched_rule: String::new(),
-        },
-        "approval required by default policy",
-    )]
-    fn build_ask_reason_assembles_the_reason_string(
-        #[case] ask: AskResponse,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(build_ask_reason(&ask), expected);
-    }
 
     // --- sandbox_updated_input ---
 
@@ -335,6 +293,34 @@ mod tests {
             }
             None => assert!(result.is_none()),
         }
+    }
+
+    #[rstest]
+    #[case::preset(
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
+        vec![],
+        "echo hello",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox restricted -- 'echo hello'"),
+    )]
+    #[case::subcommand_wrap(
+        SandboxInfo::Preset(vec![]),
+        vec![wrap(0..23, "readonly")],
+        "node fix.mjs > out.json | cat notes.txt",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox readonly -- \
+             'node fix.mjs > out.json' | cat notes.txt",
+        ),
+    )]
+    fn sandbox_updated_input_with_ask_places_flag_after_exec(
+        #[case] sandbox: SandboxInfo,
+        #[case] wraps: Vec<SandboxWrap>,
+        #[case] command: &str,
+        #[case] expected_command: Option<&str>,
+    ) {
+        let actual = sandbox_updated_input_with_mode(&sandbox, &wraps, command, true)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"))
+            .map(|updated| normalize_hook_origin_token(&updated.command));
+        assert_eq!(actual, expected_command.map(str::to_owned));
     }
 
     // --- wrap_with_sandbox quotes shell metacharacters ---
