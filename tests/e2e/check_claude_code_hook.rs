@@ -200,7 +200,7 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
     assert_eq!(
         normalize_hook_origin_token(rewritten_command),
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"
+        "runok exec --hook-origin <token> --sandbox restricted -- 'echo hello'"
     );
 }
 
@@ -212,12 +212,12 @@ fn hook_sandbox_allow_rewrites_command(hook_env: TestEnv) {
 // governs the redirect target.
 #[case::redirect_belongs_to_the_sandboxed_sub_command(
     "echo hello > out.json | git status",
-    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello > out.json' | git status"
+    "runok exec --hook-origin <token> --sandbox restricted -- 'echo hello > out.json' | git status"
 )]
 #[case::one_wrap_per_sandboxed_sub_command(
     "echo hello | grep -c foo",
-    "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello' | \
-     RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'grep -c foo'"
+    "runok exec --hook-origin <token> --sandbox restricted -- 'echo hello' | \
+     runok exec --hook-origin <token> --sandbox readonly -- 'grep -c foo'"
 )]
 fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(
     hook_env: TestEnv,
@@ -362,7 +362,7 @@ fn hook_bash_no_match_with_default_sandbox_omits_permission_decision(#[case] con
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'unknown-command --flag'"
+                    "command": "runok exec --hook-origin <token> --sandbox restricted -- 'unknown-command --flag'"
                 }
             }
         })
@@ -399,19 +399,27 @@ fn hook_pass_with_sandbox_wrapper_executes_successfully() {
         .as_str()
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
 
-    let mut tokens = shlex::split(wrapped_command)
+    let tokens = shlex::split(wrapped_command)
         .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
-    let env_assignment = tokens.remove(0);
-    let (env_key, env_value) = env_assignment
-        .split_once('=')
-        .unwrap_or_else(|| panic!("expected KEY=VALUE env assignment, got: {env_assignment}"));
-    assert_eq!(tokens.remove(0), "runok");
+    let normalized_tokens = shlex::split(&normalize_hook_origin_token(wrapped_command))
+        .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
+    assert_eq!(
+        normalized_tokens,
+        vec![
+            "runok",
+            "exec",
+            "--hook-origin",
+            "<token>",
+            "--sandbox",
+            "restricted",
+            "--",
+            "ls -la",
+        ]
+    );
 
-    env.command()
-        .env(env_key, env_value)
-        .args(tokens)
-        .assert()
-        .code(0);
+    let mut exec_args = tokens;
+    assert_eq!(exec_args.remove(0), "runok");
+    env.command().args(exec_args).assert().code(0);
 }
 
 // --- Hook event name ---

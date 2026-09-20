@@ -5,12 +5,6 @@ pub mod hook_adapter;
 pub mod hook_common;
 mod verbose;
 
-/// Environment variable a hook wrapper sets on the `runok exec` invocation it
-/// generates, so `exec` can tell that invocation apart from a user typing
-/// `--sandbox` directly. See the `hook_common::wrap_with_*` helpers and
-/// `ExecAdapter::hook_origin` for how it is produced and consumed.
-pub const HOOK_ORIGIN_ENV_VAR: &str = "RUNOK_HOOK_ORIGIN";
-
 use crate::audit::{
     AuditEntry, AuditMetadata, AuditWriter, CommandEvaluation, EvalType, SerializableAction,
     SerializableEnvVar, SerializablePipe, SerializableRedirect, SerializableRuleMatch,

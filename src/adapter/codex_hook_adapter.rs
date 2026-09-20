@@ -344,7 +344,7 @@ mod tests {
             Some("allow"),
             None,
             Some(crate::adapter::hook_common::UpdatedInput {
-                command: "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'".to_string(),
+                command: "runok exec --hook-origin <token> --sandbox restricted -- 'git status'".to_string(),
             }),
         )),
     )]
@@ -355,7 +355,7 @@ mod tests {
             Some("allow"),
             None,
             Some(crate::adapter::hook_common::UpdatedInput {
-                command: "RUNOK_HOOK_ORIGIN=<token> runok exec -- 'git status'".to_string(),
+                command: "runok exec --hook-origin <token> -- 'git status'".to_string(),
             }),
         )),
     )]
@@ -370,7 +370,7 @@ mod tests {
             Some("allow"),
             None,
             Some(crate::adapter::hook_common::UpdatedInput {
-                command: "RUNOK_HOOK_ORIGIN=<token> runok exec --ask -- 'git status'".to_string(),
+                command: "runok exec --ask --hook-origin <token> -- 'git status'".to_string(),
             }),
         )),
     )]
@@ -386,7 +386,7 @@ mod tests {
             None,
             Some(crate::adapter::hook_common::UpdatedInput {
                 command:
-                    "RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox restricted -- 'git status'"
+                    "runok exec --ask --hook-origin <token> --sandbox restricted -- 'git status'"
                         .to_string(),
             }),
         )),

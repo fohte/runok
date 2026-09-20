@@ -359,12 +359,12 @@ mod tests {
     #[case::allow_with_sandbox(
         Action::Allow,
         SandboxInfo::Preset(vec!["restricted".to_string()]),
-        make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("allow"), None, Some("runok exec --hook-origin <token> --sandbox restricted -- 'git status'")),
     )]
     #[case::allow_with_multiple_sandboxes(
         Action::Allow,
         SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
-        make_output(Some("allow"), None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
+        make_output(Some("allow"), None, Some("runok exec --hook-origin <token> --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     #[case::deny_with_message(
         Action::Deny(DenyResponse {
@@ -418,17 +418,17 @@ mod tests {
             matched_rule: String::new(),
         }),
         SandboxInfo::Preset(vec!["restricted".to_string()]),
-        make_output(Some("ask"), Some("please confirm"), Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+        make_output(Some("ask"), Some("please confirm"), Some("runok exec --hook-origin <token> --sandbox restricted -- 'git status'")),
     )]
     #[case::pass_with_sandbox(
         Action::Pass,
         SandboxInfo::Preset(vec!["restricted".to_string()]),
-        make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'")),
+        make_output(None, None, Some("runok exec --hook-origin <token> --sandbox restricted -- 'git status'")),
     )]
     #[case::pass_with_multiple_sandboxes(
         Action::Pass,
         SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
-        make_output(None, None, Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'")),
+        make_output(None, None, Some("runok exec --hook-origin <token> --sandbox preset_a --sandbox preset_b -- 'git status'")),
     )]
     fn build_action_output_maps_action_to_hook_output(
         #[case] action: Action,
@@ -554,7 +554,7 @@ mod tests {
             make_output(
                 expected_decision,
                 None,
-                Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'npm install'"),
+                Some("runok exec --hook-origin <token> --sandbox restricted -- 'npm install'"),
             ),
         );
     }
@@ -680,7 +680,7 @@ mod tests {
         let output = make_output(
             None,
             None,
-            Some("RUNOK_HOOK_ORIGIN=abc123 runok exec --sandbox restricted -- ls"),
+            Some("runok exec --hook-origin abc123 --sandbox restricted -- ls"),
         );
         let json_val: serde_json::Value =
             serde_json::to_value(&output).unwrap_or_else(|e| panic!("serialization failed: {e}"));
@@ -689,7 +689,7 @@ mod tests {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "updatedInput": {
-                    "command": "RUNOK_HOOK_ORIGIN=abc123 runok exec --sandbox restricted -- ls"
+                    "command": "runok exec --hook-origin abc123 --sandbox restricted -- ls"
                 }
             }
         });
