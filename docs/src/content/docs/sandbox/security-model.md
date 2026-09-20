@@ -118,6 +118,7 @@ On macOS, this is provided by the Seatbelt kernel extension. On Linux, it is pro
 
 ## Limitations
 
+- **Codex `write_stdin` input is outside runok's hook path** -- `write_stdin` sends input to a shell session that `exec_command` already started, so no runok hook runs for that input and no new runok decision or approval is made. The session keeps the sandbox established when it started. Interactive shells therefore remain governed by Codex's sandbox, while commands that runok wrapped with a sandbox preset remain governed by that preset.
 - **Read restriction is opt-in and path-based** — by default all files are readable; only paths explicitly listed in `fs.read.deny` are blocked
 - **Network granularity is binary** — network access is either fully allowed or fully blocked; per-host or per-port filtering is not supported
 - **macOS Seatbelt is deprecated** — Apple has deprecated `sandbox-exec` but provides no replacement. It continues to work and is used by Apple's own tools
