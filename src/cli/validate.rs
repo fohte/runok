@@ -109,6 +109,11 @@ const EXEC_FLAGS: &[FlagDef] = &[
         takes_value: true,
     },
     FlagDef {
+        name: "--ask",
+        short: None,
+        takes_value: false,
+    },
+    FlagDef {
         name: "--verbose",
         short: None,
         takes_value: false,

@@ -84,10 +84,7 @@ pub fn build_deny_reason(deny: &DenyResponse) -> String {
 }
 
 /// Build the same shape of reason string as `build_deny_reason`, but for an
-/// `AskResponse`, with an "approval required" prefix instead of "denied" --
-/// Codex's `PreToolUse` hook (see `codex_hook_adapter::build_ask_deny_reason`)
-/// needs this distinct wording so the model can tell "forbidden" apart from
-/// "needs a human's judgment" and react differently.
+/// `AskResponse`, with an "approval required" prefix instead of "denied".
 pub fn build_ask_reason(ask: &AskResponse) -> String {
     build_reason(
         "approval required",
@@ -133,6 +130,20 @@ pub fn sandbox_updated_input(
     }))
 }
 
+/// Rewrite a Codex command so Codex's exec policy re-evaluates the command
+/// through runok. The wrapper carries the resolved sandbox presets because
+/// Codex's allow decision bypasses its own sandbox.
+pub fn codex_updated_input(
+    ask: bool,
+    sandbox: &SandboxInfo,
+    original_command: &str,
+) -> Result<UpdatedInput, anyhow::Error> {
+    let SandboxInfo::Preset(presets) = sandbox;
+    Ok(UpdatedInput {
+        command: wrap_with_runok_exec(ask, presets, original_command)?,
+    })
+}
+
 /// Replace each sub-command that needs a sandbox with a `runok exec`
 /// invocation carrying that sub-command as one quoted argument, leaving
 /// every byte between them untouched: the operators that join the
@@ -174,6 +185,24 @@ pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::
 /// Wrap `command` with `runok exec`, passing each preset in `presets` as a
 /// `--sandbox` flag.
 pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
+    wrap_with_runok_exec_inner(false, presets, command, true)
+}
+
+/// Build a `runok exec` invocation for a Codex `updatedInput` rewrite.
+fn wrap_with_runok_exec(
+    ask: bool,
+    presets: &[String],
+    command: &str,
+) -> Result<String, anyhow::Error> {
+    wrap_with_runok_exec_inner(ask, presets, command, false)
+}
+
+fn wrap_with_runok_exec_inner(
+    ask: bool,
+    presets: &[String],
+    command: &str,
+    include_hook_origin: bool,
+) -> Result<String, anyhow::Error> {
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
     let mut flags = String::new();
@@ -182,11 +211,15 @@ pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, 
             .map_err(|_| anyhow::anyhow!("sandbox preset name contains invalid characters"))?;
         flags.push_str(&format!(" --sandbox {quoted_preset}"));
     }
-    let token = hook_origin_token();
-    let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
-    Ok(format!(
-        "{env_var}={token} runok exec{flags} -- {quoted_command}"
-    ))
+    let ask_flag = if ask { " --ask" } else { "" };
+    let invocation = format!("runok exec{ask_flag}{flags} -- {quoted_command}");
+    if include_hook_origin {
+        let token = hook_origin_token();
+        let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
+        Ok(format!("{env_var}={token} {invocation}"))
+    } else {
+        Ok(invocation)
+    }
 }
 
 /// A per-call, non-cryptographic token (process id + current time) --
@@ -335,6 +368,32 @@ mod tests {
             }
             None => assert!(result.is_none()),
         }
+    }
+
+    // --- codex_updated_input ---
+
+    #[rstest]
+    #[case::allow_without_sandbox(false, SandboxInfo::Preset(vec![]), "runok exec -- 'git status'")]
+    #[case::ask_without_sandbox(true, SandboxInfo::Preset(vec![]), "runok exec --ask -- 'git push'")]
+    #[case::allow_with_sandbox(
+        false,
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
+        "runok exec --sandbox restricted -- 'git status'"
+    )]
+    #[case::ask_with_sandbox(
+        true,
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
+        "runok exec --ask --sandbox restricted -- 'git push'"
+    )]
+    fn codex_updated_input_routes_through_runok_exec(
+        #[case] ask: bool,
+        #[case] sandbox: SandboxInfo,
+        #[case] expected: &str,
+    ) {
+        let updated =
+            codex_updated_input(ask, &sandbox, if ask { "git push" } else { "git status" })
+                .unwrap_or_else(|e| panic!("unexpected error: {e}"));
+        assert_eq!(updated.command, expected);
     }
 
     // --- wrap_with_sandbox quotes shell metacharacters ---

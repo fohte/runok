@@ -80,9 +80,7 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ### `runok hook --agent codex` integrates with Codex CLI's hook protocol ([#517](https://github.com/fohte/runok/pull/517))
 
-`runok hook` now accepts `--agent codex` alongside the existing `--agent claude-code`, dispatching Codex CLI's `PreToolUse` and `PermissionRequest` hook events. The mapping mirrors `--agent claude-code` for `deny`/`allow`, with one Codex-specific constraint: Codex rejects `updatedInput` unless it is paired with an explicit `permissionDecision: "allow"`, so a `pass` decision never emits `updatedInput` under `--agent codex`, even when `defaults.sandbox` is configured -- the sandbox wrap only reaches Codex through an explicit `allow`. `PermissionRequest` has no `updatedInput` support at all, so it always reports a plain `{ behavior: "allow" }` or `{ behavior: "deny", message }`, ignoring sandbox presets entirely.
-
-`ask` is handled differently by the two events, since Codex's `PreToolUse` hook has no way to open an approval prompt mid-call: it always reports `permissionDecision: "deny"`, with the reason text explaining that human judgment is needed (not a hard rejection) and instructing the model to stop, report which command needs approval and why, and let the delegator or the user decide, rather than retrying -- this session has no way to re-run the call with elevated permission. `PermissionRequest` is unchanged -- an `ask` decision writes nothing, deferring to Codex's own approval UI. See [`runok hook`](/cli/hook/#codex---agent-codex) for the full decision mapping.
+`runok hook` now accepts `--agent codex` alongside the existing `--agent claude-code`, dispatching Codex CLI's `PreToolUse` and `PermissionRequest` hook events. Codex requires `updatedInput` to be paired with an explicit `permissionDecision: "allow"`, so the adapter routes explicit `allow` and `ask` decisions through `runok exec` and `runok exec --ask`; `pass` emits nothing and remains under Codex's own permission flow. `PermissionRequest` has no `updatedInput` support at all, so it reports a plain `{ behavior: "allow" }` or `{ behavior: "deny", message }`, ignoring sandbox presets entirely. See [`runok hook`](/cli/hook/#codex---agent-codex) for the full decision mapping.
 
 ### `runok init` registers the Codex hook automatically ([#520](https://github.com/fohte/runok/pull/520))
 
@@ -307,6 +305,12 @@ rules:
 `definitions.paths` exposes the same data as the existing `paths` context variable; `definitions.vars` is new and lists every declared value for each `definitions.vars` entry, unlike `vars`, which only holds the single value a matched `<var:name>` placeholder captured. See [When Clauses -> `definitions`](/rule-evaluation/when-clause/#definitions--raw-definitions-data) and [When Clauses -> Glob matching](/rule-evaluation/when-clause/#glob-matching) for details.
 
 ## Bug Fixes
+
+### Codex `ask` decisions now reach the approval UI (TODO(pr-link))
+
+Codex `PreToolUse` hooks previously had no path from runok's `ask` result to Codex's human approval UI, so the adapter had to deny the command. The hook now rewrites `ask` decisions to `runok exec --ask`; the automatically installed Codex exec policy marks that prefix as `prompt`, and approving it lets runok execute the original command. `deny` still stops before execution, while `allow` runs without a second approval.
+
+Commands routed through `runok exec` use runok's sandbox presets. Codex's trusted `allow` exec policy can bypass its own workspace sandbox, so the runok preset is the security boundary for this integration. See [Codex hook integration](/cli/hook/#codex---agent-codex) and [Security Model](/sandbox/security-model/#codex-execution-path).
 
 ### `runok init` no longer overwrites an existing `runok.yml` with migrated Claude Code rules ([#522](https://github.com/fohte/runok/pull/522))
 

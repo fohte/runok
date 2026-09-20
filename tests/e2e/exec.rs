@@ -57,6 +57,23 @@ fn exec_ask_treated_as_deny() {
 }
 
 #[rstest]
+fn exec_ask_runs_when_flag_is_set() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - ask: 'echo *'
+    "});
+    let output = env
+        .command()
+        .args(["exec", "--ask", "--", "echo", "approved"])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
+    assert_eq!(
+        (output.status.code(), output.stdout),
+        (Some(0), b"approved\n".to_vec())
+    );
+}
+
+#[rstest]
 fn exec_no_match_uses_default_deny() {
     let env = TestEnv::new(indoc! {"
         rules:
