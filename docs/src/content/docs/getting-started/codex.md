@@ -36,7 +36,7 @@ See [Configuration](/configuration/schema/) for the full `runok.yml` reference.
 
 After `runok init` writes the changes, close any existing Codex session and start a new one before verifying the integration. Codex loads its exec policy when a session starts, so an already-running session does not see newly added `runok.rules` entries.
 
-## Step 2: Configure the Codex hooks
+## Manual hook configuration (optional)
 
 `runok init --scope user` registers both Codex events automatically. If you prefer to configure them manually, add these entries to `$CODEX_HOME/hooks.json` (or `~/.codex/hooks.json` when `CODEX_HOME` is unset). Preserve your existing hooks when merging this configuration:
 
@@ -78,7 +78,7 @@ prefix_rule(pattern = ["runok", "exec", "--ask"], decision = "prompt")
 
 If Codex asks for permission, approve the newly registered hook. When configuring these files manually, also start a new Codex session after saving them.
 
-## Step 3: Verify the integration
+## Step 2: Verify the integration
 
 Start Codex in a directory that uses the configuration above:
 
@@ -96,6 +96,8 @@ The hook applies to Codex `Bash` tool calls. File edits and other tools remain u
 
 ## Sandbox execution
 
+Commands routed through Codex's trusted `runok exec` path can bypass Codex's workspace sandbox. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer. Add a preset to every rule that needs OS-level restrictions.
+
 To add OS-level restrictions, attach a [sandbox preset](/sandbox/overview/) to an `allow` rule:
 
 ```yaml
@@ -103,7 +105,8 @@ definitions:
   sandbox:
     restricted:
       fs:
-        writable: [./tmp]
+        write:
+          allow: [./tmp]
       network:
         allow: false
 

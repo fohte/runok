@@ -141,6 +141,7 @@ Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any
 ## Related
 
 - [Claude Code Integration](/getting-started/claude-code/) -- Full hook setup guide.
+- [Codex CLI Integration](/getting-started/codex/) -- Full Codex hook setup guide.
 - [`runok check`](/cli/check/) -- Read-only rule evaluation for humans, CI, and scripts.
 - [`runok migrate`](/cli/migrate/) -- Rewrites deprecated config and settings.json entries to the current format.
 - [`runok init`](/cli/init/) -- Registers the hook automatically.

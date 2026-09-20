@@ -73,4 +73,5 @@ runok init --scope project
 
 - [Quick Start](/getting-started/quickstart/) — Getting started with runok.
 - [Claude Code Integration](/getting-started/claude-code/) — Manual hook setup and sandbox configuration.
+- [Codex CLI Integration](/getting-started/codex/) — Set up runok as a Codex CLI hook.
 - [Configuration](/configuration/schema/) — Full configuration reference.
