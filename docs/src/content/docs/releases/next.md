@@ -78,7 +78,7 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ## New Features
 
-### `runok exec --ask` supports execution after an outer approval (TODO(pr-link))
+### `runok exec --ask` supports execution after an outer approval ([#526](https://github.com/fohte/runok/pull/526))
 
 `runok exec --ask` executes commands whose runok rule result is `ask`, while `deny` and `pass` remain blocked. `runok init --scope user` installs the Codex exec policy rules that allow `runok exec` and prompt for `runok exec --ask`, preparing integrations to request approval before executing the wrapper. See [`runok exec`](/cli/exec/) and [`runok init`](/cli/init/#what-the-wizard-does).
 
