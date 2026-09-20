@@ -267,7 +267,7 @@ The audit log used to record only that runok answered `ask` for a command -- not
   "outcome": "approved",
   "tool_use_id": "toolu_01AbCdEfGh",
   "command": "terraform apply",
-  "executed_command": "runok exec --sandbox restricted -- 'terraform apply'"
+  "executed_command": "runok exec --hook-origin <token> --sandbox restricted -- 'terraform apply'"
 }
 ```
 
@@ -341,7 +341,11 @@ For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `runo
 
 ### Codex hook wrappers now reach the registered exec policy (TODO(pr-link))
 
-Codex does not evaluate exec policies for shell commands prefixed with an environment-variable assignment, so the hook-generated wrapper could bypass the `runok exec` and `runok exec --ask` rules. Hook wrappers now pass the marker as the hidden `--hook-origin <token>` flag while keeping `--ask` immediately after `exec`, so `ask` decisions reach Codex's approval UI.
+Codex does not evaluate exec policies for shell commands prefixed with an environment-variable assignment, so the hook-generated wrapper could bypass the `runok exec` and `runok exec --ask` rules. Hook wrappers now pass the hook-origin marker as the hidden `--hook-origin <token>` flag while keeping `--ask` immediately after `exec`, so `ask` decisions reach Codex's approval UI:
+
+```
+runok exec --ask --hook-origin <token> -- '<command>'
+```
 
 ### A compound command matching a single sandboxed preset no longer loses its sandbox or forces an `ask` prompt ([#506](https://github.com/fohte/runok/pull/506))
 

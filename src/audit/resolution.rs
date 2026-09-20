@@ -198,25 +198,40 @@ fn find_unresolved_by_session<'a>(
 }
 
 /// The executed command matches the entry either verbatim or after
-/// unwrapping the `runok exec --sandbox <preset> -- <command>` rewrite that
-/// the PreToolUse hook applies via `updatedInput`.
+/// unwrapping the hook's `runok exec --hook-origin ... -- <command>` rewrite
+/// that the PreToolUse hook applies via `updatedInput`.
 fn command_matches(entry: &AuditEntry, executed: &str) -> bool {
     if entry.command == executed {
         return true;
     }
-    unwrap_sandbox_exec(executed).is_some_and(|inner| inner == entry.command)
+    unwrap_hook_exec(executed).is_some_and(|inner| inner == entry.command)
 }
 
-fn unwrap_sandbox_exec(executed: &str) -> Option<String> {
+fn unwrap_hook_exec(executed: &str) -> Option<String> {
     let tokens = shlex::split(executed)?;
-    match tokens.as_slice() {
-        [runok, exec, flag, _preset, sep, command]
-            if runok == "runok" && exec == "exec" && flag == "--sandbox" && sep == "--" =>
-        {
-            Some(command.clone())
-        }
-        _ => None,
+    let mut tokens = tokens.into_iter();
+    if tokens.next()?.as_str() != "runok" || tokens.next()?.as_str() != "exec" {
+        return None;
     }
+
+    let mut has_hook_origin = false;
+    loop {
+        match tokens.next()?.as_str() {
+            "--ask" => {}
+            "--hook-origin" => {
+                tokens.next()?;
+                has_hook_origin = true;
+            }
+            "--sandbox" => {
+                tokens.next()?;
+            }
+            "--" => break,
+            _ => return None,
+        }
+    }
+
+    let command = tokens.next()?;
+    (has_hook_origin && tokens.next().is_none()).then_some(command)
 }
 
 #[cfg(test)]
@@ -311,7 +326,9 @@ mod tests {
     // command differs from the original and is recorded separately.
     #[rstest]
     #[case::verbatim("terraform apply")]
-    #[case::sandbox_wrapped("runok exec --sandbox restricted -- 'terraform apply'")]
+    #[case::sandbox_wrapped(
+        "runok exec --hook-origin token --sandbox restricted -- 'terraform apply'"
+    )]
     fn approval_with_matching_tool_use_id_writes_resolution(
         audit_dir: TempDir,
         #[case] executed_command: &str,
@@ -433,7 +450,9 @@ mod tests {
 
     #[rstest]
     #[case::verbatim("terraform apply")]
-    #[case::sandbox_wrapped("runok exec --sandbox restricted -- 'terraform apply'")]
+    #[case::sandbox_wrapped(
+        "runok exec --hook-origin token --sandbox restricted -- 'terraform apply'"
+    )]
     fn approval_without_tool_use_id_falls_back_to_session_and_command(
         audit_dir: TempDir,
         #[case] executed_command: &str,
@@ -537,21 +556,31 @@ mod tests {
         assert_eq!(is_approved(&entry, &resolutions), expected);
     }
 
-    // --- unwrap_sandbox_exec ---
+    // --- unwrap_hook_exec ---
 
     #[rstest]
-    #[case::wrapped(
-        "runok exec --sandbox restricted -- 'terraform apply'",
+    #[case::wrapped_with_sandbox(
+        "runok exec --hook-origin token --sandbox restricted -- 'terraform apply'",
+        Some("terraform apply")
+    )]
+    #[case::wrapped_without_sandbox(
+        "runok exec --hook-origin token -- 'terraform apply'",
+        Some("terraform apply")
+    )]
+    #[case::wrapped_ask(
+        "runok exec --ask --hook-origin token -- 'terraform apply'",
         Some("terraform apply")
     )]
     #[case::plain_command("terraform apply", None)]
     #[case::different_binary("sudo exec --sandbox x -- ls", None)]
+    #[case::missing_hook_origin("runok exec --sandbox restricted -- 'terraform apply'", None)]
     #[case::missing_separator("runok exec --sandbox restricted 'terraform apply'", None)]
     #[case::extra_tokens("runok exec --sandbox restricted -- terraform apply", None)]
-    fn unwrap_sandbox_exec_extracts_inner_command(
+    #[case::unknown_flag("runok exec --hook-origin token --unknown -- 'terraform apply'", None)]
+    fn unwrap_hook_exec_extracts_inner_command(
         #[case] executed: &str,
         #[case] expected: Option<&str>,
     ) {
-        assert_eq!(unwrap_sandbox_exec(executed), expected.map(str::to_owned),);
+        assert_eq!(unwrap_hook_exec(executed), expected.map(str::to_owned),);
     }
 }

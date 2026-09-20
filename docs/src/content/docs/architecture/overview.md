@@ -64,7 +64,7 @@ If a matching rule specifies a `sandbox` preset name, the adapter resolves it to
 
 1. Look up the preset in `definitions.sandbox`
 2. Resolve CWD-relative paths to absolute paths
-3. For compound commands: the Claude Code hook replaces each sub-command that needs a sandbox with its own `runok exec --sandbox <preset> --` invocation, wrapping that sub-command's own text (including its redirects) rather than the whole input, isolating most sub-commands individually. `runok exec` and `runok check`, and any sub-command the hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
+3. For compound commands: the Claude Code hook replaces each sub-command that needs a sandbox with its own `runok exec --hook-origin <token> --sandbox <preset> --` invocation, wrapping that sub-command's own text (including its redirects) rather than the whole input, isolating most sub-commands individually. `runok exec` and `runok check`, and any sub-command the hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
    - `write.allow` paths: intersection (more restrictive)
    - `write.deny` paths: union (all denied paths combined)
    - `read.deny` paths: union (all denied paths combined)
@@ -106,4 +106,4 @@ runok supports three adapter types that share the same evaluation pipeline but d
 
 - **Exec** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions.
 - **Check** (`runok check`): Performs dry-run evaluation and outputs the result as JSON or text. Always exits with code 0.
-- **Hook**: Integrates with LLM agent hook systems (e.g., [Claude Code's `PreToolUse` hook](/getting-started/claude-code/)). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.
+- **Hook**: Integrates with LLM agent hook systems (e.g., [Claude Code's `PreToolUse` hook](/getting-started/claude-code/)). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --hook-origin <token>` and optional `--sandbox` flags.

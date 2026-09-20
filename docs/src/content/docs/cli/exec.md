@@ -39,6 +39,11 @@ Execute a command resolved as `ask` after an outer approval flow has approved it
 
 This must be the first option after `exec` so the Codex `prompt` policy rule matches it.
 
+Hook-generated wrappers add the hidden `--hook-origin <token>` marker after
+`--ask` when present. The marker lets `defaults.action: pass` defer to the
+agent's permission flow under the selected sandbox; its value is not verified,
+and it does not change `deny` or `ask` decisions.
+
 ### `--verbose`
 
 Output detailed rule matching information to stderr.

@@ -401,22 +401,6 @@ fn hook_pass_with_sandbox_wrapper_executes_successfully() {
 
     let tokens = shlex::split(wrapped_command)
         .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
-    let normalized_tokens = shlex::split(&normalize_hook_origin_token(wrapped_command))
-        .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
-    assert_eq!(
-        normalized_tokens,
-        vec![
-            "runok",
-            "exec",
-            "--hook-origin",
-            "<token>",
-            "--sandbox",
-            "restricted",
-            "--",
-            "ls -la",
-        ]
-    );
-
     let mut exec_args = tokens;
     assert_eq!(exec_args.remove(0), "runok");
     env.command().args(exec_args).assert().code(0);

@@ -227,37 +227,21 @@ fn exec_ask_still_rejects_with_hook_origin() {
 }
 
 #[rstest]
-fn exec_pass_with_sandbox_does_not_leak_hook_origin_to_child_env() {
-    // `--hook-origin` is a CLI flag, so it must not propagate into the spawned
-    // command's environment or grant hook-origin trust to a nested `runok
-    // exec` that command runs.
+fn exec_pass_hook_origin_is_not_inherited_by_nested_runok() {
+    // A CLI flag must not grant hook-origin trust to a nested `runok exec`
+    // that the wrapped command runs.
     let env = TestEnv::new(indoc! {"
         defaults:
           action: pass
-          sandbox: restricted
-        definitions:
-          sandbox:
-            restricted:
-              fs:
-                writable: [./tmp]
     "});
-    let output = env
-        .command()
-        .args([
-            "exec",
-            "--hook-origin",
-            "test-token",
-            "--sandbox",
-            "restricted",
-            "--",
-            "printenv",
-            "RUNOK_HOOK_ORIGIN",
-        ])
-        .output()
-        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
-
-    // `printenv NAME` prints nothing and exits 1 when `NAME` is unset.
-    assert_eq!((output.status.code(), output.stdout), (Some(1), Vec::new()),);
+    let nested_runok = env.command().get_program().to_os_string();
+    let mut command = env.command();
+    command
+        .args(["exec", "--hook-origin", "test-token", "--"])
+        .arg(nested_runok)
+        .args(["exec", "--", "ls"])
+        .assert()
+        .code(3);
 }
 
 #[rstest]
