@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::hook_common::{
     BashToolInput, HookOutput, UpdatedInput, build_deny_reason, build_output,
-    sandbox_updated_input, sandbox_updated_input_with_ask, wrap_with_sandboxes,
-    wrap_with_sandboxes_and_ask,
+    sandbox_updated_input_with_mode, wrap_with_exec,
 };
 use crate::adapter::{ActionResult, Endpoint};
 use crate::audit::AuditMetadata;
@@ -72,12 +71,9 @@ impl CodexHookAdapter {
                 Some(build_deny_reason(deny_response)),
                 None,
             ))),
-            Action::Allow => {
-                let updated = self.build_exec_updated_input(result, &bash_input.command, false)?;
-                Ok(Some(build_output(Some("allow"), None, Some(updated))))
-            }
-            Action::Ask(_) => {
-                let updated = self.build_exec_updated_input(result, &bash_input.command, true)?;
+            Action::Allow | Action::Ask(_) => {
+                let ask = matches!(&result.action, Action::Ask(_));
+                let updated = self.build_exec_updated_input(result, &bash_input.command, ask)?;
                 Ok(Some(build_output(Some("allow"), None, Some(updated))))
             }
             Action::Pass => Ok(None),
@@ -90,24 +86,17 @@ impl CodexHookAdapter {
         original_command: &str,
         ask: bool,
     ) -> Result<UpdatedInput, anyhow::Error> {
-        let sandboxed = if ask {
-            sandbox_updated_input_with_ask(
-                &result.sandbox,
-                &result.sandbox_wraps,
-                original_command,
-            )?
-        } else {
-            sandbox_updated_input(&result.sandbox, &result.sandbox_wraps, original_command)?
-        };
+        let sandboxed = sandbox_updated_input_with_mode(
+            &result.sandbox,
+            &result.sandbox_wraps,
+            original_command,
+            ask,
+        )?;
         if let Some(updated) = sandboxed {
             return Ok(updated);
         }
 
-        let command = if ask {
-            wrap_with_sandboxes_and_ask(&[], original_command)?
-        } else {
-            wrap_with_sandboxes(&[], original_command)?
-        };
+        let command = wrap_with_exec(&[], original_command, ask)?;
         Ok(UpdatedInput { command })
     }
 
