@@ -50,7 +50,7 @@ However, specific paths can be denied for reading via `fs.read.deny`. This is us
 
 ### Codex execution path
 
-When runok is registered as a Codex hook, `allow` and `ask` decisions rewrite the Bash command through [`runok exec`](/cli/exec/). `runok init` installs Codex exec policy rules that allow `runok exec` and prompt for `runok exec --ask`, so the final command is evaluated by runok before it runs.
+When a Codex integration routes a Bash command through [`runok exec`](/cli/exec/), Codex's exec policy treats `runok exec` as trusted and `runok exec --ask` as a prompt. `runok init` installs these policy rules so the final command can be evaluated by runok before it runs.
 
 Codex's `allow` exec policy is a trusted execution path and can bypass Codex's normal workspace sandbox. Commands routed through this integration therefore rely on the sandbox preset selected by runok. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer.
 

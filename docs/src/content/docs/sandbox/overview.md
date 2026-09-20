@@ -141,12 +141,6 @@ rules:
 `defaults.sandbox` can be combined with [`defaults.action: pass`](/configuration/schema/#defaultsaction) -- including the unset (default) case, which also resolves to `pass`. When combined, the Claude Code hook response omits `permissionDecision` entirely but still includes `updatedInput` with the command rewritten to run under the sandbox preset: Claude Code's own permission flow decides against the original command, while the sandbox still applies to whatever actually runs.
 :::
 
-## Codex hook integration
-
-For Codex, `allow` and `ask` decisions are rewritten to `runok exec` and `runok exec --ask` so the command is evaluated again by runok after Codex's exec policy has made its decision. A matching sandbox preset is passed as one or more `--sandbox` flags; for compound commands, `runok exec` applies the merged policy to the whole command.
-
-Codex's `allow` exec policy can bypass its normal workspace sandbox. The runok sandbox preset is therefore the security boundary for commands routed through this integration. `runok init --scope user` installs the required Codex policy rules automatically when a Codex config directory is present.
-
 ## Sandbox merging for compound commands
 
 The Claude Code hook applies a sandbox to a compound command like `cmd1 && cmd2` sub-command by sub-command: each sub-command that matches a sandboxed rule runs under exactly the preset its own rule named -- runok replaces that sub-command's own text (its `KEY=VALUE` env-assignment prefix and its own redirects included) with `runok exec --sandbox <preset> -- '<sub-command>'`, shell-quoted, and returns the rewritten string via `updatedInput`. Only the pipe, `&&`, `||`, and `;` that join the sub-commands together are left outside every sandbox. A sub-command whose rule names no sandbox runs unsandboxed, even next to one that does.

@@ -64,7 +64,7 @@ If a matching rule specifies a `sandbox` preset name, the adapter resolves it to
 
 1. Look up the preset in `definitions.sandbox`
 2. Resolve CWD-relative paths to absolute paths
-3. For compound commands: the Claude Code hook replaces each sub-command that needs a sandbox with its own `runok exec --sandbox <preset> --` invocation, wrapping that sub-command's own text (including its redirects) rather than the whole input, isolating most sub-commands individually. The Codex hook routes the whole rewritten command through `runok exec`; `runok exec` and `runok check`, and any sub-command the Claude Code hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
+3. For compound commands: the Claude Code hook replaces each sub-command that needs a sandbox with its own `runok exec --sandbox <preset> --` invocation, wrapping that sub-command's own text (including its redirects) rather than the whole input, isolating most sub-commands individually. `runok exec` and `runok check`, and any sub-command the hook can't isolate this way, instead merge all matched policies using a strictest-wins strategy:
    - `write.allow` paths: intersection (more restrictive)
    - `write.deny` paths: union (all denied paths combined)
    - `read.deny` paths: union (all denied paths combined)
@@ -104,6 +104,6 @@ The source code ([`src/`](https://github.com/fohte/runok/tree/main/src)) is orga
 
 runok supports three adapter types that share the same evaluation pipeline but differ in how they handle the result:
 
-- **Exec** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions unless the internal `--ask` flag is set.
+- **Exec** (`runok exec`): Executes allowed commands directly (or via sandbox). Exits with code 3 for denied/ask actions.
 - **Check** (`runok check`): Performs dry-run evaluation and outputs the result as JSON or text. Always exits with code 0.
-- **Hook**: Integrates with LLM agent hook systems (e.g., [Claude Code's `PreToolUse` hook](/getting-started/claude-code/)). Evaluates only `Bash` tool invocations and routes Codex `allow`/`ask` decisions through `runok exec` / `runok exec --ask`.
+- **Hook**: Integrates with LLM agent hook systems (e.g., [Claude Code's `PreToolUse` hook](/getting-started/claude-code/)). Evaluates only `Bash` tool invocations and wraps allowed commands with `runok exec --sandbox`.

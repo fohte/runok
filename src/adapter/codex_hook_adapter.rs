@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::hook_common::{
-    BashToolInput, HookOutput, build_deny_reason, build_output, codex_updated_input,
+    BashToolInput, HookOutput, build_ask_reason, build_deny_reason, build_output,
+    sandbox_updated_input,
 };
 use crate::adapter::{ActionResult, Endpoint};
 use crate::audit::AuditMetadata;
 use crate::config::Defaults;
-use crate::rules::rule_engine::Action;
+use crate::rules::rule_engine::{Action, AskResponse};
 
 /// Codex `PreToolUse`/`PermissionRequest` hook input (stdin JSON). Both events
 /// share this shape; PreToolUse additionally carries `tool_use_id`, which
@@ -55,8 +56,19 @@ impl CodexHookAdapter {
         Ok(serde_json::from_value(self.input.tool_input.clone())?)
     }
 
-    /// Route allow and ask decisions through `runok exec` so Codex evaluates
-    /// the rewritten command with the corresponding exec policy rule.
+    /// Codex requires `updatedInput` to be paired with an explicit
+    /// `permissionDecision: allow` -- so Pass and a sandbox-less allow both
+    /// write nothing here, deferring to Codex's own approval flow.
+    ///
+    /// Ask always maps to `deny` instead of deferring: Codex's `PreToolUse`
+    /// hook has no way to open an approval prompt mid-call (unlike
+    /// `PermissionRequest`, see `build_permission_request_output`), and
+    /// `permissionDecision` is the only value that actually stops the tool
+    /// from running -- silence or an annotation lets it execute regardless
+    /// of `permission_mode`. The reason text carries the "ask" semantics
+    /// (why human judgment is needed) and tells the model to stop and report
+    /// back instead of retrying, since this session has no way to re-run the
+    /// call with elevated permission.
     fn build_pre_tool_use_output(
         &self,
         result: &ActionResult,
@@ -69,13 +81,18 @@ impl CodexHookAdapter {
                 None,
             ))),
             Action::Allow => {
-                let updated = codex_updated_input(false, &result.sandbox, &bash_input.command)?;
-                Ok(Some(build_output(Some("allow"), None, Some(updated))))
+                let updated = sandbox_updated_input(
+                    &result.sandbox,
+                    &result.sandbox_wraps,
+                    &bash_input.command,
+                )?;
+                Ok(updated.map(|u| build_output(Some("allow"), None, Some(u))))
             }
-            Action::Ask(_) => {
-                let updated = codex_updated_input(true, &result.sandbox, &bash_input.command)?;
-                Ok(Some(build_output(Some("allow"), None, Some(updated))))
-            }
+            Action::Ask(ask_response) => Ok(Some(build_output(
+                Some("deny"),
+                Some(build_ask_deny_reason(ask_response)),
+                None,
+            ))),
             Action::Pass => Ok(None),
         }
     }
@@ -95,8 +112,9 @@ impl CodexHookAdapter {
                 behavior: "allow".to_string(),
                 message: None,
             }),
-            // `build_pre_tool_use_output` routes `Ask` through `runok exec
-            // --ask`, so this hook does not make a second decision.
+            // `build_pre_tool_use_output` runs first for the same tool call and
+            // already reports `Ask` as `deny`, so Codex never reaches
+            // PermissionRequest with an unresolved `Ask`.
             Action::Ask(_) | Action::Pass => None,
         };
         Ok(decision.map(|decision| PermissionRequestOutput {
@@ -106,6 +124,25 @@ impl CodexHookAdapter {
             },
         }))
     }
+}
+
+/// Build the `permissionDecisionReason` for an Ask action reported through
+/// `PreToolUse`'s `deny`. Codex treats an empty (post-trim) reason as an
+/// invalid `deny` and silently continues instead of blocking (see
+/// `codex-rs/core/src/hook_runtime.rs`'s `block_reason` handling), so the
+/// fixed trailing instruction is unconditional -- it's the only part
+/// guaranteed to be there when `ask_response` carries neither a message nor
+/// a fix suggestion. The instruction tells the model to stop rather than
+/// retry: this session has no mechanism to re-run a call with elevated
+/// permission, so retrying just repeats the same deny.
+fn build_ask_deny_reason(ask_response: &AskResponse) -> String {
+    let mut reason = build_ask_reason(ask_response);
+    reason.push_str(
+        ". This rule requires a human decision and this session has no approval prompt. Stop, \
+         report which command needs approval and why, and let the delegator or the user decide. \
+         Do not retry this command and do not work around the rule.",
+    );
+    reason
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -323,21 +360,11 @@ mod tests {
             Some("allow"),
             None,
             Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --sandbox restricted -- 'git status'".to_string(),
+                command: "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'".to_string(),
             }),
         )),
     )]
-    #[case::allow_without_sandbox(
-        Action::Allow,
-        SandboxInfo::Preset(vec![]),
-        Some(build_output(
-            Some("allow"),
-            None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec -- 'git status'".to_string(),
-            }),
-        )),
-    )]
+    #[case::allow_without_sandbox(Action::Allow, SandboxInfo::Preset(vec![]), None)]
     #[case::ask_with_message_and_fix_suggestion(
         Action::Ask(AskResponse {
             message: Some("please confirm".to_string()),
@@ -346,11 +373,16 @@ mod tests {
         }),
         SandboxInfo::Preset(vec![]),
         Some(build_output(
-            Some("allow"),
+            Some("deny"),
+            Some(
+                "approval required: git push -f * (please confirm) [suggestion: git push \
+                 --force-with-lease]. This rule requires a human decision and this session has \
+                 no approval prompt. Stop, report which command needs approval and why, and let \
+                 the delegator or the user decide. Do not retry this command and do not work \
+                 around the rule."
+                    .to_string(),
+            ),
             None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --ask -- 'git status'".to_string(),
-            }),
         )),
     )]
     #[case::ask_with_message_only(
@@ -361,11 +393,15 @@ mod tests {
         }),
         SandboxInfo::Preset(vec![]),
         Some(build_output(
-            Some("allow"),
+            Some("deny"),
+            Some(
+                "approval required: git push -f * (please confirm). This rule requires a human \
+                 decision and this session has no approval prompt. Stop, report which command \
+                 needs approval and why, and let the delegator or the user decide. Do not retry \
+                 this command and do not work around the rule."
+                    .to_string(),
+            ),
             None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --ask -- 'git status'".to_string(),
-            }),
         )),
     )]
     #[case::ask_with_fix_suggestion_only(
@@ -376,11 +412,15 @@ mod tests {
         }),
         SandboxInfo::Preset(vec![]),
         Some(build_output(
-            Some("allow"),
+            Some("deny"),
+            Some(
+                "approval required: git push -f * [suggestion: git push --force-with-lease]. \
+                 This rule requires a human decision and this session has no approval prompt. \
+                 Stop, report which command needs approval and why, and let the delegator or \
+                 the user decide. Do not retry this command and do not work around the rule."
+                    .to_string(),
+            ),
             None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --ask -- 'git status'".to_string(),
-            }),
         )),
     )]
     #[case::ask_with_neither(
@@ -391,11 +431,15 @@ mod tests {
         }),
         SandboxInfo::Preset(vec![]),
         Some(build_output(
-            Some("allow"),
+            Some("deny"),
+            Some(
+                "approval required: git push -f *. This rule requires a human decision and \
+                 this session has no approval prompt. Stop, report which command needs approval \
+                 and why, and let the delegator or the user decide. Do not retry this command \
+                 and do not work around the rule."
+                    .to_string(),
+            ),
             None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --ask -- 'git status'".to_string(),
-            }),
         )),
     )]
     // Exercises the synthetic-ask code path (`default_action`/`escalate_to_ask`)
@@ -409,11 +453,15 @@ mod tests {
         }),
         SandboxInfo::Preset(vec![]),
         Some(build_output(
-            Some("allow"),
+            Some("deny"),
+            Some(
+                "approval required by default policy. This rule requires a human decision and \
+                 this session has no approval prompt. Stop, report which command needs approval \
+                 and why, and let the delegator or the user decide. Do not retry this command \
+                 and do not work around the rule."
+                    .to_string(),
+            ),
             None,
-            Some(crate::adapter::hook_common::UpdatedInput {
-                command: "runok exec --ask -- 'git status'".to_string(),
-            }),
         )),
     )]
     #[case::pass(Action::Pass, SandboxInfo::Preset(vec![]), None)]
