@@ -114,6 +114,11 @@ const EXEC_FLAGS: &[FlagDef] = &[
         takes_value: false,
     },
     FlagDef {
+        name: "--hook-origin",
+        short: None,
+        takes_value: true,
+    },
+    FlagDef {
         name: "--verbose",
         short: None,
         takes_value: false,
@@ -264,6 +269,7 @@ mod tests {
     #[case::exec_sandbox_eq_form("runok exec --sandbox=strict -- ls")]
     #[case::exec_all_flags("runok exec --sandbox strict --verbose -- ls")]
     #[case::exec_ask_first("runok exec --ask --sandbox strict -- ls")]
+    #[case::exec_hook_origin_after_ask("runok exec --ask --hook-origin token -- ls")]
     #[case::exec_command_without_double_dash("runok exec ls -la")]
     #[case::exec_command_with_flag_args("runok exec git log --oneline")]
     #[case::check_with_double_dash("runok check -- ls -la")]

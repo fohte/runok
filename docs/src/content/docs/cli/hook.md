@@ -48,7 +48,7 @@ Output detailed rule matching information to stderr.
 }
 ```
 
-`permissionDecisionReason` and `updatedInput` are omitted when not applicable. `updatedInput` is present when a `sandbox` preset applies to the matched rule -- it rewrites the command to `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- <command>` so Claude Code executes it inside the sandbox.
+`permissionDecisionReason` and `updatedInput` are omitted when not applicable. `updatedInput` is present when a `sandbox` preset applies to the matched rule -- it rewrites the command to `runok exec --hook-origin <token> --sandbox <preset> -- <command>` so Claude Code executes it inside the sandbox.
 
 ## Codex (`--agent codex`)
 
@@ -63,14 +63,14 @@ Codex CLI speaks two hook events for a Bash tool call: `PreToolUse` and `Permiss
 
 Two points where this differs from `--agent claude-code`:
 
-- Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"`. `allow` therefore always rewrites the command to `RUNOK_HOOK_ORIGIN=<token> runok exec -- <command>` (adding `--sandbox` flags when needed), even when no sandbox preset applies. A `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured.
+- Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"`. `allow` therefore always rewrites the command to `runok exec --hook-origin <token> -- <command>` (adding `--sandbox` flags when needed), even when no sandbox preset applies. A `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured.
 - The `runok exec` and `runok exec --ask` policy rules installed by [`runok init --scope user`](/cli/init/#what-the-wizard-does) are required for this routing to provide its intended allow-without-prompt and ask-with-prompt behavior. When registering the hooks manually, add the same rules to the Codex exec policy.
 - The trusted `runok exec` allow path bypasses Codex's workspace sandbox. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer; configure a runok sandbox preset when OS-level restriction is required. See [Codex execution path](/sandbox/security-model/#codex-execution-path).
 - `PermissionRequest` has no `updatedInput` support at all, so a resolved sandbox preset is irrelevant there -- `allow` always reports plain `{ behavior: "allow" }` regardless of `defaults.sandbox` or a rule's `sandbox` key.
 
 `ask` is handled differently by the two events:
 
-- **`PreToolUse`**: `ask` reports `permissionDecision: "allow"` and rewrites the command to `RUNOK_HOOK_ORIGIN=<token> runok exec --ask -- <command>` (adding `--sandbox` flags when needed). The registered Codex exec policy marks `runok exec --ask` as `prompt`, so Codex opens its approval UI; after approval, `runok exec --ask` executes the command.
+- **`PreToolUse`**: `ask` reports `permissionDecision: "allow"` and rewrites the command to `runok exec --ask --hook-origin <token> -- <command>` (adding `--sandbox` flags when needed). The registered Codex exec policy marks `runok exec --ask` as `prompt`, so Codex opens its approval UI; after approval, `runok exec --ask` executes the command.
 - **`PermissionRequest`**: unchanged -- nothing is written, deferring to Codex's own approval UI, which this event was built to drive.
 
 `runok hook --agent codex` only guards `Bash` tool calls: for any other tool name it writes nothing, the same as a `pass` decision. This leaves `apply_patch` (file edits) and `spawn_agent` calls entirely to Codex's own judgment and sandbox, not `runok`'s rules.
@@ -113,7 +113,7 @@ Same, for a Codex CLI `PreToolUse` payload: an `allow` result is routed through 
 
 ```sh
 cat hook-input.json | runok hook --agent codex
-# {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"RUNOK_HOOK_ORIGIN=<token> runok exec -- 'git status'"}}}
+# {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"runok exec --hook-origin <token> -- 'git status'"}}}
 ```
 
 ## Exit codes

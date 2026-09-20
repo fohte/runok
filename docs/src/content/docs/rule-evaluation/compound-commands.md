@@ -176,7 +176,7 @@ Without this resolution, unmatched sub-commands would be silently ignored.
 
 ## Sandbox policy aggregation
 
-The Claude Code hook applies a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok replaces that sub-command's own text in the original input -- its `KEY=VALUE` env-assignment prefix and its own redirects included -- with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is the replaced text, shell-quoted, and returns the rewritten string via `updatedInput`. Only the operators that join sub-commands together (`|`, `&&`, `||`, `;`) are left as-is, handled by the outer shell exactly as they would be for an unsandboxed command.
+The Claude Code hook applies a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok replaces that sub-command's own text in the original input -- its `KEY=VALUE` env-assignment prefix and its own redirects included -- with `runok exec --hook-origin <token> --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is the replaced text, shell-quoted, and returns the rewritten string via `updatedInput`. Only the operators that join sub-commands together (`|`, `&&`, `||`, `;`) are left as-is, handled by the outer shell exactly as they would be for an unsandboxed command.
 
 ```yaml
 rules:
@@ -192,7 +192,7 @@ For the command `cat notes.txt > out.json | wc -l`:
 3. runok replaces only `wc -l`'s own text:
 
    ```
-   cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+   cat notes.txt > out.json | runok exec --hook-origin <token> --sandbox readonly -- 'wc -l'
    ```
 
 4. `cat notes.txt > out.json` runs unsandboxed, since its own matched rule specified no `sandbox` -- `> out.json` stays with the outer shell.
@@ -210,12 +210,12 @@ rules:
 For the command `cat < secret.txt | wc -l`, where `readonly`'s `fs.read.deny` covers `secret.txt`:
 
 ```
-RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'cat < secret.txt' | wc -l
+runok exec --hook-origin <token> --sandbox readonly -- 'cat < secret.txt' | wc -l
 ```
 
 `secret.txt` is opened inside the sandbox, so `readonly`'s `fs.read.deny` blocks it -- the same as it would for the equivalent non-compound `cat < secret.txt`.
 
-The replaced range starts at the sub-command's own `KEY=VALUE` env-assignment prefix, if it has one, and ends after its own redirects. `FOO=1 node x` therefore becomes `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'FOO=1 node x'` -- the env assignment is part of the quoted command, re-parsed and applied by the shell `runok exec` runs inside the sandbox.
+The replaced range starts at the sub-command's own `KEY=VALUE` env-assignment prefix, if it has one, and ends after its own redirects. `FOO=1 node x` therefore becomes `runok exec --hook-origin <token> --sandbox readonly -- 'FOO=1 node x'` -- the env assignment is part of the quoted command, re-parsed and applied by the shell `runok exec` runs inside the sandbox.
 
 When [`defaults.sandbox`](/configuration/schema/#defaultssandbox) is set, it applies the same way it does to a non-compound command: a sub-command with no `sandbox` of its own still gets wrapped for the default preset.
 
@@ -245,7 +245,7 @@ When every sub-command that specifies a sandbox resolves to the **same** preset 
 A merge across **two or more distinct** presets is represented as repeated `--sandbox` flags: the Claude Code hook writes `updatedInput` with one `--sandbox <preset>` flag per distinct preset name --
 
 ```
-RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset-a> --sandbox <preset-b> -- '<compound command, re-quoted>'
+runok exec --hook-origin <token> --sandbox <preset-a> --sandbox <preset-b> -- '<compound command, re-quoted>'
 ```
 
 -- and `runok exec` resolves and merges the named presets itself, using the same intersection/union merge shown in the table above. This applies for `allow`, `ask`, and `pass` alike: a `pass` decision is no longer escalated to `ask` just because two or more distinct presets are involved, since the merged set can now always be carried through `updatedInput`.

@@ -161,9 +161,9 @@ fn wrap_sub_commands(
 }
 
 /// Shell-quotes `command` and `preset` so the wrapped command's own shell
-/// syntax is interpreted inside the sandbox, not by the outer shell. Sets
-/// `RUNOK_HOOK_ORIGIN` so `exec` treats this as a hook-originated call and
-/// runs `defaults.action: pass` under the sandbox instead of denying it.
+/// syntax is interpreted inside the sandbox, not by the outer shell. Sets the
+/// hidden `--hook-origin` flag so `exec` treats this as a hook-originated call
+/// and runs `defaults.action: pass` under the sandbox instead of denying it.
 pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::Error> {
     wrap_with_sandboxes(std::slice::from_ref(&preset.to_string()), command)
 }
@@ -191,15 +191,13 @@ pub(crate) fn wrap_with_exec(
         flags.push_str(&format!(" --sandbox {quoted_preset}"));
     }
     let token = hook_origin_token();
-    let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
     Ok(format!(
-        "{env_var}={token} runok exec{ask_flag}{flags} -- {quoted_command}"
+        "runok exec{ask_flag} --hook-origin {token}{flags} -- {quoted_command}"
     ))
 }
 
-/// A per-call, non-cryptographic token (process id + current time) --
-/// just enough entropy that the env var's value differs on every
-/// invocation instead of being a single string anyone can hardcode.
+/// A per-call, non-cryptographic token (process id + current time) that keeps
+/// the hook-origin marker from being a single hardcoded string.
 fn hook_origin_token() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -208,14 +206,14 @@ fn hook_origin_token() -> String {
     format!("{:x}-{:x}", std::process::id(), nanos)
 }
 
-/// `wrap_with_sandbox` embeds a fresh token from `hook_origin_token` on
-/// every call (see that function's doc comment). Replace it with a fixed
-/// placeholder so tests -- here and in the other hook adapters -- can
-/// still assert the wrapped command with a single equality check.
+/// Hook wrappers embed a fresh token from `hook_origin_token` on every call
+/// (see that function's doc comment). Replace it with a fixed placeholder so
+/// tests -- here and in the other hook adapters -- can still assert the
+/// wrapped command with a single equality check.
 #[cfg(test)]
 pub(crate) fn normalize_hook_origin_token(command: &str) -> String {
-    let re = regex::Regex::new(r"RUNOK_HOOK_ORIGIN=\S+").expect("valid regex");
-    re.replace_all(command, "RUNOK_HOOK_ORIGIN=<token>")
+    let re = regex::Regex::new(r"--hook-origin \S+").expect("valid regex");
+    re.replace_all(command, "--hook-origin <token>")
         .into_owned()
 }
 
@@ -238,14 +236,14 @@ mod tests {
         SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![],
         "echo hello",
-        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'echo hello'"),
+        Some("runok exec --hook-origin <token> --sandbox restricted -- 'echo hello'"),
     )]
     #[case::preset_none(SandboxInfo::Preset(vec![]), vec![], "echo hello", None)]
     #[case::multiple_presets(
         SandboxInfo::Preset(vec!["preset_a".to_string(), "preset_b".to_string()]),
         vec![],
         "echo hello",
-        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'echo hello'"),
+        Some("runok exec --hook-origin <token> --sandbox preset_a --sandbox preset_b -- 'echo hello'"),
     )]
     // Only `node` needs the sandbox, and its redirect is inside the wrapped
     // range, so `out.json` is opened by the shell inside the sandbox while
@@ -255,7 +253,7 @@ mod tests {
         vec![wrap(0..23, "readonly")],
         "node fix.mjs > out.json | cat notes.txt",
         Some(
-            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \
+            "runok exec --hook-origin <token> --sandbox readonly -- \
              'node fix.mjs > out.json' | cat notes.txt",
         ),
     )]
@@ -266,8 +264,8 @@ mod tests {
         vec![wrap(0..13, "readonly"), wrap(16..28, "writable")],
         "awk '{print}' | node fix.mjs",
         Some(
-            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- \"awk '{print}'\" | \
-             RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox writable -- 'node fix.mjs'",
+            "runok exec --hook-origin <token> --sandbox readonly -- \"awk '{print}'\" | \
+             runok exec --hook-origin <token> --sandbox writable -- 'node fix.mjs'",
         ),
     )]
     // Wraps win over the whole-input preset: they express the same sandbox
@@ -276,7 +274,7 @@ mod tests {
         SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![wrap(0..2, "readonly")],
         "ls | wc -l",
-        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- ls | wc -l"),
+        Some("runok exec --hook-origin <token> --sandbox readonly -- ls | wc -l"),
     )]
     fn sandbox_updated_input_resolves_preset(
         #[case] sandbox: SandboxInfo,
@@ -300,14 +298,14 @@ mod tests {
         SandboxInfo::Preset(vec!["restricted".to_string()]),
         vec![],
         "echo hello",
-        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox restricted -- 'echo hello'"),
+        Some("runok exec --ask --hook-origin <token> --sandbox restricted -- 'echo hello'"),
     )]
     #[case::subcommand_wrap(
         SandboxInfo::Preset(vec![]),
         vec![wrap(0..23, "readonly")],
         "node fix.mjs > out.json | cat notes.txt",
         Some(
-            "RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox readonly -- \
+            "runok exec --ask --hook-origin <token> --sandbox readonly -- \
              'node fix.mjs > out.json' | cat notes.txt",
         ),
     )]
@@ -326,25 +324,22 @@ mod tests {
     // --- wrap_with_sandbox quotes shell metacharacters ---
 
     #[rstest]
-    #[case::simple_command(
-        "ls",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- ls"
-    )]
+    #[case::simple_command("ls", "runok exec --hook-origin <token> --sandbox restricted -- ls")]
     #[case::command_with_spaces(
         "git status",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'git status'"
+        "runok exec --hook-origin <token> --sandbox restricted -- 'git status'"
     )]
     #[case::compound_and(
         "safe-cmd && dangerous-cmd",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'safe-cmd && dangerous-cmd'"
+        "runok exec --hook-origin <token> --sandbox restricted -- 'safe-cmd && dangerous-cmd'"
     )]
     #[case::compound_pipe(
         "cat file | grep secret",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'cat file | grep secret'"
+        "runok exec --hook-origin <token> --sandbox restricted -- 'cat file | grep secret'"
     )]
     #[case::compound_semicolon(
         "cmd1; cmd2",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox restricted -- 'cmd1; cmd2'"
+        "runok exec --hook-origin <token> --sandbox restricted -- 'cmd1; cmd2'"
     )]
     fn wrap_with_sandbox_quotes_command(#[case] command: &str, #[case] expected: &str) {
         let actual = wrap_with_sandbox("restricted", command)
@@ -356,12 +351,12 @@ mod tests {
     #[case::preset_with_spaces(
         "my preset",
         "echo hello",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox 'my preset' -- 'echo hello'"
+        "runok exec --hook-origin <token> --sandbox 'my preset' -- 'echo hello'"
     )]
     #[case::preset_with_special_chars(
         "pre$et",
         "ls",
-        "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox 'pre$et' -- ls"
+        "runok exec --hook-origin <token> --sandbox 'pre$et' -- ls"
     )]
     fn wrap_with_sandbox_quotes_preset(
         #[case] preset: &str,
@@ -388,7 +383,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("unexpected error: {e}"));
         assert_eq!(
             normalize_hook_origin_token(&actual),
-            "RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox preset_a --sandbox preset_b -- 'git status'",
+            "runok exec --hook-origin <token> --sandbox preset_a --sandbox preset_b -- 'git status'",
         );
     }
 }

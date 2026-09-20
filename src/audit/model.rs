@@ -860,9 +860,11 @@ mod tests {
             session_id: Some("sess-1".to_owned()),
             cwd: Some("/home/user/project".to_owned()),
             command: "terraform apply".to_owned(),
-            executed_command: "runok exec --sandbox restricted -- 'terraform apply'".to_owned(),
+            executed_command:
+                "runok exec --hook-origin token --sandbox restricted -- 'terraform apply'"
+                    .to_owned(),
         },
-        indoc! {r#"{"kind":"ask_resolution","timestamp":"2026-07-08T10:30:00Z","outcome":"approved","tool_use_id":"toolu_01","session_id":"sess-1","cwd":"/home/user/project","command":"terraform apply","executed_command":"runok exec --sandbox restricted -- 'terraform apply'"}"#},
+        indoc! {r#"{"kind":"ask_resolution","timestamp":"2026-07-08T10:30:00Z","outcome":"approved","tool_use_id":"toolu_01","session_id":"sess-1","cwd":"/home/user/project","command":"terraform apply","executed_command":"runok exec --hook-origin token --sandbox restricted -- 'terraform apply'"}"#},
     )]
     #[case::without_tool_use_id(
         AskResolution {

@@ -267,7 +267,7 @@ The audit log used to record only that runok answered `ask` for a command -- not
   "outcome": "approved",
   "tool_use_id": "toolu_01AbCdEfGh",
   "command": "terraform apply",
-  "executed_command": "runok exec --sandbox restricted -- 'terraform apply'"
+  "executed_command": "runok exec --hook-origin <token> --sandbox restricted -- 'terraform apply'"
 }
 ```
 
@@ -333,11 +333,19 @@ runok: stdin parse error: failed to parse stdin as shell input
 
 ### `defaults.action: pass` combined with `defaults.sandbox` now actually runs the command (TODO(pr-link))
 
-For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- <command>` so the sandbox still applies once Claude Code's own permission flow lets the command through. `runok exec` re-evaluates that command against the same rules, and an unmatched command also resolves to `Action::Pass` there -- which `exec` (having no permission flow of its own to defer to) treated the same as `ask`, denying with exit code 3. The combination documented in `defaults.action: pass` + `defaults.sandbox` ([#502](https://github.com/fohte/runok/pull/502)) never actually ran the command.
+For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `runok exec --hook-origin <token> --sandbox <preset> -- <command>` so the sandbox still applies once Claude Code's own permission flow lets the command through. `runok exec` re-evaluates that command against the same rules, and an unmatched command also resolves to `Action::Pass` there -- which `exec` (having no permission flow of its own to defer to) treated the same as `ask`, denying with exit code 3. The combination documented in `defaults.action: pass` + `defaults.sandbox` ([#502](https://github.com/fohte/runok/pull/502)) never actually ran the command.
 
-`runok exec` now runs the command under the resolved sandbox when the invocation came from the hook's own wrapper, identified by an internal `RUNOK_HOOK_ORIGIN=<token>` environment variable the wrapper sets -- not merely by the presence of `--sandbox`, so typing `runok exec --sandbox <preset> -- <command>` directly still denies an unmatched command exactly as before. The token changes on every hook invocation, so the marker can't just be copy-pasted from a doc or a previous run. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
+`runok exec` now runs the command under the resolved sandbox when the invocation came from the hook's own wrapper, identified by an internal `--hook-origin <token>` flag the wrapper sets -- not merely by the presence of `--sandbox`, so typing `runok exec --sandbox <preset> -- <command>` directly still denies an unmatched command exactly as before. The token changes on every hook invocation, so the marker can't just be copy-pasted from a doc or a previous run. See [`defaults.action`](/configuration/schema/#defaultsaction) for details.
 
-`exec` never verifies the token's value, only that the env var was set -- it is not a cryptographic proof that a given invocation actually came from the hook, and anyone who can run `runok exec` at all can set it. This is a deliberate, accepted trade-off, not an oversight: it only relaxes `Action::Pass` (a command that matched no rule). A command that matches a `deny` or `ask` rule is still rejected by `exec`'s own re-evaluation regardless of the marker. Spoofing it can therefore only turn "the caller's own permission flow decides, unsandboxed" into "the caller's own permission flow decides, sandboxed" -- a strictly narrower outcome, not a privilege escalation.
+`exec` never verifies the token's value, only that the flag was set -- it is not a cryptographic proof that a given invocation actually came from the hook, and anyone who can run `runok exec` at all can set it. This is a deliberate, accepted trade-off, not an oversight: it only relaxes `Action::Pass` (a command that matched no rule). A command that matches a `deny` or `ask` rule is still rejected by `exec`'s own re-evaluation regardless of the marker. Spoofing it can therefore only turn "the caller's own permission flow decides, unsandboxed" into "the caller's own permission flow decides, sandboxed" -- a strictly narrower outcome, not a privilege escalation.
+
+### Codex hook wrappers now reach the registered exec policy ([#528](https://github.com/fohte/runok/pull/528))
+
+Codex does not evaluate exec policies for shell commands prefixed with an environment-variable assignment, so the hook-generated wrapper could bypass the `runok exec` and `runok exec --ask` rules. Hook wrappers now pass the hook-origin marker as the hidden `--hook-origin <token>` flag while keeping `--ask` immediately after `exec`, so `ask` decisions reach Codex's approval UI:
+
+```
+runok exec --ask --hook-origin <token> -- '<command>'
+```
 
 ### A compound command matching a single sandboxed preset no longer loses its sandbox or forces an `ask` prompt ([#506](https://github.com/fohte/runok/pull/506))
 
@@ -349,20 +357,20 @@ A compound command now collapses to the underlying named preset (applied the sam
 
 A compound command (`|`, `&&`, `||`, `;`, loops) whose sandbox policy came from more than one sub-command used to be wrapped as a whole: all matched presets were merged into one policy, and `runok exec --sandbox <preset> -- '<compound command, re-quoted>'` ran the entire compound inside it. A sub-command that matched an `allow` rule with **no** `sandbox` field still ran inside a neighboring sub-command's preset, tightening restrictions the matched rule never asked for.
 
-Each sub-command that needs a sandbox is now replaced with its own `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer shell. For example, with `wc *` sandboxed under a `readonly` preset and `cat *` left unsandboxed:
+Each sub-command that needs a sandbox is now replaced with its own `runok exec --hook-origin <token> --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer shell. For example, with `wc *` sandboxed under a `readonly` preset and `cat *` left unsandboxed:
 
 ```
 cat notes.txt > out.json | wc -l
 ```
 
 ```
-cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+cat notes.txt > out.json | runok exec --hook-origin <token> --sandbox readonly -- 'wc -l'
 ```
 
 `cat notes.txt > out.json` keeps running unsandboxed, exactly as its own matched rule specified, and `> out.json` is opened by that same unsandboxed process. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to _that_ sub-command is carried inside its sandbox instead of being left to the outer shell. This is the [Claude Code hook](/getting-started/claude-code/)'s `updatedInput` rewrite specifically -- `runok exec` and `runok check` each evaluate one command string at a time and have no per-sub-command shell to hand a rewritten string back to, so they keep applying a single, merged policy to the whole input.
 
 runok falls back to that merge-and-wrap behavior when a sub-command has no byte range of its own in the input to replace, when its range sits inside another sub-command's range (`$(...)`, `<(...)`), or when a sub-command is a shell builtin that changes shell state (`cd`, `export`, `source`, `eval`, and similar) or a call to a shell function defined in the same input: replacing either would run it in a child process, so `cd build && make` would run `make` back in the original directory instead of `build`, and a function defined by the command itself would not exist at all.
 
-That fallback merges every distinct preset matched across the compound's sub-commands using [Strictest Wins](/sandbox/overview/#sandbox-merging-for-compound-commands). `runok exec --sandbox` accepts the flag repeatably, and `runok exec` resolves and merges the named presets itself; the hook writes `updatedInput` as one `--sandbox <preset>` flag per distinct preset, e.g. `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'`. This applies for `allow`, `ask`, and `pass` alike -- a `pass` decision is never escalated to `ask` just to avoid dropping the sandbox, since the merged set can always be carried through `updatedInput`. The writable-contradiction escalation (an empty intersection of writable roots forcing `ask`) is unrelated and unchanged.
+That fallback merges every distinct preset matched across the compound's sub-commands using [Strictest Wins](/sandbox/overview/#sandbox-merging-for-compound-commands). `runok exec --sandbox` accepts the flag repeatably, and `runok exec` resolves and merges the named presets itself; the hook writes `updatedInput` as one `--sandbox <preset>` flag per distinct preset, e.g. `runok exec --hook-origin <token> --sandbox web-only --sandbox api-only -- '<compound command, re-quoted>'`. This applies for `allow`, `ask`, and `pass` alike -- a `pass` decision is never escalated to `ask` just to avoid dropping the sandbox, since the merged set can always be carried through `updatedInput`. The writable-contradiction escalation (an empty intersection of writable roots forcing `ask`) is unrelated and unchanged.
 
 See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics.

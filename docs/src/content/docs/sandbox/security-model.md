@@ -78,7 +78,7 @@ Then `.git` is protected even though `.` (its parent) is writable. This matches 
 
 ## Isolated sandboxes for compound commands
 
-In a compound command (`|`, `&&`, `||`, `;`, loops), runok replaces each sub-command that needs a sandbox with `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its `KEY=VALUE` env prefix and its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer, unsandboxed shell -- one sub-command's sandbox never weakens or gets weakened by another's, because they run as separate processes. Only the Claude Code hook's `updatedInput` rewrite performs this per-sub-command replacement; `runok exec` and `runok check` each hand the whole input to a single process, so they always apply one policy to the entire compound command -- the merged policy described below, or, when every sub-command resolves to the same preset, that preset directly.
+In a compound command (`|`, `&&`, `||`, `;`, loops), runok replaces each sub-command that needs a sandbox with `runok exec --hook-origin <token> --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is that sub-command's own text -- including its `KEY=VALUE` env prefix and its own redirects -- shell-quoted as a single argument. Only the operators joining sub-commands (`|`, `&&`, `||`, `;`) stay in the outer, unsandboxed shell -- one sub-command's sandbox never weakens or gets weakened by another's, because they run as separate processes. Only the Claude Code hook's `updatedInput` rewrite performs this per-sub-command replacement; `runok exec` and `runok check` each hand the whole input to a single process, so they always apply one policy to the entire compound command -- the merged policy described below, or, when every sub-command resolves to the same preset, that preset directly.
 
 For example, with a rule that sandboxes `wc *` under a `readonly` preset and leaves `cat *` unsandboxed:
 
@@ -89,10 +89,10 @@ cat notes.txt > out.json | wc -l
 becomes
 
 ```
-cat notes.txt > out.json | RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'wc -l'
+cat notes.txt > out.json | runok exec --hook-origin <token> --sandbox readonly -- 'wc -l'
 ```
 
-`cat notes.txt > out.json` is untouched and keeps running outside any sandbox, exactly as the rule matching `cat *` specified. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to that sub-command is carried inside its sandbox: with `cat *` sandboxed under `readonly` and `secret.txt` listed in that preset's `fs.read.deny`, `cat < secret.txt | wc -l` becomes `RUNOK_HOOK_ORIGIN=<token> runok exec --sandbox readonly -- 'cat < secret.txt' | wc -l` -- `secret.txt` is opened inside the sandbox, so the deny rule still applies.
+`cat notes.txt > out.json` is untouched and keeps running outside any sandbox, exactly as the rule matching `cat *` specified. Because the replacement covers the sandboxed sub-command's own text in full, a redirect belonging to that sub-command is carried inside its sandbox: with `cat *` sandboxed under `readonly` and `secret.txt` listed in that preset's `fs.read.deny`, `cat < secret.txt | wc -l` becomes `runok exec --hook-origin <token> --sandbox readonly -- 'cat < secret.txt' | wc -l` -- `secret.txt` is opened inside the sandbox, so the deny rule still applies.
 
 runok falls back to one merged sandbox for the whole compound command -- including inside the hook -- when a sub-command that needs a sandbox meets any of these conditions:
 
