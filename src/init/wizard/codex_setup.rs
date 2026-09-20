@@ -7,7 +7,7 @@ use super::preview::{
     normalize_json, preview_register_codex_exec_policy, preview_register_codex_hook, print_diff,
 };
 
-/// Result of setting up Codex hook registration.
+/// Result of setting up Codex hook and exec policy registration.
 pub(super) struct CodexScopeResult {
     pub hook_registered: bool,
     pub exec_policy_registered: bool,
@@ -17,7 +17,7 @@ pub(super) struct CodexScopeResult {
 ///
 /// If Codex isn't installed (`codex_home` doesn't exist), this is a silent
 /// no-op: no prompts, no directory creation, no file writes. If the hook is
-/// already registered for both events, this is also a silent no-op.
+/// and exec policy are already registered, this is also a silent no-op.
 pub(super) fn setup_codex_scope(
     codex_home: &Path,
     prompter: &dyn Prompter,

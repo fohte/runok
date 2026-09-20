@@ -74,6 +74,23 @@ fn exec_ask_runs_when_flag_is_set() {
 }
 
 #[rstest]
+fn exec_deny_still_rejects_with_ask_flag() {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - deny: 'echo *'
+    "});
+    let output = env
+        .command()
+        .args(["exec", "--ask", "--", "echo", "denied"])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(3), Vec::new(), b"runok: denied: echo *\n".to_vec())
+    );
+}
+
+#[rstest]
 fn exec_no_match_uses_default_deny() {
     let env = TestEnv::new(indoc! {"
         rules:

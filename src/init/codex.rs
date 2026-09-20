@@ -352,8 +352,6 @@ mod tests {
         );
     }
 
-    // --- exec policy ---
-
     fn lines_with_trailing_newline(lines: &[&str]) -> String {
         lines.join("\n") + "\n"
     }

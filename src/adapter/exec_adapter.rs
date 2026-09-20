@@ -186,9 +186,8 @@ impl Endpoint for ExecAdapter {
                     // re-asking here.
                     return self.execute_with_sandbox(&result.sandbox);
                 }
-                // exec has no caller to defer a decision to (unlike the
-                // Claude Code hook, there's no "normal permission flow"
-                // underneath it) -- treated as deny, same as Ask.
+                // `--ask` only authorizes an Ask result. Exec has no caller
+                // to defer a Pass decision to (unlike the Claude Code hook).
                 eprintln!(
                     "runok: command requires confirmation (defaults.action: pass has \
                      no effect outside the Claude Code hook)"
@@ -222,7 +221,8 @@ impl Endpoint for ExecAdapter {
                 Ok(3)
             }
             ActionKind::Pass => {
-                // exec has no caller to defer to; treated as deny like Ask.
+                // `--ask` only authorizes an Ask result. Exec has no caller
+                // to defer a Pass decision to.
                 eprintln!(
                     "runok: command requires confirmation (defaults.action: pass has \
                      no effect outside the Claude Code hook)"
@@ -503,6 +503,29 @@ mod tests {
             Box::new(MockExecutor::new(0)),
         )
         .with_hook_origin(true);
+        let result = adapter
+            .handle_action(ActionResult {
+                action: Action::Deny(DenyResponse {
+                    message: None,
+                    fix_suggestion: None,
+                    matched_rule: "rm -rf /".to_string(),
+                }),
+                sandbox: SandboxInfo::Preset(vec![]),
+                sandbox_wraps: vec![],
+                evaluations: vec![],
+            })
+            .unwrap();
+        assert_eq!(result, 3);
+    }
+
+    #[rstest]
+    fn handle_action_deny_returns_exit_3_with_ask_flag() {
+        let adapter = ExecAdapter::new(
+            vec!["rm".into(), "-rf".into(), "/".into()],
+            vec![],
+            Box::new(MockExecutor::new(0)),
+        )
+        .with_ask(true);
         let result = adapter
             .handle_action(ActionResult {
                 action: Action::Deny(DenyResponse {

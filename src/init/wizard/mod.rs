@@ -1059,6 +1059,10 @@ mod tests {
         std::fs::read_to_string(codex_home.join(codex::EXEC_POLICY_PATH)).unwrap()
     }
 
+    fn codex_exec_policy() -> String {
+        codex::EXEC_POLICY_RULES.join("\n") + "\n"
+    }
+
     #[rstest]
     fn wizard_user_scope_registers_codex_hook_when_codex_home_exists() {
         let env = TestEnv::new();
@@ -1072,10 +1076,7 @@ mod tests {
                 read_codex_hooks(&codex_home),
                 read_codex_exec_policy(&codex_home)
             ),
-            (
-                codex_hook_json(),
-                codex::EXEC_POLICY_RULES.join("\n") + "\n"
-            )
+            (codex_hook_json(), codex_exec_policy())
         );
     }
 
@@ -1115,10 +1116,51 @@ mod tests {
                 read_codex_hooks(&codex_home),
                 read_codex_exec_policy(&codex_home)
             ),
+            (codex_hook_json(), codex_exec_policy())
+        );
+    }
+
+    #[rstest]
+    fn wizard_registers_missing_codex_exec_policy_when_hook_exists() {
+        let env = TestEnv::new();
+        let codex_home = env.codex_home_dir();
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(
+            codex_home.join("hooks.json"),
+            serde_json::to_string(&codex_hook_json()).unwrap(),
+        )
+        .unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(
             (
-                codex_hook_json(),
-                codex::EXEC_POLICY_RULES.join("\n") + "\n"
-            )
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
+        );
+    }
+
+    #[rstest]
+    fn wizard_registers_missing_codex_hook_when_exec_policy_exists() {
+        let env = TestEnv::new();
+        let codex_home = env.codex_home_dir();
+        std::fs::create_dir_all(codex_home.join("rules")).unwrap();
+        std::fs::write(
+            codex_home.join(codex::EXEC_POLICY_PATH),
+            codex_exec_policy(),
+        )
+        .unwrap();
+
+        env.run(Some(&InitScope::User), &AutoYesPrompter).unwrap();
+
+        assert_eq!(
+            (
+                read_codex_hooks(&codex_home),
+                read_codex_exec_policy(&codex_home)
+            ),
+            (codex_hook_json(), codex_exec_policy())
         );
     }
 
