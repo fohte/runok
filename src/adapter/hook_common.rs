@@ -119,9 +119,29 @@ pub fn sandbox_updated_input(
     wraps: &[SandboxWrap],
     original_command: &str,
 ) -> Result<Option<UpdatedInput>, anyhow::Error> {
+    sandbox_updated_input_with_mode(sandbox, wraps, original_command, false)
+}
+
+/// Build an `updatedInput` that routes the command through `runok exec --ask`.
+/// The flag is placed immediately after `exec` so Codex's prefix rule can
+/// distinguish the prompt-producing wrapper from the general allow wrapper.
+pub fn sandbox_updated_input_with_ask(
+    sandbox: &SandboxInfo,
+    wraps: &[SandboxWrap],
+    original_command: &str,
+) -> Result<Option<UpdatedInput>, anyhow::Error> {
+    sandbox_updated_input_with_mode(sandbox, wraps, original_command, true)
+}
+
+fn sandbox_updated_input_with_mode(
+    sandbox: &SandboxInfo,
+    wraps: &[SandboxWrap],
+    original_command: &str,
+    ask: bool,
+) -> Result<Option<UpdatedInput>, anyhow::Error> {
     if !wraps.is_empty() {
         return Ok(Some(UpdatedInput {
-            command: wrap_sub_commands(wraps, original_command)?,
+            command: wrap_sub_commands(wraps, original_command, ask)?,
         }));
     }
     let SandboxInfo::Preset(names) = sandbox;
@@ -129,7 +149,7 @@ pub fn sandbox_updated_input(
         return Ok(None);
     }
     Ok(Some(UpdatedInput {
-        command: wrap_with_sandboxes(names, original_command)?,
+        command: wrap_with_exec(names, original_command, ask)?,
     }))
 }
 
@@ -143,6 +163,7 @@ pub fn sandbox_updated_input(
 fn wrap_sub_commands(
     wraps: &[SandboxWrap],
     original_command: &str,
+    ask: bool,
 ) -> Result<String, anyhow::Error> {
     let mut command = original_command.to_string();
     let mut ordered: Vec<&SandboxWrap> = wraps.iter().collect();
@@ -156,7 +177,7 @@ fn wrap_sub_commands(
                 wrap.range.end
             )
         })?;
-        let wrapped = wrap_with_sandbox(&wrap.preset, sub_command)?;
+        let wrapped = wrap_with_exec(std::slice::from_ref(&wrap.preset), sub_command, ask)?;
         command.replace_range(wrap.range.clone(), &wrapped);
     }
 
@@ -174,8 +195,22 @@ pub fn wrap_with_sandbox(preset: &str, command: &str) -> Result<String, anyhow::
 /// Wrap `command` with `runok exec`, passing each preset in `presets` as a
 /// `--sandbox` flag.
 pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, anyhow::Error> {
+    wrap_with_exec(presets, command, false)
+}
+
+/// Wrap `command` with `runok exec --ask`, passing each preset in `presets` as
+/// a `--sandbox` flag.
+pub fn wrap_with_sandboxes_and_ask(
+    presets: &[String],
+    command: &str,
+) -> Result<String, anyhow::Error> {
+    wrap_with_exec(presets, command, true)
+}
+
+fn wrap_with_exec(presets: &[String], command: &str, ask: bool) -> Result<String, anyhow::Error> {
     let quoted_command = shlex::try_quote(command)
         .map_err(|_| anyhow::anyhow!("command contains invalid characters (NUL byte)"))?;
+    let ask_flag = if ask { " --ask" } else { "" };
     let mut flags = String::new();
     for preset in presets {
         let quoted_preset = shlex::try_quote(preset)
@@ -185,7 +220,7 @@ pub fn wrap_with_sandboxes(presets: &[String], command: &str) -> Result<String, 
     let token = hook_origin_token();
     let env_var = crate::adapter::HOOK_ORIGIN_ENV_VAR;
     Ok(format!(
-        "{env_var}={token} runok exec{flags} -- {quoted_command}"
+        "{env_var}={token} runok exec{ask_flag}{flags} -- {quoted_command}"
     ))
 }
 
@@ -335,6 +370,34 @@ mod tests {
             }
             None => assert!(result.is_none()),
         }
+    }
+
+    #[rstest]
+    #[case::preset(
+        SandboxInfo::Preset(vec!["restricted".to_string()]),
+        vec![],
+        "echo hello",
+        Some("RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox restricted -- 'echo hello'"),
+    )]
+    #[case::subcommand_wrap(
+        SandboxInfo::Preset(vec![]),
+        vec![wrap(0..23, "readonly")],
+        "node fix.mjs > out.json | cat notes.txt",
+        Some(
+            "RUNOK_HOOK_ORIGIN=<token> runok exec --ask --sandbox readonly -- \
+             'node fix.mjs > out.json' | cat notes.txt",
+        ),
+    )]
+    fn sandbox_updated_input_with_ask_places_flag_after_exec(
+        #[case] sandbox: SandboxInfo,
+        #[case] wraps: Vec<SandboxWrap>,
+        #[case] command: &str,
+        #[case] expected_command: Option<&str>,
+    ) {
+        let actual = sandbox_updated_input_with_ask(&sandbox, &wraps, command)
+            .unwrap_or_else(|e| panic!("unexpected error: {e}"))
+            .map(|updated| normalize_hook_origin_token(&updated.command));
+        assert_eq!(actual, expected_command.map(str::to_owned));
     }
 
     // --- wrap_with_sandbox quotes shell metacharacters ---
