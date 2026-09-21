@@ -92,4 +92,5 @@ See how runok is configured in practice:
 
 - [Official Presets (runok-presets)](/configuration/official-presets/) -- Customize the preset selection or learn what each preset includes.
 - [Claude Code Integration](/getting-started/claude-code/) -- Set up runok as a Claude Code PreToolUse hook, and install the [Claude Code plugin](/getting-started/claude-code/#claude-code-plugin) to manage `runok.yml` from inside Claude Code.
+- [Codex CLI Integration](/getting-started/codex/) -- Set up runok as a Codex CLI hook.
 - [CLI Reference](/cli/overview/) -- Full reference for `runok init`, `runok check`, and `runok exec`.

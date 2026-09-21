@@ -61,17 +61,18 @@ Codex CLI speaks two hook events for a Bash tool call: `PreToolUse` and `Permiss
 | `ask`                                                      | `permissionDecision: "allow"` + `updatedInput` | nothing written                           |
 | `pass` (no rule matched, or `defaults.action: pass`/unset) | nothing written                                | nothing written                           |
 
-Two points where this differs from `--agent claude-code`:
+Points specific to `--agent codex`:
 
 - Codex rejects `updatedInput` unless it is paired with `permissionDecision: "allow"`. `allow` therefore always rewrites the command to `runok exec --hook-origin <token> -- <command>` (adding `--sandbox` flags when needed), even when no sandbox preset applies. A `pass` decision never emits `updatedInput` even when `defaults.sandbox` is configured.
 - The `runok exec` and `runok exec --ask` policy rules installed by [`runok init --scope user`](/cli/init/#what-the-wizard-does) are required for this routing to provide its intended allow-without-prompt and ask-with-prompt behavior. When registering the hooks manually, add the same rules to the Codex exec policy.
+- The runok configuration must keep the rewritten `runok exec --ask ...` command at `ask`; see [Preserve ask for the rewritten command](/getting-started/codex/#preserve-ask-for-the-rewritten-command) for the required rule.
 - The trusted `runok exec` allow path bypasses Codex's workspace sandbox. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer; configure a runok sandbox preset when OS-level restriction is required. See [Codex execution path](/sandbox/security-model/#codex-execution-path).
 - `PermissionRequest` has no `updatedInput` support at all, so a resolved sandbox preset is irrelevant there -- `allow` always reports plain `{ behavior: "allow" }` regardless of `defaults.sandbox` or a rule's `sandbox` key.
 
 `ask` is handled differently by the two events:
 
-- **`PreToolUse`**: `ask` reports `permissionDecision: "allow"` and rewrites the command to `runok exec --ask --hook-origin <token> -- <command>` (adding `--sandbox` flags when needed). The registered Codex exec policy marks `runok exec --ask` as `prompt`, so Codex opens its approval UI; after approval, `runok exec --ask` executes the command.
-- **`PermissionRequest`**: unchanged -- nothing is written, deferring to Codex's own approval UI, which this event was built to drive.
+- **`PreToolUse`**: `ask` reports `permissionDecision: "allow"` and rewrites the command to `runok exec --ask --hook-origin <token> -- <command>` (adding `--sandbox` flags when needed). The registered Codex exec policy marks `runok exec --ask` as `prompt`, so Codex enters its approval flow; after approval, `runok exec --ask` executes the command. See [Approval routing](/getting-started/codex/#approval-routing) for how Codex selects the reviewer.
+- **`PermissionRequest`**: unchanged -- nothing is written, deferring to Codex's approval flow. See [Approval routing](/getting-started/codex/#approval-routing) for how Codex selects the reviewer.
 
 `runok hook --agent codex` only guards `Bash` tool calls: for any other tool name it writes nothing, the same as a `pass` decision. This leaves `apply_patch` (file edits) and `spawn_agent` calls entirely to Codex's own judgment and sandbox, not `runok`'s rules.
 
@@ -141,6 +142,7 @@ Claude Code treats exit `2` from a `PreToolUse` hook as a blocking error, so any
 ## Related
 
 - [Claude Code Integration](/getting-started/claude-code/) -- Full hook setup guide.
+- [Codex CLI Integration](/getting-started/codex/) -- Full Codex hook setup guide.
 - [`runok check`](/cli/check/) -- Read-only rule evaluation for humans, CI, and scripts.
 - [`runok migrate`](/cli/migrate/) -- Rewrites deprecated config and settings.json entries to the current format.
 - [`runok init`](/cli/init/) -- Registers the hook automatically.
