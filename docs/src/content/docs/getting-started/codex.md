@@ -7,6 +7,10 @@ sidebar:
 
 runok integrates with [Codex CLI](https://github.com/openai/codex) through Codex's hook system. Once configured, runok evaluates each `Bash` command Codex attempts to run against your `runok.yml`.
 
+:::caution[Beta]
+Codex support is beta and has not been validated as extensively as the Claude Code integration. Approval routing and wrapper rules have important edge cases, so review the limitations on this page before relying on the integration.
+:::
+
 ## Step 1: Install and configure runok
 
 If you have not installed runok yet, follow the [Installation](/getting-started/installation/) guide. Then run the setup wizard at user scope:
@@ -24,6 +28,7 @@ Add rules to `~/.config/runok/runok.yml` so you can verify each decision type:
 ```yaml
 rules:
   - allow: 'git status'
+  - ask: 'runok exec --ask *'
   - ask: 'git push *'
   - deny: 'git push -f|--force *'
     message: 'Force push is not allowed.'
@@ -33,6 +38,8 @@ defaults:
 ```
 
 See [Configuration](/configuration/schema/) for the full `runok.yml` reference.
+
+If your configuration has a broad `allow: 'runok exec *'` rule, keep the `ask: 'runok exec --ask *'` rule above. Codex sends the rewritten `runok exec --ask ...` command to the `PermissionRequest` hook; allowing that rewritten command makes runok answer `allow` and removes the approval request.
 
 After `runok init` writes the changes, close any existing Codex session and start a new one before verifying the integration. Codex loads its exec policy when a session starts, so an already-running session does not see newly added `runok.rules` entries.
 
@@ -78,6 +85,15 @@ prefix_rule(pattern = ["runok", "exec", "--ask"], decision = "prompt")
 
 If Codex asks for permission, approve the newly registered hook. When configuring these files manually, also start a new Codex session after saving them.
 
+## Approval routing
+
+Codex chooses the reviewer for approval requests from `~/.codex/config.toml`:
+
+- When `approvals_reviewer` is unset, its default is `user`, and runok `ask` decisions reach a human approval dialog.
+- When `approvals_reviewer = "auto_review"`, the Guardian LLM sub-agent decides `allow` or `deny`; the request does not reach a human dialog.
+
+Codex does not provide a per-command setting to choose a different reviewer. This setting therefore affects every approval request handled by the session.
+
 ## Step 2: Verify the integration
 
 Start Codex in a directory that uses the configuration above:
@@ -89,36 +105,13 @@ codex
 Ask Codex to run these commands:
 
 1. `git status` should run without an approval prompt.
-2. `git push --dry-run origin example-branch` should open Codex's approval prompt. Cancel it instead of approving the command.
+2. `git push --dry-run origin example-branch` should enter Codex's approval flow. With the default `approvals_reviewer = "user"`, a human approval dialog appears; with `approvals_reviewer = "auto_review"`, Guardian decides `allow` or `deny` without showing a human dialog. Cancel the command if a human dialog appears.
 3. `git push --force --dry-run origin example-branch` should be blocked by runok before execution.
 
 The hook applies to Codex `Bash` tool calls. File edits and other tools remain under Codex's own controls. See [`runok hook`](/cli/hook/#codex---agent-codex) for the complete event and decision mapping.
 
-## Sandbox execution
-
-Commands routed through Codex's trusted `runok exec` path can bypass Codex's workspace sandbox. If no runok sandbox preset applies, the command has no OS-level sandbox from either layer. Add a preset to every rule that needs OS-level restrictions.
-
-To add OS-level restrictions, attach a [sandbox preset](/sandbox/overview/) to an `allow` rule:
-
-```yaml
-definitions:
-  sandbox:
-    restricted:
-      fs:
-        write:
-          allow: [./tmp]
-      network:
-        allow: false
-
-rules:
-  - allow: 'python3 *'
-    sandbox: restricted
-```
-
-See the [Security Model](/sandbox/security-model/#codex-execution-path) for Codex's trust boundary and the [sandbox reference](/configuration/schema/#definitionssandbox) for available options.
-
 ## Related
 
-- [Configuration](/configuration/schema/) -- Configure rules, defaults, and sandbox presets.
+- [Configuration](/configuration/schema/) -- Configure rules and defaults.
 - [`runok hook`](/cli/hook/#codex---agent-codex) -- Hook protocol and decision mapping.
 - [`runok init`](/cli/init/#what-the-wizard-does) -- Initialization details and supported scopes.
