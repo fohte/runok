@@ -1,5 +1,5 @@
 ---
-title: Codex CLI Integration
+title: Codex CLI Integration (Beta)
 description: Set up runok as a Codex CLI hook.
 sidebar:
   order: 4
