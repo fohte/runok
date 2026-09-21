@@ -8,7 +8,7 @@ sidebar:
 runok integrates with [Codex CLI](https://github.com/openai/codex) through Codex's hook system. Once configured, runok evaluates each `Bash` command Codex attempts to run against your `runok.yml`.
 
 :::caution[Beta]
-Codex support is beta and has not been validated as extensively as the Claude Code integration. Approval routing and wrapper rules have important edge cases, so review the limitations on this page before relying on the integration.
+Codex support is beta and has not been validated as extensively as the Claude Code integration. Approval routing and wrapper rules have important edge cases; keep the behavior described below in mind when verifying the integration.
 :::
 
 ## Step 1: Install and configure runok
@@ -28,7 +28,6 @@ Add rules to `~/.config/runok/runok.yml` so you can verify each decision type:
 ```yaml
 rules:
   - allow: 'git status'
-  - ask: 'runok exec --ask *'
   - ask: 'git push *'
   - deny: 'git push -f|--force *'
     message: 'Force push is not allowed.'
@@ -39,7 +38,16 @@ defaults:
 
 See [Configuration](/configuration/schema/) for the full `runok.yml` reference.
 
-If your configuration has a broad `allow: 'runok exec *'` rule, keep the `ask: 'runok exec --ask *'` rule above. Codex sends the rewritten `runok exec --ask ...` command to the `PermissionRequest` hook; allowing that rewritten command makes runok answer `allow` and removes the approval request.
+### Preserve ask for the rewritten command
+
+If your configuration has a broad `allow: 'runok exec *'` rule, place the following rule before it. Add the same rule when `defaults.action: allow` is set:
+
+```yaml
+rules:
+  - ask: 'runok exec --ask *'
+```
+
+Codex sends the rewritten `runok exec --ask ...` command to the `PermissionRequest` hook. If that command resolves to `allow`, the hook allows it before Codex handles the approval, so the approval request never appears.
 
 After `runok init` writes the changes, close any existing Codex session and start a new one before verifying the integration. Codex loads its exec policy when a session starts, so an already-running session does not see newly added `runok.rules` entries.
 
@@ -87,7 +95,7 @@ If Codex asks for permission, approve the newly registered hook. When configurin
 
 ## Approval routing
 
-Codex chooses the reviewer for approval requests from `~/.codex/config.toml`:
+Codex chooses the reviewer for approval requests from `$CODEX_HOME/config.toml` (or `~/.codex/config.toml` when `CODEX_HOME` is unset):
 
 - When `approvals_reviewer` is unset, its default is `user`, and runok `ask` decisions reach a human approval dialog.
 - When `approvals_reviewer = "auto_review"`, the Guardian LLM sub-agent decides `allow` or `deny`; the request does not reach a human dialog.
@@ -105,7 +113,7 @@ codex
 Ask Codex to run these commands:
 
 1. `git status` should run without an approval prompt.
-2. `git push --dry-run origin example-branch` should enter Codex's approval flow. With the default `approvals_reviewer = "user"`, a human approval dialog appears; with `approvals_reviewer = "auto_review"`, Guardian decides `allow` or `deny` without showing a human dialog. Cancel the command if a human dialog appears.
+2. `git push --dry-run origin example-branch` should enter Codex's approval flow. See [Approval routing](#approval-routing) for how Codex selects the reviewer. Cancel the command if a human dialog appears.
 3. `git push --force --dry-run origin example-branch` should be blocked by runok before execution.
 
 The hook applies to Codex `Bash` tool calls. File edits and other tools remain under Codex's own controls. See [`runok hook`](/cli/hook/#codex---agent-codex) for the complete event and decision mapping.
