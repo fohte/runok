@@ -297,7 +297,7 @@ rules:
 Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported to child processes, so they don't appear in `env`. Use `os` instead of trying to read those through `env.OSTYPE`.
 :::
 
-### `shell` -- Shell execution context
+### `shell` -- Shell-construct context
 
 An object describing shell context for the command being evaluated.
 

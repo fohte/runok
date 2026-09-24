@@ -80,7 +80,7 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ### Expose shell wrapper patterns to `when` clauses (TODO(pr-link))
 
-`when` clauses can now inspect `shell.wrappers`, a list of configured wrapper patterns enclosing the command. The list is ordered from outermost to innermost and is empty outside a wrapper. See [When Clause -- Shell execution context](/rule-evaluation/when-clause/#shell--shell-execution-context) for details.
+`when` clauses can now inspect `shell.wrappers`, a list of configured wrapper patterns enclosing the command. The list is ordered from outermost to innermost and is empty outside a wrapper. See [When Clause -- Shell-construct context](/rule-evaluation/when-clause/#shell--shell-construct-context) for details.
 
 ### `runok exec --ask` supports execution after an outer approval ([#526](https://github.com/fohte/runok/pull/526))
 
