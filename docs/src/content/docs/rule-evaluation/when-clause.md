@@ -328,16 +328,16 @@ rules:
 
 `shell.wrappers` contains the matching pattern strings from `definitions.wrappers`. For nested wrappers, patterns are listed from the outermost wrapper to the innermost. It is always a list and is empty when the command is not inside a wrapper.
 
-Use `exists` to make a rule conditional on a wrapper. This example denies `wait-tool` when it is run directly and allows it through the configured `async run -- <cmd>` wrapper:
+Use `exists` to make a rule conditional on a wrapper. This example denies `sleep` when it runs directly and allows it through the shell's `time <cmd>` command:
 
 ```yaml
 definitions:
   wrappers:
-    - 'async run -- <cmd>'
+    - 'time <cmd>'
 rules:
-  - deny: 'wait-tool *'
-    when: "!shell.wrappers.exists(w, w.startsWith('async run --'))"
-  - allow: 'wait-tool *'
+  - deny: 'sleep *'
+    when: "!shell.wrappers.exists(w, w.startsWith('time '))"
+  - allow: 'sleep *'
 ```
 
 ## Filesystem
