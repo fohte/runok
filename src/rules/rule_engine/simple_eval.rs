@@ -11,7 +11,9 @@ use super::flag_schema::{build_expr_context, build_flag_schema};
 use super::function::try_unwrap_function_call;
 use super::require_command_in_path::resolve_unmatched;
 use super::wrapper::try_unwrap_wrapper;
-use super::{Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatchInfo};
+use super::{
+    Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatchInfo, ShellContext,
+};
 
 /// Evaluate a single (non-compound) command against rules, function
 /// calls, and wrappers.
@@ -23,7 +25,7 @@ use super::{Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatc
 /// from command substitutions).
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, active wrapper patterns, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe metadata, shell position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_simple_command(
     config: &Config,
@@ -32,8 +34,7 @@ pub(super) fn evaluate_simple_command(
     depth: usize,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
-    loop_kind: &str,
-    wrappers: &[String],
+    shell_context: &ShellContext<'_>,
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
     source_like_present: bool,
@@ -52,8 +53,7 @@ pub(super) fn evaluate_simple_command(
             depth,
             redirects,
             pipe,
-            loop_kind,
-            wrappers,
+            shell_context,
             call_stack,
             source_like_present,
         )?
@@ -112,8 +112,7 @@ pub(super) fn evaluate_simple_command(
                         redirects,
                         pipe,
                         &match_captures,
-                        loop_kind,
-                        wrappers,
+                        shell_context,
                     );
                     match evaluate(when_expr, &expr_context) {
                         Ok(true) => {}
@@ -146,8 +145,7 @@ pub(super) fn evaluate_simple_command(
         context,
         definitions,
         depth,
-        loop_kind,
-        wrappers,
+        shell_context,
         call_stack,
         source_like_present,
     )?;

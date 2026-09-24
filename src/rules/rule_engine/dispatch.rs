@@ -6,7 +6,7 @@ use crate::rules::command_parser::{
 
 use super::compound::{default_action, merge_results, normalize_whitespace};
 use super::simple_eval::evaluate_simple_command;
-use super::{EvalContext, EvalResult};
+use super::{EvalContext, EvalResult, ShellContext};
 
 /// Maximum recursion depth shared by wrapper-command unwrapping and
 /// function-call resolution.
@@ -14,7 +14,7 @@ pub(super) const MAX_WRAPPER_DEPTH: usize = 10;
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, active wrapper patterns, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe metadata, shell position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_command_inner(
     config: &Config,
@@ -23,8 +23,7 @@ pub(super) fn evaluate_command_inner(
     depth: usize,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
-    loop_kind: &str,
-    wrappers: &[String],
+    shell_context: &ShellContext<'_>,
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
     source_like_present: bool,
@@ -62,6 +61,10 @@ pub(super) fn evaluate_command_inner(
         if !had_self_reference {
             let mut merged: Option<EvalResult> = None;
             for sub in &nested_subs {
+                let sub_shell_context = ShellContext {
+                    loop_kind: &sub.loop_kind,
+                    wrappers: shell_context.wrappers,
+                };
                 let result = evaluate_command_inner(
                     config,
                     &sub.command,
@@ -69,8 +72,7 @@ pub(super) fn evaluate_command_inner(
                     depth + 1,
                     &sub.redirects,
                     &sub.pipe,
-                    &sub.loop_kind,
-                    wrappers,
+                    &sub_shell_context,
                     sub.function_call.as_ref(),
                     call_stack,
                     source_like_present,
@@ -91,6 +93,10 @@ pub(super) fn evaluate_command_inner(
         if !nested_subs.is_empty() {
             let mut nested_merged: Option<EvalResult> = None;
             for sub in &nested_subs {
+                let sub_shell_context = ShellContext {
+                    loop_kind: &sub.loop_kind,
+                    wrappers: shell_context.wrappers,
+                };
                 let result = evaluate_command_inner(
                     config,
                     &sub.command,
@@ -98,8 +104,7 @@ pub(super) fn evaluate_command_inner(
                     depth + 1,
                     &sub.redirects,
                     &sub.pipe,
-                    &sub.loop_kind,
-                    wrappers,
+                    &sub_shell_context,
                     sub.function_call.as_ref(),
                     call_stack,
                     source_like_present,
@@ -123,8 +128,7 @@ pub(super) fn evaluate_command_inner(
                     depth,
                     redirects,
                     pipe,
-                    loop_kind,
-                    wrappers,
+                    shell_context,
                     function_call,
                     call_stack,
                     source_like_present,
@@ -143,8 +147,7 @@ pub(super) fn evaluate_command_inner(
         depth,
         redirects,
         pipe,
-        loop_kind,
-        wrappers,
+        shell_context,
         function_call,
         call_stack,
         source_like_present,

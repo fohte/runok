@@ -8,7 +8,7 @@ use super::dispatch::evaluate_command_inner;
 use super::require_command_in_path::command_contains_source_like;
 use super::{
     Action, AskResponse, CompoundEvalResult, DenyResponse, EvalContext, EvalResult, SandboxWrap,
-    SubCommandDetail,
+    ShellContext, SubCommandDetail,
 };
 
 /// Evaluate a potentially compound command (containing `|`, `&&`, `||`, `;`)
@@ -58,6 +58,10 @@ pub fn evaluate_compound(
     let mut sub_command_details: Vec<SubCommandDetail> = Vec::new();
 
     for ext_cmd in &extracted {
+        let shell_context = ShellContext {
+            loop_kind: &ext_cmd.loop_kind,
+            wrappers: &[],
+        };
         let result = evaluate_command_inner(
             config,
             &ext_cmd.command,
@@ -65,8 +69,7 @@ pub fn evaluate_compound(
             0,
             &ext_cmd.redirects,
             &ext_cmd.pipe,
-            &ext_cmd.loop_kind,
-            &[],
+            &shell_context,
             ext_cmd.function_call.as_ref(),
             &[],
             source_like_present,

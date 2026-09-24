@@ -263,14 +263,7 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
         ),
         (
             "wrappers".to_string(),
-            cel_interpreter::Value::List(std::sync::Arc::new(
-                context
-                    .wrappers
-                    .iter()
-                    .cloned()
-                    .map(cel_interpreter::Value::from)
-                    .collect(),
-            )),
+            cel_interpreter::Value::from(context.wrappers.clone()),
         ),
     ]);
     cel_context.add_variable_from_value("shell", shell_value);

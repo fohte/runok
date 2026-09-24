@@ -6,7 +6,7 @@ use crate::rules::command_parser::{
 
 use super::compound::merge_results;
 use super::dispatch::{MAX_WRAPPER_DEPTH, evaluate_command_inner};
-use super::{EvalContext, EvalResult};
+use super::{EvalContext, EvalResult, ShellContext};
 
 /// Try to resolve a call to a function defined earlier in the same
 /// command string, evaluating its body (or bodies, if the name was
@@ -23,7 +23,7 @@ use super::{EvalContext, EvalResult};
 /// propagating an error.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, active wrapper patterns, the resolved call itself, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe metadata, shell position at the call site, the resolved call itself, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn try_unwrap_function_call(
     config: &Config,
@@ -32,8 +32,7 @@ pub(super) fn try_unwrap_function_call(
     depth: usize,
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
-    loop_kind: &str,
-    wrappers: &[String],
+    shell_context: &ShellContext<'_>,
     call_stack: &[String],
     source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
@@ -54,12 +53,16 @@ pub(super) fn try_unwrap_function_call(
         // principle as an unresolved call. If every candidate fails,
         // `merged` stays `None` and the caller falls back too.
         let Ok(sub_commands) =
-            resolve_function_call_body(call_info, body, redirects, pipe, loop_kind)
+            resolve_function_call_body(call_info, body, redirects, pipe, shell_context.loop_kind)
         else {
             continue;
         };
 
         for sub in &sub_commands {
+            let sub_shell_context = ShellContext {
+                loop_kind: &sub.loop_kind,
+                wrappers: shell_context.wrappers,
+            };
             let sub_result = match evaluate_command_inner(
                 config,
                 &sub.command,
@@ -67,8 +70,7 @@ pub(super) fn try_unwrap_function_call(
                 depth + 1,
                 &sub.redirects,
                 &sub.pipe,
-                &sub.loop_kind,
-                wrappers,
+                &sub_shell_context,
                 sub.function_call.as_ref(),
                 &new_stack,
                 source_like_present,
