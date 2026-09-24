@@ -328,7 +328,7 @@ rules:
 
 `shell.wrappers` contains the matching pattern strings from `definitions.wrappers`. For nested wrappers, patterns are listed from the outermost wrapper to the innermost. It is always a list and is empty when the command is not inside a wrapper.
 
-Use `exists` to make a rule conditional on a wrapper. This example denies `sleep` when it runs directly and allows it through the shell's `time <cmd>` command:
+Use `exists` to make a rule conditional on a wrapper. This example denies `sleep` when it runs directly and allows it when `sleep` is the command argument to `time`, as in `time sleep 1`:
 
 ```yaml
 definitions:
@@ -339,6 +339,8 @@ rules:
     when: "!shell.wrappers.exists(w, w.startsWith('time '))"
   - allow: 'sleep *'
 ```
+
+When `time` wraps a group or loop, such as `time (sleep 1)`, the inner command is evaluated without wrapper context, so this deny rule still applies.
 
 ## Filesystem
 
