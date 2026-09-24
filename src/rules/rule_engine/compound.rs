@@ -66,6 +66,7 @@ pub fn evaluate_compound(
             &ext_cmd.redirects,
             &ext_cmd.pipe,
             &ext_cmd.loop_kind,
+            &[],
             ext_cmd.function_call.as_ref(),
             &[],
             source_like_present,

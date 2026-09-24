@@ -116,7 +116,7 @@ fn glob_matches_impl(pattern: Arc<String>, value: Arc<String>) -> bool {
 /// Context for CEL expression evaluation, providing access to
 /// environment variables, parsed flags, positional arguments, path lists,
 /// redirect operators, pipeline position, captured variables, flag groups,
-/// and the host operating system.
+/// shell loop and wrapper context, and the host operating system.
 pub struct ExprContext {
     pub env: HashMap<String, String>,
     pub flags: HashMap<String, Option<String>>,
@@ -145,6 +145,9 @@ pub struct ExprContext {
     /// evaluated. Exposed to CEL as `shell.loop_kind`. Values: `"while"`,
     /// `"until"`, `"for"`, or `""` when the command is not inside any loop.
     pub loop_kind: String,
+    /// Wrapper patterns enclosing the command, ordered from outermost to
+    /// innermost. Exposed to CEL as `shell.wrappers`.
+    pub wrappers: Vec<String>,
     /// Home directory absolute path, exposed to CEL as `fs.home`. `None`
     /// when the home directory cannot be determined (e.g. `HOME` unset),
     /// which CEL sees as `null` -- `fs.home == null` detects this case
@@ -252,11 +255,24 @@ pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
 
     cel_context.add_variable_from_value("os", context.os.clone());
 
-    // Register shell.* fields as a nested map (currently only `loop_kind`).
-    let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([(
-        "loop_kind".to_string(),
-        cel_interpreter::Value::String(context.loop_kind.clone().into()),
-    )]);
+    // Register shell.* fields as a nested map.
+    let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
+        (
+            "loop_kind".to_string(),
+            cel_interpreter::Value::String(context.loop_kind.clone().into()),
+        ),
+        (
+            "wrappers".to_string(),
+            cel_interpreter::Value::List(std::sync::Arc::new(
+                context
+                    .wrappers
+                    .iter()
+                    .cloned()
+                    .map(cel_interpreter::Value::from)
+                    .collect(),
+            )),
+        ),
+    ]);
     cel_context.add_variable_from_value("shell", shell_value);
 
     cel_context.add_variable_from_value("fs", fs_namespace(context));
@@ -301,6 +317,7 @@ mod tests {
             flag_groups: HashMap::new(),
             os: String::new(),
             loop_kind: String::new(),
+            wrappers: Vec::new(),
             home: None,
             cwd: String::new(),
         }

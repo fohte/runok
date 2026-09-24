@@ -14,7 +14,7 @@ pub(super) const MAX_WRAPPER_DEPTH: usize = 10;
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, active wrapper patterns, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_command_inner(
     config: &Config,
@@ -24,6 +24,7 @@ pub(super) fn evaluate_command_inner(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    wrappers: &[String],
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
     source_like_present: bool,
@@ -69,6 +70,7 @@ pub(super) fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    wrappers,
                     sub.function_call.as_ref(),
                     call_stack,
                     source_like_present,
@@ -97,6 +99,7 @@ pub(super) fn evaluate_command_inner(
                     &sub.redirects,
                     &sub.pipe,
                     &sub.loop_kind,
+                    wrappers,
                     sub.function_call.as_ref(),
                     call_stack,
                     source_like_present,
@@ -121,6 +124,7 @@ pub(super) fn evaluate_command_inner(
                     redirects,
                     pipe,
                     loop_kind,
+                    wrappers,
                     function_call,
                     call_stack,
                     source_like_present,
@@ -140,6 +144,7 @@ pub(super) fn evaluate_command_inner(
         redirects,
         pipe,
         loop_kind,
+        wrappers,
         function_call,
         call_stack,
         source_like_present,

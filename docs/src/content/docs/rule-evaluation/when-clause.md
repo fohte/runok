@@ -297,13 +297,14 @@ rules:
 Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported to child processes, so they don't appear in `env`. Use `os` instead of trying to read those through `env.OSTYPE`.
 :::
 
-### `shell` -- Shell-construct context
+### `shell` -- Shell execution context
 
-An object describing the shell construct that immediately encloses the command being evaluated.
+An object describing shell context for the command being evaluated.
 
-| Field       | Type     | Description                                                                                                |
-| ----------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `loop_kind` | `string` | The kind of loop the command runs inside: `"while"`, `"until"`, `"for"`, or `""` when not inside any loop. |
+| Field       | Type           | Description                                                                                                          |
+| ----------- | -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `loop_kind` | `string`       | The kind of loop the command runs inside: `"while"`, `"until"`, `"for"`, or `""` when not inside any loop.           |
+| `wrappers`  | `list<string>` | The configured wrapper patterns enclosing the command, ordered from outermost to innermost. Empty outside a wrapper. |
 
 Nested loops surface the nearest enclosing kind. For example, `for x in a b; do until y; do sleep 1; done; done` reports `loop_kind == "until"` for `sleep 1`. Subshells do not reset the kind, so `(while x; do sleep 1; done)` still reports `"while"` inside the subshell.
 
@@ -323,6 +324,20 @@ rules:
 rules:
   - allow: 'sleep *'
     when: 'shell.loop_kind == ""'
+```
+
+`shell.wrappers` contains the matching pattern strings from `definitions.wrappers`. For nested wrappers, patterns are listed from the outermost wrapper to the innermost. It is always a list and is empty when the command is not inside a wrapper.
+
+Use `exists` to make a rule conditional on a wrapper. This example denies `wait-tool` when it is run directly and allows it through the configured `async run -- <cmd>` wrapper:
+
+```yaml
+definitions:
+  wrappers:
+    - 'async run -- <cmd>'
+rules:
+  - deny: 'wait-tool *'
+    when: "!shell.wrappers.exists(w, w.startsWith('async run --'))"
+  - allow: 'wait-tool *'
 ```
 
 ## Filesystem

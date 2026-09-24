@@ -23,7 +23,7 @@ use super::{EvalContext, EvalResult};
 /// propagating an error.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, the resolved call itself, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position at the call site, active wrapper patterns, the resolved call itself, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn try_unwrap_function_call(
     config: &Config,
@@ -33,6 +33,7 @@ pub(super) fn try_unwrap_function_call(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    wrappers: &[String],
     call_stack: &[String],
     source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
@@ -67,6 +68,7 @@ pub(super) fn try_unwrap_function_call(
                 &sub.redirects,
                 &sub.pipe,
                 &sub.loop_kind,
+                wrappers,
                 sub.function_call.as_ref(),
                 &new_stack,
                 source_like_present,

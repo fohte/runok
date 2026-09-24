@@ -23,7 +23,7 @@ use super::{Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatc
 /// from command substitutions).
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (redirect/pipe/loop position, active wrapper patterns, the resolved function call for this command if any, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn evaluate_simple_command(
     config: &Config,
@@ -33,6 +33,7 @@ pub(super) fn evaluate_simple_command(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     loop_kind: &str,
+    wrappers: &[String],
     function_call: Option<&FunctionCallInfo>,
     call_stack: &[String],
     source_like_present: bool,
@@ -52,6 +53,7 @@ pub(super) fn evaluate_simple_command(
             redirects,
             pipe,
             loop_kind,
+            wrappers,
             call_stack,
             source_like_present,
         )?
@@ -111,6 +113,7 @@ pub(super) fn evaluate_simple_command(
                         pipe,
                         &match_captures,
                         loop_kind,
+                        wrappers,
                     );
                     match evaluate(when_expr, &expr_context) {
                         Ok(true) => {}
@@ -144,6 +147,7 @@ pub(super) fn evaluate_simple_command(
         definitions,
         depth,
         loop_kind,
+        wrappers,
         call_stack,
         source_like_present,
     )?;

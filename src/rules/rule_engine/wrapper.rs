@@ -18,7 +18,7 @@ use super::{EvalContext, EvalResult};
 /// Explicit Deny Wins.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (loop position, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (loop position, active wrapper patterns, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn try_unwrap_wrapper(
     config: &Config,
@@ -27,6 +27,7 @@ pub(super) fn try_unwrap_wrapper(
     definitions: &Definitions,
     depth: usize,
     loop_kind: &str,
+    active_wrappers: &[String],
     call_stack: &[String],
     source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
@@ -53,6 +54,9 @@ pub(super) fn try_unwrap_wrapper(
         if all_candidates.is_empty() {
             continue;
         }
+
+        let mut inner_wrappers = active_wrappers.to_vec();
+        inner_wrappers.push(wrapper_pattern_str.clone());
 
         // Try each candidate capture and pick the one with the highest
         // action priority. This handles ambiguous patterns like `xargs * <cmd>`
@@ -85,6 +89,7 @@ pub(super) fn try_unwrap_wrapper(
                     &[],
                     &PipeInfo::default(),
                     loop_kind,
+                    &inner_wrappers,
                     None,
                     call_stack,
                     source_like_present,
