@@ -7,7 +7,7 @@ use crate::rules::pattern_parser::parse_multi;
 use super::compound::{action_priority, merge_results};
 use super::dispatch::evaluate_command_inner;
 use super::flag_schema::build_flag_schema;
-use super::{EvalContext, EvalResult};
+use super::{EvalContext, EvalResult, ShellContext};
 
 /// Try to match the command against wrapper patterns and recursively
 /// evaluate the inner command.
@@ -18,7 +18,7 @@ use super::{EvalContext, EvalResult};
 /// Explicit Deny Wins.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each parameter carries independent recursive-evaluation context (loop position, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
+    reason = "each parameter carries independent recursive-evaluation context (shell position, the in-progress call stack for cycle detection, and whether the original input contains a source/./eval command); grouping them into a struct would obscure the per-call-site overrides this function relies on"
 )]
 pub(super) fn try_unwrap_wrapper(
     config: &Config,
@@ -26,7 +26,7 @@ pub(super) fn try_unwrap_wrapper(
     context: &EvalContext,
     definitions: &Definitions,
     depth: usize,
-    loop_kind: &str,
+    shell_context: &ShellContext<'_>,
     call_stack: &[String],
     source_like_present: bool,
 ) -> Result<Option<EvalResult>, RuleError> {
@@ -53,6 +53,13 @@ pub(super) fn try_unwrap_wrapper(
         if all_candidates.is_empty() {
             continue;
         }
+
+        let mut inner_wrappers = shell_context.wrappers.to_vec();
+        inner_wrappers.push(wrapper_pattern_str.clone());
+        let inner_shell_context = ShellContext {
+            loop_kind: shell_context.loop_kind,
+            wrappers: &inner_wrappers,
+        };
 
         // Try each candidate capture and pick the one with the highest
         // action priority. This handles ambiguous patterns like `xargs * <cmd>`
@@ -84,7 +91,7 @@ pub(super) fn try_unwrap_wrapper(
                     depth + 1,
                     &[],
                     &PipeInfo::default(),
-                    loop_kind,
+                    &inner_shell_context,
                     None,
                     call_stack,
                     source_like_present,

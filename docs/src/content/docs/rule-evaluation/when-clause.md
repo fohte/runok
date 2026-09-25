@@ -299,11 +299,12 @@ Shell built-ins like `OSTYPE`, `HOSTTYPE`, and `MACHTYPE` are **not** exported t
 
 ### `shell` -- Shell-construct context
 
-An object describing the shell construct that immediately encloses the command being evaluated.
+An object describing shell context for the command being evaluated.
 
-| Field       | Type     | Description                                                                                                |
-| ----------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `loop_kind` | `string` | The kind of loop the command runs inside: `"while"`, `"until"`, `"for"`, or `""` when not inside any loop. |
+| Field       | Type           | Description                                                                                                          |
+| ----------- | -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `loop_kind` | `string`       | The kind of loop the command runs inside: `"while"`, `"until"`, `"for"`, or `""` when not inside any loop.           |
+| `wrappers`  | `list<string>` | The configured wrapper patterns enclosing the command, ordered from outermost to innermost. Empty outside a wrapper. |
 
 Nested loops surface the nearest enclosing kind. For example, `for x in a b; do until y; do sleep 1; done; done` reports `loop_kind == "until"` for `sleep 1`. Subshells do not reset the kind, so `(while x; do sleep 1; done)` still reports `"while"` inside the subshell.
 
@@ -324,6 +325,22 @@ rules:
   - allow: 'sleep *'
     when: 'shell.loop_kind == ""'
 ```
+
+`shell.wrappers` contains the matching pattern strings from `definitions.wrappers`. For nested wrappers, patterns are listed from the outermost wrapper to the innermost. It is always a list and is empty when the command is not inside a wrapper.
+
+Use `exists` to make a rule conditional on a wrapper. This example denies `sleep` when it runs directly and allows it when `sleep` is the command argument to `time`, as in `time sleep 1`:
+
+```yaml
+definitions:
+  wrappers:
+    - 'time <cmd>'
+rules:
+  - deny: 'sleep *'
+    when: "!shell.wrappers.exists(w, w.startsWith('time '))"
+  - allow: 'sleep *'
+```
+
+When `time` wraps a group or loop, such as `time (sleep 1)`, the inner command is evaluated without wrapper context, so this deny rule still applies.
 
 ## Filesystem
 

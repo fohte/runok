@@ -6,7 +6,7 @@ use crate::rules::expr_evaluator::ExprContext;
 use crate::rules::pattern_matcher::MatchCaptures;
 use crate::rules::pattern_parser::{Pattern, PatternToken};
 
-use super::EvalContext;
+use super::{EvalContext, ShellContext};
 
 /// Build a FlagSchema from a pattern's FlagWithValue and FlagGroupRef tokens.
 ///
@@ -85,7 +85,7 @@ pub(super) fn build_expr_context(
     redirects: &[RedirectInfo],
     pipe: &PipeInfo,
     match_captures: &MatchCaptures,
-    loop_kind: &str,
+    shell_context: &ShellContext<'_>,
 ) -> ExprContext {
     let flags: HashMap<String, Option<String>> = parsed_command
         .flags
@@ -144,7 +144,8 @@ pub(super) fn build_expr_context(
         vars: match_captures.vars.clone(),
         flag_groups,
         os: std::env::consts::OS.to_string(),
-        loop_kind: loop_kind.to_string(),
+        loop_kind: shell_context.loop_kind.to_string(),
+        wrappers: shell_context.wrappers.to_vec(),
         home: crate::config::dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
         cwd: eval_context.cwd.to_string_lossy().into_owned(),
     }

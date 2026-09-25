@@ -35,6 +35,13 @@ pub struct EvalContext {
     pub resolver: Arc<dyn CommandResolver>,
 }
 
+/// Shell metadata inherited by a command during recursive rule evaluation.
+#[derive(Clone, Copy)]
+pub(super) struct ShellContext<'a> {
+    pub(super) loop_kind: &'a str,
+    pub(super) wrappers: &'a [String],
+}
+
 impl EvalContext {
     /// Build an `EvalContext` from the current process environment.
     pub fn from_env() -> Self {
@@ -170,6 +177,10 @@ pub fn evaluate_command(
         && extracted.len() == 1
     {
         let first = &extracted[0];
+        let shell_context = ShellContext {
+            loop_kind: &first.loop_kind,
+            wrappers: &[],
+        };
         return evaluate_command_inner(
             config,
             &first.command,
@@ -177,12 +188,16 @@ pub fn evaluate_command(
             0,
             &first.redirects,
             &first.pipe,
-            &first.loop_kind,
+            &shell_context,
             first.function_call.as_ref(),
             &[],
             source_like_present,
         );
     }
+    let shell_context = ShellContext {
+        loop_kind: "",
+        wrappers: &[],
+    };
     evaluate_command_inner(
         config,
         command,
@@ -190,7 +205,7 @@ pub fn evaluate_command(
         0,
         &[],
         &PipeInfo::default(),
-        "",
+        &shell_context,
         None,
         &[],
         source_like_present,
@@ -212,6 +227,10 @@ pub fn evaluate_command_with_metadata(
     loop_kind: &str,
     function_call: Option<&FunctionCallInfo>,
 ) -> Result<EvalResult, RuleError> {
+    let shell_context = ShellContext {
+        loop_kind,
+        wrappers: &[],
+    };
     evaluate_command_inner(
         config,
         command,
@@ -219,7 +238,7 @@ pub fn evaluate_command_with_metadata(
         0,
         redirects,
         pipe,
-        loop_kind,
+        &shell_context,
         function_call,
         &[],
         command_contains_source_like(command),
