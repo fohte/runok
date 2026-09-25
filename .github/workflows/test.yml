@@ -147,9 +147,10 @@ jobs:
           flags: ${{ runner.os }}
           fail_ci_if_error: false
 
+  # Keep a fixed check context for the ruleset; canceled matrix runs must fail too.
   unit-test:
     needs: unit-test-run
-    if: failure()
+    if: always() && needs.unit-test-run.result != 'success'
     runs-on: ubuntu-slim
     steps:
       - run: exit 1
