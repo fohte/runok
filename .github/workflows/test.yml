@@ -91,7 +91,7 @@ jobs:
         if: steps.lefthook.outcome == 'failure'
         run: exit 1
 
-  unit-test:
+  unit-test-run:
     strategy:
       fail-fast: false
       matrix:
@@ -146,3 +146,11 @@ jobs:
           files: lcov.info
           flags: ${{ runner.os }}
           fail_ci_if_error: false
+
+  # Keep a fixed check context for the ruleset; canceled matrix runs must fail too.
+  unit-test:
+    needs: unit-test-run
+    if: always() && needs.unit-test-run.result != 'success'
+    runs-on: ubuntu-slim
+    steps:
+      - run: exit 1
