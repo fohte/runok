@@ -49,6 +49,7 @@ jobs:
             echo "Failed to read _commit from .copier-answers.yml" >&2
             exit 1
           fi
+          cp .copier-answers.yml "$RUNNER_TEMP/copier-answers-before-update.yml"
           echo "version=${from_version}" >> "$GITHUB_OUTPUT"
 
       - name: Determine repo_id backfill data
@@ -153,7 +154,7 @@ jobs:
         continue-on-error: true
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.5
+          version: 2026.9.11
 
       - name: Sync pnpm lockfiles
         if: steps.can-sync-lockfiles.outputs.value == 'true' && hashFiles('**/pnpm-lock.yaml') != ''
@@ -237,8 +238,60 @@ jobs:
             echo "value=chore: update ${TEMPLATE_REPO} from ${FROM_VERSION} to ${TARGET_VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check out content-loss detector
+        if: steps.should-update.outputs.value == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TEMPLATE_REPO }}
+          # Use master for the detector CLI so it stays independent from an
+          # explicitly pinned target-version; --from below still renders the
+          # pre-update template version the PR was based on.
+          ref: master
+          path: .content-loss-detector
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.octo-sts.outputs.token }}
+
+      - name: Set up copier for content-loss check
+        if: steps.should-update.outputs.value == 'true'
+        run: |
+          set -euo pipefail
+          copier_venv="$RUNNER_TEMP/copier-content-loss"
+          copier_version=$(awk '$1 == "_min_copier_version:" { print $2 }' .content-loss-detector/copier.yml | tr -d "\"'")
+          if [ -z "${copier_version}" ]; then
+            echo "Failed to read _min_copier_version from .content-loss-detector/copier.yml" >&2
+            exit 1
+          fi
+          python3 -m venv "$copier_venv"
+          "$copier_venv/bin/python" -m pip install \
+            --disable-pip-version-check --quiet --only-binary=:all: \
+            "copier==${copier_version}"
+          echo "$copier_venv/bin" >> "$GITHUB_PATH"
+
+      - name: Disable auto-merge while validating update
+        if: steps.should-update.outputs.value == 'true'
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          set -euo pipefail
+          existing_pr=$(gh pr list --head "${BRANCH}" --state open --json url --jq 'map(.url)[0] // ""')
+          if [ -z "${existing_pr}" ]; then
+            exit 0
+          fi
+
+          # A reused branch may still have an auto-merge request from an earlier
+          # run. Disarm it before pushing a new diff that has not been checked.
+          gh pr merge --disable-auto "${existing_pr}" || true
+          auto_merge=$(gh pr view "${existing_pr}" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          if [ "${auto_merge}" = "true" ]; then
+            echo "Could not disable auto-merge for ${existing_pr}; stopping before push." >&2
+            exit 1
+          fi
+
       - name: Commit and push changes
         if: steps.should-update.outputs.value == 'true'
+        id: commit-and-push
         env:
           BRANCH: ${{ steps.branch.outputs.name }}
           COMMIT_MESSAGE: ${{ steps.title.outputs.value }}
@@ -258,6 +311,7 @@ jobs:
           # refs/remotes/origin/<branch> for non-checked-out branches, so --force-with-lease
           # would reject with "stale info" on a later run against the same branch.
           git push --force origin "${BRANCH}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Create or update pull request
         if: steps.should-update.outputs.value == 'true'
@@ -270,6 +324,7 @@ jobs:
           LOCKFILE_SYNC_FAILED: ${{ steps.sync-pnpm-lockfiles.outcome == 'failure' || steps.sync-cargo-lockfiles.outcome == 'failure' }}
           HAS_LOCKFILES: ${{ hashFiles('**/pnpm-lock.yaml', '**/Cargo.lock') != '' }}
           BRANCH: ${{ steps.branch.outputs.name }}
+          EXPECTED_SHA: ${{ steps.commit-and-push.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           IS_BACKFILL_ONLY: ${{ steps.branch.outputs.is-backfill-only }}
         run: |
@@ -331,6 +386,43 @@ jobs:
           else
             pr_url=$(gh pr create "${create_args[@]}")
           fi
+
+          # GitHub updates a PR's head asynchronously after a push. Wait for
+          # the PR to point at the commit this run pushed before reading its
+          # diff; otherwise a reused branch could validate the previous diff.
+          pr_head_sha=""
+          for _ in $(seq 1 15); do
+            if pr_head_sha=$(gh pr view "${pr_url}" --json headRefOid --jq .headRefOid); then
+              if [ "${pr_head_sha}" = "${EXPECTED_SHA}" ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+          if [ "${pr_head_sha}" != "${EXPECTED_SHA}" ]; then
+            echo "PR head ${pr_head_sha:-unknown} did not reach pushed commit ${EXPECTED_SHA}; not arming auto-merge." >&2
+            exit 1
+          fi
+
+          if ! CONTENT_LOSS_OUTPUT=$(
+            .content-loss-detector/scripts/detect-content-loss \
+              --pr-url "${pr_url}" \
+              --from "${FROM_VERSION}" \
+              --data-file "$RUNNER_TEMP/copier-answers-before-update.yml" \
+              2>&1
+          ); then
+            echo "${CONTENT_LOSS_OUTPUT}" >&2
+            content_loss_list=$(printf '%s\n' "${CONTENT_LOSS_OUTPUT}" | sed 's/^/> /')
+            body="${body}
+
+          > [!WARNING]
+          > Content-loss check failed; auto-merge was not enabled.
+          >
+          ${content_loss_list}"
+            gh pr edit "${pr_url}" --body "${body}"
+            exit 1
+          fi
+          echo "${CONTENT_LOSS_OUTPUT}"
 
           # `unresolved-files` only reflects copier's own 3-way merge; it says
           # nothing about whether this branch can still merge into the base
