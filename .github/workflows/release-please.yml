@@ -14,6 +14,10 @@ name: release-please
 
 jobs:
   release-please:
+    concurrency:
+      group: release-please-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:

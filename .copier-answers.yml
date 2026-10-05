@@ -1,10 +1,11 @@
 # Changes here will be overwritten by Copier
-_commit: v0.11.7
+_commit: v0.11.9
 _src_path: https://github.com/fohte/generic-boilerplate
 auto_merge_release_pr: false
 binary_name: runok
 description: Command execution permission framework for LLM agents
 is_public: true
+pr_title_check: true
 project_name: runok
 release_binary: true
 release_type: rust
