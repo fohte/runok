@@ -1,0 +1,39 @@
+id: no-knip-ignore-tags-javascript
+snapshots:
+  ? |
+    /**
+     * @public
+     */
+    export const value = 'public';
+  : labels:
+      - source: |-
+          /**
+           * @public
+           */
+        style: primary
+        start: 0
+        end: 18
+  ? |
+    /** @alias previousName */
+    export const value = 'alias';
+  : labels:
+      - source: /** @alias previousName */
+        style: primary
+        start: 0
+        end: 26
+  ? |
+    /** @beta */
+    export const value = 'beta';
+  : labels:
+      - source: /** @beta */
+        style: primary
+        start: 0
+        end: 12
+  ? |
+    /** @internal */
+    export const value = 'internal';
+  : labels:
+      - source: /** @internal */
+        style: primary
+        start: 0
+        end: 16

@@ -1,0 +1,32 @@
+id: no-knip-ignore-tags-typescript
+valid:
+  - |
+    // @internal
+    export const value: string = 'allowed line comment';
+  - |
+    /* @public */
+    export const value: string = 'allowed block comment';
+  - |
+    /** @internalized is not the knip tag. */
+    export const value: string = 'allowed longer tag';
+  - |
+    /** Contact ops@internal.example.com for access. */
+    export const value: string = 'allowed email address';
+  - |
+    /** Use @public as an example tag name. */
+    export const value: string = 'allowed inline mention';
+invalid:
+  - |
+    /** @internal */
+    export const value: string = 'internal';
+  - |
+    /**
+     * @public
+     */
+    export const value: string = 'public';
+  - |
+    /** @beta */
+    export const value: string = 'beta';
+  - |
+    /** @alias previousName */
+    export const value: string = 'alias';
