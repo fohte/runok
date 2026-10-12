@@ -1,0 +1,32 @@
+id: no-knip-ignore-tags-tsx
+valid:
+  - |
+    // @internal
+    export const Value = () => <div>allowed line comment</div>;
+  - |
+    /* @public */
+    export const Value = () => <div>allowed block comment</div>;
+  - |
+    /** @internalized is not the knip tag. */
+    export const Value = () => <div>allowed longer tag</div>;
+  - |
+    /** Contact ops@internal.example.com for access. */
+    export const EmailValue = () => <div>allowed email address</div>;
+  - |
+    /** Use @public as an example tag name. */
+    export const MentionValue = () => <div>allowed inline mention</div>;
+invalid:
+  - |
+    /** @internal */
+    export const InternalValue = () => <div>internal</div>;
+  - |
+    /**
+     * @public
+     */
+    export const PublicValue = () => <div>public</div>;
+  - |
+    /** @beta */
+    export const BetaValue = () => <div>beta</div>;
+  - |
+    /** @alias PreviousValue */
+    export const AliasValue = () => <div>alias</div>;

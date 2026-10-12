@@ -1,0 +1,12 @@
+id: no-knip-ignore-tags-tsx
+language: Tsx
+severity: error
+message: |
+  Avoid JSDoc tags that make knip ignore exports.
+  Restructure production usage instead of adding @internal, @public, @beta, or @alias.
+note: |
+  Remove the tag and make production code use the export.
+rule:
+  all:
+    - kind: comment
+    - regex: '(?s)^/\*\*(?:[^\n]*\n)*[ \t]*\*?[ \t]*@(internal|public|beta|alias)\b'
