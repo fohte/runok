@@ -316,7 +316,7 @@ rules:
 
 ## Bug Fixes
 
-### Hook wrappers no longer ask for contradictory presets that run separately (TODO(pr-link))
+### Hook wrappers no longer ask for contradictory presets that run separately ([#534](https://github.com/fohte/runok/pull/534))
 
 Claude Code hooks no longer escalate `allow` or `pass` actions when each sandboxed sub-command can run under its own preset. Codex `PreToolUse` hooks apply the same behavior to `allow` actions; a contradictory `pass` result still escalates because Codex cannot return `updatedInput` for `pass`. Existing `ask` and `deny` actions stay unchanged. `runok exec`, `runok check`, and hook fallbacks still escalate `allow` and `pass` to `ask` when they must apply a contradictory merged policy.
 
