@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use indoc::indoc;
 use tempfile::TempDir;
 
 /// Test environment that manages a temporary directory with a `runok.yml`
@@ -46,6 +47,28 @@ impl TestEnv {
         cmd.env_remove("XDG_CACHE_HOME");
         cmd
     }
+}
+
+pub fn sandbox_contradiction_env() -> TestEnv {
+    TestEnv::new(indoc! {"
+        rules:
+          - allow: 'write_tool *'
+            sandbox: writable
+          - allow: 'read_tool *'
+            sandbox: readonly
+          - allow: 'cd *'
+            sandbox: writable
+        definitions:
+          sandbox:
+            writable:
+              fs:
+                write:
+                  allow: [./output]
+            readonly:
+              fs:
+                write:
+                  allow: []
+    "})
 }
 
 /// `runok exec --hook-origin <token> --sandbox <preset> -- ...` embeds a

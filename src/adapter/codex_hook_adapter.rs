@@ -204,6 +204,10 @@ impl Endpoint for CodexHookAdapter {
     fn is_auditable(&self) -> bool {
         true
     }
+
+    fn applies_sandbox_wraps(&self) -> bool {
+        self.event_kind() == CodexHookEventKind::PreToolUse
+    }
 }
 
 #[cfg(test)]

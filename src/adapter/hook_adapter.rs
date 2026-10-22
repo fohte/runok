@@ -225,6 +225,10 @@ impl Endpoint for ClaudeCodeHookAdapter {
         true
     }
 
+    fn applies_sandbox_wraps(&self) -> bool {
+        self.event_kind() == HookEventKind::PreToolUse
+    }
+
     fn extract_command(&self) -> Result<Option<String>, anyhow::Error> {
         if self.input.tool_name != "Bash" {
             return Ok(None);

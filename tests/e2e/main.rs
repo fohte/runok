@@ -1,5 +1,6 @@
 mod audit;
 mod check_claude_code_hook;
+mod check_codex_hook;
 mod check_format_auto_detect;
 mod check_generic;
 mod cli;

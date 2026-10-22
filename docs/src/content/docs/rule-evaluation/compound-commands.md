@@ -176,7 +176,7 @@ Without this resolution, unmatched sub-commands would be silently ignored.
 
 ## Sandbox policy aggregation
 
-The Claude Code hook applies a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok replaces that sub-command's own text in the original input -- its `KEY=VALUE` env-assignment prefix and its own redirects included -- with `runok exec --hook-origin <token> --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is the replaced text, shell-quoted, and returns the rewritten string via `updatedInput`. Only the operators that join sub-commands together (`|`, `&&`, `||`, `;`) are left as-is, handled by the outer shell exactly as they would be for an unsandboxed command.
+Claude Code and Codex `PreToolUse` hooks apply a sandbox to a compound command sub-command by sub-command by default: for each sub-command that needs a sandbox, runok replaces that sub-command's own text in the original input -- its `KEY=VALUE` env-assignment prefix and its own redirects included -- with `runok exec --hook-origin <token> --sandbox <preset> -- '<sub-command>'`, where `<sub-command>` is the replaced text, shell-quoted, and returns the rewritten string via `updatedInput`. Only the operators that join sub-commands together (`|`, `&&`, `||`, `;`) are left as-is, handled by the outer shell exactly as they would be for an unsandboxed command.
 
 ```yaml
 rules:
@@ -219,11 +219,11 @@ The replaced range starts at the sub-command's own `KEY=VALUE` env-assignment pr
 
 When [`defaults.sandbox`](/configuration/schema/#defaultssandbox) is set, it applies the same way it does to a non-compound command: a sub-command with no `sandbox` of its own still gets wrapped for the default preset.
 
-Per-sub-command wrapping is what the Claude Code hook's `updatedInput` rewrite uses. `runok exec` and `runok check` never use it: each evaluates one command string at a time and has no per-sub-command shell to hand a rewritten string back to, so they always apply a single, merged policy to the whole input instead -- see [Fallback: merged sandbox policy](#fallback-merged-sandbox-policy) below.
+Per-sub-command wrapping is what the Claude Code and Codex hooks' `updatedInput` rewrites use. `runok exec` and `runok check` never use it: each evaluates one command string at a time and has no per-sub-command shell to hand a rewritten string back to, so they always apply a single, merged policy to the whole input instead -- see [Fallback: merged sandbox policy](#fallback-merged-sandbox-policy) below.
 
 ### Fallback: merged sandbox policy
 
-`runok exec` and `runok check` always apply a single, merged sandbox policy to the whole input, built from every matched preset using the **strictest intersection**. The Claude Code hook normally avoids this by wrapping each sub-command on its own, but falls back to the same merged policy, wrapping the **entire** compound command in one sandbox, when a sub-command that needs a sandbox meets one of these conditions:
+`runok exec` and `runok check` always apply a single, merged sandbox policy to the whole input, built from every matched preset using the **strictest intersection**. The Claude Code and Codex hooks normally avoid this by wrapping each sub-command on its own, but fall back to the same merged policy, wrapping the **entire** compound command in one sandbox, when a sub-command that needs a sandbox meets one of these conditions:
 
 - **No byte range at all.** The sub-command has no range of its own in the input to replace -- the case after a [parse failure](#parse-failure-fallback), where the whole input is treated as one sub-command.
 - **Byte range nested inside another sub-command's range.** Command substitution (`$(...)`) and process substitution (`<(...)`) extract an inner sub-command whose range sits inside the outer sub-command's own range. Since the outer sub-command is wrapped too, wrapping the inner one as well would start a sandbox inside a sandbox.
@@ -252,7 +252,7 @@ runok exec --hook-origin <token> --sandbox <preset-a> --sandbox <preset-b> -- '<
 
 ### Writable contradiction escalation
 
-If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction, and the action is escalated to `ask` (unless it is already `deny`). This escalation is unconditional: `runok exec` and `runok check` always evaluate against the merged policy, so it happens whenever the writable intersection is empty, independent of whether the Claude Code hook was also able to wrap every sub-command that needs one on its own.
+If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction, and the action is escalated to `ask` (unless it is already `deny`). `runok exec` and `runok check` always evaluate against the merged policy, so they keep this escalation. A hook skips it only when it can apply each sub-command's preset separately; it keeps the escalation when the whole compound must run under one merged policy.
 
 ```yaml
 definitions:
@@ -278,7 +278,7 @@ For the command `build-a release && build-b release`:
 3. Writable intersection: empty (contradiction)
 4. Final result: **ask** (escalated from `allow`)
 
-Both sub-commands have a contiguous byte range and neither is nested in the other, so the Claude Code hook can still wrap each of them on its own -- but the merged policy it also evaluates against still has an empty writable intersection, so the action still escalates to `ask`.
+Both sub-commands have a contiguous byte range and neither is nested in the other, so Claude Code and Codex hooks wrap each of them on its own. The merged policy has an empty writable intersection, but those hooks do not apply that merged policy in this case, so the action remains `allow`.
 
 ## Parse failure fallback
 

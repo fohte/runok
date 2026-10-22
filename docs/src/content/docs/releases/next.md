@@ -316,6 +316,10 @@ rules:
 
 ## Bug Fixes
 
+### Hook wrappers no longer ask for contradictory presets that run separately (TODO(pr-link))
+
+Claude Code and Codex `PreToolUse` hooks now allow a compound command when each sandboxed sub-command can run under its own preset, even when merging those presets would produce contradictory writable roots. `runok exec` and compounds that cannot be wrapped separately still ask for confirmation.
+
 ### `runok init` no longer overwrites an existing `runok.yml` with migrated Claude Code rules ([#522](https://github.com/fohte/runok/pull/522))
 
 `runok init` used to silently overwrite an existing hand-written `runok.yml` (e.g. one built with `extends`) in two cases: accepting the "Migrate Claude Code Bash permissions to runok rules?" prompt replaced it with the migrated rules, and a separate "`runok.yml` already exists. Overwrite?" prompt could be bypassed since `-y` auto-answers every prompt "yes" -- even though `-y` is documented as only skipping confirmations, not permitting destructive overwrites. `runok init` now never touches an existing `runok.yml`: the migration offer isn't shown once one already exists at the target scope, the overwrite prompt has been removed entirely, and init only ever populates a fresh, not-yet-existing `runok.yml`.
