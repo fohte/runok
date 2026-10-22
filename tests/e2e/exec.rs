@@ -59,14 +59,20 @@ fn exec_ask_treated_as_deny() {
 #[rstest]
 fn exec_keeps_ask_for_contradictory_compound_presets() {
     let env = sandbox_contradiction_env();
-    let assert = env
+    let output = env
         .command()
         .args(["exec", "--", "write_tool run && read_tool run"])
-        .assert();
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
 
-    assert.code(3).stderr(predicates::str::diff(
-        "runok: sandbox policy conflict: writable roots are contradictory\n",
-    ));
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (
+            Some(3),
+            Vec::new(),
+            b"runok: sandbox policy conflict: writable roots are contradictory\n".to_vec(),
+        ),
+    );
 }
 
 #[rstest]
