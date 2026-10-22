@@ -60,18 +60,26 @@ fn codex_pass_keeps_contradiction_ask() {
         ))
         .output()
         .unwrap_or_else(|e| panic!("failed to run Codex hook: {e}"));
-    let actual = normalized_hook_output(&output.stdout);
+    let actual = (
+        output.status.code(),
+        normalized_hook_output(&output.stdout),
+        output.stderr,
+    );
 
     assert_eq!(
         actual,
-        serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": {
-                    "command": "runok exec --ask --hook-origin <token> --sandbox writable -- 'write_tool run' && runok exec --ask --hook-origin <token> --sandbox readonly -- 'read_tool run' && inspect_tool run"
+        (
+            Some(0),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "command": "runok exec --ask --hook-origin <token> --sandbox writable -- 'write_tool run' && runok exec --ask --hook-origin <token> --sandbox readonly -- 'read_tool run' && inspect_tool run"
+                    }
                 }
-            }
-        })
+            }),
+            Vec::new(),
+        )
     );
 }
