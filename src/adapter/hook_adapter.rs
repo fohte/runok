@@ -225,7 +225,7 @@ impl Endpoint for ClaudeCodeHookAdapter {
         true
     }
 
-    fn applies_sandbox_wraps(&self) -> bool {
+    fn applies_sandbox_wraps(&self, _action: &Action) -> bool {
         self.event_kind() == HookEventKind::PreToolUse
     }
 

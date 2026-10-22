@@ -252,7 +252,7 @@ runok exec --hook-origin <token> --sandbox <preset-a> --sandbox <preset-b> -- '<
 
 ### Writable contradiction escalation
 
-If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction. `allow` and `pass` actions escalate to `ask`; an existing `ask` or `deny` action stays unchanged. `runok exec` and `runok check` always evaluate against the merged policy. A hook skips the escalation only when it can apply each sub-command's preset separately; it keeps the escalation when the whole compound must run under one merged policy.
+If the intersection of `fs.writable` paths in the merged policy is empty -- meaning sub-commands require incompatible write access -- this is treated as a contradiction. `allow` and `pass` actions escalate to `ask`; an existing `ask` or `deny` action stays unchanged. `runok exec` and `runok check` always evaluate against the merged policy. A hook skips escalation only when its response can carry every planned sub-command wrapper. Codex `pass` responses cannot carry `updatedInput`, so a contradictory `pass` result still escalates.
 
 ```yaml
 definitions:

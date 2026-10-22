@@ -14,7 +14,7 @@ use crate::config::{Config, Defaults};
 use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
 use crate::rules::rule_engine::{
     Action, EvalContext, RuleMatchInfo, SandboxWrap, default_action,
-    evaluate_command_with_metadata, evaluate_compound, evaluate_compound_with_sandbox_wraps,
+    evaluate_command_with_metadata, evaluate_compound_with_sandbox_wraps,
 };
 
 /// Unified evaluation result for the adapter layer.
@@ -114,8 +114,9 @@ pub trait Endpoint {
     }
 
     /// Whether this endpoint applies `sandbox_wraps` to individual
-    /// sub-commands instead of merging their policies for the whole input.
-    fn applies_sandbox_wraps(&self) -> bool {
+    /// sub-commands for the resolved action instead of merging their policies
+    /// for the whole input.
+    fn applies_sandbox_wraps(&self, _action: &Action) -> bool {
         false
     }
 }
@@ -264,11 +265,10 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         (commands.len() == 1 && commands[0] != command).then(|| commands[0].as_str());
     let effective_command: &str = extracted_display.unwrap_or(command.as_str());
     let action_result = if commands.len() > 1 {
-        let compound_result = if endpoint.applies_sandbox_wraps() {
-            evaluate_compound_with_sandbox_wraps(config, &command, &context, true)
-        } else {
-            evaluate_compound(config, &command, &context)
-        };
+        let compound_result =
+            evaluate_compound_with_sandbox_wraps(config, &command, &context, |action| {
+                endpoint.applies_sandbox_wraps(action)
+            });
         match compound_result {
             Ok(compound_result) => {
                 if options.verbose {

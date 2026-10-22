@@ -47,3 +47,31 @@ fn codex_permission_request_keeps_contradiction_ask_deferred() {
         (Some(0), Vec::new(), Vec::new()),
     );
 }
+
+#[rstest]
+fn codex_pass_keeps_contradiction_ask() {
+    let env = sandbox_contradiction_env();
+    let output = env
+        .command()
+        .args(["hook", "--agent", "codex"])
+        .write_stdin(codex_bash_hook_json(
+            "write_tool run && read_tool run && inspect_tool run",
+            "PreToolUse",
+        ))
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run Codex hook: {e}"));
+    let actual = normalized_hook_output(&output.stdout);
+
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    "command": "runok exec --ask --hook-origin <token> --sandbox writable -- 'write_tool run' && runok exec --ask --hook-origin <token> --sandbox readonly -- 'read_tool run' && inspect_tool run"
+                }
+            }
+        })
+    );
+}

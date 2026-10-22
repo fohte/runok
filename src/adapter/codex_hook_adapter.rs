@@ -205,8 +205,8 @@ impl Endpoint for CodexHookAdapter {
         true
     }
 
-    fn applies_sandbox_wraps(&self) -> bool {
-        self.event_kind() == CodexHookEventKind::PreToolUse
+    fn applies_sandbox_wraps(&self, action: &Action) -> bool {
+        self.event_kind() == CodexHookEventKind::PreToolUse && !matches!(action, Action::Pass)
     }
 }
 

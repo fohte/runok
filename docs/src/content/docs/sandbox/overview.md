@@ -160,7 +160,7 @@ This ensures that, even when the merged policy applies, a less-restricted comman
 
 If every sub-command that specifies a sandbox names the **same** preset (after deduplication), a whole-command wrapper can apply that preset directly instead of a merged policy -- the same way a non-compound command's preset is applied. When a whole-command wrapper merges two or more distinct presets, the hook passes repeated `--sandbox` flags in `updatedInput`, and `runok exec` resolves and merges those presets itself. Claude Code does this for `allow`, `ask`, and `pass`; Codex `PreToolUse` does it for `allow` and `ask`, while `pass` emits no output.
 
-If the intersection of `writable` roots in the merged policy becomes empty (a contradiction), runok escalates `allow` and `pass` actions to `ask`; existing `ask` and `deny` actions remain unchanged. `runok exec` and `runok check` always evaluate against the merged policy. A Claude Code or Codex hook skips the escalation only when it can wrap every sandboxed sub-command separately; it keeps the escalation when it has to apply the merged policy to the whole command.
+If the intersection of `writable` roots in the merged policy becomes empty (a contradiction), runok escalates `allow` and `pass` actions to `ask`; existing `ask` and `deny` actions remain unchanged. `runok exec` and `runok check` always evaluate against the merged policy. A hook skips escalation only when its response can carry every planned sub-command wrapper. Codex `pass` responses cannot carry `updatedInput`, so a contradictory `pass` result still escalates.
 
 See [Compound Commands -- Sandbox policy aggregation](/rule-evaluation/compound-commands/#sandbox-policy-aggregation) for the full mechanics and worked examples.
 
