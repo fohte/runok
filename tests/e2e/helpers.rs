@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use indoc::indoc;
 use tempfile::TempDir;
 
 /// Test environment that manages a temporary directory with a `runok.yml`
@@ -46,6 +47,70 @@ impl TestEnv {
         cmd.env_remove("XDG_CACHE_HOME");
         cmd
     }
+}
+
+pub fn claude_bash_hook_json(command: &str) -> String {
+    serde_json::json!({
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_use_id": "test-123"
+    })
+    .to_string()
+}
+
+pub fn codex_bash_hook_json(command: &str, hook_event_name: &str) -> String {
+    let mut input = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": hook_event_name,
+        "tool_name": "Bash",
+        "tool_input": {"command": command}
+    });
+    if hook_event_name == "PreToolUse" {
+        input["tool_use_id"] = serde_json::json!("test-123");
+    }
+    input.to_string()
+}
+
+pub fn normalized_hook_output(output: &[u8]) -> serde_json::Value {
+    let mut result: serde_json::Value =
+        serde_json::from_slice(output).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+    let command = result
+        .pointer("/hookSpecificOutput/updatedInput/command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    if let Some(command) = command {
+        result["hookSpecificOutput"]["updatedInput"]["command"] =
+            serde_json::Value::String(normalize_hook_origin_token(&command));
+    }
+    result
+}
+
+pub fn sandbox_contradiction_env() -> TestEnv {
+    TestEnv::new(indoc! {"
+        rules:
+          - allow: 'write_tool *'
+            sandbox: writable
+          - allow: 'read_tool *'
+            sandbox: readonly
+          - allow: 'cd *'
+            sandbox: writable
+        definitions:
+          sandbox:
+            writable:
+              fs:
+                write:
+                  allow: [./output]
+            readonly:
+              fs:
+                write:
+                  allow: []
+    "})
 }
 
 /// `runok exec --hook-origin <token> --sandbox <preset> -- ...` embeds a

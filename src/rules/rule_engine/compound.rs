@@ -22,14 +22,25 @@ use super::{
 ///   deny paths unioned, network access intersected), for callers that can
 ///   only apply one policy to the whole input, and for a compound where some
 ///   sub-command cannot be wrapped on its own
-/// - If sandbox aggregation produces empty writable roots (contradiction),
-///   the action is escalated to `Ask`
+/// - If the merged sandbox policy has contradictory writable roots and must
+///   be applied to the whole input, the action is escalated to `Ask`
 ///
 /// For single (non-compound) commands, this delegates to `evaluate_command`.
 pub fn evaluate_compound(
     config: &Config,
     command: &str,
     context: &EvalContext,
+) -> Result<CompoundEvalResult, RuleError> {
+    evaluate_compound_with_sandbox_wraps(config, command, context, |_| false)
+}
+
+/// Evaluate a compound for an endpoint that can apply each planned sandbox
+/// wrap to its own sub-command.
+pub(crate) fn evaluate_compound_with_sandbox_wraps(
+    config: &Config,
+    command: &str,
+    context: &EvalContext,
+    applies_sandbox_wraps: impl Fn(&Action) -> bool,
 ) -> Result<CompoundEvalResult, RuleError> {
     let extracted = extract_commands_with_metadata(command).unwrap_or_else(|_| {
         vec![ExtractedCommand {
@@ -125,9 +136,11 @@ pub fn evaluate_compound(
 
     let sandbox_preset_names: Vec<String> = unique_names.iter().map(|n| n.to_string()).collect();
 
+    let wraps_resolve_contradiction = !sandbox_wraps.is_empty() && applies_sandbox_wraps(&action);
     let (final_action, final_policy) = match (action, sandbox_policy) {
         (action, Some(policy))
-            if has_writable_contradiction(&policy, &unique_names, sandbox_defs) =>
+            if has_writable_contradiction(&policy, &unique_names, sandbox_defs)
+                && !wraps_resolve_contradiction =>
         {
             let escalated = escalate_to_ask(action);
             (escalated, Some(policy))

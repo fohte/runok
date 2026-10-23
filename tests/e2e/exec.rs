@@ -1,7 +1,7 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
 
-use super::helpers::TestEnv;
+use super::helpers::{TestEnv, sandbox_contradiction_env};
 
 #[fixture]
 fn exec_env() -> TestEnv {
@@ -54,6 +54,25 @@ fn exec_ask_treated_as_deny() {
         .args(["exec", "--", "git", "push", "origin", "main"])
         .assert();
     assert.code(3);
+}
+
+#[rstest]
+fn exec_keeps_ask_for_contradictory_compound_presets() {
+    let env = sandbox_contradiction_env();
+    let output = env
+        .command()
+        .args(["exec", "--", "write_tool run && read_tool run"])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run command: {e}"));
+
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (
+            Some(3),
+            Vec::new(),
+            b"runok: sandbox policy conflict: writable roots are contradictory\n".to_vec(),
+        ),
+    );
 }
 
 #[rstest]

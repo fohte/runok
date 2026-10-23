@@ -1,7 +1,10 @@
 use indoc::indoc;
 use rstest::{fixture, rstest};
 
-use super::helpers::{TestEnv, normalize_hook_origin_token};
+use super::helpers::{
+    TestEnv, claude_bash_hook_json as bash_hook_json, normalize_hook_origin_token,
+    normalized_hook_output, sandbox_contradiction_env,
+};
 
 #[fixture]
 fn hook_env() -> TestEnv {
@@ -25,20 +28,6 @@ fn hook_env() -> TestEnv {
               fs:
                 writable: [./tmp]
     "})
-}
-
-fn bash_hook_json(command: &str) -> String {
-    serde_json::json!({
-        "session_id": "test-session",
-        "transcript_path": "/tmp/transcript",
-        "cwd": "/tmp",
-        "permission_mode": "default",
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": {"command": command},
-        "tool_use_id": "test-123"
-    })
-    .to_string()
 }
 
 fn non_bash_hook_json(tool_name: &str) -> String {
@@ -243,6 +232,57 @@ fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
                 "updatedInput": {"command": expected_command}
+            }
+        })
+    );
+}
+
+#[rstest]
+fn hook_allows_contradictory_presets_when_each_sub_command_is_wrapped() {
+    let env = sandbox_contradiction_env();
+    let assert = env
+        .command()
+        .args(["hook", "--agent", "claude-code"])
+        .write_stdin(bash_hook_json("write_tool run && read_tool run"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let actual = normalized_hook_output(&output);
+
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    "command": "runok exec --hook-origin <token> --sandbox writable -- 'write_tool run' && runok exec --hook-origin <token> --sandbox readonly -- 'read_tool run'"
+                }
+            }
+        })
+    );
+}
+
+#[rstest]
+fn hook_keeps_ask_when_a_contradictory_compound_cannot_be_wrapped() {
+    let env = sandbox_contradiction_env();
+    let assert = env
+        .command()
+        .args(["hook", "--agent", "claude-code"])
+        .write_stdin(bash_hook_json("cd . && read_tool run"))
+        .assert();
+    let output = assert.code(0).get_output().stdout.clone();
+    let actual = normalized_hook_output(&output);
+
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": "sandbox policy conflict: writable roots are contradictory",
+                "updatedInput": {
+                    "command": "runok exec --hook-origin <token> --sandbox writable --sandbox readonly -- 'cd . && read_tool run'"
+                }
             }
         })
     );

@@ -20,6 +20,7 @@ mod wrapper;
 pub use command_resolver::{
     CommandResolution, CommandResolver, ProcessCommandResolver, StubCommandResolver,
 };
+pub(crate) use compound::evaluate_compound_with_sandbox_wraps;
 pub use compound::{default_action, evaluate_compound};
 
 use dispatch::evaluate_command_inner;
