@@ -310,7 +310,7 @@ pub(super) fn collect_heredoc_redirect_substitutions(
 /// HEREDOC delimiters cannot legally contain those characters, so
 /// finding one is unambiguous evidence that the delimiter is
 /// (partially) quoted.
-pub(super) fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+pub(crate) fn is_quoted_heredoc(heredoc_redirect: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     for i in 0..heredoc_redirect.child_count() {
         let Some(child) = heredoc_redirect.child(i as u32) else {
             continue;

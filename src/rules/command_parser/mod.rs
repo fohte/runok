@@ -1,9 +1,11 @@
 mod function_table;
 mod redirect;
+mod shell_expansion;
 mod splitter;
 mod tokenizer;
 mod var_env;
 
+pub(crate) use shell_expansion::contains_shell_state_expansion;
 pub(crate) use splitter::resolve_function_call_body;
 pub use splitter::{extract_commands, extract_commands_with_metadata, split_top_level_commands};
 pub use tokenizer::{parse_command, tokenize_command};

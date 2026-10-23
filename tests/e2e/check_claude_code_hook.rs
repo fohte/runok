@@ -3,7 +3,7 @@ use rstest::{fixture, rstest};
 
 use super::helpers::{
     TestEnv, claude_bash_hook_json as bash_hook_json, normalize_hook_origin_token,
-    normalized_hook_output, sandbox_contradiction_env,
+    normalized_hook_output, sandbox_contradiction_env, shell_variable_sandbox_env,
 };
 
 #[fixture]
@@ -234,6 +234,53 @@ fn hook_sandbox_allow_wraps_each_sub_command_of_a_compound(
                 "updatedInput": {"command": expected_command}
             }
         })
+    );
+}
+
+#[rstest]
+fn hook_sandbox_wrap_preserves_shell_variables_in_a_compound_command() {
+    let env = shell_variable_sandbox_env();
+    let command = r#"file=/example/document.md; true; printf "%s\n" "$file" 2>&1 | tail"#;
+
+    let hook_output = env
+        .command()
+        .args(["check", "--input-format", "claude-code-hook"])
+        .write_stdin(bash_hook_json(command))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let hook_json = normalized_hook_output(&hook_output);
+    assert_eq!(
+        hook_json,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    "command": r#"runok exec --hook-origin <token> --sandbox restricted -- "file=/example/document.md; true; printf \"%s\\n\" \""'$file" 2>&1 | tail'"#
+                }
+            }
+        })
+    );
+
+    let wrapped_command = hook_json["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
+    let tokens = shlex::split(wrapped_command)
+        .unwrap_or_else(|| panic!("failed to split wrapped command: {wrapped_command}"));
+    let output = env
+        .command()
+        .args(&tokens[1..])
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"/example/document.md\n".to_vec(), vec![]),
     );
 }
 

@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::{Config, Definitions, MergedSandboxPolicy, SandboxPreset};
 use crate::rules::RuleError;
-use crate::rules::command_parser::{ExtractedCommand, PipeInfo, extract_commands_with_metadata};
+use crate::rules::command_parser::{
+    ExtractedCommand, PipeInfo, contains_shell_state_expansion, extract_commands_with_metadata,
+};
 
 use super::dispatch::evaluate_command_inner;
 use super::require_command_in_path::command_contains_source_like;
@@ -108,7 +110,7 @@ pub(crate) fn evaluate_compound_with_sandbox_wraps(
 
     let default_preset = config.defaults.as_ref().and_then(|d| d.sandbox.as_deref());
     let sandbox_wraps =
-        plan_sandbox_wraps(&extracted, &sub_results, default_preset).unwrap_or_default();
+        plan_sandbox_wraps(command, &extracted, &sub_results, default_preset).unwrap_or_default();
 
     // Deduplicate preset names while preserving order
     let mut seen = HashSet::new();
@@ -174,9 +176,11 @@ const SHELL_STATE_BUILTINS: &[&str] = &[
 /// Returns `None` when a sub-command that needs a sandbox cannot be wrapped on
 /// its own: it has no `full_span`, its range lies inside another sub-command's
 /// range (a command or process substitution), where wrapping it would start a
-/// sandbox inside a sandbox, or it is one of `SHELL_STATE_BUILTINS`. The caller
-/// then wraps the whole compound in one sandbox instead.
+/// sandbox inside a sandbox, it is one of `SHELL_STATE_BUILTINS`, or its
+/// original text uses shell-state variable expansion. The caller then wraps
+/// the whole compound in one sandbox instead.
 fn plan_sandbox_wraps(
+    original_command: &str,
     extracted: &[ExtractedCommand],
     results: &[EvalResult],
     default_preset: Option<&str>,
@@ -210,6 +214,10 @@ fn plan_sandbox_wraps(
                     .is_some_and(|o| o.start <= range.start && range.end <= o.end)
         });
         if contained_in_another {
+            return None;
+        }
+        let fragment = original_command.get(range.clone())?;
+        if contains_shell_state_expansion(fragment)? {
             return None;
         }
         wraps.push(SandboxWrap {

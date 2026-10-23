@@ -113,6 +113,25 @@ pub fn sandbox_contradiction_env() -> TestEnv {
     "})
 }
 
+pub fn shell_variable_sandbox_env() -> TestEnv {
+    let env = TestEnv::new(indoc! {"
+        rules:
+          - allow: 'true'
+          - allow: 'printf *'
+            sandbox: restricted
+          - allow: 'tail *'
+        definitions:
+          sandbox:
+            restricted:
+              fs:
+                write:
+                  allow: [./tmp]
+    "});
+    fs::create_dir_all(env.cwd.join("tmp"))
+        .unwrap_or_else(|e| panic!("failed to create tmp dir: {e}"));
+    env
+}
+
 /// `runok exec --hook-origin <token> --sandbox <preset> -- ...` embeds a
 /// fresh token on every call, once per wrapped sub-command. Replace each with
 /// a fixed placeholder so tests can still assert the wrapped command with a

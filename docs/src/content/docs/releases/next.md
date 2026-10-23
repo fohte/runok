@@ -316,6 +316,10 @@ rules:
 
 ## Bug Fixes
 
+### Sandboxed fragments preserve shell variables in compound commands (TODO(pr-link))
+
+When a compound command had a sandboxed fragment that referenced a variable from the original shell, the hook moved that fragment into a child shell where an unexported variable was empty. runok now keeps such expansions in the original shell by wrapping the whole compound command with the merged sandbox policy. Variable-independent fragments, including quoted literal `$` text, still receive individual wraps. See [Compound Commands -- Fallback: merged sandbox policy](/rule-evaluation/compound-commands/#fallback-merged-sandbox-policy) for details.
+
 ### Hook wrappers no longer ask for contradictory presets that run separately ([#534](https://github.com/fohte/runok/pull/534))
 
 Claude Code hooks no longer escalate `allow` or `pass` actions when each sandboxed sub-command can run under its own preset. Codex `PreToolUse` hooks apply the same behavior to `allow` actions; a contradictory `pass` result still escalates because Codex cannot return `updatedInput` for `pass`. Existing `ask` and `deny` actions stay unchanged. `runok exec`, `runok check`, and hook fallbacks still escalate `allow` and `pass` to `ask` when they must apply a contradictory merged policy.

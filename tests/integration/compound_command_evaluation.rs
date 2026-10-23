@@ -1,7 +1,7 @@
 use super::{ActionAssertion, assert_allow, assert_ask, assert_deny, assert_pass, empty_context};
 
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use runok::config::{MergedSandboxPolicy, parse_config};
 use runok::exec::command_executor::CommandInput;
 use runok::rules::rule_engine::{
@@ -288,6 +288,92 @@ fn compound_sandbox_wraps(
                 preset: preset.to_string(),
             })
             .collect::<Vec<_>>(),
+    );
+}
+
+#[fixture]
+fn shell_expansion_sandbox_config() -> Result<runok::config::Config, runok::config::ConfigError> {
+    parse_config(indoc! {"
+        rules:
+          - allow: 'printf *'
+            sandbox: readonly
+          - ask: 'cargo build *'
+            sandbox: readonly
+          - allow: 'cat'
+            sandbox: readonly
+        definitions:
+          sandbox:
+            readonly:
+              fs:
+                writable: [./tmp]
+    "})
+}
+
+#[rstest]
+#[case::static_assignment(r#"file=/example/document.md; printf '%s\n' "$file""#)]
+#[case::parameter_expansion(r#"file=/example/document.md; printf '%s\n' "${file}""#)]
+#[case::environment_variable(r#"printf '%s\n' "$HOME""#)]
+#[case::dynamic_assignment(r#"file=$(echo /example/document.md); printf '%s\n' "$file""#)]
+#[case::loop_variable(r#"for file in /example/document.md; do printf '%s\n' "$file"; done"#)]
+#[case::arithmetic_variable(r#"count=1; printf '%s\n' "$((count + 1))""#)]
+#[case::redirect_target(r#"file=/example/document.md; printf '%s\n' result > "$file""#)]
+#[case::nested_substitution(r#"file=/example/document.md; cargo build "$(echo $file)""#)]
+#[case::unquoted_heredoc_variable(indoc! {"
+    cat <<EOF
+    $file
+    EOF
+    "})]
+fn sandboxed_fragments_with_shell_state_expansions_use_the_merged_wrap(
+    empty_context: EvalContext,
+    shell_expansion_sandbox_config: Result<runok::config::Config, runok::config::ConfigError>,
+    #[case] command: &str,
+) {
+    let result = evaluate_compound(
+        &shell_expansion_sandbox_config.unwrap(),
+        command,
+        &empty_context,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (result.sandbox_preset_names, result.sandbox_wraps),
+        (vec!["readonly".to_string()], vec![]),
+    );
+}
+
+#[rstest]
+#[case::single_quoted_variable(r#"printf '%s\n' '$file'"#, 0..21)]
+#[case::escaped_dollar(r#"printf '%s\n' \$file"#, 0..20)]
+#[case::quoted_heredoc(
+    indoc! {"
+        cat <<'EOF'
+        $file
+        EOF
+    "},
+    0..21
+)]
+fn sandboxed_fragments_with_literal_variables_keep_individual_wraps(
+    empty_context: EvalContext,
+    shell_expansion_sandbox_config: Result<runok::config::Config, runok::config::ConfigError>,
+    #[case] command: &str,
+    #[case] range: std::ops::Range<usize>,
+) {
+    let result = evaluate_compound(
+        &shell_expansion_sandbox_config.unwrap(),
+        command,
+        &empty_context,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (result.sandbox_preset_names, result.sandbox_wraps),
+        (
+            vec!["readonly".to_string()],
+            vec![SandboxWrap {
+                range,
+                preset: "readonly".to_string(),
+            }],
+        ),
     );
 }
 

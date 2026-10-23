@@ -1,5 +1,37 @@
-use super::helpers::{codex_bash_hook_json, normalized_hook_output, sandbox_contradiction_env};
+use super::helpers::{
+    codex_bash_hook_json, normalized_hook_output, sandbox_contradiction_env,
+    shell_variable_sandbox_env,
+};
 use rstest::rstest;
+
+#[rstest]
+fn codex_hook_sandbox_wrap_preserves_shell_variables_in_a_compound_command() {
+    let env = shell_variable_sandbox_env();
+    let command = r#"file=/example/document.md; true; printf "%s\n" "$file" 2>&1 | tail"#;
+    let output = env
+        .command()
+        .args(["hook", "--agent", "codex"])
+        .write_stdin(codex_bash_hook_json(command, "PreToolUse"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let actual = normalized_hook_output(&output);
+
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    "command": r#"runok exec --hook-origin <token> --sandbox restricted -- "file=/example/document.md; true; printf \"%s\\n\" \""'$file" 2>&1 | tail'"#
+                }
+            }
+        })
+    );
+}
 
 #[rstest]
 fn codex_hook_allows_contradictory_presets_when_each_sub_command_is_wrapped() {
