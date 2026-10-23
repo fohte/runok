@@ -252,19 +252,6 @@ fn hook_sandbox_wrap_preserves_shell_variables_in_a_compound_command() {
         .stdout
         .clone();
     let hook_json = normalized_hook_output(&hook_output);
-    assert_eq!(
-        hook_json,
-        serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": {
-                    "command": r#"runok exec --hook-origin <token> --sandbox restricted -- "file=/example/document.md; true; printf \"%s\\n\" \""'$file" 2>&1 | tail'"#
-                }
-            }
-        })
-    );
-
     let wrapped_command = hook_json["hookSpecificOutput"]["updatedInput"]["command"]
         .as_str()
         .unwrap_or_else(|| panic!("updatedInput.command should be a string"));
@@ -279,8 +266,26 @@ fn hook_sandbox_wrap_preserves_shell_variables_in_a_compound_command() {
         .clone();
 
     assert_eq!(
-        (output.status.code(), output.stdout, output.stderr),
-        (Some(0), b"/example/document.md\n".to_vec(), vec![]),
+        (
+            hook_json,
+            output.status.code(),
+            output.stdout,
+            output.stderr
+        ),
+        (
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "command": r#"runok exec --hook-origin <token> --sandbox restricted -- "file=/example/document.md; true; printf \"%s\\n\" \""'$file" 2>&1 | tail'"#
+                    }
+                }
+            }),
+            Some(0),
+            b"/example/document.md\n".to_vec(),
+            vec![]
+        ),
     );
 }
 
