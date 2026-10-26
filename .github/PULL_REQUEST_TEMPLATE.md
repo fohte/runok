@@ -51,5 +51,5 @@ Group by decision axis. Use one H4 per axis, even if there is only one axis. Eac
 ### Breaking changes
 
 <!--
-Include only when this PR breaks compatibility. State what breaks and what consumers need to do to adapt. Delete this entire subsection if there are no breaking changes.
+Include only when this PR requires a semver major bump: the public interface of a released artifact changes so that consumers must change their code, configuration, or usage for it to keep working. Do not include follow-up changes in other repositories, data migrations, APIs between components within this repository, or UI changes. State what breaks and what consumers need to do to adapt. Delete this entire subsection otherwise.
 -->

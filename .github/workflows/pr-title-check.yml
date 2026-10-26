@@ -10,13 +10,13 @@ permissions:
 jobs:
   pr-title-check:
     runs-on: ubuntu-slim
+    timeout-minutes: 30
 
     steps:
-      # PRs are squash-merged, so the PR title becomes the commit message that
-      # release-please reads. In a pnpm workspace, release-please (independent
-      # mode) decides which package to bump solely from the scope, so
-      # release-bumping types must name a real workspace package. Projects
-      # without a pnpm workspace fall back to a plain Conventional Commits check.
+      # PRs are squash-merged, so the PR title becomes the commit message.
+      # When release-please is enabled in a pnpm workspace, its independent
+      # mode uses the scope to decide which package to bump. Projects without a
+      # pnpm workspace use this workflow only to validate Conventional Commits.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
