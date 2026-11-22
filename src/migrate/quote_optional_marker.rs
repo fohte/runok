@@ -70,7 +70,7 @@ fn migrate_quote_optional_marker(content: &str) -> Result<Option<String>, Migrat
 }
 
 /// Walk every pattern-syntax-bearing field reachable from a parsed `Config`
-/// (`rules[].{allow,deny,ask}`, `definitions.wrappers`,
+/// (`rules[].{allow,deny,ask,match}`, `definitions.wrappers`,
 /// `definitions.flag_groups.*`, `definitions.aliases.*`, and
 /// `definitions.vars.*.values` for pattern-typed values) and build a
 /// `Replace` patch for each one that contains a bare `?`. Inline
@@ -81,17 +81,17 @@ fn collect_patches(config: &Config) -> Vec<Patch<'_>> {
     // `rules` is `Option<Vec<RuleEntry>>`, not `Vec<Option<RuleEntry>>`: `flatten()`
     // only strips the outer `Option`, so `i` always matches the YAML `rules[]` index.
     for (i, rule) in config.rules.iter().flatten().enumerate() {
-        let Some((action, pattern)) = rule.action_and_pattern() else {
+        let Some((matcher, pattern)) = rule.matcher_and_pattern() else {
             continue;
         };
-        let key = match action {
-            ActionKind::Allow => "allow",
-            ActionKind::Deny => "deny",
-            ActionKind::Ask => "ask",
-            ActionKind::Pass => unreachable!(
-                "action_and_pattern() reads a rule's deny/allow/ask field; \
-                 a rule entry can never resolve to ActionKind::Pass"
-            ),
+        let key = match matcher {
+            crate::config::RuleMatcher::Action(ActionKind::Allow) => "allow",
+            crate::config::RuleMatcher::Action(ActionKind::Deny) => "deny",
+            crate::config::RuleMatcher::Action(ActionKind::Ask) => "ask",
+            crate::config::RuleMatcher::Action(ActionKind::Pass) => {
+                unreachable!("rule matchers cannot use ActionKind::Pass")
+            }
+            crate::config::RuleMatcher::Extension(_) => "match",
         };
         push_patch(&mut patches, route!("rules", i, key), pattern);
     }

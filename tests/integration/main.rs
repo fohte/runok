@@ -3,6 +3,7 @@ mod audit_log_integration;
 mod compound_command_evaluation;
 mod config_to_rule_evaluation;
 mod extends_resolution;
+mod extension_rule_evaluation;
 mod flag_group_evaluation;
 mod flag_optional_value;
 mod function_call_resolution;
@@ -33,6 +34,7 @@ fn empty_context() -> EvalContext {
         env: HashMap::new(),
         cwd: PathBuf::from("/tmp"),
         resolver: Arc::new(StubCommandResolver),
+        extension_runner: Arc::new(runok::exec::extension_runner::ProcessExtensionRunner),
     }
 }
 

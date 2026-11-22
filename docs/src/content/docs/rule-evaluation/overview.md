@@ -23,7 +23,7 @@ When runok receives a command:
 
 1. **Parse compound command**: Split into sub-commands using tree-sitter-bash (see [Compound Commands](/rule-evaluation/compound-commands/)).
 2. **For each sub-command**:
-   a. Match against all rules (pattern + `when` clause filtering).
+   a. Match all rules (pattern + optional `when`). If a matching rule references an [extension](/extensions/overview/), run it and include its `allow`, `deny`, or `ask` result in the priority merge. An extension's `pass` leaves that rule unmatched.
    b. Try [`definitions.wrappers`](/configuration/schema/#definitionswrappers) pattern matching to extract wrapped commands for recursive evaluation.
    c. Merge direct and wrapped command results using Explicit Deny Wins.
 3. **Aggregate**: Merge all sub-command results (strictest wins).

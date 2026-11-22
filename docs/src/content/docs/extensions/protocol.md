@@ -94,21 +94,22 @@ The extension must write a single JSON-RPC 2.0 response to stdout.
 
 ### `result` fields
 
-| Field            | Type     | Required | Description                                    |
-| ---------------- | -------- | -------- | ---------------------------------------------- |
-| `status`         | `string` | **Yes**  | One of `"allow"`, `"deny"`, or `"ask"`         |
-| `message`        | `string` | No       | Human-readable message explaining the decision |
-| `fix_suggestion` | `string` | No       | A suggested alternative command                |
+| Field            | Type     | Required | Description                                      |
+| ---------------- | -------- | -------- | ------------------------------------------------ |
+| `status`         | `string` | **Yes**  | One of `"allow"`, `"deny"`, `"ask"`, or `"pass"` |
+| `message`        | `string` | No       | Human-readable message explaining the decision   |
+| `fix_suggestion` | `string` | No       | A suggested alternative command                  |
 
 ### Status values
 
-| Status    | Action                                                                        |
-| --------- | ----------------------------------------------------------------------------- |
-| `"allow"` | The command is permitted to run                                               |
-| `"deny"`  | The command is blocked. `message` and `fix_suggestion` are shown to the user. |
-| `"ask"`   | The user is prompted for confirmation before the command runs                 |
+| Status    | Action                                                                         |
+| --------- | ------------------------------------------------------------------------------ |
+| `"allow"` | The command is permitted to run                                                |
+| `"deny"`  | The command is blocked. `message` and `fix_suggestion` are shown to the user.  |
+| `"ask"`   | The user is prompted for confirmation before the command runs                  |
+| `"pass"`  | This extension rule is treated as unmatched; other rules or the default decide |
 
-Any unrecognized status value is treated as `"ask"`.
+Any unrecognized status value is treated as `"ask"`. A timeout, failed process, or invalid response also becomes `ask`.
 
 ### Error response
 
@@ -153,12 +154,13 @@ Extension output is sanitized before display. ASCII control characters (except `
 
 ## Executor command
 
-The extension process is specified via the `executor` field in the [configuration](/configuration/schema/). runok uses shell-style tokenization (`shlex`) to parse the command:
+The extension process is specified under `definitions.extensions.<name>.executor` in the [configuration](/configuration/schema/#definitionsextensions). A rule references it with `extension` and provides its command pattern with `match`. runok uses shell-style tokenization (`shlex`) to parse the executor command:
 
 ```yaml
-types:
-  InternalUrl:
-    executor: 'deno run --allow-net ./checks/url_check.ts'
+definitions:
+  extensions:
+    internal_url:
+      executor: 'deno run --allow-net ./checks/url_check.ts'
 ```
 
 The executor string is split into a program and arguments. In this example, runok spawns `deno` with arguments `["run", "--allow-net", "./checks/url_check.ts"]`. Quoted strings and backslash escapes in the executor command are handled correctly.

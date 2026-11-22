@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::{ActionKind, Config, MergedSandboxPolicy};
+use crate::exec::extension_runner::{ExtensionRunner, ProcessExtensionRunner};
 use crate::rules::RuleError;
 use crate::rules::command_parser::{
     FunctionCallInfo, PipeInfo, RedirectInfo, extract_commands_with_metadata,
@@ -34,6 +35,8 @@ pub struct EvalContext {
     /// PATH-dependent command lookup, injected so tests can substitute a
     /// deterministic stub instead of depending on the host's `$PATH`.
     pub resolver: Arc<dyn CommandResolver>,
+    /// External command validator used by extension rules.
+    pub extension_runner: Arc<dyn ExtensionRunner>,
 }
 
 /// Shell metadata inherited by a command during recursive rule evaluation.
@@ -50,6 +53,7 @@ impl EvalContext {
             env: std::env::vars().collect(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             resolver: Arc::new(ProcessCommandResolver::new()),
+            extension_runner: Arc::new(ProcessExtensionRunner),
         }
     }
 }
@@ -266,6 +270,7 @@ mod test_support {
             env: HashMap::new(),
             cwd: PathBuf::from("/tmp"),
             resolver: Arc::new(StubCommandResolver),
+            extension_runner: Arc::new(crate::exec::extension_runner::ProcessExtensionRunner),
         }
     }
 
@@ -285,6 +290,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }
@@ -298,6 +305,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }
@@ -311,6 +320,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }

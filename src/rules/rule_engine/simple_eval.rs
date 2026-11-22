@@ -1,4 +1,6 @@
-use crate::config::{ActionKind, Config, Definitions, RuleEntry};
+use crate::config::{ActionKind, Config, Definitions, RuleMatcher};
+use crate::exec::ExtensionError;
+use crate::exec::extension_runner::{ExtensionRequest, resolve_extension_result};
 use crate::rules::RuleError;
 use crate::rules::alias_expander::expand_rule_pattern;
 use crate::rules::command_parser::{FunctionCallInfo, PipeInfo, RedirectInfo, parse_command};
@@ -14,6 +16,8 @@ use super::wrapper::try_unwrap_wrapper;
 use super::{
     Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatchInfo, ShellContext,
 };
+
+const EXTENSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Evaluate a single (non-compound) command against rules, function
 /// calls, and wrappers.
@@ -82,8 +86,8 @@ pub(super) fn evaluate_simple_command(
     let mut matched: Vec<MatchedRule> = Vec::new();
     let mut match_infos: Vec<RuleMatchInfo> = Vec::new();
 
-    for rule in rules {
-        let (action_kind, pattern_str) = match rule.action_and_pattern() {
+    'rules: for rule in rules {
+        let (matcher, pattern_str) = match rule.matcher_and_pattern() {
             Some(pair) => pair,
             None => continue,
         };
@@ -121,6 +125,64 @@ pub(super) fn evaluate_simple_command(
                     }
                 }
 
+                let (action_kind, message, fix_suggestion) = match matcher {
+                    RuleMatcher::Action(action_kind) => (
+                        action_kind,
+                        rule.message.clone(),
+                        rule.fix_suggestion.clone(),
+                    ),
+                    RuleMatcher::Extension(name) => {
+                        let extension_result = match definitions
+                            .extensions
+                            .as_ref()
+                            .and_then(|extensions| extensions.get(name))
+                        {
+                            Some(extension) => {
+                                let request = ExtensionRequest {
+                                    command: parsed_command.command.clone(),
+                                    flags: parsed_command
+                                        .flags
+                                        .iter()
+                                        .map(|(flag, value)| {
+                                            (
+                                                flag.trim_start_matches('-').to_string(),
+                                                value.clone().unwrap_or_default(),
+                                            )
+                                        })
+                                        .collect(),
+                                    args: parsed_command.args.clone(),
+                                    raw_command_line: command.to_string(),
+                                    env: context.env.clone(),
+                                    cwd: context.cwd.to_string_lossy().into_owned(),
+                                };
+                                let response = context.extension_runner.validate(
+                                    &extension.executor,
+                                    &request,
+                                    EXTENSION_TIMEOUT,
+                                );
+                                resolve_extension_result(response, false)
+                            }
+                            None => resolve_extension_result(
+                                Err(ExtensionError::InvalidResponse(format!(
+                                    "extension '{name}' is not defined"
+                                ))),
+                                false,
+                            ),
+                        };
+
+                        if extension_result.action == ActionKind::Pass {
+                            continue 'rules;
+                        }
+                        (
+                            extension_result.action,
+                            extension_result.message.or_else(|| rule.message.clone()),
+                            extension_result
+                                .fix_suggestion
+                                .or_else(|| rule.fix_suggestion.clone()),
+                        )
+                    }
+                };
+
                 match_infos.push(RuleMatchInfo {
                     action_kind,
                     pattern: pattern_str.to_string(),
@@ -129,7 +191,9 @@ pub(super) fn evaluate_simple_command(
 
                 matched.push(MatchedRule {
                     action_kind,
-                    rule,
+                    message,
+                    fix_suggestion,
+                    sandbox_preset: rule.sandbox.clone(),
                     pattern_str: pattern_str.to_string(),
                     alias_chain: expansion.chain.clone(),
                 });
@@ -173,23 +237,22 @@ pub(super) fn evaluate_simple_command(
 
         let action = match most_restrictive.action_kind {
             ActionKind::Deny => Action::Deny(DenyResponse {
-                message: most_restrictive.rule.message.clone(),
-                fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
+                message: most_restrictive.message.clone(),
+                fix_suggestion: most_restrictive.fix_suggestion.clone(),
                 matched_rule: most_restrictive.pattern_str.clone(),
             }),
             ActionKind::Ask => Action::Ask(AskResponse {
-                message: most_restrictive.rule.message.clone(),
-                fix_suggestion: most_restrictive.rule.fix_suggestion.clone(),
+                message: most_restrictive.message.clone(),
+                fix_suggestion: most_restrictive.fix_suggestion.clone(),
                 matched_rule: most_restrictive.pattern_str.clone(),
             }),
             ActionKind::Allow => Action::Allow,
             ActionKind::Pass => unreachable!(
-                "RuleEntry has no `pass` field (only deny/allow/ask); \
-                 action_and_pattern() can never return ActionKind::Pass"
+                "extension `pass` decisions are filtered before matched rules are combined"
             ),
         };
 
-        let sandbox_preset = most_restrictive.rule.sandbox.clone();
+        let sandbox_preset = most_restrictive.sandbox_preset.clone();
         let alias_chain = most_restrictive.alias_chain.clone();
 
         Some(EvalResult {
@@ -210,9 +273,11 @@ pub(super) fn evaluate_simple_command(
     Ok(merged)
 }
 
-struct MatchedRule<'a> {
+struct MatchedRule {
     action_kind: ActionKind,
-    rule: &'a RuleEntry,
+    message: Option<String>,
+    fix_suggestion: Option<String>,
+    sandbox_preset: Option<String>,
     pattern_str: String,
     alias_chain: Vec<String>,
 }
@@ -588,6 +653,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         };
         let config = make_config(vec![invalid_rule, allow_rule("git status")]);

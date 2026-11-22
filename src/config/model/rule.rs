@@ -52,24 +52,23 @@ pub enum ActionKind {
     /// permission flow (the auto-mode classifier) decides instead. Writes
     /// nothing at all when no sandbox applies either; when a sandbox does
     /// apply, `updatedInput` alone is still emitted so the rewritten command
-    /// reaches that flow. Only meaningful for `defaults.action` -- a
-    /// per-rule `deny`/`allow`/`ask` entry can never resolve to this
-    /// variant, since `RuleEntry` has no `pass` field.
+    /// reaches that flow. Extension rules also use this result to indicate
+    /// that the rule does not decide the command.
     ///
     /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
     /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
     /// is a weaker decision than an explicit `ask`, but still more
     /// restrictive than silently allowing.
     ///
-    /// The type-level default: matches `Defaults::resolved_action()`, which
-    /// falls back to `Pass` when `defaults.action` is unset.
+    /// `Defaults::resolved_action()` also falls back to `Pass` when
+    /// `defaults.action` is unset.
     #[default]
     Pass,
     Ask,
     Deny,
 }
 
-/// A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.
+/// A permission rule entry with one static action or an extension matcher.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[cfg_attr(any(feature = "config-schema", test), schemars(transform = super::schema_gen::rule_entry_one_of_transform))]
@@ -80,6 +79,11 @@ pub struct RuleEntry {
     pub allow: Option<String>,
     /// Command pattern to ask about. Matched commands prompt for confirmation.
     pub ask: Option<String>,
+    /// Name of an extension to run when `match` and `when` match.
+    pub extension: Option<String>,
+    /// Command pattern for an extension rule.
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
     /// CEL expression that must evaluate to true for this rule to apply.
     pub when: Option<String>,
     /// Message shown when the rule matches (primarily for deny rules).
@@ -103,6 +107,45 @@ impl RuleEntry {
             _ => None,
         }
     }
+
+    /// Return the rule matcher and its command pattern when exactly one matcher is configured.
+    pub(crate) fn matcher_and_pattern(&self) -> Option<(RuleMatcher<'_>, &str)> {
+        match (
+            self.deny.as_deref(),
+            self.allow.as_deref(),
+            self.ask.as_deref(),
+            self.extension.as_deref(),
+            self.match_pattern.as_deref(),
+        ) {
+            (Some(pattern), None, None, None, None) => {
+                Some((RuleMatcher::Action(ActionKind::Deny), pattern))
+            }
+            (None, Some(pattern), None, None, None) => {
+                Some((RuleMatcher::Action(ActionKind::Allow), pattern))
+            }
+            (None, None, Some(pattern), None, None) => {
+                Some((RuleMatcher::Action(ActionKind::Ask), pattern))
+            }
+            (None, None, None, Some(name), Some(pattern)) => {
+                Some((RuleMatcher::Extension(name), pattern))
+            }
+            _ => None,
+        }
+    }
+
+    /// Return the pattern used by a configured rule matcher.
+    pub(crate) fn matcher_pattern(&self) -> Option<&str> {
+        match self.matcher_and_pattern() {
+            Some((_, pattern)) => Some(pattern),
+            None => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleMatcher<'a> {
+    Action(ActionKind),
+    Extension(&'a str),
 }
 
 /// A test case entry used in both inline rule tests and top-level test cases.
@@ -198,6 +241,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
@@ -213,6 +258,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         };
         assert!(rule.action_and_pattern().is_none());
@@ -228,6 +275,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         };
         assert!(rule.action_and_pattern().is_none());

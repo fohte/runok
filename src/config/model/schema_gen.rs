@@ -1,10 +1,11 @@
 #[cfg(any(feature = "config-schema", test))]
 use super::Config;
 
-/// Transform the generated `RuleEntry` schema into a `oneOf` with three variants:
+/// Transform the generated `RuleEntry` schema into a `oneOf` with four variants:
 /// - `deny`: requires `deny`, forbids `allow`/`ask`/`sandbox`
 /// - `allow`: requires `allow`, forbids `deny`/`ask`
 /// - `ask`: requires `ask`, forbids `deny`/`allow`
+/// - `extension`: requires `extension` and `match`
 #[cfg(any(feature = "config-schema", test))]
 pub(super) fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     let common_optional = ["when", "message", "fix_suggestion"];
@@ -53,6 +54,27 @@ pub(super) fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     let allow_variant = make_variant("allow", &["sandbox", "tests"]);
     let ask_variant = make_variant("ask", &["sandbox", "tests"]);
 
+    let extension_variant = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "extension": {
+                "type": "string",
+                "description": schema.get("properties").and_then(|p| p.get("extension")).and_then(|p| p.get("description")).cloned().unwrap_or(serde_json::Value::Null),
+            },
+            "match": {
+                "type": "string",
+                "description": schema.get("properties").and_then(|p| p.get("match")).and_then(|p| p.get("description")).cloned().unwrap_or(serde_json::Value::Null),
+            },
+            "when": schema.get("properties").and_then(|p| p.get("when")).cloned().unwrap_or(serde_json::Value::Null),
+            "message": schema.get("properties").and_then(|p| p.get("message")).cloned().unwrap_or(serde_json::Value::Null),
+            "fix_suggestion": schema.get("properties").and_then(|p| p.get("fix_suggestion")).cloned().unwrap_or(serde_json::Value::Null),
+            "sandbox": schema.get("properties").and_then(|p| p.get("sandbox")).cloned().unwrap_or(serde_json::Value::Null),
+            "tests": schema.get("properties").and_then(|p| p.get("tests")).cloned().unwrap_or(serde_json::Value::Null),
+        },
+        "required": ["extension", "match"],
+        "additionalProperties": false
+    });
+
     // Replace the schema with oneOf
     let description = schema.get("description").cloned();
 
@@ -64,7 +86,12 @@ pub(super) fn rule_entry_one_of_transform(schema: &mut schemars::Schema) {
     // Set oneOf
     schema.insert(
         "oneOf".to_owned(),
-        serde_json::Value::Array(vec![deny_variant, allow_variant, ask_variant]),
+        serde_json::Value::Array(vec![
+            deny_variant,
+            allow_variant,
+            ask_variant,
+            extension_variant,
+        ]),
     );
 
     if let Some(desc) = description {

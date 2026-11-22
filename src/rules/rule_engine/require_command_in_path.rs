@@ -159,6 +159,7 @@ mod tests {
             env: HashMap::new(),
             cwd: PathBuf::from("/tmp"),
             resolver,
+            extension_runner: Arc::new(crate::exec::extension_runner::ProcessExtensionRunner),
         }
     }
 

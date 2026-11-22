@@ -27,7 +27,7 @@
       ]
     },
     "definitions": {
-      "description": "Reusable definitions for paths, sandbox presets, wrappers, and variables.",
+      "description": "Reusable definitions for paths, extensions, sandbox presets, wrappers, and variables.",
       "anyOf": [
         {
           "$ref": "#/$defs/Definitions"
@@ -100,7 +100,7 @@
           ]
         },
         {
-          "description": "No decision: the hook omits `permissionDecision` so Claude Code's own\npermission flow (the auto-mode classifier) decides instead. Writes\nnothing at all when no sandbox applies either; when a sandbox does\napply, `updatedInput` alone is still emitted so the rewritten command\nreaches that flow. Only meaningful for `defaults.action` -- a\nper-rule `deny`/`allow`/`ask` entry can never resolve to this\nvariant, since `RuleEntry` has no `pass` field.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.\n\nThe type-level default: matches `Defaults::resolved_action()`, which\nfalls back to `Pass` when `defaults.action` is unset.",
+          "description": "No decision: the hook omits `permissionDecision` so Claude Code's own\npermission flow (the auto-mode classifier) decides instead. Writes\nnothing at all when no sandbox applies either; when a sandbox does\napply, `updatedInput` alone is still emitted so the rewritten command\nreaches that flow. Extension rules also use this result to indicate\nthat the rule does not decide the command.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.\n\n`Defaults::resolved_action()` also falls back to `Pass` when\n`defaults.action` is unset.",
           "type": "string",
           "const": "pass"
         }
@@ -178,7 +178,7 @@
       }
     },
     "Definitions": {
-      "description": "Reusable definitions for paths, sandbox presets, wrappers, variables, and flag groups.",
+      "description": "Reusable definitions for paths, extensions, sandbox presets, wrappers, variables, and flag groups.",
       "type": "object",
       "properties": {
         "aliases": {
@@ -189,6 +189,16 @@
           ],
           "additionalProperties": {
             "$ref": "#/$defs/AliasDefinition"
+          }
+        },
+        "extensions": {
+          "description": "Named external command validators referenced by extension rules.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/ExtensionDefinition"
           }
         },
         "flag_groups": {
@@ -262,6 +272,19 @@
           ]
         }
       }
+    },
+    "ExtensionDefinition": {
+      "description": "Executor command for an extension referenced by a rule.",
+      "type": "object",
+      "properties": {
+        "executor": {
+          "description": "Command and arguments used to start the extension process.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "executor"
+      ]
     },
     "FsAccessPolicy": {
       "description": "Access policy for a single operation (read or write).",
@@ -463,7 +486,7 @@
       }
     },
     "RuleEntry": {
-      "description": "A permission rule entry. Exactly one of `deny`, `allow`, or `ask` must be set.",
+      "description": "A permission rule entry with one static action or an extension matcher.",
       "oneOf": [
         {
           "type": "object",
@@ -609,6 +632,62 @@
           "additionalProperties": false,
           "required": [
             "ask"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "extension": {
+              "description": "Name of an extension to run when `match` and `when` match.",
+              "type": "string"
+            },
+            "fix_suggestion": {
+              "description": "Suggested fix command shown when a deny rule matches.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "match": {
+              "description": "Command pattern for an extension rule.",
+              "type": "string"
+            },
+            "message": {
+              "description": "Message shown when the rule matches (primarily for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sandbox": {
+              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tests": {
+              "description": "Inline test cases for this rule.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/InlineTestEntry"
+              }
+            },
+            "when": {
+              "description": "CEL expression that must evaluate to true for this rule to apply.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "extension",
+            "match"
           ]
         }
       ]

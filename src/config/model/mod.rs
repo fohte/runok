@@ -9,9 +9,10 @@ mod schema_gen;
 mod validate;
 
 pub use audit_config::{AuditConfig, RotationConfig};
-pub use definitions::{Definitions, VarDefinition, VarType, VarValue};
+pub use definitions::{Definitions, ExtensionDefinition, VarDefinition, VarType, VarValue};
 pub use experimental_config::{ExperimentalConfig, RequireCommandInPathConfig};
 pub use parse::{ParsedConfig, parse_config, parse_config_with_warnings};
+pub(crate) use rule::RuleMatcher;
 pub use rule::{ActionKind, AliasDefinition, Defaults, InlineTestEntry, RuleEntry, TestSection};
 pub use sandbox::{FsAccessPolicy, FsPolicy, MergedSandboxPolicy, NetworkPolicy, SandboxPreset};
 #[cfg(feature = "config-schema")]
@@ -37,7 +38,7 @@ pub struct Config {
     pub defaults: Option<Defaults>,
     /// Ordered list of permission rules evaluated against each command.
     pub rules: Option<Vec<RuleEntry>>,
-    /// Reusable definitions for paths, sandbox presets, wrappers, and variables.
+    /// Reusable definitions for paths, extensions, sandbox presets, wrappers, and variables.
     pub definitions: Option<Definitions>,
     /// Audit log settings.
     pub audit: Option<AuditConfig>,

@@ -78,6 +78,10 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ## New Features
 
+### Rule-level extension evaluation (TODO(pr-link))
+
+Rules can invoke named executors from `definitions.extensions` after their command pattern and optional `when` condition match. Extensions can return `pass` to leave the rule unmatched, and their other decisions combine with matching rules using `deny > ask > allow`. See [Extensions](/extensions/overview/) and the [Configuration Schema](/configuration/schema/#definitionsextensions).
+
 ### Expose shell wrapper patterns to `when` clauses ([#530](https://github.com/fohte/runok/pull/530))
 
 `when` clauses can now inspect `shell.wrappers`, a list of configured wrapper patterns enclosing the command. The list is ordered from outermost to innermost and is empty outside a wrapper. See [When Clause -- Shell-construct context](/rule-evaluation/when-clause/#shell--shell-construct-context) for details.

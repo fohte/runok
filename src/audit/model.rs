@@ -372,8 +372,7 @@ impl From<RuleMatchInfo> for SerializableRuleMatch {
                 ActionKind::Ask => "ask".to_owned(),
                 ActionKind::Deny => "deny".to_owned(),
                 ActionKind::Pass => unreachable!(
-                    "RuleMatchInfo is only built from a matched rule (deny/allow/ask); \
-                     a rule entry can never resolve to ActionKind::Pass"
+                    "extension `pass` decisions are filtered before matched rules are recorded"
                 ),
             },
             pattern: info.pattern,

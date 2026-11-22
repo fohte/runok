@@ -9,7 +9,7 @@ Build a runok extension that validates commands using JSON-RPC 2.0. This tutoria
 
 ## What you'll build
 
-A simple extension that denies `curl` commands using `POST` method in production environments, while allowing everything else.
+A simple extension that denies `curl` commands using `POST` in production environments and lets other runok rules decide otherwise.
 
 ## Step 1: Create the extension script
 
@@ -34,7 +34,7 @@ env_profile=$(echo "$request" | jq -r '.params.env.AWS_PROFILE // empty')
 if [ "$method" = "POST" ] && [ "$env_profile" = "prod" ]; then
   printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"deny","message":"POST requests are blocked in production","fix_suggestion":"Use a staging environment instead"}}' "$id"
 else
-  printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"allow"}}' "$id"
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"pass"}}' "$id"
 fi
 ```
 
@@ -46,12 +46,17 @@ chmod +x checks/env_guard.sh
 
 ## Step 2: Configure runok
 
-Add the extension to your [`runok.yml`](/configuration/schema/):
+Register the executor and add a rule to your [`runok.yml`](/configuration/schema/):
 
 ```yaml
-types:
-  ProdGuard:
-    executor: './checks/env_guard.sh'
+definitions:
+  extensions:
+    prod_guard:
+      executor: './checks/env_guard.sh'
+
+rules:
+  - extension: prod_guard
+    match: 'curl *'
 ```
 
 ## Step 3: Test the extension manually
@@ -100,7 +105,7 @@ if flags.get("X") == "POST" and env.get("AWS_PROFILE") == "prod":
         "fix_suggestion": "Use a staging environment instead",
     }
 else:
-    result = {"status": "allow"}
+    result = {"status": "pass"}
 
 response = {"jsonrpc": "2.0", "id": request["id"], "result": result}
 print(json.dumps(response))
@@ -119,7 +124,7 @@ const result =
         message: 'POST requests are blocked in production',
         fix_suggestion: 'Use a staging environment instead',
       }
-    : { status: 'allow' }
+    : { status: 'pass' }
 
 console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }))
 ```
@@ -128,16 +133,26 @@ Configure the executor accordingly:
 
 ```yaml
 # Python
-types:
-  ProdGuard:
-    executor: 'python3 ./checks/env_guard.py'
+definitions:
+  extensions:
+    prod_guard:
+      executor: 'python3 ./checks/env_guard.py'
+
+rules:
+  - extension: prod_guard
+    match: 'curl *'
 ```
 
 ```yaml
 # Deno
-types:
-  ProdGuard:
-    executor: 'deno run --allow-read ./checks/env_guard.ts'
+definitions:
+  extensions:
+    prod_guard:
+      executor: 'deno run --allow-read ./checks/env_guard.ts'
+
+rules:
+  - extension: prod_guard
+    match: 'curl *'
 ```
 
 ## Timeout and fallback behavior

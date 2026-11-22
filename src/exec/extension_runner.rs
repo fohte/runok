@@ -9,7 +9,7 @@ use super::ExtensionError;
 use crate::config::ActionKind;
 
 /// JSON-RPC 2.0 request sent to an extension process via stdin.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ExtensionRequest {
     pub command: String,
     pub flags: HashMap<String, String>,
@@ -74,7 +74,7 @@ fn sanitize_for_terminal(s: &str) -> String {
 
 /// Resolve an extension validation result into an action.
 ///
-/// On success, maps the response status to an `ActionKind`.
+/// On success, maps the response status to an `ActionKind`, including `pass`.
 /// On any error (timeout, spawn failure, invalid response), falls back to
 /// `ActionKind::Ask` so that the user is prompted for confirmation.
 /// When `verbose` is true, error details are printed to stderr.
@@ -88,6 +88,7 @@ pub fn resolve_extension_result(
                 "allow" => ActionKind::Allow,
                 "deny" => ActionKind::Deny,
                 "ask" => ActionKind::Ask,
+                "pass" => ActionKind::Pass,
                 _ => {
                     if verbose {
                         eprintln!(
@@ -209,6 +210,7 @@ impl ProcessExtensionRunner {
         })?;
         let mut iter = parts.into_iter();
         let program = iter.next().unwrap_or_default();
+        let program = crate::config::expand_tilde(&program);
         Ok((program, iter.collect()))
     }
 }
@@ -508,6 +510,18 @@ mod tests {
         assert_eq!(args_strs, expected_args);
     }
 
+    #[test]
+    fn parse_command_expands_tilde_in_program_path() {
+        let home = std::env::var("HOME").expect("HOME should be set for the test");
+        let parsed = ProcessExtensionRunner::parse_command("~/checks/guard --strict")
+            .expect("executor should parse");
+
+        assert_eq!(
+            parsed,
+            (format!("{home}/checks/guard"), vec!["--strict".into()]),
+        );
+    }
+
     // === resolve_extension_result: error fallback ===
 
     #[rstest]
@@ -554,6 +568,10 @@ mod tests {
     #[case::ask(
         ExtensionResponse { status: "ask".into(), message: Some("please confirm".into()), fix_suggestion: None },
         ActionKind::Ask,
+    )]
+    #[case::pass(
+        ExtensionResponse { status: "pass".into(), message: None, fix_suggestion: None },
+        ActionKind::Pass,
     )]
     fn success_maps_to_correct_action(
         #[case] response: ExtensionResponse,

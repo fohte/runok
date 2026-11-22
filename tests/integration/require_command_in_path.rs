@@ -37,6 +37,7 @@ fn known_commands_context() -> EvalContext {
         resolver: Arc::new(FoundOnlyResolver {
             found: HashSet::from(["sudo", "terraform", "true", "echo"]),
         }),
+        extension_runner: Arc::new(runok::exec::extension_runner::ProcessExtensionRunner),
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::config::{ActionKind, Config, VarType};
+use crate::config::{ActionKind, Config, RuleMatcher, VarType};
 
 use super::pattern_refs::{collect_flag_group_refs, collect_var_refs_inside_optional};
 
@@ -35,7 +35,7 @@ impl Config {
 
         if let Some(rules) = &self.rules {
             for (i, rule) in rules.iter().enumerate() {
-                let Some((_, pattern_str)) = rule.action_and_pattern() else {
+                let Some(pattern_str) = rule.matcher_pattern() else {
                     continue;
                 };
                 let parsed = match crate::rules::pattern_parser::parse_multi(pattern_str) {
@@ -78,18 +78,39 @@ impl Config {
             .unwrap_or_default();
 
         for (i, rule) in rules.iter().enumerate() {
-            let action = match rule.action_and_pattern() {
-                Some((action, _)) => action,
+            let matcher = match rule.matcher_and_pattern() {
+                Some((matcher, _)) => matcher,
                 None => {
                     errors.push(format!(
-                        "rules[{i}]: must have exactly one of 'deny', 'allow', or 'ask'"
+                        "rules[{i}]: must have exactly one of 'deny', 'allow', 'ask', or 'extension' with 'match'"
                     ));
                     continue;
                 }
             };
 
+            let action = match matcher {
+                RuleMatcher::Action(action) => Some(action),
+                RuleMatcher::Extension(name) => {
+                    let definition = self
+                        .definitions
+                        .as_ref()
+                        .and_then(|definitions| definitions.extensions.as_ref())
+                        .and_then(|extensions| extensions.get(name));
+                    match definition {
+                        None => errors.push(format!(
+                            "rules[{i}]: extension '{name}' is not defined in definitions.extensions"
+                        )),
+                        Some(definition) if definition.executor.trim().is_empty() => errors.push(
+                            format!("definitions.extensions.{name}.executor must not be empty"),
+                        ),
+                        Some(_) => {}
+                    }
+                    None
+                }
+            };
+
             if let Some(sandbox_name) = &rule.sandbox {
-                if action == ActionKind::Deny {
+                if action == Some(ActionKind::Deny) {
                     errors.push(format!(
                         "rules[{i}]: deny rule cannot have a sandbox attribute (sandbox: '{sandbox_name}')"
                     ));
@@ -129,6 +150,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             definitions: None,
@@ -154,6 +177,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             definitions: None,

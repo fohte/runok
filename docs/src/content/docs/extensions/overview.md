@@ -20,9 +20,27 @@ runok's YAML rules with [pattern matching](/pattern-syntax/overview/) and [`when
 1. **runok** spawns the extension process specified by the `executor` field.
 2. **runok** sends a `validateCommand` JSON-RPC request to **the extension process**'s stdin.
 3. **The extension process** reads the request, performs its validation logic, and writes a JSON-RPC response to stdout.
-4. **runok** parses the response and maps the `status` field (`allow`, `deny`, or `ask`) to the corresponding action.
+4. **runok** parses the response and maps `allow`, `deny`, and `ask` to rule decisions. `pass` leaves the extension rule unmatched so other rules or the default action can decide.
 
 Each extension is spawned as a fresh process per validation. There is no persistent connection or process reuse.
+
+## Configure an extension rule
+
+Declare reusable executors under `definitions.extensions`, then reference one from a rule with `extension` and `match`. The rule's `when` condition, if present, is checked before the process starts:
+
+```yaml title="runok.yml"
+definitions:
+  extensions:
+    repository_guard:
+      executor: ./checks/repository_guard
+
+rules:
+  - extension: repository_guard
+    match: 'git [-C *] commit|push *'
+    when: "env.CI != 'true'"
+```
+
+Extension decisions combine with matching rules using the same precedence: `deny` over `ask` over `allow`. `pass` contributes no match, so the next matching rule or the configured default applies. A timeout, failed process, or invalid response becomes `ask`. See the [Configuration Schema](/configuration/schema/#definitionsextensions) and [Protocol Reference](/extensions/protocol/) for details.
 
 ## Key design principles
 

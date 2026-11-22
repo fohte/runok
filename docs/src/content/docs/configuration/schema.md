@@ -114,7 +114,7 @@ defaults:
 
 ### `rules`
 
-Ordered list of permission rules evaluated top-to-bottom against each command. The first matching rule wins. See [Rule Evaluation](/rule-evaluation/overview/) for how rules are matched and prioritized.
+Ordered list of permission rules evaluated against each command. All matching rules are combined by precedence: `deny` over `ask` over `allow`. See [Rule Evaluation](/rule-evaluation/overview/) for details.
 
 **Type:** `list[RuleEntry]`\
 **Default:** `[]`\
@@ -131,7 +131,7 @@ rules:
 
 #### Rule Entry
 
-Each rule entry must have exactly one of `deny`, `allow`, or `ask` set.
+Each rule entry must have exactly one of `deny`, `allow`, or `ask`, or both `extension` and `match`.
 
 ##### `deny` / `allow` / `ask`
 
@@ -149,7 +149,13 @@ Command pattern that triggers this rule. Only one of the three may be specified 
 
 # ask rule
 - ask: 'docker run *'
+
+# extension rule
+- extension: repository_guard
+  match: 'git [-C *] commit|push *'
 ```
+
+Extension rules call the named executor only after `match` and the optional `when` condition match. Their `allow`, `deny`, or `ask` result combines with all other matching rules using `deny > ask > allow`. A `pass` response leaves the rule unmatched. See [Extensions](/extensions/overview/) and [`definitions.extensions`](#definitionsextensions).
 
 ##### `when`
 
@@ -162,6 +168,27 @@ CEL (Common Expression Language) expression that must evaluate to `true` for thi
 - allow: 'npm publish'
   when: "env.CI == 'true'"
 ```
+
+##### `extension` and `match`
+
+`extension` names an executor from `definitions.extensions`. `match` is the command pattern that triggers it. Both fields are required together and cannot be combined with `deny`, `allow`, or `ask`.
+
+**Type:** `str` for both fields\
+**Required:** Together
+
+```yaml title="runok.yml"
+definitions:
+  extensions:
+    repository_guard:
+      executor: ./checks/repository_guard
+
+rules:
+  - extension: repository_guard
+    match: 'git [-C *] commit|push *'
+    when: "env.CI != 'true'"
+```
+
+The extension's `pass` status treats the rule as unmatched, so later rules or `defaults.action` decide. Extension failures fall back to `ask`. See [Extensions](/extensions/overview/) for the protocol and decision precedence.
 
 :::tip
 `when` expressions work on parsed tokens (flags, args, environment variables). For validation that requires deeper argument parsing -- such as inspecting a GraphQL query string or parsing a URL -- use an [extension](/extensions/overview/) instead.
@@ -220,7 +247,7 @@ Inline test cases for this rule. Each entry specifies the expected decision and 
 
 ### `definitions`
 
-Reusable definitions for paths, variables, sandbox presets, and wrappers.
+Reusable definitions for paths, extension executors, variables, sandbox presets, and wrappers.
 
 **Type:** `object`\
 **Default:** `{}`\
@@ -256,6 +283,24 @@ definitions:
 :::note
 Path definitions must contain concrete paths. `<path:name>` references inside `definitions.paths` values are not allowed.
 :::
+
+#### `definitions.extensions`
+
+Named extension executors that rules can call. Each executor is a command string split with shell-style quoting; runok starts a new process for each matching rule.
+
+**Type:** `map[str, ExtensionDefinition]`\
+**Default:** `{}`
+
+```yaml title="runok.yml"
+definitions:
+  extensions:
+    repository_guard:
+      executor: ./checks/repository_guard
+```
+
+A leading `~/` in the executable path expands to `$HOME`. See [Extensions](/extensions/overview/) for rule binding and response behavior.
+
+See [Extensions](/extensions/overview/) and the [protocol reference](/extensions/protocol/) for request and response details.
 
 #### `definitions.sandbox`
 

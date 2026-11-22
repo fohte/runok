@@ -7,7 +7,15 @@ use serde::de::Deserializer;
 
 use super::{AliasDefinition, SandboxPreset};
 
-/// Reusable definitions for paths, sandbox presets, wrappers, variables, and flag groups.
+/// Executor command for an extension referenced by a rule.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
+pub struct ExtensionDefinition {
+    /// Command and arguments used to start the extension process.
+    pub executor: String,
+}
+
+/// Reusable definitions for paths, extensions, sandbox presets, wrappers, variables, and flag groups.
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct Definitions {
@@ -36,6 +44,9 @@ pub struct Definitions {
     /// lets you factor out a repeated prefix (e.g. shared optional flags)
     /// from many rules.
     pub aliases: Option<HashMap<String, AliasDefinition>>,
+
+    /// Named external command validators referenced by extension rules.
+    pub extensions: Option<HashMap<String, ExtensionDefinition>>,
 
     /// Pre-parsed flag group definitions, populated by `resolve_flag_groups()`.
     /// Avoids re-parsing the same definition string on every `<flag:name>` match.

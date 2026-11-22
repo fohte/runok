@@ -15,6 +15,7 @@ impl Config {
     ///   (sandbox presets have interdependent fields like fs.writable and
     ///   fs.deny that must stay consistent; partial merging could create
     ///   contradictory constraints.)
+    /// - definitions.extensions: per-key override
     /// - audit: override (local wins at merge level; loader enforces
     ///   global-only by stripping audit from project/local layers)
     /// - tests: override (local wins; test definitions are not merged across layers)
@@ -69,6 +70,7 @@ impl Config {
                     vars: Self::merge_vars(b.vars, o.vars),
                     flag_groups: Self::merge_hashmaps(b.flag_groups, o.flag_groups),
                     aliases: Self::merge_hashmaps(b.aliases, o.aliases),
+                    extensions: Self::merge_hashmaps(b.extensions, o.extensions),
                     parsed_flag_groups: None,
                     parsed_pattern_vars: None,
                 };
@@ -225,6 +227,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             ..Config::default()
@@ -244,6 +248,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             ..Config::default()
@@ -328,6 +334,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             ..Config::default()
@@ -341,6 +349,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }]),
             ..Config::default()

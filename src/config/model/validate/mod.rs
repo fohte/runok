@@ -161,6 +161,8 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    extension: None,
+                    match_pattern: None,
                     tests: None,
                 },
                 // Valid rule (should not appear in errors)
@@ -172,6 +174,8 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: None,
+                    extension: None,
+                    match_pattern: None,
                     tests: None,
                 },
                 // Error 2: deny with sandbox
@@ -183,6 +187,8 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("restricted".to_string()),
+                    extension: None,
+                    match_pattern: None,
                     tests: None,
                 },
                 // Error 3: undefined sandbox
@@ -194,6 +200,8 @@ mod tests {
                     message: None,
                     fix_suggestion: None,
                     sandbox: Some("nonexistent".to_string()),
+                    extension: None,
+                    match_pattern: None,
                     tests: None,
                 },
             ]),
@@ -204,7 +212,7 @@ mod tests {
         let err = config.validate().unwrap_err();
         let expected = indoc! {"
             validation errors:
-              - rules[0]: must have exactly one of 'deny', 'allow', or 'ask'
+              - rules[0]: must have exactly one of 'deny', 'allow', 'ask', or 'extension' with 'match'
               - rules[2]: deny rule cannot have a sandbox attribute (sandbox: 'restricted')
               - rules[2]: sandbox 'restricted' is not defined in definitions.sandbox
               - rules[3]: sandbox 'nonexistent' is not defined in definitions.sandbox"}

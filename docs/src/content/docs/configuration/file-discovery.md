@@ -75,15 +75,16 @@ After merging all four layers, the resulting configuration is validated.
 
 Different fields use different merge strategies:
 
-| Field                  | Strategy         | Behavior                                             |
-| ---------------------- | ---------------- | ---------------------------------------------------- |
-| `extends`              | Append           | Lists are concatenated.                              |
-| `rules`                | Append           | Rules from all layers are concatenated in order.     |
-| `defaults.action`      | Override         | Higher-priority layer wins.                          |
-| `defaults.sandbox`     | Override         | Higher-priority layer wins.                          |
-| `definitions.paths`    | Per-key append   | Values for each key are concatenated (deduplicated). |
-| `definitions.sandbox`  | Per-key override | Higher-priority layer replaces the entire preset.    |
-| `definitions.wrappers` | Append           | Lists are concatenated.                              |
+| Field                    | Strategy         | Behavior                                                   |
+| ------------------------ | ---------------- | ---------------------------------------------------------- |
+| `extends`                | Append           | Lists are concatenated.                                    |
+| `rules`                  | Append           | Rules from all layers are concatenated in order.           |
+| `defaults.action`        | Override         | Higher-priority layer wins.                                |
+| `defaults.sandbox`       | Override         | Higher-priority layer wins.                                |
+| `definitions.paths`      | Per-key append   | Values for each key are concatenated (deduplicated).       |
+| `definitions.sandbox`    | Per-key override | Higher-priority layer replaces the entire preset.          |
+| `definitions.extensions` | Per-key override | Higher-priority layer replaces the executor for each name. |
+| `definitions.wrappers`   | Append           | Lists are concatenated.                                    |
 
 ### Example
 

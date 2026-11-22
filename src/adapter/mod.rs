@@ -524,6 +524,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }
@@ -537,6 +539,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }
@@ -565,6 +569,8 @@ mod tests {
             message: Some("please confirm".to_string()),
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }
     }
@@ -826,6 +832,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: Some("restricted".to_string()),
+            extension: None,
+            match_pattern: None,
             tests: None,
         }]);
         run(&endpoint, &config);
@@ -891,6 +899,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
+                extension: None,
+                match_pattern: None,
                 tests: None,
             }],
             None,

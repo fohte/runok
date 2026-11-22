@@ -242,6 +242,8 @@ fn preset_merge_wrappers_appended() {
             message: None,
             fix_suggestion: None,
             sandbox: None,
+            extension: None,
+            match_pattern: None,
             tests: None,
         }]),
         ..Config::default()
@@ -297,6 +299,8 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
+                extension: None,
+                match_pattern: None,
                 tests: None,
             },
             RuleEntry {
@@ -307,6 +311,8 @@ fn config_validation_collects_multiple_errors() {
                 message: None,
                 fix_suggestion: None,
                 sandbox: Some("restricted".to_string()),
+                extension: None,
+                match_pattern: None,
                 tests: None,
             },
         ]),
