@@ -298,7 +298,9 @@ definitions:
       executor: ./checks/repository_guard
 ```
 
-A leading `~/` in the executable path expands to `$HOME`. See [Extensions](/extensions/overview/) for rule binding and response behavior.
+A leading `~/` in the executable path expands to `$HOME`. Relative executable paths resolve from runok's current working directory. See [Extensions](/extensions/overview/) for rule binding and response behavior.
+
+Because extensions start external processes, default discovery accepts extension definitions and rules only from the global config. Project-discovered files have them ignored with a warning. A file selected explicitly with `--config` may configure extensions.
 
 See [Extensions](/extensions/overview/) and the [protocol reference](/extensions/protocol/) for request and response details.
 

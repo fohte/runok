@@ -163,7 +163,7 @@ definitions:
       executor: 'deno run --allow-net ./checks/url_check.ts'
 ```
 
-The executor string is split into a program and arguments. In this example, runok spawns `deno` with arguments `["run", "--allow-net", "./checks/url_check.ts"]`. Quoted strings and backslash escapes in the executor command are handled correctly.
+The executor string is split into a program and arguments. In this example, runok spawns `deno` with arguments `["run", "--allow-net", "./checks/url_check.ts"]`. Quoted strings and backslash escapes in the executor command are handled correctly. Relative program paths resolve from runok's current working directory, not the configuration file's directory.
 
 ## Related
 

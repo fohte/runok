@@ -26,7 +26,7 @@ Each extension is spawned as a fresh process per validation. There is no persist
 
 ## Configure an extension rule
 
-Declare reusable executors under `definitions.extensions`, then reference one from a rule with `extension` and `match`. The rule's `when` condition, if present, is checked before the process starts:
+Declare reusable executors under `definitions.extensions`, then reference one from a rule with `extension` and `match`. The rule's `when` condition, if present, is checked before the process starts. Relative executable paths use runok's current working directory. Because extensions start external processes, default discovery accepts their definitions and rules only from the global config; project-discovered extension settings are ignored with a warning. A file selected explicitly with `--config` may configure extensions:
 
 ```yaml title="runok.yml"
 definitions:
