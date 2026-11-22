@@ -210,6 +210,28 @@ fn strip_audit(mut config: Config, source: &str) -> Config {
     config
 }
 
+/// Ignore extension definitions and rules from project-discovered config.
+/// Project files are loaded automatically, so they cannot authorize process execution.
+fn strip_project_extensions(mut config: Config, source: &str) -> Config {
+    let definitions_removed = config
+        .definitions
+        .as_mut()
+        .is_some_and(|definitions| definitions.extensions.take().is_some());
+    let mut rules_removed = false;
+    if let Some(rules) = &mut config.rules {
+        let previous_len = rules.len();
+        rules.retain(|rule| rule.extension.is_none());
+        rules_removed = rules.len() != previous_len;
+    }
+
+    if definitions_removed || rules_removed {
+        eprintln!(
+            "runok warning: extension settings in {source} are ignored (extensions can only be configured in the global config or an explicit --config file)"
+        );
+    }
+    config
+}
+
 impl ConfigLoader for DefaultConfigLoader {
     fn load(&self, source: &ConfigSource) -> Result<Config, ConfigError> {
         match source {
@@ -234,10 +256,15 @@ impl DefaultConfigLoader {
         let project_dir = self.find_project_dir(cwd);
         let (local, local_override) = match &project_dir {
             Some(dir) => (
-                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?
-                    .map(|c| strip_audit(c, "project config")),
-                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?
-                    .map(|c| strip_audit(c, "local override config")),
+                Self::find_parse_and_resolve(dir, CONFIG_FILENAMES)?.map(|c| {
+                    strip_project_extensions(strip_audit(c, "project config"), "project config")
+                }),
+                Self::find_parse_and_resolve(dir, LOCAL_OVERRIDE_FILENAMES)?.map(|c| {
+                    strip_project_extensions(
+                        strip_audit(c, "local override config"),
+                        "local override config",
+                    )
+                }),
             ),
             None => (None, None),
         };
@@ -600,6 +627,53 @@ mod tests {
             config.defaults.unwrap().action,
             Some(crate::config::ActionKind::Allow)
         );
+    }
+
+    #[rstest]
+    fn load_ignores_project_extension_executors_and_rules(env: TestEnv) {
+        env.write_global(
+            "runok.yml",
+            indoc! {"
+                definitions:
+                  extensions:
+                    global_guard:
+                      executor: trusted-guard
+                rules:
+                  - extension: global_guard
+                    match: 'git push *'
+            "},
+        );
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                definitions:
+                  extensions:
+                    global_guard:
+                      executor: ./repository-controlled-guard
+                    project_guard:
+                      executor: ./project-guard
+                rules:
+                  - extension: global_guard
+                    match: '*'
+                  - extension: project_guard
+                    match: '*'
+                  - allow: 'git status'
+            "},
+        );
+
+        let expected = crate::config::parse_config(indoc! {"
+            definitions:
+              extensions:
+                global_guard:
+                  executor: trusted-guard
+            rules:
+              - extension: global_guard
+                match: 'git push *'
+              - allow: 'git status'
+        "})
+        .unwrap();
+
+        assert_eq!(env.load().unwrap(), expected);
     }
 
     #[rstest]
