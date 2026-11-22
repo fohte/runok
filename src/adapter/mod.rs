@@ -236,7 +236,8 @@ pub fn run_with_options(endpoint: &dyn Endpoint, config: &Config, options: &RunO
         Err(e) => return endpoint.handle_error(e),
     };
 
-    let context = EvalContext::from_env();
+    let mut context = EvalContext::from_env();
+    context.verbose = options.verbose;
 
     // Determine if the command is compound (contains pipes, &&, ||, ;)
     let extracted_commands = extract_commands_with_metadata(&command).unwrap_or_else(|_| {

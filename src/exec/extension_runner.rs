@@ -101,8 +101,12 @@ pub fn resolve_extension_result(
             };
             ExtensionResult {
                 action,
-                message: response.message,
-                fix_suggestion: response.fix_suggestion,
+                message: response
+                    .message
+                    .map(|message| sanitize_for_terminal(&message)),
+                fix_suggestion: response
+                    .fix_suggestion
+                    .map(|fix| sanitize_for_terminal(&fix)),
             }
         }
         Err(ref err) => {
@@ -577,12 +581,33 @@ mod tests {
         #[case] response: ExtensionResponse,
         #[case] expected_action: ActionKind,
     ) {
-        let expected_message = response.message.clone();
-        let expected_fix = response.fix_suggestion.clone();
-        let resolved = resolve_extension_result(Ok(response), false);
-        assert_eq!(resolved.action, expected_action);
-        assert_eq!(resolved.message, expected_message);
-        assert_eq!(resolved.fix_suggestion, expected_fix);
+        assert_eq!(
+            resolve_extension_result(Ok(response.clone()), false),
+            ExtensionResult {
+                action: expected_action,
+                message: response.message,
+                fix_suggestion: response.fix_suggestion,
+            },
+        );
+    }
+
+    #[test]
+    fn successful_response_text_is_sanitized_for_terminal_output() {
+        assert_eq!(
+            resolve_extension_result(
+                Ok(ExtensionResponse {
+                    status: "deny".into(),
+                    message: Some("blocked\u{1b}[31m".into()),
+                    fix_suggestion: Some("use\u{7f} GET".into()),
+                }),
+                false,
+            ),
+            ExtensionResult {
+                action: ActionKind::Deny,
+                message: Some("blocked[31m".into()),
+                fix_suggestion: Some("use GET".into()),
+            },
+        );
     }
 
     #[test]
@@ -593,7 +618,14 @@ mod tests {
             fix_suggestion: None,
         };
         let resolved = resolve_extension_result(Ok(response), false);
-        assert_eq!(resolved.action, ActionKind::Ask);
+        assert_eq!(
+            resolved,
+            ExtensionResult {
+                action: ActionKind::Ask,
+                message: Some("something".into()),
+                fix_suggestion: None,
+            },
+        );
     }
 
     // === resolve_extension_result: verbose logging ===

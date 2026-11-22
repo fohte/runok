@@ -160,13 +160,13 @@ pub(super) fn evaluate_simple_command(
                                     &request,
                                     EXTENSION_TIMEOUT,
                                 );
-                                resolve_extension_result(response, false)
+                                resolve_extension_result(response, context.verbose)
                             }
                             None => resolve_extension_result(
                                 Err(ExtensionError::InvalidResponse(format!(
                                     "extension '{name}' is not defined"
                                 ))),
-                                false,
+                                context.verbose,
                             ),
                         };
 

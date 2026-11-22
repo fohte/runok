@@ -160,6 +160,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             resolver,
             extension_runner: Arc::new(crate::exec::extension_runner::ProcessExtensionRunner),
+            verbose: false,
         }
     }
 

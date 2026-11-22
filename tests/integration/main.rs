@@ -35,6 +35,7 @@ fn empty_context() -> EvalContext {
         cwd: PathBuf::from("/tmp"),
         resolver: Arc::new(StubCommandResolver),
         extension_runner: Arc::new(runok::exec::extension_runner::ProcessExtensionRunner),
+        verbose: false,
     }
 }
 

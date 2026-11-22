@@ -20,14 +20,14 @@ enum StubResult {
 
 struct RecordingRunner {
     result: StubResult,
-    requests: Mutex<Vec<ExtensionRequest>>,
+    calls: Mutex<Vec<(String, ExtensionRequest)>>,
 }
 
 impl RecordingRunner {
     fn new(result: StubResult) -> Self {
         Self {
             result,
-            requests: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
         }
     }
 }
@@ -35,13 +35,15 @@ impl RecordingRunner {
 impl ExtensionRunner for RecordingRunner {
     fn validate(
         &self,
-        _executor_cmd: &str,
+        executor_cmd: &str,
         request: &ExtensionRequest,
         _timeout: Duration,
     ) -> Result<ExtensionResponse, ExtensionError> {
-        match self.requests.lock() {
-            Ok(mut requests) => requests.push(request.clone()),
-            Err(poisoned) => poisoned.into_inner().push(request.clone()),
+        match self.calls.lock() {
+            Ok(mut calls) => calls.push((executor_cmd.to_string(), request.clone())),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .push((executor_cmd.to_string(), request.clone())),
         }
         match &self.result {
             StubResult::Response(response) => Ok(response.clone()),
@@ -56,6 +58,7 @@ fn context(runner: Arc<dyn ExtensionRunner>) -> EvalContext {
         cwd: PathBuf::from("/workspace"),
         resolver: Arc::new(StubCommandResolver),
         extension_runner: runner,
+        verbose: false,
     }
 }
 
@@ -88,13 +91,13 @@ fn extension_rule_receives_parsed_request_and_returns_its_decision() -> Result<(
         "git -C /workspace push origin",
         &context(runner.clone()),
     )?;
-    let requests = match runner.requests.lock() {
-        Ok(requests) => requests.clone(),
+    let calls = match runner.calls.lock() {
+        Ok(calls) => calls.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     };
 
     assert_eq!(
-        (result, requests),
+        (result, calls),
         (
             EvalResult {
                 action: Action::Deny(DenyResponse {
@@ -111,14 +114,17 @@ fn extension_rule_receives_parsed_request_and_returns_its_decision() -> Result<(
                 alias_chain: Vec::new(),
                 require_command_in_path: None,
             },
-            vec![ExtensionRequest {
-                command: "git".into(),
-                flags: HashMap::from([("C".into(), "/workspace".into())]),
-                args: vec!["push".into(), "origin".into()],
-                raw_command_line: "git -C /workspace push origin".into(),
-                env: HashMap::from([("RUNOK_MODE".into(), "test".into())]),
-                cwd: "/workspace".into(),
-            }],
+            vec![(
+                "fixture-executor".into(),
+                ExtensionRequest {
+                    command: "git".into(),
+                    flags: HashMap::from([("C".into(), "/workspace".into())]),
+                    args: vec!["push".into(), "origin".into()],
+                    raw_command_line: "git -C /workspace push origin".into(),
+                    env: HashMap::from([("RUNOK_MODE".into(), "test".into())]),
+                    cwd: "/workspace".into(),
+                },
+            )],
         ),
     );
     Ok(())
@@ -308,13 +314,13 @@ fn false_when_skips_the_extension() -> Result<(), Box<dyn Error>> {
             when: 'env.RUNOK_MODE == "never"'
     "#})?;
     let result = evaluate_command(&config, "deploy release", &context(runner.clone()))?;
-    let requests = match runner.requests.lock() {
-        Ok(requests) => requests.clone(),
+    let calls = match runner.calls.lock() {
+        Ok(calls) => calls.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     };
 
     assert_eq!(
-        (result, requests),
+        (result, calls),
         (
             EvalResult {
                 action: Action::Allow,

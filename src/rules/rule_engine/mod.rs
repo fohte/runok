@@ -27,8 +27,8 @@ pub use compound::{default_action, evaluate_compound};
 use dispatch::evaluate_command_inner;
 use require_command_in_path::command_contains_source_like;
 
-/// Context for rule evaluation, providing environment variables and
-/// working directory for `when` clause evaluation.
+/// Context for rule evaluation, providing environment variables, working
+/// directory, and runtime options for rule evaluation.
 pub struct EvalContext {
     pub env: HashMap<String, String>,
     pub cwd: PathBuf,
@@ -37,6 +37,8 @@ pub struct EvalContext {
     pub resolver: Arc<dyn CommandResolver>,
     /// External command validator used by extension rules.
     pub extension_runner: Arc<dyn ExtensionRunner>,
+    /// Whether extension failures should include diagnostic details.
+    pub verbose: bool,
 }
 
 /// Shell metadata inherited by a command during recursive rule evaluation.
@@ -54,6 +56,7 @@ impl EvalContext {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             resolver: Arc::new(ProcessCommandResolver::new()),
             extension_runner: Arc::new(ProcessExtensionRunner),
+            verbose: false,
         }
     }
 }
@@ -271,6 +274,7 @@ mod test_support {
             cwd: PathBuf::from("/tmp"),
             resolver: Arc::new(StubCommandResolver),
             extension_runner: Arc::new(crate::exec::extension_runner::ProcessExtensionRunner),
+            verbose: false,
         }
     }
 

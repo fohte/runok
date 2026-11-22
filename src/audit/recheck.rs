@@ -127,6 +127,7 @@ fn recheck_one(
         cwd: PathBuf::from(cwd.as_str()),
         resolver: Arc::clone(resolver),
         extension_runner: Arc::new(crate::exec::extension_runner::ProcessExtensionRunner),
+        verbose: false,
     };
 
     match evaluate_compound(config, &entry.command, &context) {
