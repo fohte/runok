@@ -203,6 +203,8 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
+
     use super::super::{
         ActionKind, FsAccessPolicy, FsPolicy, NetworkPolicy, RuleEntry, SandboxPreset, VarType,
     };
@@ -719,6 +721,41 @@ mod tests {
     }
 
     // === definitions.vars ===
+
+    #[test]
+    fn merge_definitions_extensions_override_per_key() {
+        let base = crate::config::parse_config(indoc! {"
+            definitions:
+              extensions:
+                repository_guard:
+                  executor: trusted-guard
+                audit_guard:
+                  executor: trusted-audit
+        "})
+        .unwrap();
+        let over = crate::config::parse_config(indoc! {"
+            definitions:
+              extensions:
+                repository_guard:
+                  executor: replacement-guard
+                local_guard:
+                  executor: local-guard
+        "})
+        .unwrap();
+        let expected = crate::config::parse_config(indoc! {"
+            definitions:
+              extensions:
+                repository_guard:
+                  executor: replacement-guard
+                audit_guard:
+                  executor: trusted-audit
+                local_guard:
+                  executor: local-guard
+        "})
+        .unwrap();
+
+        assert_eq!(base.merge(over), expected);
+    }
 
     #[test]
     fn merge_definitions_vars_override_per_key() {

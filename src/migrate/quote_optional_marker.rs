@@ -242,6 +242,18 @@ mod tests {
               - ask: cmd2 --mode \\?
         "},
     )]
+    #[case::extension_rule_match(
+        indoc! {"
+            rules:
+              - extension: repository_guard
+                match: git push ?
+        "},
+        indoc! {"
+            rules:
+              - extension: repository_guard
+                match: git push \\?
+        "},
+    )]
     #[case::multiple_bare_markers_in_one_pattern(
         indoc! {"
             rules:
