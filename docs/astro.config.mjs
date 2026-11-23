@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config'
 import starlight from '@astrojs/starlight'
 import starlightLinksValidator from 'starlight-links-validator'
 import starlightLlmsTxt from 'starlight-llms-txt'
+import starlightVersions from 'starlight-versions'
 
 export default defineConfig({
   site: 'https://runok.fohte.net',
@@ -25,11 +26,16 @@ export default defineConfig({
       ],
       plugins: [
         starlightLinksValidator(),
+        starlightVersions({
+          versions: [{ slug: 'v0.3' }],
+          exclude: ['releases/**'],
+        }),
         starlightLlmsTxt({
           projectName: 'runok',
           description:
             'A command allowlisting tool for AI coding agents and human developers.',
           promote: ['index*', 'getting-started*'],
+          exclude: ['v0.3/**'],
         }),
       ],
       sidebar: [

@@ -1,0 +1,7 @@
+diff --git a/llms-full.txt.ts b/llms-full.txt.ts
+--- a/llms-full.txt.ts
++++ b/llms-full.txt.ts
+@@ -1,0 +2 @@
++import { starlightLllmsTxtContext } from 'virtual:starlight-llms-txt/context';
+@@ -15,0 +17 @@
++	exclude: starlightLllmsTxtContext.exclude,

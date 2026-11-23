@@ -1,0 +1,176 @@
+---
+title: Extends (Presets)
+description: Inherit and share configuration using the extends field.
+sidebar:
+  order: 3
+slug: v0.3/configuration/extends
+---
+
+The `extends` field lets you inherit configuration from other files or remote repositories. This enables sharing common rulesets across projects and teams.
+
+## Reference Formats
+
+runok supports three ways to specify an extends source:
+
+### Local Path
+
+Reference a configuration file on the local filesystem.
+
+```yaml title="runok.yml"
+extends:
+  - ./shared/base.yml
+  - ~/company/runok-base.yml
+```
+
+Path resolution rules:
+
+- `~/...` expands to `$HOME`
+- `./...` and relative paths resolve from the directory containing the current config file
+- Absolute paths are used as-is
+- References that escape the resolution root via `..` segments (for example `../../etc/passwd` from a relative path, or `~/../../etc/passwd`) are rejected. The check is purely lexical on the reference text — if the resolved path is a symlink, the target is followed normally even when it lives outside the resolution root.
+
+### GitHub Shorthand
+
+Reference a configuration file in a GitHub repository using the `github:` prefix.
+
+```yaml title="runok.yml"
+extends:
+  - github:example-org/example-presets@v1.0.0
+  - github:example-org/security-rules@main
+  - github:example-org/security-rules # uses default branch
+  - github:example-org/runok-presets/readonly-unix@v1 # specific file in repo
+```
+
+Format: `github:<owner>/<repo>[/<path>][@<ref>]`
+
+The optional `/<path>` specifies a preset file within the repository (without `.yml`/`.yaml` extension). When omitted, runok reads `runok.yml` (or `runok.yaml`) from the repository root. When provided, runok reads `<path>.yml` (or `<path>.yaml`).
+
+The `@<ref>` part is optional and can be:
+
+- A tag (e.g., `v1.0.0`)
+- A branch name (e.g., `main`)
+- A full commit SHA (40-character hex string)
+- Omitted to use the repository's default branch
+
+### Git URL
+
+Reference any Git repository by URL.
+
+```yaml title="runok.yml"
+extends:
+  - https://github.com/example-org/runok-config.git
+  - https://github.com/example-org/runok-config.git@v2.0.0
+  - git@github.com:example-org/runok-config.git@main
+```
+
+Supports `https://`, `http://`, and `git@` URLs. An optional `@<ref>` suffix specifies the version.
+
+## Mutable vs Immutable References
+
+runok distinguishes between mutable and immutable references for caching:
+
+| Reference Type      | Example                       | Caching Behavior   |
+| ------------------- | ----------------------------- | ------------------ |
+| Commit SHA (40 hex) | `github:org/repo@a1b2c3d4...` | Cached permanently |
+| Tag or branch       | `github:org/repo@v1.0.0`      | Cached with TTL    |
+| Default branch      | `github:org/repo`             | Cached with TTL    |
+
+Mutable references (tags, branches) are cached for 24 hours by default. Immutable references (commit SHAs) are cached permanently. See [Environment Variables](/v0.3/configuration/environment-variables/) for how to configure the cache TTL.
+
+## Resolution Order
+
+When a config file specifies `extends`, runok resolves presets using depth-first traversal:
+
+1. For each entry in `extends` (in order), recursively load and resolve its own `extends`.
+2. Merge all resolved presets in order.
+3. Merge the current config on top.
+
+This means the current file always takes the highest priority, and earlier `extends` entries serve as the base.
+
+### Diamond Inheritance
+
+Diamond-shaped extends (where two presets share a common ancestor) are allowed. The shared ancestor is loaded once for each path, and both copies are merged.
+
+```yaml title="a.yml"
+# a.yml
+extends:
+  - ./b.yml
+  - ./c.yml
+
+# b.yml extends: [./shared.yml]
+# c.yml extends: [./shared.yml]
+# This is valid — shared.yml is merged from both paths.
+```
+
+### Circular Reference Detection
+
+Circular references are detected and rejected. runok normalizes file paths before checking, so `./runok.yml` and `runok.yml` pointing to the same file are correctly identified as circular.
+
+The maximum extends depth is **10** levels. Exceeding this limit produces an error.
+
+## Version Guards (`required_runok_version`)
+
+A preset file can declare the minimum runok version it needs by setting the top-level `required_runok_version` field to a [semver requirement](https://docs.rs/semver/latest/semver/struct.VersionReq.html) expression. Preset authors should set this whenever a file depends on schema features introduced in a newer runok, so that older runok binaries refuse the preset cleanly instead of silently ignoring unknown fields or surfacing confusing parse errors.
+
+```yaml title="preset using a newer runok feature"
+required_runok_version: '>=0.3.0'
+definitions:
+  flag_groups:
+    field-flag: '-f|--field *'
+```
+
+The check is enforced per file: the project `runok.yml`, every file pulled in via `extends`, and every transitively extended preset are validated independently. If any file's requirement is not satisfied, loading fails with an error that names the exact file and the constraint.
+
+### Interaction with `update-presets`
+
+`runok update-presets` honors `required_runok_version` when selecting which tag to upgrade a remote preset to. Candidate tags are inspected from newest to oldest, and the newest tag whose entire preset tree (including every file it transitively extends) satisfies the current runok version is adopted. Candidates that require a newer runok are reported as a warning so that the user knows upgrading the runok binary would unlock newer preset versions.
+
+This lets a preset repository ship schema-incompatible changes under a newer tag without breaking users still on older runok — they will stay on the previous compatible tag until they upgrade runok themselves.
+
+### Interaction with automatic refresh
+
+The same check also guards the background refresh that happens when a cached remote preset goes stale. A new revision fetched from the remote is only written to the cache working tree after its `required_runok_version` has been verified. If the new revision (or any file it extends in the same repository) is incompatible, the refresh is silently skipped and the existing cached preset is kept, so that normal `runok check` / `runok exec` operations are never broken by a preset upgrade that the current runok cannot read.
+
+No warning is emitted in this path on purpose — warnings about "a newer tag exists" are reserved for the explicit `update-presets` command so that normal operations stay quiet.
+
+### Nightly builds
+
+Nightly builds of runok (`X.Y.Z-nightly+<sha>`) are treated as "latest" for the purpose of this check, so any `>=X.Y.Z` requirement passes automatically. Upper-bounded ranges such as `">=0.2, <0.4"` intentionally reject nightly builds because nightly is modeled as strictly greater than every released version.
+
+## Caching
+
+Remote presets are cached locally to avoid repeated network fetches.
+
+### Cache Location
+
+The cache directory is determined by:
+
+1. `$XDG_CACHE_HOME/runok/presets` (if `XDG_CACHE_HOME` is set)
+2. `$HOME/.cache/runok/presets` (fallback)
+
+Each cached preset is stored in a directory named by the SHA-256 hash of the reference string.
+
+### Cache Behavior
+
+| Scenario          | Action                                                     |
+| ----------------- | ---------------------------------------------------------- |
+| Cache hit (fresh) | Use cached data directly.                                  |
+| Cache stale       | Attempt to fetch updates. If fetch fails, use stale cache. |
+| Cache miss        | Clone the repository. Fail if clone fails.                 |
+
+Stale cache provides resilience against temporary network failures — if a fetch fails, the previously cached version is used with a warning.
+
+### Cache Metadata
+
+Each cached entry includes a `metadata.json` file tracking:
+
+- `fetched_at` — Unix timestamp of when the preset was fetched
+- `is_immutable` — Whether the reference is a commit SHA
+- `reference` — The original reference string
+- `resolved_sha` — The resolved commit SHA (if available)
+
+## Related
+
+- [Official Presets (runok-presets)](/v0.3/configuration/official-presets/) -- Ready-made rule presets for common read-only commands.
+- [File Discovery and Merging](/v0.3/configuration/file-discovery/) -- How configuration files are loaded and merged.
+- [Configuration Schema](/v0.3/configuration/schema/) -- Full reference for `runok.yml`.

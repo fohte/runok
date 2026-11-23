@@ -13,3 +13,6 @@ minimumReleaseAgeExclude: [
     # Renovate security update: astro@6.4.6
     astro@6.4.6,
   ]
+
+patchedDependencies:
+  starlight-llms-txt@0.10.0: patches/starlight-llms-txt@0.10.0.patch

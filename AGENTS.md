@@ -185,6 +185,12 @@ When a PR introduces user-facing changes (new features, bug fixes, breaking chan
 
 **PR link is required.** The PR link in the `###` heading is mandatory. If the PR number is not yet known when editing `next.md`, leave a `TODO(pr-link)` placeholder and replace it in a follow-up commit (after `gh pr create` returns the number) before the PR is merged. Entries without PR links must not be merged.
 
+### Snapshot docs before a major release
+
+Keep a snapshot of the previous compatibility boundary before merging the release PR that starts a new major version. For 0.x releases, the minor version is the compatibility boundary (for example, use `v0.3` for the final 0.3.x tag); from 1.0 onward, use the major version (for example, `v1`).
+
+Create the snapshot in a PR based on the final tag of the previous compatibility boundary. Add its slug to `starlight-versions` in `docs/astro.config.mjs`, then run one docs build to archive it. Before that build, temporarily restore the tag's `docs/src/content/docs/`, assets, and public files, and use the tag's sidebar configuration while keeping the current version plugin settings. Restore the latest docs, assets, public files, and sidebar afterward, keeping only the generated `docs/src/content/docs/<slug>/`, `docs/src/content/versions/<slug>.json`, and `docs/src/assets/<slug>/`. Keep the current `docs/src/content.config.ts` so the versions collection remains available during the build. Repeat the process in a separate PR for each new snapshot; merge it before the release PR. Do not automate snapshot creation in the release workflow.
+
 ## Code rules
 
 ### Use the `shlex` crate for shell quoting and splitting
