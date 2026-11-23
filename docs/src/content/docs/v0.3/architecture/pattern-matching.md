@@ -27,7 +27,7 @@ The pipeline has two independent input paths that converge at the Matcher:
 
 ## Layer 1: Lexer
 
-**Source**: [`src/rules/pattern_lexer.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_lexer.rs)
+**Source**: [`src/rules/pattern_lexer.rs`](https://github.com/fohte/runok/blob/v0.3.1/src/rules/pattern_lexer.rs)
 
 The lexer converts a pattern string into a flat list of `LexToken` values. It handles:
 
@@ -56,7 +56,7 @@ Lexer output:
 
 ## Layer 2: Parser
 
-**Source**: [`src/rules/pattern_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_parser.rs)
+**Source**: [`src/rules/pattern_parser.rs`](https://github.com/fohte/runok/blob/v0.3.1/src/rules/pattern_parser.rs)
 
 The parser transforms `Vec<LexToken>` into a structured `Pattern`:
 
@@ -88,7 +88,7 @@ The parser's output drives **FlagSchema** construction in the rule engine. By ex
 
 ## Layer 3: Matcher
 
-**Source**: [`src/rules/pattern_matcher.rs`](https://github.com/fohte/runok/blob/main/src/rules/pattern_matcher.rs)
+**Source**: [`src/rules/pattern_matcher.rs`](https://github.com/fohte/runok/blob/v0.3.1/src/rules/pattern_matcher.rs)
 
 The matcher compares a `Pattern` against a `ParsedCommand` and returns whether they match (optionally with captures for placeholder extraction).
 
@@ -152,7 +152,7 @@ Example: With wrapper `sudo <cmd>`, the command `sudo rm -rf /` matches, and `rm
 
 ## Command Parser
 
-**Source**: [`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/main/src/rules/command_parser.rs)
+**Source**: [`src/rules/command_parser.rs`](https://github.com/fohte/runok/blob/v0.3.1/src/rules/command_parser.rs)
 
 The command parser operates on the input command (not the pattern). It provides:
 

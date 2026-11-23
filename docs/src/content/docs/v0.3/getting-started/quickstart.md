@@ -81,12 +81,9 @@ runok check -- git push origin main
 
 The decision (`allow`, `deny`, or `ask`) is printed to stdout. Use `--output-format json` for machine-readable output.
 
-:::tip[Real-world configurations]
-See how runok is configured in practice:
-
-- [fohte/dotfiles `runok.yml`](https://github.com/fohte/dotfiles/blob/master/config/runok/runok.yml) -- The author's dotfiles configuration extending official presets with project-specific rules.
-- [fohte/runok-presets](https://github.com/fohte/runok-presets) -- The official preset collection for common read-only commands. See [Official Presets](/v0.3/configuration/official-presets/) for details.
-  :::
+:::tip[Related projects]
+[fohte/runok-presets](https://github.com/fohte/runok-presets) is the official preset collection for common read-only commands. See [Official Presets](/v0.3/configuration/official-presets/) for details.
+:::
 
 ## Next steps
 

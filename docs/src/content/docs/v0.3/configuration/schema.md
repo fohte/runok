@@ -24,7 +24,7 @@ The top-level keys are `required_runok_version`, `extends`, `defaults`, `rules`,
 
 ### JSON Schema
 
-runok provides a JSON Schema for configuration file validation and editor autocompletion. The schema file is available at [`schema/runok.schema.json`](https://github.com/fohte/runok/blob/main/schema/runok.schema.json) in the repository.
+runok provides a JSON Schema for configuration file validation and editor autocompletion. The schema file is available at [`schema/runok.schema.json`](https://github.com/fohte/runok/blob/v0.3.1/schema/runok.schema.json) in the repository.
 
 To enable autocompletion in your editor, add a `# yaml-language-server` directive at the top of your configuration file:
 
