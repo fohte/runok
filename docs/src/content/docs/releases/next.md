@@ -339,7 +339,7 @@ runok: stdin parse error: failed to parse stdin as shell input
 
 `TS=foo 2>/dev/null; echo hi` now correctly extracts to a single command (`echo hi`), with the assignment persisted so a later `$TS` in the same command string resolves it -- `TS` is never looked up as a command name in `PATH`.
 
-### `defaults.action: pass` combined with `defaults.sandbox` now actually runs the command (TODO(pr-link))
+### `defaults.action: pass` combined with `defaults.sandbox` now actually runs the command ([#504](https://github.com/fohte/runok/pull/504))
 
 For an unmatched command, the `PreToolUse` hook rewrites `updatedInput` to `runok exec --hook-origin <token> --sandbox <preset> -- <command>` so the sandbox still applies once Claude Code's own permission flow lets the command through. `runok exec` re-evaluates that command against the same rules, and an unmatched command also resolves to `Action::Pass` there -- which `exec` (having no permission flow of its own to defer to) treated the same as `ask`, denying with exit code 3. The combination documented in `defaults.action: pass` + `defaults.sandbox` ([#502](https://github.com/fohte/runok/pull/502)) never actually ran the command.
 
