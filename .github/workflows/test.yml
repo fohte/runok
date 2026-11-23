@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   test:
+    # The commit that adds bootstrap.yml has no lockfiles yet; the Bootstrap
+    # workflow commits them, and that push runs these jobs instead.
+    if: "!contains(github.event.head_commit.added, '.github/workflows/bootstrap.yml')"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -72,11 +75,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: lefthook run pre-commit --all-files
 
-      # Formatters configured with `stage_fixed: true` run `git add` after formatting,
-      # which stages the changes.
-      # commit-action uses `git ls-files --modified` which only detects unstaged changes.
-      # https://github.com/suzuki-shunsuke/commit-action/blob/87b297f0ce551411b43d1880f4fb3cbc60381055/action.yaml#L57
-      # We need to unstage the changes so commit-action can detect them.
+      # commit-action lists only unstaged files (`git ls-files --modified --others`),
+      # so unstage everything earlier steps staged, including new files.
+      # https://github.com/suzuki-shunsuke/commit-action/blob/06e3b49d4706498d325d29bd85adc82ecf2f5d8f/src/run.ts#L186-L188
       - name: Unstage changes for commit-action
         run: git restore --staged .
 
@@ -97,7 +98,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-
+    if: "!contains(github.event.head_commit.added, '.github/workflows/bootstrap.yml')"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
