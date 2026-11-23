@@ -194,7 +194,7 @@ fn cel_or_runok_builtin_names() -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
 
     use crate::config::parse_config;
@@ -204,14 +204,51 @@ mod tests {
     #[case::reserved_keyword("true", "name must be a CEL identifier")]
     #[case::builtin_function("contains", "name conflicts with a CEL or runok built-in function")]
     fn validate_rejects_invalid_extension_names(#[case] name: &str, #[case] reason: &str) {
-        let mut config = parse_config(&format!(
-            "definitions:\n  extensions:\n    {name}:\n      executor: external-tool"
-        ))
+        let mut config = parse_config(&formatdoc! {
+            "
+            definitions:
+              extensions:
+                {name}:
+                  executor: external-tool
+            "
+        })
         .unwrap();
+
+        let expected = formatdoc! {
+            "
+            validation errors:
+              - definitions.extensions.{name}: {reason}
+            "
+        };
 
         assert_eq!(
             config.validate().unwrap_err().to_string(),
-            format!("validation errors:\n  - definitions.extensions.{name}: {reason}"),
+            expected.strip_suffix('\n').unwrap()
+        );
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace_only("   ")]
+    fn validate_rejects_empty_extension_executor(#[case] executor: &str) {
+        let mut config = parse_config(&formatdoc! {
+            "
+            definitions:
+              extensions:
+                lookup:
+                  executor: \"{executor}\"
+            "
+        })
+        .unwrap();
+
+        let expected = indoc! {"
+            validation errors:
+              - definitions.extensions.lookup.executor must not be empty
+        "};
+
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            expected.strip_suffix('\n').unwrap(),
         );
     }
 

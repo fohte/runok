@@ -85,6 +85,12 @@ impl ProcessExtensionRunner {
             .stderr(Stdio::null())
             .env_clear();
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+
         for name in ["PATH", "HOME"]
             .into_iter()
             .chain(extra_env.iter().map(String::as_str))
@@ -243,12 +249,23 @@ impl ExtensionRunner for ProcessExtensionRunner {
             }
 
             if started.elapsed() >= timeout {
-                let _ = child.kill();
-                let _ = child.wait();
+                Self::terminate_processes(&mut child);
                 return Err(ExtensionError::Timeout(timeout));
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+}
+
+impl ProcessExtensionRunner {
+    fn terminate_processes(child: &mut std::process::Child) {
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+        }
+        #[cfg(not(unix))]
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -477,6 +494,42 @@ mod tests {
         assert_eq!(
             result.map_err(|error| error.to_string()),
             Err("timeout after 50ms".to_string())
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_descendants_holding_stdout() -> Result<(), Box<dyn Error>> {
+        let temp_dir = TempDir::new()?;
+        let script = write_script(indoc! {"
+            #!/bin/sh
+            cat >/dev/null
+            (
+              sleep 0.5
+              printf done > child-finished
+            ) &
+            exit 0
+        "})?;
+        let executor_cmd = script.to_string_lossy();
+        let params = params();
+        let parent_env = parent_env();
+        let result = call_process_extension(
+            executor_cmd.as_ref(),
+            &params,
+            &parent_env,
+            &[],
+            temp_dir.path(),
+            Duration::from_millis(50),
+        );
+        std::thread::sleep(Duration::from_millis(600));
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                temp_dir.path().join("child-finished").exists(),
+            ),
+            (Err("timeout after 50ms".to_string()), false),
         );
         Ok(())
     }

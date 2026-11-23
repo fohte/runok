@@ -22,7 +22,7 @@ rules:
     when: "ext.repo_state({'remote': args[1]}).protected_branch"
 ```
 
-The extension receives `{"remote": args[0]}` as its JSON-RPC `params` object. Its result can be any JSON value, which CEL exposes as a map, list, string, boolean, number, or `null`. See the [Protocol Reference](/extensions/protocol/) for the request and response format.
+The extension receives `{"remote": args[1]}` as its JSON-RPC `params` object. Its result can be any JSON value, which CEL exposes as a map, list, string, boolean, number, or `null`. See the [Protocol Reference](/extensions/protocol/) for the request and response format.
 
 ## Evaluation behavior
 
