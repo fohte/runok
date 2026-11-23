@@ -78,11 +78,11 @@ Since `pass` is now the common outcome for a command that matches no rule, the t
 
 ## New Features
 
-### Rule-level extension evaluation (TODO(pr-link))
+### CEL extensions return JSON values (TODO(pr-link))
 
-Rules can invoke named executors from `definitions.extensions` after their command pattern and optional `when` condition match. Extensions can return `pass` to leave the rule unmatched, and their other decisions combine with matching rules using `deny > ask > allow`. See [Extensions](/extensions/overview/) and the [Configuration Schema](/configuration/schema/#definitionsextensions).
+CEL `when` expressions can call named executors as `ext.<name>(map)` and inspect the returned JSON value. Calls run only when CEL evaluates them, and identical calls are reused within one `when` evaluation. A failed call or an evaluation error after a call makes that rule `ask`, while other matching rules continue to combine using `deny > ask > allow`.
 
-Rust callers who construct `RuleEntry`, `Definitions`, or `EvalContext` with struct literals must populate the new extension-related fields.
+**Breaking change:** extensions now use the JSON-RPC method `call` and return arbitrary JSON values. The earlier `validateCommand` response format and the rule fields `extension` / `match` are removed. Move the decision into a normal rule's `when` expression. Rust callers must update `ExtensionRunner` implementations and any direct struct literals for extension definitions, rules, tests, or evaluation contexts. See [Extensions](/extensions/overview/), the [Protocol Reference](/extensions/protocol/), and the [Configuration Schema](/configuration/schema/#definitionsextensions).
 
 ### Expose shell wrapper patterns to `when` clauses ([#530](https://github.com/fohte/runok/pull/530))
 

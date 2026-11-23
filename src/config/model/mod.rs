@@ -9,10 +9,11 @@ mod schema_gen;
 mod validate;
 
 pub use audit_config::{AuditConfig, RotationConfig};
-pub use definitions::{Definitions, ExtensionDefinition, VarDefinition, VarType, VarValue};
+pub use definitions::{
+    Definitions, ExtensionDefinition, ExtensionTimeout, VarDefinition, VarType, VarValue,
+};
 pub use experimental_config::{ExperimentalConfig, RequireCommandInPathConfig};
 pub use parse::{ParsedConfig, parse_config, parse_config_with_warnings};
-pub(crate) use rule::RuleMatcher;
 pub use rule::{ActionKind, AliasDefinition, Defaults, InlineTestEntry, RuleEntry, TestSection};
 pub use sandbox::{FsAccessPolicy, FsPolicy, MergedSandboxPolicy, NetworkPolicy, SandboxPreset};
 #[cfg(feature = "config-schema")]

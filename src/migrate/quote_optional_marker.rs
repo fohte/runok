@@ -81,17 +81,14 @@ fn collect_patches(config: &Config) -> Vec<Patch<'_>> {
     // `rules` is `Option<Vec<RuleEntry>>`, not `Vec<Option<RuleEntry>>`: `flatten()`
     // only strips the outer `Option`, so `i` always matches the YAML `rules[]` index.
     for (i, rule) in config.rules.iter().flatten().enumerate() {
-        let Some((matcher, pattern)) = rule.matcher_and_pattern() else {
+        let Some((action, pattern)) = rule.action_and_pattern() else {
             continue;
         };
-        let key = match matcher {
-            crate::config::RuleMatcher::Action(ActionKind::Allow) => "allow",
-            crate::config::RuleMatcher::Action(ActionKind::Deny) => "deny",
-            crate::config::RuleMatcher::Action(ActionKind::Ask) => "ask",
-            crate::config::RuleMatcher::Action(ActionKind::Pass) => {
-                unreachable!("rule matchers cannot use ActionKind::Pass")
-            }
-            crate::config::RuleMatcher::Extension(_) => "match",
+        let key = match action {
+            ActionKind::Allow => "allow",
+            ActionKind::Deny => "deny",
+            ActionKind::Ask => "ask",
+            ActionKind::Pass => unreachable!("rule actions cannot use ActionKind::Pass"),
         };
         push_patch(&mut patches, route!("rules", i, key), pattern);
     }
@@ -242,17 +239,17 @@ mod tests {
               - ask: cmd2 --mode \\?
         "},
     )]
-    #[case::extension_rule_match(
-        indoc! {"
+    #[case::extension_call_in_when(
+        indoc! {r#"
             rules:
-              - extension: repository_guard
-                match: git push ?
-        "},
-        indoc! {"
+              - deny: git push ?
+                when: 'ext.repo_state({"branch": args[0]}).branch == "?"'
+        "#},
+        indoc! {r#"
             rules:
-              - extension: repository_guard
-                match: git push \\?
-        "},
+              - deny: git push \?
+                when: 'ext.repo_state({"branch": args[0]}).branch == "?"'
+        "#},
     )]
     #[case::multiple_bare_markers_in_one_pattern(
         indoc! {"

@@ -60,6 +60,28 @@ tests:
     - pass: 'echo hello'
 ```
 
+An inline or top-level case can override extension results with an `extensions` map. The key is the extension name and the value is the JSON result. runok returns that value regardless of the call arguments and does not start the process for that extension in the test case:
+
+```yaml
+definitions:
+  extensions:
+    repo_state:
+      executor: ./checks/repo_state
+
+rules:
+  - deny: 'git push * *'
+    when: "ext.repo_state({'branch': args[2]}).protected_branch"
+    tests:
+      - deny: 'git push origin release'
+        extensions:
+          repo_state: { protected_branch: true }
+      - pass: 'git push origin topic'
+        extensions:
+          repo_state: { protected_branch: false }
+```
+
+When a test case does not provide an override for an extension, runok starts the configured process as usual. See [Extensions](/extensions/overview/) for the protocol and process settings.
+
 #### `tests.extends`
 
 Load additional configuration files only during test execution. This is useful for testing rules that depend on shared presets without affecting production configuration:

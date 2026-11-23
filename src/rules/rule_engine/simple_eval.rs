@@ -1,10 +1,9 @@
-use crate::config::{ActionKind, Config, Definitions, RuleMatcher};
-use crate::exec::ExtensionError;
-use crate::exec::extension_runner::{ExtensionRequest, resolve_extension_result};
+use crate::config::{ActionKind, Config, Definitions};
 use crate::rules::RuleError;
 use crate::rules::alias_expander::expand_rule_pattern;
 use crate::rules::command_parser::{FunctionCallInfo, PipeInfo, RedirectInfo, parse_command};
-use crate::rules::expr_evaluator::evaluate;
+use crate::rules::expr_evaluator::evaluate_with_extensions;
+use crate::rules::extension_functions::{ExtensionExecutionContext, extension_error_message};
 use crate::rules::pattern_matcher::matches_with_captures;
 use crate::rules::pattern_parser::parse_multi;
 
@@ -16,8 +15,6 @@ use super::wrapper::try_unwrap_wrapper;
 use super::{
     Action, AskResponse, DenyResponse, EvalContext, EvalResult, RuleMatchInfo, ShellContext,
 };
-
-const EXTENSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Evaluate a single (non-compound) command against rules, function
 /// calls, and wrappers.
@@ -82,12 +79,15 @@ pub(super) fn evaluate_simple_command(
 
     let default_definitions = Definitions::default();
     let definitions = config.definitions.as_ref().unwrap_or(&default_definitions);
+    let extension_definitions =
+        std::sync::Arc::new(definitions.extensions.clone().unwrap_or_default());
+    let extension_parent_env = std::sync::Arc::new(context.env.clone());
 
     let mut matched: Vec<MatchedRule> = Vec::new();
     let mut match_infos: Vec<RuleMatchInfo> = Vec::new();
 
-    'rules: for rule in rules {
-        let (matcher, pattern_str) = match rule.matcher_and_pattern() {
+    for rule in rules {
+        let (action_kind, pattern_str) = match rule.action_and_pattern() {
             Some(pair) => pair,
             None => continue,
         };
@@ -108,6 +108,7 @@ pub(super) fn evaluate_simple_command(
                     continue;
                 };
 
+                let mut extension_error = None;
                 if let Some(when_expr) = &rule.when {
                     let expr_context = build_expr_context(
                         &parsed_command,
@@ -118,70 +119,42 @@ pub(super) fn evaluate_simple_command(
                         &match_captures,
                         shell_context,
                     );
-                    match evaluate(when_expr, &expr_context) {
+                    let evaluation = evaluate_with_extensions(
+                        when_expr,
+                        &expr_context,
+                        ExtensionExecutionContext {
+                            definitions: std::sync::Arc::clone(&extension_definitions),
+                            runner: std::sync::Arc::clone(&context.extension_runner),
+                            parent_env: std::sync::Arc::clone(&extension_parent_env),
+                            cwd: context.cwd.clone(),
+                            calls_allowed: rule.extension_calls_allowed,
+                            verbose: context.verbose,
+                        },
+                    );
+                    match evaluation.result {
                         Ok(true) => {}
                         Ok(false) => continue,
-                        Err(e) => return Err(e.into()),
+                        Err(error) if !evaluation.calls.names.is_empty() => {
+                            extension_error = Some(extension_error_message(
+                                &evaluation.calls,
+                                &error.to_string(),
+                            ));
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
 
-                let (action_kind, message, fix_suggestion) = match matcher {
-                    RuleMatcher::Action(action_kind) => (
-                        action_kind,
-                        rule.message.clone(),
-                        rule.fix_suggestion.clone(),
-                    ),
-                    RuleMatcher::Extension(name) => {
-                        let extension_result = match definitions
-                            .extensions
-                            .as_ref()
-                            .and_then(|extensions| extensions.get(name))
-                        {
-                            Some(extension) => {
-                                let request = ExtensionRequest {
-                                    command: parsed_command.command.clone(),
-                                    flags: parsed_command
-                                        .flags
-                                        .iter()
-                                        .map(|(flag, value)| {
-                                            (
-                                                flag.trim_start_matches('-').to_string(),
-                                                value.clone().unwrap_or_default(),
-                                            )
-                                        })
-                                        .collect(),
-                                    args: parsed_command.args.clone(),
-                                    raw_command_line: command.to_string(),
-                                    env: context.env.clone(),
-                                    cwd: context.cwd.to_string_lossy().into_owned(),
-                                };
-                                let response = context.extension_runner.validate(
-                                    &extension.executor,
-                                    &request,
-                                    EXTENSION_TIMEOUT,
-                                );
-                                resolve_extension_result(response, context.verbose)
-                            }
-                            None => resolve_extension_result(
-                                Err(ExtensionError::InvalidResponse(format!(
-                                    "extension '{name}' is not defined"
-                                ))),
-                                context.verbose,
-                            ),
-                        };
-
-                        if extension_result.action == ActionKind::Pass {
-                            continue 'rules;
-                        }
-                        (
-                            extension_result.action,
-                            extension_result.message.or_else(|| rule.message.clone()),
-                            extension_result
-                                .fix_suggestion
-                                .or_else(|| rule.fix_suggestion.clone()),
-                        )
-                    }
+                let message = extension_error.map(|extension_error| match &rule.message {
+                    Some(rule_message) => format!("{extension_error}. {rule_message}"),
+                    None => extension_error,
+                });
+                let action_kind = if message.is_some() {
+                    ActionKind::Ask
+                } else {
+                    action_kind
                 };
+                let message = message.or_else(|| rule.message.clone());
+                let fix_suggestion = rule.fix_suggestion.clone();
 
                 match_infos.push(RuleMatchInfo {
                     action_kind,
@@ -247,9 +220,7 @@ pub(super) fn evaluate_simple_command(
                 matched_rule: most_restrictive.pattern_str.clone(),
             }),
             ActionKind::Allow => Action::Allow,
-            ActionKind::Pass => unreachable!(
-                "extension `pass` decisions are filtered before matched rules are combined"
-            ),
+            ActionKind::Pass => unreachable!("Pass cannot be a configured rule action"),
         };
 
         let sandbox_preset = most_restrictive.sandbox_preset.clone();
@@ -653,9 +624,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         };
         let config = make_config(vec![invalid_rule, allow_rule("git status")]);
         let result = evaluate_command(&config, "git status", &empty_context).unwrap();

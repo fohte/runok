@@ -342,6 +342,25 @@ rules:
 
 When `time` wraps a group or loop, such as `time (sleep 1)`, the inner command is evaluated without wrapper context, so this deny rule still applies.
 
+## Extension values
+
+Call a configured extension from CEL with `ext.<name>(map)`. The map is passed as the JSON-RPC `params` object; omit it to pass `{}`. The extension returns a JSON value that CEL can read:
+
+```yaml
+definitions:
+  extensions:
+    repo_state:
+      executor: ./checks/repo_state
+
+rules:
+  - deny: 'git push * *'
+    when: "ext.repo_state({'remote': args[1], 'branch': args[2]}).protected_branch"
+```
+
+The extension is called only if CEL evaluates that expression branch. Within one `when` evaluation, repeated calls with the same name and map arguments reuse one result. Results are not shared across rules.
+
+If the extension fails, or the `when` expression errors after an extension call, that rule becomes `ask` and evaluation continues. Other matching rules combine normally, so a `deny` still takes precedence. An error without an extension call still stops evaluation. Extensions can be configured in the global config or an explicitly selected `--config` file; project rules that call extensions become `ask`. See [Extensions](/extensions/overview/) for process settings and JSON-RPC details.
+
 ## Filesystem
 
 A `fs` namespace exposes read-only filesystem checks and path values for use inside `when` clauses.
@@ -484,7 +503,7 @@ This means the `when` clause acts as an additional filter, not a replacement for
 | Eval error  | Referencing an undeclared variable (e.g., `missing.var`) | Evaluation fails with error |
 | Type error  | Expression returns non-boolean (e.g., `env.HOME`)        | Evaluation fails with error |
 
-Errors in `when` clause evaluation cause the entire command evaluation to fail, rather than silently skipping the rule. This is intentional — a misconfigured `when` clause should be surfaced immediately.
+Errors in a `when` clause without an extension call cause the entire command evaluation to fail, rather than silently skipping the rule. If the expression called an extension before the error, runok records `ask` for that rule and continues evaluating other rules.
 
 ## Examples
 
@@ -581,4 +600,4 @@ rules:
 ## Related
 
 - [Configuration Schema: `when`](/configuration/schema/#when) -- Configuration reference for the `when` field.
-- [Extensions](/extensions/overview/) -- Custom validation beyond CEL expressions.
+- [Extensions](/extensions/overview/) -- External JSON values for CEL expressions.

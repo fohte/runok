@@ -9,6 +9,10 @@ use cel_interpreter::{ExecutionError, ResolveResult, Value};
 
 use super::ExprError;
 use super::command_parser::{PipeInfo, RedirectInfo};
+use super::extension_functions::{
+    ExtensionCallSnapshot, ExtensionExecutionContext, call_snapshot, register_extension_functions,
+    rewrite_extension_calls,
+};
 
 /// Marker key used to identify the `fs` sentinel map. The `fs.*` functions
 /// reject calls whose receiver is not this exact map, so registering them as
@@ -161,135 +165,177 @@ pub struct ExprContext {
     pub cwd: String,
 }
 
+pub(crate) struct ExtensionEvaluation {
+    pub result: Result<bool, ExprError>,
+    pub calls: ExtensionCallSnapshot,
+}
+
 /// Evaluates a CEL expression against a given context, returning a boolean result.
 pub fn evaluate(expr: &str, context: &ExprContext) -> Result<bool, ExprError> {
-    let program =
-        cel_interpreter::Program::compile(expr).map_err(|e| ExprError::Parse(e.to_string()))?;
+    evaluate_inner(expr, context, None).result
+}
+
+pub(crate) fn evaluate_with_extensions(
+    expr: &str,
+    context: &ExprContext,
+    execution: ExtensionExecutionContext,
+) -> ExtensionEvaluation {
+    evaluate_inner(expr, context, Some(execution))
+}
+
+fn evaluate_inner(
+    expr: &str,
+    context: &ExprContext,
+    execution: Option<ExtensionExecutionContext>,
+) -> ExtensionEvaluation {
+    let (rewritten_expr, extension_names) = rewrite_extension_calls(expr);
+    let program = match cel_interpreter::Program::compile(&rewritten_expr) {
+        Ok(program) => program,
+        Err(error) => {
+            return ExtensionEvaluation {
+                result: Err(ExprError::Parse(error.to_string())),
+                calls: ExtensionCallSnapshot::default(),
+            };
+        }
+    };
 
     let mut cel_context = cel_interpreter::Context::default();
+    let mut extension_state = None;
+    let result = (|| -> Result<bool, ExprError> {
+        cel_context.add_variable_from_value("env", context.env.clone());
 
-    cel_context.add_variable_from_value("env", context.env.clone());
-
-    // Convert Option<String> flags to CEL-compatible values.
-    // None values become null in CEL.
-    let flags_value: HashMap<String, cel_interpreter::Value> = context
-        .flags
-        .iter()
-        .map(|(k, v)| {
-            let val = match v {
-                Some(s) => cel_interpreter::Value::String(s.clone().into()),
-                None => cel_interpreter::Value::Null,
-            };
-            (k.clone(), val)
-        })
-        .collect();
-    cel_context.add_variable_from_value("flags", flags_value);
-
-    cel_context.add_variable_from_value("args", context.args.clone());
-
-    cel_context
-        .add_variable("paths", &context.paths)
-        .map_err(|e| ExprError::Eval(e.to_string()))?;
-
-    // Register `definitions`: a nested map exposing the raw definitions data,
-    // as opposed to `paths`/`vars`, which expose only what the current rule's
-    // pattern captured. `definitions.paths` aliases the same data as `paths`
-    // above; `definitions.vars` holds every declared value for every
-    // `definitions.vars` entry.
-    let definitions_value = HashMap::from([
-        ("paths", &context.paths),
-        ("vars", &context.var_definitions),
-    ]);
-    cel_context
-        .add_variable("definitions", definitions_value)
-        .map_err(|e| ExprError::Eval(e.to_string()))?;
-
-    // Register redirects: list of maps with type, operator, target, descriptor
-    let redirects_value: Vec<HashMap<String, cel_interpreter::Value>> = context
-        .redirects
-        .iter()
-        .map(|r| {
-            let mut m = HashMap::new();
-            m.insert(
-                "type".to_string(),
-                cel_interpreter::Value::String(r.redirect_type.clone().into()),
-            );
-            m.insert(
-                "operator".to_string(),
-                cel_interpreter::Value::String(r.operator.clone().into()),
-            );
-            m.insert(
-                "target".to_string(),
-                cel_interpreter::Value::String(r.target.clone().into()),
-            );
-            m.insert(
-                "descriptor".to_string(),
-                match r.descriptor {
-                    Some(fd) => cel_interpreter::Value::Int(fd),
+        // Convert Option<String> flags to CEL-compatible values.
+        // None values become null in CEL.
+        let flags_value: HashMap<String, cel_interpreter::Value> = context
+            .flags
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    Some(s) => cel_interpreter::Value::String(s.clone().into()),
                     None => cel_interpreter::Value::Null,
-                },
-            );
-            m
-        })
-        .collect();
-    cel_context.add_variable_from_value("redirects", redirects_value);
+                };
+                (k.clone(), val)
+            })
+            .collect();
+        cel_context.add_variable_from_value("flags", flags_value);
 
-    // Register pipe: map with stdin and stdout booleans
-    let pipe_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
-        (
-            "stdin".to_string(),
-            cel_interpreter::Value::Bool(context.pipe.stdin),
-        ),
-        (
-            "stdout".to_string(),
-            cel_interpreter::Value::Bool(context.pipe.stdout),
-        ),
-    ]);
-    cel_context.add_variable_from_value("pipe", pipe_value);
+        cel_context.add_variable_from_value("args", context.args.clone());
 
-    cel_context.add_variable_from_value("vars", context.vars.clone());
+        cel_context
+            .add_variable("paths", &context.paths)
+            .map_err(|e| ExprError::Eval(e.to_string()))?;
 
-    cel_context
-        .add_variable("flag_groups", &context.flag_groups)
-        .map_err(|e| ExprError::Eval(e.to_string()))?;
+        // Register `definitions`: a nested map exposing the raw definitions data,
+        // as opposed to `paths`/`vars`, which expose only what the current rule's
+        // pattern captured. `definitions.paths` aliases the same data as `paths`
+        // above; `definitions.vars` holds every declared value for every
+        // `definitions.vars` entry.
+        let definitions_value = HashMap::from([
+            ("paths", &context.paths),
+            ("vars", &context.var_definitions),
+        ]);
+        cel_context
+            .add_variable("definitions", definitions_value)
+            .map_err(|e| ExprError::Eval(e.to_string()))?;
 
-    cel_context.add_variable_from_value("os", context.os.clone());
+        // Register redirects: list of maps with type, operator, target, descriptor
+        let redirects_value: Vec<HashMap<String, cel_interpreter::Value>> = context
+            .redirects
+            .iter()
+            .map(|r| {
+                let mut m = HashMap::new();
+                m.insert(
+                    "type".to_string(),
+                    cel_interpreter::Value::String(r.redirect_type.clone().into()),
+                );
+                m.insert(
+                    "operator".to_string(),
+                    cel_interpreter::Value::String(r.operator.clone().into()),
+                );
+                m.insert(
+                    "target".to_string(),
+                    cel_interpreter::Value::String(r.target.clone().into()),
+                );
+                m.insert(
+                    "descriptor".to_string(),
+                    match r.descriptor {
+                        Some(fd) => cel_interpreter::Value::Int(fd),
+                        None => cel_interpreter::Value::Null,
+                    },
+                );
+                m
+            })
+            .collect();
+        cel_context.add_variable_from_value("redirects", redirects_value);
 
-    // Register shell.* fields as a nested map.
-    let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
-        (
-            "loop_kind".to_string(),
-            cel_interpreter::Value::String(context.loop_kind.clone().into()),
-        ),
-        (
-            "wrappers".to_string(),
-            cel_interpreter::Value::from(context.wrappers.clone()),
-        ),
-    ]);
-    cel_context.add_variable_from_value("shell", shell_value);
+        // Register pipe: map with stdin and stdout booleans
+        let pipe_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
+            (
+                "stdin".to_string(),
+                cel_interpreter::Value::Bool(context.pipe.stdin),
+            ),
+            (
+                "stdout".to_string(),
+                cel_interpreter::Value::Bool(context.pipe.stdout),
+            ),
+        ]);
+        cel_context.add_variable_from_value("pipe", pipe_value);
 
-    cel_context.add_variable_from_value("fs", fs_namespace(context));
-    // `exists` is also the name of CEL's built-in comprehension macro
-    // (`list.exists(v, pred)`), but cel-parser dispatches the 2-arg
-    // comprehension form before function lookup, so a 1-arg `fs.exists(path)`
-    // call lands here without colliding. `require_fs_target` rejects any
-    // other receiver (e.g. `'foo'.exists('bar')`) so this registration is
-    // not an unguarded global identifier. `fs.home` and `fs.cwd` are plain
-    // map-field reads on the same `fs` map and do not go through function
-    // dispatch, so both forms coexist on the one `fs` identifier.
-    cel_context.add_function("exists", fs_exists_impl);
-    cel_context.add_function("is_file", fs_is_file_impl);
-    cel_context.add_function("is_dir", fs_is_dir_impl);
-    cel_context.add_function("glob_matches", glob_matches_impl);
+        cel_context.add_variable_from_value("vars", context.vars.clone());
 
-    let result = program
-        .execute(&cel_context)
-        .map_err(|e| ExprError::Eval(e.to_string()))?;
+        cel_context
+            .add_variable("flag_groups", &context.flag_groups)
+            .map_err(|e| ExprError::Eval(e.to_string()))?;
 
-    match result {
-        cel_interpreter::Value::Bool(b) => Ok(b),
-        other => Err(ExprError::TypeError(format!("{:?}", other))),
-    }
+        cel_context.add_variable_from_value("os", context.os.clone());
+
+        // Register shell.* fields as a nested map.
+        let shell_value: HashMap<String, cel_interpreter::Value> = HashMap::from([
+            (
+                "loop_kind".to_string(),
+                cel_interpreter::Value::String(context.loop_kind.clone().into()),
+            ),
+            (
+                "wrappers".to_string(),
+                cel_interpreter::Value::from(context.wrappers.clone()),
+            ),
+        ]);
+        cel_context.add_variable_from_value("shell", shell_value);
+
+        cel_context.add_variable_from_value("fs", fs_namespace(context));
+        // `exists` is also the name of CEL's built-in comprehension macro
+        // (`list.exists(v, pred)`), but cel-parser dispatches the 2-arg
+        // comprehension form before function lookup, so a 1-arg `fs.exists(path)`
+        // call lands here without colliding. `require_fs_target` rejects any
+        // other receiver (e.g. `'foo'.exists('bar')`) so this registration is
+        // not an unguarded global identifier. `fs.home` and `fs.cwd` are plain
+        // map-field reads on the same `fs` map and do not go through function
+        // dispatch, so both forms coexist on the one `fs` identifier.
+        cel_context.add_function("exists", fs_exists_impl);
+        cel_context.add_function("is_file", fs_is_file_impl);
+        cel_context.add_function("is_dir", fs_is_dir_impl);
+        cel_context.add_function("glob_matches", glob_matches_impl);
+
+        extension_state = Some(register_extension_functions(
+            &mut cel_context,
+            &extension_names,
+            execution,
+        ));
+
+        let result = program
+            .execute(&cel_context)
+            .map_err(|error| ExprError::Eval(error.to_string()))?;
+
+        match result {
+            cel_interpreter::Value::Bool(value) => Ok(value),
+            other => Err(ExprError::TypeError(format!("{:?}", other))),
+        }
+    })();
+    let calls = extension_state
+        .as_ref()
+        .map(call_snapshot)
+        .unwrap_or_default();
+    ExtensionEvaluation { result, calls }
 }
 
 #[cfg(test)]

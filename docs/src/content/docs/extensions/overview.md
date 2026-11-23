@@ -1,54 +1,43 @@
 ---
 title: Extensions Overview
-description: Extend runok with custom plugins via JSON-RPC.
+description: Call external JSON value providers from CEL rule conditions.
 sidebar:
   order: 1
 ---
 
-runok's extension system lets you implement custom command validators as external processes. Extensions communicate with runok over **JSON-RPC 2.0 via stdio** (the same transport mechanism used by LSP), so you can write them in any language: Python, Ruby, Deno, Go, or anything that can read stdin and write to stdout.
+Extensions let a rule read information that runok cannot derive from the command, environment, or filesystem. Each extension is a process that receives a JSON object and returns a JSON value over JSON-RPC 2.0 on stdin and stdout.
 
-## Why extensions?
-
-runok's YAML rules with [pattern matching](/pattern-syntax/overview/) and [`when` expressions](/configuration/schema/#when) cover most use cases, but they work purely on string tokens. When the command arguments carry structured data that needs parsing to make a safe decision, static rules aren't enough. Extensions let you write custom validation logic that understands what the arguments actually mean:
-
-- **GraphQL query parsing**: `gh api graphql -f query='...'` can express reads or mutations. An extension can parse the GraphQL query string, extract the operation type, and deny mutations while allowing queries -- something pattern matching on the raw string cannot reliably do.
-- **URL-aware network control**: `curl -X POST https://api.example.com/v2/deploy` carries a URL whose domain and path determine the risk level. An extension can parse the URL properly and apply per-domain policies (e.g., allow internal APIs but require confirmation for external endpoints).
-- **Structured argument validation**: commands like `jq`, `kubectl apply -f`, or `aws s3 cp` take arguments with their own grammar. An extension can parse these domain-specific arguments and make fine-grained decisions that flat pattern matching cannot express.
-
-## How it works
-
-1. **runok** spawns the extension process specified by the `executor` field.
-2. **runok** sends a `validateCommand` JSON-RPC request to **the extension process**'s stdin.
-3. **The extension process** reads the request, performs its validation logic, and writes a JSON-RPC response to stdout.
-4. **runok** parses the response and maps `allow`, `deny`, and `ask` to rule decisions. `pass` leaves the extension rule unmatched so other rules or the default action can decide.
-
-Each extension is spawned as a fresh process per validation. There is no persistent connection or process reuse.
-
-## Configure an extension rule
-
-Declare reusable executors under `definitions.extensions`, then reference one from a rule with `extension` and `match`. The rule's `when` condition, if present, is checked before the process starts. Relative executable paths use runok's current working directory. Because extensions start external processes, default discovery accepts their definitions and rules only from the global config; project-discovered extension settings are ignored with a warning. A file selected explicitly with `--config` may configure extensions:
+Extensions return data, not permission decisions. A rule calls an extension from `when` and decides whether to allow, ask, or deny:
 
 ```yaml title="runok.yml"
 definitions:
   extensions:
-    repository_guard:
-      executor: ./checks/repository_guard
+    repo_state:
+      executor: ./checks/repo_state
+      timeout: 5s
+      env: [GIT_AUTH_TOKEN]
 
 rules:
-  - extension: repository_guard
-    match: 'git [-C *] commit|push *'
-    when: "env.CI != 'true'"
+  - deny: 'git push *'
+    when: "ext.repo_state({'remote': args[1]}).protected_branch"
 ```
 
-Extension decisions combine with matching rules using the same precedence: `deny` over `ask` over `allow`. `pass` contributes no match, so the next matching rule or the configured default applies. A timeout, failed process, or invalid response becomes `ask`. See the [Configuration Schema](/configuration/schema/#definitionsextensions) and [Protocol Reference](/extensions/protocol/) for details.
+The extension receives `{"remote": args[0]}` as its JSON-RPC `params` object. Its result can be any JSON value, which CEL exposes as a map, list, string, boolean, number, or `null`. See the [Protocol Reference](/extensions/protocol/) for the request and response format.
 
-## Key design principles
+## Evaluation behavior
 
-- **Language-agnostic**: runok does not embed any language runtime. Extensions are standalone executables.
-- **Single-binary**: runok remains a single Rust binary. The extension system adds no runtime dependencies.
-- **Fail-safe**: if an extension times out, crashes, or returns invalid output, runok falls back to `ask` mode so the user is always prompted for confirmation.
+- runok calls an extension only when its rule pattern matches and CEL evaluates that call.
+- A repeated call with the same extension name and argument map runs once within a single `when` evaluation. Results are not shared between rules.
+- A failed extension call, or a `when` evaluation error after an extension call, makes that rule ask for confirmation. Evaluation continues and matching results combine as `deny > ask > allow`.
+- A `when` error that occurs without calling an extension still stops evaluation as before.
+
+Each call starts a new process. The process inherits runok's current working directory and receives `PATH`, `HOME`, and only the extra environment variable names listed in the extension definition. The default timeout is five seconds per extension call. There is no timeout for the whole `runok check` evaluation.
+
+## Configuration trust
+
+Default config discovery accepts extension definitions and calls only from the global configuration. Extension definitions found in project configuration are ignored with a warning. Project rules that call `ext.*` fail as `ask`. An explicitly selected `--config` file and its `extends` chain may define and call extensions.
 
 ## Next steps
 
-- [Protocol Reference](/extensions/protocol/) -- JSON-RPC 2.0 request/response specification
-- [Tutorial](/extensions/tutorial/) -- build your first extension with error handling and timeout behavior
+- [Protocol Reference](/extensions/protocol/) -- JSON-RPC request, result, and process settings.
+- [Tutorial](/extensions/tutorial/) -- Build an extension that returns data to a rule.

@@ -1,14 +1,18 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use owo_colors::OwoColorize;
 use owo_colors::Stream::Stdout;
+use serde_json::Value as JsonValue;
 
 use crate::config::{
     ActionKind, Config, ConfigError, InlineTestEntry, ParsedConfig, PresetCache,
     parse_config_with_warnings, resolve_config_paths, resolve_extends,
 };
+use crate::exec::ExtensionError;
+use crate::exec::extension_runner::{ExtensionCall, ExtensionRunner, ProcessExtensionRunner};
 use crate::rules::RuleError;
 use crate::rules::rule_engine::{Action, EvalContext, StubCommandResolver, evaluate_compound};
 
@@ -92,10 +96,11 @@ pub struct TestCase {
     pub command: String,
     pub expected: ExpectedDecision,
     pub source: TestCaseSource,
+    pub extensions: Option<HashMap<String, JsonValue>>,
 }
 
 /// Result of a single test case execution.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct TestResult {
     pub test_case: TestCase,
     pub actual: ActionKind,
@@ -105,7 +110,7 @@ pub struct TestResult {
 }
 
 /// Aggregated test results.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct TestResults {
     pub results: Vec<TestResult>,
 }
@@ -185,6 +190,7 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
                                 file: file.to_path_buf(),
                                 rule_index,
                             },
+                            extensions: entry.extensions.clone(),
                         });
                     }
                 }
@@ -204,6 +210,7 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
                     source: TestCaseSource::TopLevel {
                         file: file.to_path_buf(),
                     },
+                    extensions: entry.extensions.clone(),
                 });
             }
         }
@@ -221,14 +228,26 @@ pub fn parse_test_cases(config: &Config, file: &Path) -> Vec<TestCase> {
 /// Uses `StubCommandResolver` (never the host `$PATH`) so results are
 /// deterministic across machines.
 pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
-    let context = EvalContext {
+    let base_context = EvalContext {
         resolver: std::sync::Arc::new(StubCommandResolver),
         ..EvalContext::from_env()
     };
+    let fallback_runner: std::sync::Arc<dyn ExtensionRunner> =
+        std::sync::Arc::new(ProcessExtensionRunner);
     let results = test_cases
         .iter()
-        .map(
-            |tc| match evaluate_compound(config, &tc.command, &context) {
+        .map(|tc| {
+            let context = EvalContext {
+                env: base_context.env.clone(),
+                cwd: base_context.cwd.clone(),
+                resolver: std::sync::Arc::clone(&base_context.resolver),
+                extension_runner: std::sync::Arc::new(TestOverrideRunner {
+                    values: tc.extensions.clone().unwrap_or_default(),
+                    fallback: std::sync::Arc::clone(&fallback_runner),
+                }),
+                verbose: base_context.verbose,
+            };
+            match evaluate_compound(config, &tc.command, &context) {
                 Ok(result) => {
                     let actual = action_to_kind(&result.action);
                     let expected_kind: ActionKind = tc.expected.into();
@@ -245,10 +264,24 @@ pub fn run_tests(config: &Config, test_cases: &[TestCase]) -> TestResults {
                     passed: false,
                     error: Some(e.to_string()),
                 },
-            },
-        )
+            }
+        })
         .collect();
     TestResults { results }
+}
+
+struct TestOverrideRunner {
+    values: HashMap<String, JsonValue>,
+    fallback: std::sync::Arc<dyn ExtensionRunner>,
+}
+
+impl ExtensionRunner for TestOverrideRunner {
+    fn call(&self, call: ExtensionCall<'_>) -> Result<JsonValue, ExtensionError> {
+        match self.values.get(call.name) {
+            Some(value) => Ok(value.clone()),
+            None => self.fallback.call(call),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +529,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                extensions: None,
             },
             actual: if passed {
                 ActionKind::Allow
@@ -534,27 +568,27 @@ mod tests {
 
     #[rstest]
     #[case::allow_entry(
-        InlineTestEntry { allow: Some("git status".into()), ask: None, deny: None, pass: None },
+        InlineTestEntry { allow: Some("git status".into()), ask: None, deny: None, pass: None, extensions: None },
         Some((ExpectedDecision::Allow, "git status".into()))
     )]
     #[case::ask_entry(
-        InlineTestEntry { allow: None, ask: Some("git push".into()), deny: None, pass: None },
+        InlineTestEntry { allow: None, ask: Some("git push".into()), deny: None, pass: None, extensions: None },
         Some((ExpectedDecision::Ask, "git push".into()))
     )]
     #[case::deny_entry(
-        InlineTestEntry { allow: None, ask: None, deny: Some("rm -rf /".into()), pass: None },
+        InlineTestEntry { allow: None, ask: None, deny: Some("rm -rf /".into()), pass: None, extensions: None },
         Some((ExpectedDecision::Deny, "rm -rf /".into()))
     )]
     #[case::pass_entry(
-        InlineTestEntry { allow: None, ask: None, deny: None, pass: Some("echo hello".into()) },
+        InlineTestEntry { allow: None, ask: None, deny: None, pass: Some("echo hello".into()), extensions: None },
         Some((ExpectedDecision::Pass, "echo hello".into()))
     )]
     #[case::none_set(
-        InlineTestEntry { allow: None, ask: None, deny: None, pass: None },
+        InlineTestEntry { allow: None, ask: None, deny: None, pass: None, extensions: None },
         None
     )]
     #[case::multiple_set(
-        InlineTestEntry { allow: Some("a".into()), ask: Some("b".into()), deny: None, pass: None },
+        InlineTestEntry { allow: Some("a".into()), ask: Some("b".into()), deny: None, pass: None, extensions: None },
         None
     )]
     fn test_parse_inline_entry(
@@ -662,11 +696,77 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            extensions: None,
         }];
 
         let results = run_tests(&config, &test_cases);
         assert!(results.is_success());
         assert_eq!(results.passed_count(), 1);
+    }
+
+    #[rstest]
+    fn run_tests_uses_each_inline_extensions_value_for_its_case() {
+        let config = parse_config(indoc! {r#"
+            definitions:
+              extensions:
+                probe:
+                  executor: unused-by-overrides
+            rules:
+              - deny: 'deploy *'
+                when: "ext.probe({'branch': args[0]}).blocked"
+                tests:
+                  - deny: 'deploy release'
+                    extensions:
+                      probe: {blocked: true}
+                  - pass: 'deploy preview'
+                    extensions:
+                      probe: {blocked: false}
+        "#})
+        .expect("config should parse");
+        let file = PathBuf::from("config.yml");
+        let test_cases = parse_test_cases(&config, &file);
+
+        assert_eq!(
+            run_tests(&config, &test_cases),
+            TestResults {
+                results: vec![
+                    TestResult {
+                        test_case: TestCase {
+                            command: "deploy release".into(),
+                            expected: ExpectedDecision::Deny,
+                            source: TestCaseSource::Inline {
+                                file: file.clone(),
+                                rule_index: 0,
+                            },
+                            extensions: Some(HashMap::from([(
+                                "probe".into(),
+                                serde_json::json!({"blocked": true}),
+                            )])),
+                        },
+                        actual: ActionKind::Deny,
+                        passed: true,
+                        error: None,
+                    },
+                    TestResult {
+                        test_case: TestCase {
+                            command: "deploy preview".into(),
+                            expected: ExpectedDecision::Pass,
+                            source: TestCaseSource::Inline {
+                                file,
+                                rule_index: 0,
+                            },
+                            extensions: Some(HashMap::from([(
+                                "probe".into(),
+                                serde_json::json!({"blocked": false}),
+                            )])),
+                        },
+                        actual: ActionKind::Pass,
+                        passed: true,
+                        error: None,
+                    },
+                ],
+            }
+        );
     }
 
     #[rstest]
@@ -682,6 +782,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            extensions: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -705,6 +806,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                extensions: None,
             },
             TestCase {
                 command: "git status".to_string(),
@@ -712,6 +814,7 @@ mod tests {
                 source: TestCaseSource::TopLevel {
                     file: PathBuf::from("test.yml"),
                 },
+                extensions: None,
             },
         ];
 
@@ -732,6 +835,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            extensions: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -753,9 +857,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
-                extension: None,
-                match_pattern: None,
                 tests: None,
+                extension_calls_allowed: true,
             }]),
             ..Default::default()
         };
@@ -765,6 +868,7 @@ mod tests {
             source: TestCaseSource::TopLevel {
                 file: PathBuf::from("test.yml"),
             },
+            extensions: None,
         }];
 
         let results = run_tests(&config, &test_cases);
@@ -807,6 +911,7 @@ mod tests {
                     source: TestCaseSource::TopLevel {
                         file: PathBuf::from("test.yml"),
                     },
+                    extensions: None,
                 },
                 actual,
                 passed,

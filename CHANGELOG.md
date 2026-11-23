@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠ BREAKING CHANGES
+
+* **extensions:** Replace rule-level extension decisions and JSON-RPC `validateCommand` with CEL `ext.<name>(map)` calls that return JSON values. Update extension processes to handle the `call` method and move allow/deny/ask decisions into normal rule conditions.
+
 ## [0.3.1](https://github.com/fohte/runok/compare/v0.3.0...v0.3.1) (2026-07-01)
 
 

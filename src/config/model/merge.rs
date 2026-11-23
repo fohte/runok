@@ -229,9 +229,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
-                extension: None,
-                match_pattern: None,
                 tests: None,
+                extension_calls_allowed: true,
             }]),
             ..Config::default()
         };
@@ -250,9 +249,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
-                extension: None,
-                match_pattern: None,
                 tests: None,
+                extension_calls_allowed: true,
             }]),
             ..Config::default()
         };
@@ -336,9 +334,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
-                extension: None,
-                match_pattern: None,
                 tests: None,
+                extension_calls_allowed: true,
             }]),
             ..Config::default()
         };
@@ -351,9 +348,8 @@ mod tests {
                 message: None,
                 fix_suggestion: None,
                 sandbox: None,
-                extension: None,
-                match_pattern: None,
                 tests: None,
+                extension_calls_allowed: true,
             }]),
             ..Config::default()
         };

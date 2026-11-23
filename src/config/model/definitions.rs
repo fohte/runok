@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[cfg(any(feature = "config-schema", test))]
 use schemars::JsonSchema;
@@ -7,12 +8,68 @@ use serde::de::Deserializer;
 
 use super::{AliasDefinition, SandboxPreset};
 
-/// Executor command for an extension referenced by a rule.
+/// Executor command and process settings for an extension called from CEL.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 pub struct ExtensionDefinition {
     /// Command and arguments used to start the extension process.
     pub executor: String,
+    /// Maximum time from process launch until its response is read. Defaults to five seconds.
+    pub timeout: Option<ExtensionTimeout>,
+    /// Additional parent environment variable names passed to the process.
+    pub env: Option<Vec<String>>,
+}
+
+/// A timeout written as a compact duration such as `5s` or `250ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionTimeout(Duration);
+
+impl ExtensionTimeout {
+    pub fn duration(self) -> Duration {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ExtensionTimeout {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        parse_extension_timeout(&value)
+            .map(Self)
+            .ok_or_else(|| serde::de::Error::custom("expected a duration such as '5s' or '250ms'"))
+    }
+}
+
+fn parse_extension_timeout(value: &str) -> Option<Duration> {
+    let (amount, unit) = ["ms", "s", "m", "h"]
+        .into_iter()
+        .find_map(|unit| value.strip_suffix(unit).map(|amount| (amount, unit)))?;
+    let amount = amount.parse::<u64>().ok()?;
+    match unit {
+        "ms" => Some(Duration::from_millis(amount)),
+        "s" => Some(Duration::from_secs(amount)),
+        "m" => amount.checked_mul(60).map(Duration::from_secs),
+        "h" => amount.checked_mul(60 * 60).map(Duration::from_secs),
+        _ => None,
+    }
+}
+
+#[cfg(any(feature = "config-schema", test))]
+impl JsonSchema for ExtensionTimeout {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ExtensionTimeout".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^[0-9]+(ms|s|m|h)$",
+            "default": "5s",
+            "description": "Maximum time from process launch through reading the response (for example, '5s'). Defaults to 5s."
+        })
+    }
 }
 
 /// Reusable definitions for paths, extensions, sandbox presets, wrappers, variables, and flag groups.
@@ -45,7 +102,7 @@ pub struct Definitions {
     /// from many rules.
     pub aliases: Option<HashMap<String, AliasDefinition>>,
 
-    /// Named external command validators referenced by extension rules.
+    /// Named external functions referenced by `ext.<name>(...)` in rule conditions.
     pub extensions: Option<HashMap<String, ExtensionDefinition>>,
 
     /// Pre-parsed flag group definitions, populated by `resolve_flag_groups()`.

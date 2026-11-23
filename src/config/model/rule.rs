@@ -1,6 +1,7 @@
 #[cfg(any(feature = "config-schema", test))]
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// Definition of a single alias entry. Accepts either a single pattern
 /// string or a list of pattern strings in YAML.
@@ -52,8 +53,7 @@ pub enum ActionKind {
     /// permission flow (the auto-mode classifier) decides instead. Writes
     /// nothing at all when no sandbox applies either; when a sandbox does
     /// apply, `updatedInput` alone is still emitted so the rewritten command
-    /// reaches that flow. Extension rules also use this result to indicate
-    /// that the rule does not decide the command.
+    /// reaches that flow.
     ///
     /// Declared here, between `Allow` and `Ask`, so the derived `Ord` matches
     /// `action_priority()` in `rules/rule_engine/compound.rs` -- pass
@@ -68,7 +68,11 @@ pub enum ActionKind {
     Deny,
 }
 
-/// A permission rule entry with one static action or an extension matcher.
+fn extension_calls_allowed_by_default() -> bool {
+    true
+}
+
+/// A permission rule entry with one static action.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[cfg_attr(any(feature = "config-schema", test), derive(JsonSchema))]
 #[cfg_attr(any(feature = "config-schema", test), schemars(transform = super::schema_gen::rule_entry_one_of_transform))]
@@ -79,11 +83,6 @@ pub struct RuleEntry {
     pub allow: Option<String>,
     /// Command pattern to ask about. Matched commands prompt for confirmation.
     pub ask: Option<String>,
-    /// Name of an extension to run when `match` and `when` match.
-    pub extension: Option<String>,
-    /// Command pattern for an extension rule.
-    #[serde(rename = "match")]
-    pub match_pattern: Option<String>,
     /// CEL expression that must evaluate to true for this rule to apply.
     pub when: Option<String>,
     /// Message shown when the rule matches (primarily for deny rules).
@@ -94,6 +93,11 @@ pub struct RuleEntry {
     pub sandbox: Option<String>,
     /// Inline test cases for this rule.
     pub tests: Option<Vec<InlineTestEntry>>,
+    /// Whether extension calls in `when` are allowed for this rule's source.
+    #[serde(skip, default = "extension_calls_allowed_by_default")]
+    #[cfg_attr(any(feature = "config-schema", test), schemars(skip))]
+    #[doc(hidden)]
+    pub extension_calls_allowed: bool,
 }
 
 impl RuleEntry {
@@ -108,29 +112,9 @@ impl RuleEntry {
         }
     }
 
-    /// Return the rule matcher and its command pattern when exactly one matcher is configured.
-    pub(crate) fn matcher_and_pattern(&self) -> Option<(RuleMatcher<'_>, &str)> {
-        match (
-            self.deny.as_deref(),
-            self.allow.as_deref(),
-            self.ask.as_deref(),
-            self.extension.as_deref(),
-            self.match_pattern.as_deref(),
-        ) {
-            (Some(pattern), None, None, None, None) => {
-                Some((RuleMatcher::Action(ActionKind::Deny), pattern))
-            }
-            (None, Some(pattern), None, None, None) => {
-                Some((RuleMatcher::Action(ActionKind::Allow), pattern))
-            }
-            (None, None, Some(pattern), None, None) => {
-                Some((RuleMatcher::Action(ActionKind::Ask), pattern))
-            }
-            (None, None, None, Some(name), Some(pattern)) => {
-                Some((RuleMatcher::Extension(name), pattern))
-            }
-            _ => None,
-        }
+    /// Return the action and command pattern when exactly one action is configured.
+    pub(crate) fn matcher_and_pattern(&self) -> Option<(ActionKind, &str)> {
+        self.action_and_pattern()
     }
 
     /// Return the pattern used by a configured rule matcher.
@@ -140,12 +124,6 @@ impl RuleEntry {
             None => None,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleMatcher<'a> {
-    Action(ActionKind),
-    Extension(&'a str),
 }
 
 /// A test case entry used in both inline rule tests and top-level test cases.
@@ -164,6 +142,9 @@ pub struct InlineTestEntry {
     /// Command expected to fall through to `defaults.action`/`defaults.sandbox`
     /// because no rule matches it.
     pub pass: Option<String>,
+    /// Extension return values to use for this test, keyed by extension name.
+    /// An override is returned regardless of the call arguments.
+    pub extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Top-level test section for cross-rule tests and test-only extends.
@@ -241,9 +222,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -258,9 +238,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         };
         assert!(rule.action_and_pattern().is_none());
     }
@@ -275,9 +254,8 @@ mod tests {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         };
         assert!(rule.action_and_pattern().is_none());
     }

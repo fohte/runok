@@ -3,6 +3,34 @@ use crate::config::{Config, VarType};
 use super::pattern_refs::find_disallowed_placeholder_in_pattern;
 
 impl Config {
+    pub(super) fn validate_extension_definitions(&self, errors: &mut Vec<String>) {
+        let Some(extensions) = self
+            .definitions
+            .as_ref()
+            .and_then(|definitions| definitions.extensions.as_ref())
+        else {
+            return;
+        };
+
+        for (name, definition) in extensions {
+            if !is_cel_identifier(name) {
+                errors.push(format!(
+                    "definitions.extensions.{name}: name must be a CEL identifier"
+                ));
+            }
+            if cel_or_runok_builtin_names().contains(&name.as_str()) {
+                errors.push(format!(
+                    "definitions.extensions.{name}: name conflicts with a CEL or runok built-in function"
+                ));
+            }
+            if definition.executor.trim().is_empty() {
+                errors.push(format!(
+                    "definitions.extensions.{name}.executor must not be empty"
+                ));
+            }
+        }
+    }
+
     /// Reject `fs.read.allow` — it is accepted by the schema for structural
     /// consistency but has no effect at runtime (read access is allowed by
     /// default; only read.deny is enforced).
@@ -116,12 +144,100 @@ impl Config {
     }
 }
 
+fn is_cel_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let is_identifier = chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric());
+    is_identifier && !["false", "in", "null", "true"].contains(&value)
+}
+
+fn cel_or_runok_builtin_names() -> &'static [&'static str] {
+    &[
+        "all",
+        "bytes",
+        "contains",
+        "double",
+        "duration",
+        "endsWith",
+        "exists",
+        "existsOne",
+        "exists_one",
+        "filter",
+        "getDate",
+        "getDayOfMonth",
+        "getDayOfWeek",
+        "getDayOfYear",
+        "getFullYear",
+        "getHours",
+        "getMilliseconds",
+        "getMinutes",
+        "getMonth",
+        "getSeconds",
+        "glob_matches",
+        "has",
+        "int",
+        "is_dir",
+        "is_file",
+        "map",
+        "matches",
+        "max",
+        "min",
+        "size",
+        "startsWith",
+        "string",
+        "timestamp",
+        "uint",
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
     use crate::config::parse_config;
+
+    #[rstest]
+    #[case::hyphenated("not-valid", "name must be a CEL identifier")]
+    #[case::reserved_keyword("true", "name must be a CEL identifier")]
+    #[case::builtin_function("contains", "name conflicts with a CEL or runok built-in function")]
+    fn validate_rejects_invalid_extension_names(#[case] name: &str, #[case] reason: &str) {
+        let mut config = parse_config(&format!(
+            "definitions:\n  extensions:\n    {name}:\n      executor: external-tool"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            format!("validation errors:\n  - definitions.extensions.{name}: {reason}"),
+        );
+    }
+
+    #[test]
+    fn extension_timeout_accepts_compact_duration() {
+        let config = parse_config(indoc! {"
+            definitions:
+              extensions:
+                lookup:
+                  executor: external-tool
+                  timeout: 250ms
+                  env: [RUNOK_TOKEN]
+        "})
+        .unwrap();
+        let timeout = config
+            .definitions
+            .unwrap()
+            .extensions
+            .unwrap()
+            .get("lookup")
+            .unwrap()
+            .timeout
+            .unwrap();
+
+        assert_eq!(timeout.duration(), std::time::Duration::from_millis(250));
+    }
 
     // === definitions.paths ===
 

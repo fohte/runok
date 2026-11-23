@@ -210,23 +210,21 @@ fn strip_audit(mut config: Config, source: &str) -> Config {
     config
 }
 
-/// Ignore extension definitions and rules from project-discovered config.
-/// Project files are loaded automatically, so they cannot authorize process execution.
+/// Ignore project extension definitions and mark project rules as untrusted.
 fn strip_project_extensions(mut config: Config, source: &str) -> Config {
     let definitions_removed = config
         .definitions
         .as_mut()
         .is_some_and(|definitions| definitions.extensions.take().is_some());
-    let mut rules_removed = false;
     if let Some(rules) = &mut config.rules {
-        let previous_len = rules.len();
-        rules.retain(|rule| rule.extension.is_none());
-        rules_removed = rules.len() != previous_len;
+        for rule in rules {
+            rule.extension_calls_allowed = false;
+        }
     }
 
-    if definitions_removed || rules_removed {
+    if definitions_removed {
         eprintln!(
-            "runok warning: extension settings in {source} are ignored (extensions can only be configured in the global config or an explicit --config file)"
+            "runok warning: extension definitions in {source} are ignored (extensions can only be configured in the global config or an explicit --config file)"
         );
     }
     config
@@ -630,7 +628,7 @@ mod tests {
     }
 
     #[rstest]
-    fn load_ignores_project_extension_executors_and_rules(env: TestEnv) {
+    fn load_ignores_project_extension_definitions_and_marks_its_rules_untrusted(env: TestEnv) {
         env.write_global(
             "runok.yml",
             indoc! {"
@@ -639,8 +637,8 @@ mod tests {
                     global_guard:
                       executor: trusted-guard
                 rules:
-                  - extension: global_guard
-                    match: 'git push *'
+                  - allow: 'git push *'
+                    when: 'ext.global_guard({}).allowed'
             "},
         );
         env.write_local(
@@ -653,10 +651,10 @@ mod tests {
                     project_guard:
                       executor: ./project-guard
                 rules:
-                  - extension: global_guard
-                    match: '*'
-                  - extension: project_guard
-                    match: '*'
+                  - ask: 'git commit *'
+                    when: 'ext.global_guard({}).allowed'
+                  - deny: 'git push *'
+                    when: 'ext.project_guard({}).allowed'
                   - allow: 'git status'
             "},
         );
@@ -667,13 +665,85 @@ mod tests {
                 global_guard:
                   executor: trusted-guard
             rules:
-              - extension: global_guard
-                match: 'git push *'
+              - allow: 'git push *'
+                when: 'ext.global_guard({}).allowed'
+              - ask: 'git commit *'
+                when: 'ext.global_guard({}).allowed'
+              - deny: 'git push *'
+                when: 'ext.project_guard({}).allowed'
               - allow: 'git status'
         "})
         .unwrap();
+        let loaded = env.load().unwrap();
+        let extension_names = loaded
+            .definitions
+            .as_ref()
+            .and_then(|definitions| definitions.extensions.as_ref())
+            .map(|extensions| extensions.keys().cloned().collect::<Vec<_>>());
+        let rule_trust = loaded.rules.as_ref().map(|rules| {
+            rules
+                .iter()
+                .map(|rule| rule.extension_calls_allowed)
+                .collect::<Vec<_>>()
+        });
+        let mut expected_rules = expected.rules.unwrap();
+        for rule in expected_rules.iter_mut().skip(1) {
+            rule.extension_calls_allowed = false;
+        }
+        let expected_rules = Some(expected_rules);
+        let actual_rules = loaded.rules;
+        let actual_definitions = loaded.definitions;
 
-        assert_eq!(env.load().unwrap(), expected);
+        assert_eq!(
+            (
+                extension_names,
+                rule_trust,
+                actual_rules,
+                actual_definitions
+            ),
+            (
+                Some(vec!["global_guard".to_string()]),
+                Some(vec![true, false, false, false]),
+                expected_rules,
+                expected.definitions,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn explicitly_selected_project_config_can_define_and_call_extensions(env: TestEnv) {
+        env.write_local(
+            "runok.yml",
+            indoc! {"
+                definitions:
+                  extensions:
+                    repo_state:
+                      executor: ./repo-state
+                rules:
+                  - deny: 'git push *'
+                    when: 'ext.repo_state({}).protected_branch'
+            "},
+        );
+
+        let config = env
+            .loader()
+            .load(&ConfigSource::Explicit {
+                path: env.cwd.join("runok.yml"),
+            })
+            .unwrap();
+
+        let expected = crate::config::parse_config(indoc! {"
+            definitions:
+              extensions:
+                repo_state:
+                  executor: ./repo-state
+            rules:
+              - deny: 'git push *'
+                when: 'ext.repo_state({}).protected_branch'
+        "})
+        .unwrap();
+
+        assert_eq!(config, expected);
     }
 
     #[rstest]

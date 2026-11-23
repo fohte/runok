@@ -2,6 +2,7 @@ pub mod alias_expander;
 pub mod command_parser;
 mod error;
 pub mod expr_evaluator;
+mod extension_functions;
 pub mod pattern_lexer;
 pub mod pattern_matcher;
 pub mod pattern_parser;

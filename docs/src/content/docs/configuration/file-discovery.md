@@ -75,18 +75,18 @@ After merging all four layers, the resulting configuration is validated.
 
 Different fields use different merge strategies:
 
-| Field                    | Strategy         | Behavior                                                                                      |
-| ------------------------ | ---------------- | --------------------------------------------------------------------------------------------- |
-| `extends`                | Append           | Lists are concatenated.                                                                       |
-| `rules`                  | Append           | Rules from all layers are concatenated in order.                                              |
-| `defaults.action`        | Override         | Higher-priority layer wins.                                                                   |
-| `defaults.sandbox`       | Override         | Higher-priority layer wins.                                                                   |
-| `definitions.paths`      | Per-key append   | Values for each key are concatenated (deduplicated).                                          |
-| `definitions.sandbox`    | Per-key override | Higher-priority layer replaces the entire preset.                                             |
-| `definitions.extensions` | Per-key override | Global layers replace the executor for each name; project layers cannot configure extensions. |
-| `definitions.wrappers`   | Append           | Lists are concatenated.                                                                       |
+| Field                    | Strategy         | Behavior                                                                                                                           |
+| ------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `extends`                | Append           | Lists are concatenated.                                                                                                            |
+| `rules`                  | Append           | Rules from all layers are concatenated in order.                                                                                   |
+| `defaults.action`        | Override         | Higher-priority layer wins.                                                                                                        |
+| `defaults.sandbox`       | Override         | Higher-priority layer wins.                                                                                                        |
+| `definitions.paths`      | Per-key append   | Values for each key are concatenated (deduplicated).                                                                               |
+| `definitions.sandbox`    | Per-key override | Higher-priority layer replaces the entire preset.                                                                                  |
+| `definitions.extensions` | Per-key override | Global layers replace definitions per name; project definitions are ignored. Project rules that call `ext.*` ask for confirmation. |
+| `definitions.wrappers`   | Append           | Lists are concatenated.                                                                                                            |
 
-Because extensions start external processes, default discovery only accepts extension definitions and extension rules from the global config. Project-discovered `runok.yml` and `runok.local.yml` files have those settings ignored with a warning. An explicitly selected `--config` file may configure extensions.
+Because extensions start external processes, default discovery only accepts extension definitions and calls from the global config and its `extends`. Extension definitions in project-discovered `runok.yml` and `runok.local.yml` files are ignored with a warning. Project rules remain loaded, but a rule that calls `ext.*` asks for confirmation. An explicitly selected `--config` file and its `extends` may configure and call extensions.
 
 ### Example
 
@@ -155,7 +155,8 @@ Path resolution happens **before merging**, so each configuration file's relativ
 
 After merging, runok validates the final configuration:
 
-- Each rule must have exactly one of `deny`, `allow`, or `ask`, or both `extension` and `match` with an executor defined in `definitions.extensions`.
+- Each rule must have exactly one of `deny`, `allow`, or `ask`.
+- Extension names must be CEL identifiers and must not conflict with a CEL or runok built-in function.
 - `deny` rules must not have a `sandbox` attribute.
 - `sandbox` values must reference names defined in `definitions.sandbox`.
 - `<path:name>` references in `fs.deny` must resolve to entries in `definitions.paths`.

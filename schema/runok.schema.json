@@ -100,7 +100,7 @@
           ]
         },
         {
-          "description": "No decision: the hook omits `permissionDecision` so Claude Code's own\npermission flow (the auto-mode classifier) decides instead. Writes\nnothing at all when no sandbox applies either; when a sandbox does\napply, `updatedInput` alone is still emitted so the rewritten command\nreaches that flow. Extension rules also use this result to indicate\nthat the rule does not decide the command.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.\n\n`Defaults::resolved_action()` also falls back to `Pass` when\n`defaults.action` is unset.",
+          "description": "No decision: the hook omits `permissionDecision` so Claude Code's own\npermission flow (the auto-mode classifier) decides instead. Writes\nnothing at all when no sandbox applies either; when a sandbox does\napply, `updatedInput` alone is still emitted so the rewritten command\nreaches that flow.\n\nDeclared here, between `Allow` and `Ask`, so the derived `Ord` matches\n`action_priority()` in `rules/rule_engine/compound.rs` -- pass\nis a weaker decision than an explicit `ask`, but still more\nrestrictive than silently allowing.\n\n`Defaults::resolved_action()` also falls back to `Pass` when\n`defaults.action` is unset.",
           "type": "string",
           "const": "pass"
         }
@@ -192,7 +192,7 @@
           }
         },
         "extensions": {
-          "description": "Named external command validators referenced by extension rules.",
+          "description": "Named external functions referenced by `ext.<name>(...)` in rule conditions.",
           "type": [
             "object",
             "null"
@@ -274,17 +274,44 @@
       }
     },
     "ExtensionDefinition": {
-      "description": "Executor command for an extension referenced by a rule.",
+      "description": "Executor command and process settings for an extension called from CEL.",
       "type": "object",
       "properties": {
+        "env": {
+          "description": "Additional parent environment variable names passed to the process.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "executor": {
           "description": "Command and arguments used to start the extension process.",
           "type": "string"
+        },
+        "timeout": {
+          "description": "Maximum time from process launch until its response is read. Defaults to five seconds.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtensionTimeout"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "executor"
       ]
+    },
+    "ExtensionTimeout": {
+      "description": "Maximum time from process launch through reading the response (for example, '5s'). Defaults to 5s.",
+      "type": "string",
+      "default": "5s",
+      "pattern": "^[0-9]+(ms|s|m|h)$"
     },
     "FsAccessPolicy": {
       "description": "Access policy for a single operation (read or write).",
@@ -366,6 +393,14 @@
                 "string",
                 "null"
               ]
+            },
+            "extensions": {
+              "description": "Extension return values to use for this test, keyed by extension name.\nAn override is returned regardless of the call arguments.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
             }
           },
           "additionalProperties": false,
@@ -382,6 +417,14 @@
                 "string",
                 "null"
               ]
+            },
+            "extensions": {
+              "description": "Extension return values to use for this test, keyed by extension name.\nAn override is returned regardless of the call arguments.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
             }
           },
           "additionalProperties": false,
@@ -398,6 +441,14 @@
                 "string",
                 "null"
               ]
+            },
+            "extensions": {
+              "description": "Extension return values to use for this test, keyed by extension name.\nAn override is returned regardless of the call arguments.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
             }
           },
           "additionalProperties": false,
@@ -408,6 +459,14 @@
         {
           "type": "object",
           "properties": {
+            "extensions": {
+              "description": "Extension return values to use for this test, keyed by extension name.\nAn override is returned regardless of the call arguments.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "pass": {
               "description": "Command expected to fall through to `defaults.action`/`defaults.sandbox`\nbecause no rule matches it.",
               "type": [
@@ -486,7 +545,7 @@
       }
     },
     "RuleEntry": {
-      "description": "A permission rule entry with one static action or an extension matcher.",
+      "description": "A permission rule entry with one static action.",
       "oneOf": [
         {
           "type": "object",
@@ -632,62 +691,6 @@
           "additionalProperties": false,
           "required": [
             "ask"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "extension": {
-              "description": "Name of an extension to run when `match` and `when` match.",
-              "type": "string"
-            },
-            "fix_suggestion": {
-              "description": "Suggested fix command shown when a deny rule matches.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "match": {
-              "description": "Command pattern for an extension rule.",
-              "type": "string"
-            },
-            "message": {
-              "description": "Message shown when the rule matches (primarily for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sandbox": {
-              "description": "Sandbox preset name to apply when this rule matches (not allowed for deny rules).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "tests": {
-              "description": "Inline test cases for this rule.",
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "$ref": "#/$defs/InlineTestEntry"
-              }
-            },
-            "when": {
-              "description": "CEL expression that must evaluate to true for this rule to apply.",
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "extension",
-            "match"
           ]
         }
       ]

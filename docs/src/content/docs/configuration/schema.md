@@ -131,7 +131,7 @@ rules:
 
 #### Rule Entry
 
-Each rule entry must have exactly one of `deny`, `allow`, or `ask`, or both `extension` and `match`.
+Each rule entry must have exactly one of `deny`, `allow`, or `ask`.
 
 ##### `deny` / `allow` / `ask`
 
@@ -149,13 +149,7 @@ Command pattern that triggers this rule. Only one of the three may be specified 
 
 # ask rule
 - ask: 'docker run *'
-
-# extension rule
-- extension: repository_guard
-  match: 'git [-C *] commit|push *'
 ```
-
-Extension rules call the named executor only after `match` and the optional `when` condition match. Their `allow`, `deny`, or `ask` result combines with all other matching rules using `deny > ask > allow`. A `pass` response leaves the rule unmatched. See [Extensions](/extensions/overview/) and [`definitions.extensions`](#definitionsextensions).
 
 ##### `when`
 
@@ -169,30 +163,24 @@ CEL (Common Expression Language) expression that must evaluate to `true` for thi
   when: "env.CI == 'true'"
 ```
 
-##### `extension` and `match`
-
-`extension` names an executor from `definitions.extensions`. `match` is the command pattern that triggers it. Both fields are required together and cannot be combined with `deny`, `allow`, or `ask`.
-
-**Type:** `str` for both fields\
-**Required:** Together
-
 ```yaml title="runok.yml"
 definitions:
   extensions:
-    repository_guard:
-      executor: ./checks/repository_guard
+    repo_state:
+      executor: ./checks/repo_state
 
 rules:
-  - extension: repository_guard
-    match: 'git [-C *] commit|push *'
-    when: "env.CI != 'true'"
+  - deny: 'git push * *'
+    when: "ext.repo_state({'remote': args[1], 'branch': args[2]}).protected_branch"
 ```
 
-The extension's `pass` status treats the rule as unmatched, so later rules or `defaults.action` decide. Extension failures fall back to `ask`. See [Extensions](/extensions/overview/) for the protocol and decision precedence.
+`ext.<name>(map)` calls the extension named in `definitions.extensions`. The map argument may be omitted, in which case runok sends `{}`. Extensions return arbitrary JSON values for CEL to inspect. See [Extensions](/extensions/overview/) for call behavior and the [Protocol Reference](/extensions/protocol/) for the JSON-RPC format.
 
 :::tip
-`when` expressions work on parsed tokens (flags, args, environment variables). For validation that requires deeper argument parsing -- such as inspecting a GraphQL query string or parsing a URL -- use an [extension](/extensions/overview/) instead.
+`when` expressions work on parsed tokens (flags, args, environment variables). For validation that requires external information or domain-specific parsing, call an [extension](/extensions/overview/) from `when` and pass the required values explicitly.
 :::
+
+When an extension call fails, or the `when` expression errors after calling an extension, that rule asks for confirmation. Other matching rules continue to run and combine using `deny > ask > allow`. A `when` error without an extension call continues to stop evaluation.
 
 ##### `message`
 
@@ -245,6 +233,17 @@ Inline test cases for this rule. Each entry specifies the expected decision and 
     - ask: 'git status --short'
 ```
 
+Each test entry may include `extensions`, a map of extension names to JSON return values. The override is used regardless of call arguments and avoids starting the process for that extension in that test.
+
+```yaml
+- deny: 'git push *'
+  when: "ext.repo_state({'branch': args[2]}).protected_branch"
+  tests:
+    - deny: 'git push origin release'
+      extensions:
+        repo_state: { protected_branch: true }
+```
+
 ### `definitions`
 
 Reusable definitions for paths, extension executors, variables, sandbox presets, and wrappers.
@@ -286,7 +285,7 @@ Path definitions must contain concrete paths. `<path:name>` references inside `d
 
 #### `definitions.extensions`
 
-Named extension executors that rules can call. Each executor is a command string split with shell-style quoting; runok starts a new process for each matching rule.
+Named extension executors that CEL `when` expressions can call as `ext.<name>(map)`. Each executor is a command string split with shell-style quoting; runok starts a new process for each call.
 
 **Type:** `map[str, ExtensionDefinition]`\
 **Default:** `{}`
@@ -294,13 +293,21 @@ Named extension executors that rules can call. Each executor is a command string
 ```yaml title="runok.yml"
 definitions:
   extensions:
-    repository_guard:
-      executor: ./checks/repository_guard
+    repo_state:
+      executor: ./checks/repo_state
+      timeout: 8s
+      env: [REPO_API_TOKEN]
 ```
 
-A leading `~/` in the executable path expands to `$HOME`. Relative executable paths resolve from runok's current working directory. See [Extensions](/extensions/overview/) for rule binding and response behavior.
+| Field      | Type            | Default  | Description                                                                                         |
+| ---------- | --------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `executor` | `str`           | Required | Program and arguments to start.                                                                     |
+| `timeout`  | duration string | `5s`     | Maximum time from process start until runok reads the response. Supports `ms`, `s`, `m`, and `h`.   |
+| `env`      | `list[str]`     | `[]`     | Additional environment variable names passed to the process. `PATH` and `HOME` are always included. |
 
-Because extensions start external processes, default discovery accepts extension definitions and rules only from the global config. Project-discovered files have them ignored with a warning. A file selected explicitly with `--config` may configure extensions.
+A leading `~` in the executable path expands to `$HOME`. Relative executable paths resolve from runok's current working directory. Extension names must be CEL identifiers and cannot conflict with built-in function names. See [Extensions](/extensions/overview/) for call behavior and response handling.
+
+Because extensions start external processes, default discovery accepts extension definitions and calls only from the global config and its `extends`. Project-discovered extension definitions are ignored with a warning, and project rules that call extensions ask for confirmation. A file selected explicitly with `--config` and its `extends` may configure and call extensions.
 
 See [Extensions](/extensions/overview/) and the [protocol reference](/extensions/protocol/) for request and response details.
 
@@ -583,7 +590,7 @@ Additional configuration files to merge only during test execution. These files 
 
 #### `tests.cases`
 
-Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, `deny`, or `pass`) and the command to evaluate.
+Test cases to evaluate. Each entry specifies the expected decision (`allow`, `ask`, `deny`, or `pass`) and the command to evaluate. A case may include an `extensions` map with JSON return values to use for that test.
 
 **Type:** `list[TestEntry]`\
 **Default:** `[]`

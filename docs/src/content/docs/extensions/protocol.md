@@ -1,171 +1,103 @@
 ---
 title: Protocol Reference
-description: JSON-RPC 2.0 request and response specification for runok extensions.
+description: JSON-RPC 2.0 protocol and process settings for runok extensions.
 sidebar:
   order: 2
 ---
 
-Extensions communicate with runok using **JSON-RPC 2.0** over standard I/O. runok spawns the extension as a child process, writes a single request to its stdin, then reads a single response from its stdout.
+Extensions communicate with runok using JSON-RPC 2.0 over standard input and output. runok starts one process for each extension call, writes one request, and reads one response.
 
 ## Transport
 
-| Property  | Value                                                               |
-| --------- | ------------------------------------------------------------------- |
-| Protocol  | JSON-RPC 2.0                                                        |
-| Transport | stdio (stdin/stdout)                                                |
-| Encoding  | UTF-8                                                               |
-| Direction | runok writes to extension's stdin, reads from extension's stdout    |
-| Lifecycle | One request per process invocation (spawn, request, response, exit) |
+| Property  | Value                              |
+| --------- | ---------------------------------- |
+| Protocol  | JSON-RPC 2.0                       |
+| Transport | stdin and stdout                   |
+| Encoding  | UTF-8                              |
+| Lifecycle | One request per process invocation |
 
-Extension stderr is discarded by runok (redirected to `/dev/null`). Use stderr for debug logging in your extension without affecting the protocol.
+The process inherits runok's current working directory. Its environment contains `PATH`, `HOME`, and the variables listed in the extension's `env` setting. Other environment variables are cleared. Extension stderr is discarded.
 
 ## Request
 
-runok sends a single JSON-RPC 2.0 request with method `validateCommand`.
-
-### Envelope
+runok sends the `call` method. The `params` value is the map passed to `ext.<name>(map)` in the `when` expression. If the call has no argument, runok sends an empty object.
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "validateCommand",
+  "method": "call",
   "params": {
-    "command": "curl",
-    "flags": {
-      "X": "POST"
-    },
-    "args": ["https://api.example.com"],
-    "raw_command_line": "curl -X POST https://api.example.com",
-    "env": {
-      "AWS_PROFILE": "prod"
-    },
-    "cwd": "/home/user/project"
+    "remote": "origin",
+    "branch": "topic"
   }
 }
 ```
 
-### `params` fields
+runok does not add command details to `params`. A rule can choose the command data it needs from CEL variables such as `flags` and `args` and pass them explicitly:
 
-| Field              | Type       | Description                                                              |
-| ------------------ | ---------- | ------------------------------------------------------------------------ |
-| `command`          | `string`   | The base command name (e.g., `"curl"`, `"git"`)                          |
-| `flags`            | `object`   | Parsed flags as key-value pairs. Boolean flags have empty string values. |
-| `args`             | `string[]` | Positional arguments (non-flag tokens)                                   |
-| `raw_command_line` | `string`   | The original command line as entered by the user                         |
-| `env`              | `object`   | Relevant environment variables (key-value pairs)                         |
-| `cwd`              | `string`   | Current working directory where the command would be executed            |
-
-### Notes on `flags`
-
-Flags are extracted from the parsed command. For example, `curl -X POST --silent` produces:
-
-```json
-{
-  "flags": {
-    "X": "POST",
-    "silent": ""
-  }
-}
+```yaml
+when: "ext.repo_state({'remote': args[1], 'branch': args[2]}).protected_branch"
 ```
-
-Flags are parsed into key-value pairs. The flag name (without leading dashes) becomes the key.
-
-- For flags with a value (e.g., `-X POST` or `--request POST`), the value is stored as a string.
-- For boolean flags without a value (e.g., `--silent`), the value is an empty string (`""`).
 
 ## Response
 
-The extension must write a single JSON-RPC 2.0 response to stdout.
-
-### Success response
+Return one JSON-RPC response with the matching request ID. The `result` may be any JSON value; runok converts it to a CEL value and does not validate its shape.
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "status": "deny",
-    "message": "POST requests are not allowed in production",
-    "fix_suggestion": "curl -X GET https://api.example.com"
+    "protected_branch": true,
+    "labels": ["release", "restricted"],
+    "metadata": null
   }
 }
 ```
 
-### `result` fields
+Use JSON-RPC's `error` response for protocol-level failures. A JSON-RPC error, malformed response, nonzero process exit, spawn failure, timeout, or argument that cannot be converted to JSON makes the calling rule ask for confirmation. A CEL error after an extension was called has the same result. Other matching rules are still evaluated, and their results combine as `deny > ask > allow`.
 
-| Field            | Type     | Required | Description                                      |
-| ---------------- | -------- | -------- | ------------------------------------------------ |
-| `status`         | `string` | **Yes**  | One of `"allow"`, `"deny"`, `"ask"`, or `"pass"` |
-| `message`        | `string` | No       | Human-readable message explaining the decision   |
-| `fix_suggestion` | `string` | No       | A suggested alternative command                  |
+If the returned value has a missing field or an incompatible type, CEL reports an evaluation error. Because the `when` expression already called an extension, that rule becomes `ask`. A `when` error that occurs before any extension call remains a normal rule evaluation error.
 
-### Status values
+## Extension definitions
 
-| Status    | Action                                                                         |
-| --------- | ------------------------------------------------------------------------------ |
-| `"allow"` | The command is permitted to run                                                |
-| `"deny"`  | The command is blocked. `message` and `fix_suggestion` are shown to the user.  |
-| `"ask"`   | The user is prompted for confirmation before the command runs                  |
-| `"pass"`  | This extension rule is treated as unmatched; other rules or the default decide |
-
-Any unrecognized status value is treated as `"ask"`. A timeout, failed process, or invalid response also becomes `ask`.
-
-### Error response
-
-Extensions can return a JSON-RPC 2.0 error object to indicate a protocol-level failure:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "error": {
-    "code": -32600,
-    "message": "Invalid request: missing required field 'command'"
-  }
-}
-```
-
-runok treats any JSON-RPC error response as an `InvalidResponse` error, which triggers the ask fallback.
-
-## Error handling
-
-runok defines three error categories for extension communication:
-
-| Error             | Cause                                                      | Behavior            |
-| ----------------- | ---------------------------------------------------------- | ------------------- |
-| `Timeout`         | Extension did not respond within the configured timeout    | Falls back to `ask` |
-| `Spawn`           | Extension process failed to start (e.g., binary not found) | Falls back to `ask` |
-| `InvalidResponse` | Extension returned unparseable output or a JSON-RPC error  | Falls back to `ask` |
-
-In all error cases, runok falls back to `ask` mode, prompting the user for confirmation. This ensures that a broken or unreachable extension never silently allows a dangerous command.
-
-When verbose mode is enabled, error details are printed to stderr:
-
-```
-[verbose] Extension error: timeout after 5s
-[verbose] Extension error: spawn error: plugin not found
-[verbose] Extension error: invalid response: JSON parse error: ...
-```
-
-## Security
-
-Extension output is sanitized before display. ASCII control characters (except `\n`, `\r`, `\t`) are stripped to prevent terminal injection attacks from malicious extension output.
-
-## Executor command
-
-The extension process is specified under `definitions.extensions.<name>.executor` in the [configuration](/configuration/schema/#definitionsextensions). A rule references it with `extension` and provides its command pattern with `match`. runok uses shell-style tokenization (`shlex`) to parse the executor command:
+Define the executor under `definitions.extensions.<name>`:
 
 ```yaml
 definitions:
   extensions:
-    internal_url:
-      executor: 'deno run --allow-net ./checks/url_check.ts'
+    repo_state:
+      executor: 'python3 ./checks/repo_state.py'
+      timeout: 8s
+      env: [GIT_AUTH_TOKEN]
 ```
 
-The executor string is split into a program and arguments. In this example, runok spawns `deno` with arguments `["run", "--allow-net", "./checks/url_check.ts"]`. Quoted strings and backslash escapes in the executor command are handled correctly. Relative program paths resolve from runok's current working directory, not the configuration file's directory.
+The executor is split with shell-style quoting. A leading `~` in its executable path expands to `HOME`; relative paths resolve from runok's current working directory.
+
+| Field      | Type            | Default  | Description                                                            |
+| ---------- | --------------- | -------- | ---------------------------------------------------------------------- |
+| `executor` | `string`        | Required | Program and arguments to start.                                        |
+| `timeout`  | duration string | `5s`     | Maximum time from process start until runok reads the response.        |
+| `env`      | `string[]`      | `[]`     | Additional environment variable names copied from runok's environment. |
+
+Timeout values use `ms`, `s`, `m`, or `h`, for example `250ms` or `8s`. Each call has its own timeout; runok does not impose a total timeout across all matching rules.
+
+Extension names must be CEL identifiers and cannot conflict with a CEL or runok built-in function. Call them as `ext.<name>(map)`; the argument is one map and may be omitted to send `{}`.
+
+## Call reuse
+
+Within one `when` evaluation, repeated calls with the same extension name and equal map arguments reuse the first result. Each rule's `when` expression has its own cache. Results are not reused across rules or separate checks.
+
+## Configuration trust
+
+Default config discovery permits extension definitions and calls only in the global configuration and its `extends`. Project-discovered extension definitions are ignored with a warning. A project rule that evaluates an `ext.*` call becomes `ask`. A file selected with `--config`, and its `extends` chain, may define extensions and call them.
+
+## Compatibility
+
+The JSON-RPC method is `call`. The earlier `validateCommand` method and rule fields `extension` / `match` are not supported. Extensions now return data, and rules choose the decision in CEL. See [Extensions Overview](/extensions/overview/) for an example.
 
 ## Related
 
-- [Extensions Overview](/extensions/overview/) -- Why and when to use extensions.
-- [Tutorial](/extensions/tutorial/) -- Build your first extension.
+- [Extensions Overview](/extensions/overview/) -- How extension values are used in rules.
+- [Tutorial](/extensions/tutorial/) -- Build a JSON-RPC extension.

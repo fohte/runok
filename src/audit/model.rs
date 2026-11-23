@@ -371,9 +371,7 @@ impl From<RuleMatchInfo> for SerializableRuleMatch {
                 ActionKind::Allow => "allow".to_owned(),
                 ActionKind::Ask => "ask".to_owned(),
                 ActionKind::Deny => "deny".to_owned(),
-                ActionKind::Pass => unreachable!(
-                    "extension `pass` decisions are filtered before matched rules are recorded"
-                ),
+                ActionKind::Pass => unreachable!("Pass cannot be a configured rule action"),
             },
             pattern: info.pattern,
             matched_tokens: info.matched_tokens,

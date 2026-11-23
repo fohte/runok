@@ -35,7 +35,7 @@ pub struct EvalContext {
     /// PATH-dependent command lookup, injected so tests can substitute a
     /// deterministic stub instead of depending on the host's `$PATH`.
     pub resolver: Arc<dyn CommandResolver>,
-    /// External command validator used by extension rules.
+    /// Runner used by CEL extension functions.
     pub extension_runner: Arc<dyn ExtensionRunner>,
     /// Whether extension failures should include diagnostic details.
     pub verbose: bool,
@@ -294,9 +294,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         }
     }
 
@@ -309,9 +308,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         }
     }
 
@@ -324,9 +322,8 @@ mod test_support {
             message: None,
             fix_suggestion: None,
             sandbox: None,
-            extension: None,
-            match_pattern: None,
             tests: None,
+            extension_calls_allowed: true,
         }
     }
 }
